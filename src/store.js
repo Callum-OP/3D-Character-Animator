@@ -24,4 +24,29 @@ export const useStore = create((set) => ({
   setShowGrid: (showGrid) => set({ showGrid }),
   setSolidBackground: (solidBackground) => set({ solidBackground }),
   setBackgroundColor: (backgroundColor) => set({ backgroundColor }),
+
+  // ---- Material mode (Phase 2) ----
+  // 'unlit' is the default: raw base colour, no lighting — matches Blender's
+  // flat colours exactly and side-steps FBX lighting artifacts.
+  materialMode: 'unlit', // 'unlit' | 'toon' | 'standard'
+  toonSteps: 3, // number of shadow bands in toon mode
+
+  setMaterialMode: (materialMode) => set({ materialMode }),
+  setToonSteps: (toonSteps) => set({ toonSteps }),
+
+  // ---- Key light (affects Toon/Standard modes only; ignored by Unlit) ----
+  lightIntensity: 2.0,
+  lightAzimuth: 35, // degrees around the model (0 = front, +ve = to the right)
+  lightElevation: 45, // degrees above the horizon
+
+  setLightIntensity: (lightIntensity) => set({ lightIntensity }),
+  setLightAzimuth: (lightAzimuth) => set({ lightAzimuth }),
+  setLightElevation: (lightElevation) => set({ lightElevation }),
+
+  // ---- Outline (inverted-hull, works in every material mode) ----
+  outlineEnabled: false,
+  outlineWidth: 0.003, // screen-space thickness; starts very thin
+
+  setOutlineEnabled: (outlineEnabled) => set({ outlineEnabled }),
+  setOutlineWidth: (outlineWidth) => set({ outlineWidth }),
 }))

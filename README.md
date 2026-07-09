@@ -19,8 +19,14 @@ The project is being built in phases (see [`references/Plan.md`](references/Plan
 
 - **Phase 1 — Scaffold & model loading — ✅ done.** Load a model, orbit around it,
   see its stats, toggle grid/background, dispose cleanly on unload.
-- **Phase 2+ — not yet built:** material modes (unlit / toon / standard), bone
-  posing, animation playback & keyframing, and PNG / image-sequence export.
+- **Phase 2 — Material modes — ✅ done.** Switch between **Unlit** (raw Blender
+  colours, the default), **Toon** (stepped anime shading with a selectable band
+  count), and **Standard** (original PBR). A key-light control (intensity /
+  direction / height) drives the Toon and Standard modes. An optional
+  **inverted-hull outline** (toggle + width) can be layered on any mode — its
+  thickness is screen-space, so it looks consistent across model scales.
+- **Phase 3+ — not yet built:** bone posing, animation playback & keyframing, and
+  PNG / image-sequence export.
 
 ### Supported file formats
 
@@ -66,7 +72,10 @@ npm run preview    # serve the production build locally
    The camera automatically frames the model on load.
 4. The **Model** panel shows the name, format, mesh count, bone count, and any
    animation clips. **Unload model** frees its GPU memory.
-5. The **View** panel toggles the reference grid and switches between a
+5. The **Material** panel picks the shading mode (Unlit / Toon / Standard), the
+   toon shadow-band count, the key-light intensity/direction/height (ignored in
+   Unlit mode), and an optional black outline with a width slider.
+6. The **View** panel toggles the reference grid and switches between a
    transparent background (the default, for compositing) and a solid colour.
 
 ## Tech stack
@@ -84,9 +93,12 @@ src/
   three/
     scene.js            # scene manager singleton (on-demand rendering, disposal)
     loadModel.js        # format dispatch: GLTFLoader / FBXLoader + deep dispose
+    materials.js        # unlit/toon/standard material modes (non-destructive)
+    outline.js          # inverted-hull outline via three's OutlineEffect
     Viewport.jsx        # canvas host + drag-and-drop
   panels/
     ModelPanel.jsx      # load button / drop zone, model stats
+    MaterialPanel.jsx   # material mode + key-light controls
     ViewPanel.jsx       # grid & background toggles
 ```
 

@@ -5,6 +5,10 @@ import {
   loadModelFile,
   setGridVisible,
   setBackground,
+  setMaterialMode,
+  setToonSteps,
+  setLightSettings,
+  setOutline,
 } from './scene.js'
 import { useStore } from '../store.js'
 import { SUPPORTED_EXTENSION_RE, SUPPORTED_EXTENSIONS } from './loadModel.js'
@@ -34,6 +38,31 @@ export default function Viewport() {
   useEffect(() => {
     setBackground(solidBackground, backgroundColor)
   }, [solidBackground, backgroundColor])
+
+  const materialMode = useStore((s) => s.materialMode)
+  const toonSteps = useStore((s) => s.toonSteps)
+  const lightIntensity = useStore((s) => s.lightIntensity)
+  const lightAzimuth = useStore((s) => s.lightAzimuth)
+  const lightElevation = useStore((s) => s.lightElevation)
+
+  useEffect(() => {
+    setMaterialMode(materialMode)
+  }, [materialMode])
+
+  useEffect(() => {
+    setToonSteps(toonSteps)
+  }, [toonSteps])
+
+  useEffect(() => {
+    setLightSettings(lightIntensity, lightAzimuth, lightElevation)
+  }, [lightIntensity, lightAzimuth, lightElevation])
+
+  const outlineEnabled = useStore((s) => s.outlineEnabled)
+  const outlineWidth = useStore((s) => s.outlineWidth)
+
+  useEffect(() => {
+    setOutline(outlineEnabled, outlineWidth)
+  }, [outlineEnabled, outlineWidth])
 
   // --- Drag & drop ---
   function onDragOver(e) {

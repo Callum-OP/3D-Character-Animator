@@ -1,6 +1,19 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { loadModel, disposeObject } from './loadModel.js'
+import {
+  recordOriginalMaterials,
+  applyMaterialMode,
+  restoreOriginalMaterials,
+  disposeGeneratedMaterials,
+} from './materials.js'
+import {
+  initOutline,
+  getOutlineEffect,
+  setOutlineEnabled,
+  applyOutlineParams,
+  disposeOutline,
+} from './outline.js'
 import { useStore } from '../store.js'
 
 // ---------------------------------------------------------------------------
@@ -58,6 +71,9 @@ export function initScene(container) {
   container.appendChild(renderer.domElement)
   state.renderer = renderer
 
+  // Wrap the renderer for the (optional) inverted-hull outline pass.
+  initOutline(renderer)
+
   // --- Scene ---
   const scene = new THREE.Scene()
   // No scene.background => transparent by default. Toggled on via setBackground.
@@ -98,6 +114,8 @@ export function initScene(container) {
   const s = useStore.getState()
   setGridVisible(s.showGrid)
   setBackground(s.solidBackground, s.backgroundColor)
+  setLightSettings(s.lightIntensity, s.lightAzimuth, s.lightElevation)
+  setOutlineEnabled(s.outlineEnabled)
 
   // --- Resize handling ---
   const resizeObserver = new ResizeObserver(() => handleResize())
@@ -119,7 +137,11 @@ export function requestRender() {
 
 function renderOnce() {
   if (!state.renderer) return
-  state.renderer.render(state.scene, state.camera)
+  // Route through the outline effect. When the outline is disabled it falls
+  // straight through to renderer.render, so there's no overhead when it's off.
+  const effect = getOutlineEffect()
+  if (effect) effect.render(state.scene, state.camera)
+  else state.renderer.render(state.scene, state.camera)
 }
 
 // Continuous render loop, used later for animation playback. Off by default.
@@ -162,6 +184,14 @@ export async function loadModelFile(file) {
     disposeCurrentModel() // free the previous model FIRST (memory hygiene)
     state.currentModel = parsed
     state.scene.add(parsed.root)
+
+    // Record the as-loaded (Standard/PBR) materials, then apply the active mode
+    // (Unlit by default). Non-destructive — originals are kept for switching back.
+    recordOriginalMaterials(parsed)
+    applyMaterialMode(parsed, store.materialMode, { toonSteps: store.toonSteps })
+    // Stamp outline params onto whatever materials are now live.
+    applyOutlineParams(parsed, store.outlineWidth)
+
     frameCameraToObject(parsed.root)
     store.setModelInfo(parsed.info)
     requestRender()
@@ -174,9 +204,13 @@ export async function loadModelFile(file) {
 
 export function disposeCurrentModel() {
   if (!state.currentModel) return
-  const { root } = state.currentModel
-  state.scene.remove(root)
-  disposeObject(root) // geometries, materials, textures
+  const model = state.currentModel
+  // Put the real materials back so the deep-dispose walk frees them (and their
+  // textures) rather than a generated shell that only borrows those textures...
+  restoreOriginalMaterials(model)
+  disposeGeneratedMaterials(model) // ...then free the generated Basic/Toon shells.
+  state.scene.remove(model.root)
+  disposeObject(model.root) // geometries, materials, textures
   state.currentModel = null
   useStore.getState().clearModel()
 }
@@ -229,12 +263,64 @@ export function setBackground(solid, color) {
 }
 
 // ---------------------------------------------------------------------------
+// Material mode + lighting (Phase 2)
+// ---------------------------------------------------------------------------
+
+// Switch the active material mode on the loaded model (no-op if none loaded).
+export function setMaterialMode(mode) {
+  if (!state.currentModel) return
+  const s = useStore.getState()
+  applyMaterialMode(state.currentModel, mode, { toonSteps: s.toonSteps })
+  // The active materials just changed; re-stamp outline params onto them.
+  applyOutlineParams(state.currentModel, s.outlineWidth)
+  requestRender()
+}
+
+// Rebuild toon materials at a new band count (only relevant in toon mode).
+export function setToonSteps(steps) {
+  if (!state.currentModel) return
+  const s = useStore.getState()
+  if (s.materialMode === 'toon') {
+    applyMaterialMode(state.currentModel, 'toon', { toonSteps: steps })
+    applyOutlineParams(state.currentModel, s.outlineWidth)
+    requestRender()
+  }
+}
+
+// Toggle the outline and set its (screen-space) thickness.
+export function setOutline(enabled, width) {
+  setOutlineEnabled(enabled)
+  if (state.currentModel) applyOutlineParams(state.currentModel, width)
+  requestRender()
+}
+
+// Position + brighten the key directional light from spherical angles. Azimuth
+// sweeps around the vertical axis (0 = straight in front, +ve = to the right),
+// elevation lifts it above the horizon. Radius is arbitrary — only direction
+// matters for a DirectionalLight.
+export function setLightSettings(intensity, azimuthDeg, elevationDeg) {
+  if (!state.dirLight) return
+  state.dirLight.intensity = intensity
+
+  const az = (azimuthDeg * Math.PI) / 180
+  const el = (elevationDeg * Math.PI) / 180
+  const r = 5
+  state.dirLight.position.set(
+    r * Math.cos(el) * Math.sin(az),
+    r * Math.sin(el),
+    r * Math.cos(el) * Math.cos(az),
+  )
+  requestRender()
+}
+
+// ---------------------------------------------------------------------------
 // Teardown (called when the Viewport unmounts)
 // ---------------------------------------------------------------------------
 
 export function disposeScene() {
   setContinuousRender(false)
   disposeCurrentModel()
+  disposeOutline()
 
   if (state.resizeObserver) {
     state.resizeObserver.disconnect()
