@@ -7,6 +7,7 @@ import {
   setBackground,
 } from './scene.js'
 import { useStore } from '../store.js'
+import { SUPPORTED_EXTENSION_RE, SUPPORTED_EXTENSIONS } from './loadModel.js'
 
 // The 3D viewport: owns the canvas container and the scene lifecycle, and
 // handles drag-and-drop of model files onto itself.
@@ -52,8 +53,9 @@ export default function Viewport() {
     setDragOver(false)
     const file = e.dataTransfer.files && e.dataTransfer.files[0]
     if (!file) return
-    if (!/\.(glb|gltf)$/i.test(file.name)) {
-      useStore.getState().setLoadError('Unsupported file. Drop a .glb or .gltf file.')
+    if (!SUPPORTED_EXTENSION_RE.test(file.name)) {
+      const list = SUPPORTED_EXTENSIONS.map((e) => '.' + e).join(', ')
+      useStore.getState().setLoadError('Unsupported file. Drop a ' + list + ' file.')
       return
     }
     loadModelFile(file).catch(() => {}) // error is surfaced via the store

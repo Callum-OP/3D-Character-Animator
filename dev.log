@@ -7,3 +7,16 @@
 
   [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m5173[22m/[39m
 [2m  [32m➜[39m  [1mNetwork[22m[2m: use [22m[1m--host[22m[2m to expose[22m
+[2m20:16:11[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/three/Viewport.jsx, /src/panels/ModelPanel.jsx[22m
+[2m20:16:12[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32m✨ new dependencies optimized: [33mthree/examples/jsm/loaders/FBXLoader.js[32m[39m
+[2m20:16:12[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32m✨ optimized dependencies changed. reloading[39m
+[2m20:16:19[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/three/Viewport.jsx, /src/panels/ModelPanel.jsx[22m
+[2m20:16:21[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/three/Viewport.jsx, /src/panels/ModelPanel.jsx[22m
+[2m20:16:23[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/three/Viewport.jsx, /src/panels/ModelPanel.jsx[22m
+[2m20:16:26[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/three/Viewport.jsx[22m
+[2m20:16:28[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/three/Viewport.jsx[22m
+[2m20:16:34[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/panels/ModelPanel.jsx[22m
+[2m20:16:43[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/panels/ModelPanel.jsx[22m
+[2m20:17:08[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/three/Viewport.jsx, /src/panels/ModelPanel.jsx[22m
+[2m20:17:09[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/three/Viewport.jsx, /src/panels/ModelPanel.jsx[22m
+[2m20:17:21[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/three/Viewport.jsx, /src/panels/ModelPanel.jsx[22m

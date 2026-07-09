@@ -20,12 +20,12 @@ export default function ModelPanel() {
       <h2>Model</h2>
 
       <button className="btn" onClick={() => fileInputRef.current?.click()} disabled={loading}>
-        {loading ? 'Loading…' : 'Load .glb / .gltf'}
+        {loading ? 'Loading…' : 'Load .glb / .gltf / .fbx'}
       </button>
       <input
         ref={fileInputRef}
         type="file"
-        accept=".glb,.gltf,model/gltf-binary,model/gltf+json"
+        accept=".glb,.gltf,.fbx,model/gltf-binary,model/gltf+json"
         style={{ display: 'none' }}
         onChange={onPick}
       />
@@ -43,6 +43,12 @@ export default function ModelPanel() {
               <span className="label">Name</span>
               <span className="value">{modelInfo.name}</span>
             </div>
+            {modelInfo.format && (
+              <div className="info-row">
+                <span className="label">Format</span>
+                <span className="value">{modelInfo.format.toUpperCase()}</span>
+              </div>
+            )}
             <div className="info-row">
               <span className="label">Meshes</span>
               <span className="value">{modelInfo.meshCount}</span>

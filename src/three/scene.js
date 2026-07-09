@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { loadGLB, disposeObject } from './loadModel.js'
+import { loadModel, disposeObject } from './loadModel.js'
 import { useStore } from '../store.js'
 
 // ---------------------------------------------------------------------------
@@ -158,7 +158,7 @@ export async function loadModelFile(file) {
   const store = useStore.getState()
   store.setLoading(true)
   try {
-    const parsed = await loadGLB(file)
+    const parsed = await loadModel(file)
     disposeCurrentModel() // free the previous model FIRST (memory hygiene)
     state.currentModel = parsed
     state.scene.add(parsed.root)
