@@ -114,6 +114,9 @@ function parseRoot(root, animations, fileName, format, source) {
     meshCount: meshes.length,
     boneCount: bones.length,
     clipNames: clips.map((c) => c.name),
+    // Lightweight mesh list for per-mesh UI controls (outline/shading overrides).
+    // uuid is the stable per-load key; name falls back to a positional label.
+    meshes: meshes.map((m, i) => ({ uuid: m.uuid, name: m.name || `Mesh ${i + 1}` })),
   }
 
   return { source, root, skinnedMeshes, meshes, skeleton, bones, clips, info }

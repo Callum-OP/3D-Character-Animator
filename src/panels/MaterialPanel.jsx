@@ -11,8 +11,14 @@ const MODES = [
 ]
 
 const TOON_STEP_OPTIONS = [2, 3, 4, 5]
+const SHADING_OPTIONS = [
+  { value: 'full', label: 'Full' },
+  { value: 'soft', label: 'Soft' },
+  { value: 'flat', label: 'Flat' },
+]
 
 export default function MaterialPanel() {
+  const modelInfo = useStore((s) => s.modelInfo)
   const materialMode = useStore((s) => s.materialMode)
   const toonSteps = useStore((s) => s.toonSteps)
   const lightIntensity = useStore((s) => s.lightIntensity)
@@ -21,6 +27,9 @@ export default function MaterialPanel() {
 
   const outlineEnabled = useStore((s) => s.outlineEnabled)
   const outlineWidth = useStore((s) => s.outlineWidth)
+  const softenEnabled = useStore((s) => s.softenEnabled)
+  const softenAmount = useStore((s) => s.softenAmount)
+  const meshOverrides = useStore((s) => s.meshOverrides)
 
   const setMaterialMode = useStore((s) => s.setMaterialMode)
   const setToonSteps = useStore((s) => s.setToonSteps)
@@ -29,8 +38,13 @@ export default function MaterialPanel() {
   const setLightElevation = useStore((s) => s.setLightElevation)
   const setOutlineEnabled = useStore((s) => s.setOutlineEnabled)
   const setOutlineWidth = useStore((s) => s.setOutlineWidth)
+  const setSoftenEnabled = useStore((s) => s.setSoftenEnabled)
+  const setSoftenAmount = useStore((s) => s.setSoftenAmount)
+  const setMeshOutline = useStore((s) => s.setMeshOutline)
+  const setMeshShading = useStore((s) => s.setMeshShading)
 
   const lit = materialMode !== 'unlit' // lights only matter for toon/standard
+  const meshes = modelInfo?.meshes || []
 
   return (
     <div className="panel">
@@ -128,6 +142,78 @@ export default function MaterialPanel() {
           format={(v) => (v * 1000).toFixed(1)}
         />
       </div>
+
+      <div className="light-controls">
+        <label className="toggle-row" style={{ padding: 0 }}>
+          <input
+            type="checkbox"
+            checked={softenEnabled}
+            onChange={(e) => setSoftenEnabled(e.target.checked)}
+          />
+          Soften shading
+        </label>
+
+        <Slider
+          label="Amount"
+          min={0}
+          max={1}
+          step={0.05}
+          value={softenAmount}
+          disabled={!softenEnabled}
+          onChange={setSoftenAmount}
+          format={(v) => Math.round(v * 100) + '%'}
+        />
+        <div className="radio-hint" style={{ marginTop: 2 }}>
+          Lifts toon shadows and thins the outline everywhere.
+        </div>
+      </div>
+
+      {meshes.length > 0 && (
+        <div className="light-controls">
+          <div className="field-label">Per-mesh (e.g. face)</div>
+          <div className="mesh-row mesh-head">
+            <span>Mesh</span>
+            <span>Line</span>
+            <span>Shade</span>
+          </div>
+          <div className="mesh-list">
+            {meshes.map((m) => {
+              const ov = meshOverrides[m.uuid] || {}
+              const outlineOn = ov.outline !== false
+              const shading = ov.shading || 'full'
+              return (
+                <div key={m.uuid} className="mesh-row">
+                  <span className="mesh-name" title={m.name}>
+                    {m.name}
+                  </span>
+                  <label
+                    className="mesh-outline"
+                    title="Draw an outline around this mesh"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={outlineOn}
+                      onChange={(e) => setMeshOutline(m.uuid, e.target.checked)}
+                    />
+                  </label>
+                  <select
+                    className="select select-sm"
+                    value={shading}
+                    title="Shading for this mesh (Flat = no lighting)"
+                    onChange={(e) => setMeshShading(m.uuid, e.target.value)}
+                  >
+                    {SHADING_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

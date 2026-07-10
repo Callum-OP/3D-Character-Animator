@@ -1,41 +1,58 @@
 import * as THREE from 'three'
 
 // ---------------------------------------------------------------------------
-// Material modes (Phase 2)
+// Material modes (Phase 2) + per-mesh shading overrides
 //
 // Blender node shaders can't be exported, but glTF carries the Principled BSDF
 // data (baseColorFactor/Texture, emissive, alpha, …) which GLTFLoader turns into
 // MeshStandardMaterial. This module offers three non-destructive "modes" that
 // reuse that data:
 //
-//   unlit    — MeshBasicMaterial: raw base colour, zero lighting. Pixel-identical
-//              to the flat colours picked in Blender. This is the default.
+//   unlit    — MeshBasicMaterial: raw base colour, zero lighting (the default).
 //   toon     — MeshToonMaterial: same colour/map, lit through a procedural
 //              stepped gradient ramp for anime-style shadow banding.
 //   standard — the original MeshStandardMaterial(s) as loaded (PBR lighting).
 //
-// The originals are recorded once at load, so switching modes never destroys
-// them. Generated materials are cached per mesh and disposed on unload. Textures
-// are SHARED between originals and generated materials (never cloned), so only
-// the material "shells" are disposed here — the textures are freed once, when
-// the model's real materials are disposed on unload.
+// On top of the mode, two controls tame harsh shading (e.g. a hard shadow line
+// across a face):
+//   • soften (0..1)  — global: raises the toon shadow floor so shadows are
+//                      lighter/flatter everywhere.
+//   • per-mesh shading override — 'full' | 'soft' | 'flat':
+//        soft  → gentler shadow ramp in toon mode.
+//        flat  → this mesh ignores lighting entirely (unlit) in ANY mode. This
+//                is how you kill shading on a specific part like the face.
+//
+// Originals are recorded once at load, so switching never destroys them.
+// Generated materials are cached per mesh and disposed on unload. Textures are
+// SHARED with the originals (never cloned), so only the material "shells" are
+// disposed here — textures are freed once, with the originals, on unload.
 // ---------------------------------------------------------------------------
 
-// Gradient ramp textures, cached by step count and shared across meshes/models.
-// Each is only `steps x 1` pixels, so we keep them for the app's lifetime rather
-// than rebuilding them every mode switch.
+// Extra shadow-lift applied to meshes flagged 'soft' (0 = full contrast, 1 =
+// flat). Faces flagged soft never go darker than this.
+const SOFT_FLOOR = 0.55
+
+// Gradient ramp textures, cached by (step count, shadow floor) and shared across
+// meshes/models. Each is only `steps x 1` px, so we keep them for the app's
+// lifetime rather than rebuilding on every slider tick. The floor is quantised
+// so dragging the soften slider reuses a bounded set of ramps.
 const gradientCache = new Map()
 
 // Build a stepped grayscale ramp used as MeshToonMaterial.gradientMap. The toon
 // shader samples this at (N·L * 0.5 + 0.5) and reads the red channel, so a small
 // N-wide NearestFilter texture quantises the diffuse term into N hard bands.
-function getGradientMap(steps) {
-  if (gradientCache.has(steps)) return gradientCache.get(steps)
+// `floor` (0..1) lifts the darkest band toward white to soften/flatten shadows.
+function getGradientMap(steps, floor) {
+  const fq = Math.round(floor * 20) / 20 // quantise to 0.05 to bound the cache
+  const key = steps + ':' + fq
+  if (gradientCache.has(key)) return gradientCache.get(key)
 
   const data = new Uint8Array(steps)
+  const base = Math.round(fq * 255) // darkest band brightness
   for (let i = 0; i < steps; i++) {
-    // Evenly space the bands from dark (0) to full (255) across the ramp.
-    data[i] = steps === 1 ? 255 : Math.round((i / (steps - 1)) * 255)
+    // Lerp from `base` (dark) to 255 (lit) across the ramp.
+    const t = steps === 1 ? 1 : i / (steps - 1)
+    data[i] = Math.round(base + (255 - base) * t)
   }
 
   const tex = new THREE.DataTexture(data, steps, 1, THREE.RedFormat)
@@ -45,7 +62,7 @@ function getGradientMap(steps) {
   // Leave colorSpace at its linear default: this is a math ramp, not sRGB colour.
   tex.needsUpdate = true
 
-  gradientCache.set(steps, tex)
+  gradientCache.set(key, tex)
   return tex
 }
 
@@ -60,43 +77,47 @@ export function recordOriginalMaterials(model) {
     originals, // mesh -> Material | Material[]  (never mutated)
     unlit: new Map(), // mesh -> generated MeshBasicMaterial(s)
     toon: new Map(), // mesh -> generated MeshToonMaterial(s)
-    toonSteps: null, // step count the current toon cache was built for
-    mode: 'standard', // the materials on the meshes right now (as loaded)
   }
 }
 
 /**
- * Apply a material mode to every mesh in the model. Non-destructive: originals
- * are kept, generated materials are cached and reused.
+ * Apply the active material mode + shading controls to every mesh.
+ * Non-destructive: originals are kept, generated materials are cached and reused;
+ * only the toon gradient (a shared tiny texture) is reassigned per apply.
  *
- * @param {object} model  parsed model (from loadModel) with .meshes + .materials
- * @param {'unlit'|'toon'|'standard'} mode
- * @param {{ toonSteps?: number }} [opts]
+ * @param {object} model  parsed model with .meshes + .materials
+ * @param {object} opts
+ * @param {'unlit'|'toon'|'standard'} opts.mode
+ * @param {number} [opts.toonSteps]  shadow band count
+ * @param {number} [opts.soften]     global shadow lift, 0..1
+ * @param {object} [opts.overrides]  { [mesh.uuid]: { outline?, shading? } }
  */
-export function applyMaterialMode(model, mode, opts = {}) {
+export function applyMaterials(model, opts) {
   if (!model || !model.materials) return
+  const { mode, toonSteps = 3, soften = 0, overrides = {} } = opts
   const store = model.materials
-  const steps = opts.toonSteps ?? 3
-
-  // If the toon step count changed, drop the stale toon cache so it rebuilds
-  // against the new gradient ramp.
-  if (mode === 'toon' && store.toonSteps !== steps) {
-    disposeCache(store.toon)
-    store.toon = new Map()
-    store.toonSteps = steps
-  }
 
   for (const mesh of model.meshes) {
+    const shading = (overrides[mesh.uuid] && overrides[mesh.uuid].shading) || 'full'
     const original = store.originals.get(mesh)
+
+    // 'flat' (or Unlit mode) → raw colour, no lighting.
+    if (mode === 'unlit' || shading === 'flat') {
+      mesh.material = getOrBuild(store.unlit, mesh, original, buildUnlit)
+      continue
+    }
+    // Standard mode keeps the untouched PBR originals.
     if (mode === 'standard') {
       mesh.material = original
-    } else if (mode === 'unlit') {
-      mesh.material = getOrBuild(store.unlit, mesh, original, buildUnlit)
-    } else if (mode === 'toon') {
-      mesh.material = getOrBuild(store.toon, mesh, original, (m) => buildToon(m, steps))
+      continue
     }
+    // Toon: reuse the cached toon material and (re)assign its gradient ramp.
+    // 'soft' meshes get a floored (gentler) ramp on top of the global soften.
+    const floor = shading === 'soft' ? Math.max(soften, SOFT_FLOOR) : soften
+    const toonMat = getOrBuild(store.toon, mesh, original, buildToon)
+    assignGradient(toonMat, toonSteps, floor)
+    mesh.material = toonMat
   }
-  store.mode = mode
 }
 
 // Put the original materials back on every mesh. Called before unload so the
@@ -118,7 +139,6 @@ export function disposeGeneratedMaterials(model) {
   disposeCache(model.materials.toon)
   model.materials.unlit.clear()
   model.materials.toon.clear()
-  model.materials.toonSteps = null
 }
 
 // --- internals ---------------------------------------------------------------
@@ -132,16 +152,28 @@ function getOrBuild(cache, mesh, original, build) {
   return made
 }
 
+// Assign a shared gradient ramp to a (possibly multi-) toon material.
+function assignGradient(material, steps, floor) {
+  const arr = Array.isArray(material) ? material : [material]
+  const grad = getGradientMap(steps, floor)
+  for (const m of arr) {
+    if (m.gradientMap !== grad) {
+      m.gradientMap = grad
+      m.needsUpdate = true
+    }
+  }
+}
+
 function buildUnlit(src) {
   const m = new THREE.MeshBasicMaterial()
   copyCommon(src, m)
   return m
 }
 
-function buildToon(src, steps) {
+function buildToon(src) {
   const m = new THREE.MeshToonMaterial()
   copyCommon(src, m)
-  m.gradientMap = getGradientMap(steps)
+  // The gradient ramp is assigned separately (per apply) via assignGradient.
   // Carry emissive/normal detail through so toon shading keeps glows and surface
   // relief that the PBR original had.
   if (src.emissive) m.emissive.copy(src.emissive)

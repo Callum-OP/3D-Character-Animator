@@ -24,7 +24,10 @@ The project is being built in phases (see [`references/Plan.md`](references/Plan
   count), and **Standard** (original PBR). A key-light control (intensity /
   direction / height) drives the Toon and Standard modes. An optional
   **inverted-hull outline** (toggle + width) can be layered on any mode — its
-  thickness is screen-space, so it looks consistent across model scales.
+  thickness is screen-space, so it looks consistent across model scales. A global
+  **Soften** control lifts toon shadows and thins the outline everywhere, and
+  **per-mesh overrides** let you drop the outline and flatten shading on specific
+  parts (e.g. the face).
 - **Phase 3+ — not yet built:** bone posing, animation playback & keyframing, and
   PNG / image-sequence export.
 
@@ -74,7 +77,9 @@ npm run preview    # serve the production build locally
    animation clips. **Unload model** frees its GPU memory.
 5. The **Material** panel picks the shading mode (Unlit / Toon / Standard), the
    toon shadow-band count, the key-light intensity/direction/height (ignored in
-   Unlit mode), and an optional black outline with a width slider.
+   Unlit mode), an optional black outline with a width slider, a global **Soften**
+   control, and **per-mesh** overrides (outline on/off + Full/Soft/Flat shading —
+   set the face mesh to *Flat* with its outline off to keep it clean).
 6. The **View** panel toggles the reference grid and switches between a
    transparent background (the default, for compositing) and a solid colour.
 

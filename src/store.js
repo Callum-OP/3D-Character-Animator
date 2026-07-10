@@ -13,8 +13,9 @@ export const useStore = create((set) => ({
 
   setLoading: (loading) => set({ loading, loadError: null }),
   setLoadError: (loadError) => set({ loadError, loading: false }),
-  setModelInfo: (modelInfo) => set({ modelInfo, loading: false, loadError: null }),
-  clearModel: () => set({ modelInfo: null, loadError: null }),
+  setModelInfo: (modelInfo) =>
+    set({ modelInfo, loading: false, loadError: null, meshOverrides: {} }),
+  clearModel: () => set({ modelInfo: null, loadError: null, meshOverrides: {} }),
 
   // ---- Viewport display toggles ----
   showGrid: true,
@@ -49,4 +50,32 @@ export const useStore = create((set) => ({
 
   setOutlineEnabled: (outlineEnabled) => set({ outlineEnabled }),
   setOutlineWidth: (outlineWidth) => set({ outlineWidth }),
+
+  // ---- Shading softening ----
+  // Global: lifts toon shadows (flatter) and thins the outline everywhere.
+  softenEnabled: false,
+  softenAmount: 0.4, // 0..1
+
+  setSoftenEnabled: (softenEnabled) => set({ softenEnabled }),
+  setSoftenAmount: (softenAmount) => set({ softenAmount }),
+
+  // Per-mesh overrides, keyed by mesh uuid: { outline: bool, shading: mode }.
+  // Absent entry => defaults (outline on, 'full' shading). Cleared on load.
+  // Used to e.g. drop the outline and flatten shading on a face mesh.
+  meshOverrides: {},
+
+  setMeshOutline: (uuid, outline) =>
+    set((s) => ({
+      meshOverrides: {
+        ...s.meshOverrides,
+        [uuid]: { shading: 'full', ...s.meshOverrides[uuid], outline },
+      },
+    })),
+  setMeshShading: (uuid, shading) =>
+    set((s) => ({
+      meshOverrides: {
+        ...s.meshOverrides,
+        [uuid]: { outline: true, ...s.meshOverrides[uuid], shading },
+      },
+    })),
 }))

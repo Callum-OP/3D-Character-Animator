@@ -3,7 +3,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { loadModel, disposeObject } from './loadModel.js'
 import {
   recordOriginalMaterials,
-  applyMaterialMode,
+  applyMaterials,
   restoreOriginalMaterials,
   disposeGeneratedMaterials,
 } from './materials.js'
@@ -186,11 +186,9 @@ export async function loadModelFile(file) {
     state.scene.add(parsed.root)
 
     // Record the as-loaded (Standard/PBR) materials, then apply the active mode
-    // (Unlit by default). Non-destructive — originals are kept for switching back.
+    // + shading/outline settings. Non-destructive — originals are kept.
     recordOriginalMaterials(parsed)
-    applyMaterialMode(parsed, store.materialMode, { toonSteps: store.toonSteps })
-    // Stamp outline params onto whatever materials are now live.
-    applyOutlineParams(parsed, store.outlineWidth)
+    applyModelMaterials()
 
     frameCameraToObject(parsed.root)
     store.setModelInfo(parsed.info)
@@ -266,31 +264,27 @@ export function setBackground(solid, color) {
 // Material mode + lighting (Phase 2)
 // ---------------------------------------------------------------------------
 
-// Switch the active material mode on the loaded model (no-op if none loaded).
-export function setMaterialMode(mode) {
+// Re-apply materials + outline to the loaded model from the current store state.
+// This is the single entry point for any material/shading/outline-width change
+// (mode, toon steps, soften, per-mesh overrides). No-op if nothing is loaded.
+export function applyModelMaterials() {
   if (!state.currentModel) return
   const s = useStore.getState()
-  applyMaterialMode(state.currentModel, mode, { toonSteps: s.toonSteps })
-  // The active materials just changed; re-stamp outline params onto them.
-  applyOutlineParams(state.currentModel, s.outlineWidth)
+  const soften = s.softenEnabled ? s.softenAmount : 0
+  applyMaterials(state.currentModel, {
+    mode: s.materialMode,
+    toonSteps: s.toonSteps,
+    soften,
+    overrides: s.meshOverrides,
+  })
+  // Materials may have been swapped; re-stamp outline params onto the live ones.
+  applyOutlineParams(state.currentModel, s.outlineWidth, soften, s.meshOverrides)
   requestRender()
 }
 
-// Rebuild toon materials at a new band count (only relevant in toon mode).
-export function setToonSteps(steps) {
-  if (!state.currentModel) return
-  const s = useStore.getState()
-  if (s.materialMode === 'toon') {
-    applyMaterialMode(state.currentModel, 'toon', { toonSteps: steps })
-    applyOutlineParams(state.currentModel, s.outlineWidth)
-    requestRender()
-  }
-}
-
-// Toggle the outline and set its (screen-space) thickness.
-export function setOutline(enabled, width) {
+// Toggle the outline pass on/off (width/visibility come from applyModelMaterials).
+export function setOutlineToggle(enabled) {
   setOutlineEnabled(enabled)
-  if (state.currentModel) applyOutlineParams(state.currentModel, width)
   requestRender()
 }
 

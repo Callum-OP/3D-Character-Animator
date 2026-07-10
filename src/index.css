@@ -295,3 +295,53 @@ body {
   color: var(--text);
   font-variant-numeric: tabular-nums;
 }
+
+/* --- Per-mesh override list --- */
+.mesh-list {
+  max-height: 180px;
+  overflow-y: auto;
+  margin-top: 4px;
+}
+
+.mesh-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  column-gap: 8px;
+  padding: 3px 0;
+}
+
+.mesh-head {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--panel-border);
+  padding-bottom: 4px;
+}
+
+.mesh-head span:not(:first-child) {
+  text-align: center;
+}
+
+.mesh-name {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mesh-outline {
+  display: inline-flex;
+  align-items: center;
+}
+
+.mesh-outline input {
+  accent-color: var(--accent);
+}
+
+.select-sm {
+  width: auto;
+  padding: 3px 6px;
+  font-size: 11px;
+}
