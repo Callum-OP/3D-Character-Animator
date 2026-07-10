@@ -47,6 +47,7 @@ const p = {
   undoStack: [],
   dragBefore: null, // selected bone's quaternion at drag start
   pointerDown: null, // { x, y, axis } for click-vs-drag discrimination
+  suspended: false, // true while animation playback drives the bones
 }
 
 const _v = new THREE.Vector3() // scratch, reused every helper update
@@ -138,6 +139,7 @@ export function clearPoseModel() {
   if (p.transform) p.transform.detach()
   p.selected = null
   p.dragBefore = null
+  p.suspended = false
   p.undoStack = []
   if (p.points) {
     p.scene.remove(p.points)
@@ -172,13 +174,52 @@ export function updateBoneHelpers() {
 }
 
 // Select a bone by name (or null to deselect). Idempotent: safe to call from
-// both the panel and the viewport pick path.
+// both the panel and the viewport pick path. While suspended (animation playing)
+// we remember the selection but don't attach the gizmo.
 export function selectBone(name) {
   const bone = name ? p.boneMap.get(name) || null : null
   p.selected = bone
-  if (bone) p.transform.attach(bone)
-  else p.transform.detach()
+  if (!p.suspended) {
+    if (bone) p.transform.attach(bone)
+    else p.transform.detach()
+  }
   p.requestRender()
+}
+
+// Suspend interactive posing while animation drives the bones: detach the gizmo
+// and ignore picks. resume() re-attaches to the remembered selection.
+export function suspendPosing() {
+  p.suspended = true
+  if (p.transform) p.transform.detach()
+  p.requestRender()
+}
+
+export function resumePosing() {
+  p.suspended = false
+  if (p.selected && p.transform) p.transform.attach(p.selected)
+  p.requestRender()
+}
+
+// Read a bone's current local rotation as [x, y, z, w] (for keyframing).
+export function getBoneQuaternion(name) {
+  const b = p.boneMap.get(name)
+  if (!b) return null
+  const q = b.quaternion
+  return [q.x, q.y, q.z, q.w]
+}
+
+// All bones currently rotated away from their rest pose, as { name, quat }.
+// Used by "key all posed bones".
+export function getPosedBones() {
+  const out = []
+  for (const bone of p.bones) {
+    const rest = p.restQuats.get(bone)
+    if (rest && !bone.quaternion.equals(rest)) {
+      const q = bone.quaternion
+      out.push({ name: bone.name, quat: [q.x, q.y, q.z, q.w] })
+    }
+  }
+  return out
 }
 
 export function setTransformSpace(space) {
@@ -293,6 +334,7 @@ function onPointerDown(e) {
 function onPointerUp(e) {
   const down = p.pointerDown
   p.pointerDown = null
+  if (p.suspended) return // no picking while animation plays
   if (!down || e.button !== 0 || !p.points || p.points.visible === false) return
   if (down.axis !== null) return // was dragging the gizmo
   if (Math.abs(e.clientX - down.x) + Math.abs(e.clientY - down.y) > DRAG_SLOP_PX) return // orbit-drag

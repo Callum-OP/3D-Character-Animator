@@ -436,3 +436,116 @@ body {
   margin-top: 8px;
   line-height: 1.4;
 }
+
+/* --- Animation panel --- */
+.transport {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.transport .btn {
+  padding: 8px 6px;
+}
+
+.scrub-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.scrub-row input[type='range'] {
+  flex: 1;
+  accent-color: var(--accent);
+}
+
+.scrub-time {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.anim-opts {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 10px;
+}
+
+.keyframe-editor {
+  margin-top: 12px;
+  border-top: 1px solid var(--panel-border);
+  padding-top: 8px;
+}
+
+.kf-numbers {
+  display: flex;
+  gap: 12px;
+  margin: 6px 0;
+}
+
+.kf-numbers label {
+  font-size: 11px;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.kf-numbers input {
+  width: 52px;
+  padding: 4px 6px;
+  background: var(--panel-bg);
+  color: var(--text);
+  border: 1px solid var(--panel-border);
+  border-radius: 5px;
+  font-size: 12px;
+}
+
+.kf-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.kf-actions .btn {
+  padding: 6px 6px;
+  font-size: 11px;
+}
+
+.kf-strip-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin: 8px 0 4px;
+}
+
+.kf-strip {
+  position: relative;
+  height: 22px;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 5px;
+}
+
+.kf-marker {
+  position: absolute;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  margin-left: -4.5px;
+  transform: translateY(-50%) rotate(45deg);
+  background: var(--text-dim);
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.kf-marker:hover {
+  background: var(--text);
+}
+
+.kf-marker.active {
+  background: var(--accent);
+}

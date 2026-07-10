@@ -20,7 +20,15 @@ import {
   clearPoseModel,
   updateBoneHelpers,
   disposePosing,
+  suspendPosing,
+  resumePosing,
 } from './posing.js'
+import {
+  initAnimation,
+  setAnimationModel,
+  clearAnimationModel,
+  updateAnimation,
+} from './animation.js'
 import { useStore } from '../store.js'
 
 // ---------------------------------------------------------------------------
@@ -52,6 +60,7 @@ const state = {
   renderScheduled: false,
   continuous: false, // when true, render every frame (for animation playback)
   animId: 0,
+  clock: null, // THREE.Clock for per-frame deltas while playing
   resizeObserver: null,
 }
 
@@ -114,6 +123,17 @@ export function initScene(container) {
     onSelect: (name) => useStore.getState().setSelectedBoneName(name),
   })
 
+  // --- Animation (baked clips + in-app keyframing) ---
+  state.clock = new THREE.Clock()
+  initAnimation({
+    requestRender,
+    setContinuousRender,
+    suspendPosing,
+    resumePosing,
+    onTime: (t) => useStore.getState().setCurrentTime(t),
+    onEnded: () => useStore.getState().setPlayback('paused'),
+  })
+
   // --- Lights (only affect Toon/Standard modes in Phase 2; harmless in Unlit) ---
   const dirLight = new THREE.DirectionalLight(0xffffff, 2.0)
   dirLight.position.set(2, 4, 3)
@@ -169,9 +189,12 @@ export function setContinuousRender(on) {
   if (on === state.continuous) return
   state.continuous = on
   if (on) {
+    if (state.clock) state.clock.getDelta() // reset delta so the first frame isn't a big jump
     const tick = () => {
       if (!state.continuous) return
       state.animId = requestAnimationFrame(tick)
+      const delta = state.clock ? state.clock.getDelta() : 0
+      updateAnimation(delta) // advance the mixer before drawing
       renderOnce()
     }
     state.animId = requestAnimationFrame(tick)
@@ -210,6 +233,7 @@ export async function loadModelFile(file) {
     recordOriginalMaterials(parsed)
     applyModelMaterials()
     setPoseModel(parsed) // capture rest pose + build the bone-dot overlay
+    setAnimationModel(parsed) // new mixer + baked clips
 
     frameCameraToObject(parsed.root)
     store.setModelInfo(parsed.info)
@@ -224,6 +248,8 @@ export async function loadModelFile(file) {
 export function disposeCurrentModel() {
   if (!state.currentModel) return
   const model = state.currentModel
+  setContinuousRender(false) // stop any playback before tearing the model down
+  clearAnimationModel() // dispose the mixer
   clearPoseModel() // detach gizmo + remove bone overlay before the graph goes away
   // Put the real materials back so the deep-dispose walk frees them (and their
   // textures) rather than a generated shell that only borrows those textures...

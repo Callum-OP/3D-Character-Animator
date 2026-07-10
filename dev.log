@@ -87,3 +87,5 @@
 [2m21:43:15[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css[22m
 [2m10:41:58[22m [36m[1m[vite][22m[39m [32mvite.config.js changed, restarting server...[39m
 [2m10:41:58[22m [36m[1m[vite][22m[39m server restarted.
+[2m11:39:34[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32m✨ new dependencies optimized: [33mthree/examples/jsm/controls/TransformControls.js[32m[39m
+[2m11:39:34[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32m✨ optimized dependencies changed. reloading[39m

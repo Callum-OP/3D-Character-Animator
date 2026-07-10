@@ -23,6 +23,15 @@ export const useStore = create((set) => ({
       boneFilter: '',
       // Default the deform-only filter ON for rigs that have DEF- bones (Rigify).
       deformOnly: !!(modelInfo.bones && modelInfo.bones.some((b) => b.deform)),
+      // Reset animation state for the new rig.
+      playback: 'stopped',
+      playbackSource: modelInfo.clipNames && modelInfo.clipNames.length ? 'clip' : 'edit',
+      activeClipName: null,
+      importedClipNames: [],
+      duration: 0,
+      currentTime: 0,
+      animData: { tracks: {} },
+      insertTime: 0,
     }),
   clearModel: () =>
     set({
@@ -31,6 +40,11 @@ export const useStore = create((set) => ({
       meshOverrides: {},
       selectedBoneName: null,
       boneFilter: '',
+      playback: 'stopped',
+      activeClipName: null,
+      importedClipNames: [],
+      currentTime: 0,
+      animData: { tracks: {} },
     }),
 
   // ---- Viewport display toggles ----
@@ -107,4 +121,67 @@ export const useStore = create((set) => ({
   setDeformOnly: (deformOnly) => set({ deformOnly }),
   setTransformSpace: (transformSpace) => set({ transformSpace }),
   setShowBones: (showBones) => set({ showBones }),
+
+  // ---- Animation (Phase 4) ----
+  playback: 'stopped', // 'stopped' | 'playing' | 'paused'
+  playbackSource: 'edit', // 'clip' (baked) | 'edit' (in-app keyframes)
+  activeClipName: null, // selected clip (baked or imported)
+  importedClipNames: [], // names of retargeted BVH mocap clips
+  loop: true,
+  speed: 1,
+  duration: 0, // current source duration (seconds)
+  currentTime: 0, // playhead (updated during playback)
+
+  setPlayback: (playback) => set({ playback }),
+  setPlaybackSource: (playbackSource) => set({ playbackSource }),
+  setActiveClipName: (activeClipName) => set({ activeClipName }),
+  addImportedClipName: (name) =>
+    set((s) => ({ importedClipNames: [...s.importedClipNames, name] })),
+  setLoop: (loop) => set({ loop }),
+  setSpeed: (speed) => set({ speed }),
+  setDuration: (duration) => set({ duration }),
+  setCurrentTime: (currentTime) => set({ currentTime }),
+
+  // In-app keyframe animation. tracks: { [boneName]: [{ time, quat:[x,y,z,w] }] }
+  animFps: 24,
+  animDuration: 2,
+  insertTime: 0, // where "Add keyframe" inserts (seconds)
+  animData: { tracks: {} },
+
+  setAnimFps: (animFps) => set({ animFps }),
+  setAnimDuration: (animDuration) => set({ animDuration }),
+  setInsertTime: (insertTime) => set({ insertTime }),
+  setAnimData: (animData) => set({ animData }),
+  clearAnim: () => set({ animData: { tracks: {} } }),
+
+  // Insert/replace a keyframe for one bone at a time.
+  addKeyframe: (name, time, quat) =>
+    set((s) => {
+      const keys = (s.animData.tracks[name] || []).filter((k) => k.time !== time)
+      keys.push({ time, quat })
+      keys.sort((a, b) => a.time - b.time)
+      return { animData: { tracks: { ...s.animData.tracks, [name]: keys } } }
+    }),
+
+  // Key several bones at the same time (for "key all posed bones").
+  addKeyframesAtTime: (list, time) =>
+    set((s) => {
+      const tracks = { ...s.animData.tracks }
+      for (const { name, quat } of list) {
+        const keys = (tracks[name] || []).filter((k) => k.time !== time)
+        keys.push({ time, quat })
+        keys.sort((a, b) => a.time - b.time)
+        tracks[name] = keys
+      }
+      return { animData: { tracks } }
+    }),
+
+  deleteKeyframe: (name, time) =>
+    set((s) => {
+      const tracks = { ...s.animData.tracks }
+      const keys = (tracks[name] || []).filter((k) => k.time !== time)
+      if (keys.length) tracks[name] = keys
+      else delete tracks[name]
+      return { animData: { tracks } }
+    }),
 }))

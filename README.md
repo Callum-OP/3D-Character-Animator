@@ -32,8 +32,18 @@ The project is being built in phases (see [`references/Plan.md`](references/Plan
   name in the tree), rotate it with the gizmo to build an FK pose, and
   save/load/reset poses as JSON. Filterable bone tree with a deform-only toggle,
   local/world gizmo space, `Esc` to deselect, and `Ctrl+Z` undo (100-deep).
-- **Phase 4+ — not yet built:** animation playback & keyframing, and PNG /
-  image-sequence export.
+- **Phase 4 — Animation — ✅ done.** Play baked glTF clips with a timeline
+  scrubber, loop toggle, and speed control; or author a simple in-app keyframe
+  animation (key the selected bone or all posed bones at a time, adjust
+  duration/fps, scrub, and save/load as JSON). Playback and posing are mutually
+  exclusive — the gizmo steps aside while a clip plays and the rest pose is
+  restored on Stop.
+- **Mocap (BVH) import — ✅ done.** Import a `.bvh` motion-capture file; it's
+  auto-retargeted onto the loaded rig (bone names matched exactly or normalized).
+  Any clip (baked or mocap) can be applied as a single **pose** at the scrub time,
+  or **baked** into editable in-app keyframes. Retargeting quality depends on the
+  rig being roughly T/A-posed and on mappable bone names.
+- **Phase 5+ — not yet built:** PNG / image-sequence export.
 
 ### Supported file formats
 
@@ -106,7 +116,14 @@ Vite build sets `base: '/3D-Character-Animator/'` (see `vite.config.js`). Local
    a name in the tree to select it, then drag the rotate gizmo. Save/Load/Reset
    poses (JSON), Undo edits, toggle the bone overlay, filter names, hide
    non-deform bones, and switch the gizmo between local/world space.
-7. The **View** panel toggles the reference grid and switches between a
+7. The **Animation** panel plays baked clips (pick one, then Play/scrub/loop/speed)
+   or authors an in-app keyframe animation: pose a bone, set the insert time, and
+   **Key bone** / **Key all posed** to add keyframes, then Play to preview and
+   Save/Load the animation as JSON. (Stop returns to the rest pose so you can keep
+   editing.) Under **Clip / mocap** you can also **Import mocap (.bvh)** to
+   retarget a motion onto the rig, and turn any clip into a single pose
+   (**Frame → pose**) or editable keyframes (**Bake → keys**).
+8. The **View** panel toggles the reference grid and switches between a
    transparent background (the default, for compositing) and a solid colour.
 
 ## Tech stack
@@ -128,11 +145,14 @@ src/
     outline.js          # inverted-hull outline via three's OutlineEffect
     posing.js           # bone gizmo, pickable bone dots, undo, rest pose
     poses.js            # pose JSON format + file save/load
+    animation.js        # AnimationMixer: baked clips + in-app keyframe clips
+    bvh.js              # BVH mocap import + retarget onto the loaded rig
     Viewport.jsx        # canvas host + drag-and-drop + pose keyboard shortcuts
   panels/
     ModelPanel.jsx      # load button / drop zone, model stats
     MaterialPanel.jsx   # material mode + key-light controls
     BonePanel.jsx       # bone tree, pose save/load/reset/undo
+    AnimationPanel.jsx  # clip playback + in-app keyframing
     ViewPanel.jsx       # grid & background toggles
 ```
 
