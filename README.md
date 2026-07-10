@@ -66,6 +66,24 @@ npm run build      # production build into dist/
 npm run preview    # serve the production build locally
 ```
 
+## Deployment (GitHub Pages)
+
+The app is a pure static site, so it deploys to GitHub Pages with no backend. A
+workflow at [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) builds
+and publishes `dist/` on every push to `main`.
+
+One-time setup: in the repo, go to **Settings → Pages → Build and deployment →
+Source** and select **GitHub Actions**. After the next push to `main`, the site
+goes live at:
+
+```
+https://callum-op.github.io/3D-Character-Animator/
+```
+
+Because this is a *project* Pages site (served from a `/<repo>/` subpath), the
+Vite build sets `base: '/3D-Character-Animator/'` (see `vite.config.js`). Local
+`dev`/`preview` still run at `/`. If the repo is renamed, update that `base`.
+
 ## Usage
 
 1. **Export** your character from Blender as `.glb` (glTF binary, with rig and any
