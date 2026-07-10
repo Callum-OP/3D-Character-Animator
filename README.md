@@ -28,8 +28,12 @@ The project is being built in phases (see [`references/Plan.md`](references/Plan
   **Soften** control lifts toon shadows and thins the outline everywhere, and
   **per-mesh overrides** let you drop the outline and flatten shading on specific
   parts (e.g. the face).
-- **Phase 3+ — not yet built:** bone posing, animation playback & keyframing, and
-  PNG / image-sequence export.
+- **Phase 3 — Bone posing — ✅ done.** Click a bone (a dot in the viewport or a
+  name in the tree), rotate it with the gizmo to build an FK pose, and
+  save/load/reset poses as JSON. Filterable bone tree with a deform-only toggle,
+  local/world gizmo space, `Esc` to deselect, and `Ctrl+Z` undo (100-deep).
+- **Phase 4+ — not yet built:** animation playback & keyframing, and PNG /
+  image-sequence export.
 
 ### Supported file formats
 
@@ -98,7 +102,11 @@ Vite build sets `base: '/3D-Character-Animator/'` (see `vite.config.js`). Local
    Unlit mode), an optional black outline with a width slider, a global **Soften**
    control, and **per-mesh** overrides (outline on/off + Full/Soft/Flat shading —
    set the face mesh to *Flat* with its outline off to keep it clean).
-6. The **View** panel toggles the reference grid and switches between a
+6. The **Pose** panel lists the rig's bones. Click a bone dot in the viewport or
+   a name in the tree to select it, then drag the rotate gizmo. Save/Load/Reset
+   poses (JSON), Undo edits, toggle the bone overlay, filter names, hide
+   non-deform bones, and switch the gizmo between local/world space.
+7. The **View** panel toggles the reference grid and switches between a
    transparent background (the default, for compositing) and a solid colour.
 
 ## Tech stack
@@ -118,10 +126,13 @@ src/
     loadModel.js        # format dispatch: GLTFLoader / FBXLoader + deep dispose
     materials.js        # unlit/toon/standard material modes (non-destructive)
     outline.js          # inverted-hull outline via three's OutlineEffect
-    Viewport.jsx        # canvas host + drag-and-drop
+    posing.js           # bone gizmo, pickable bone dots, undo, rest pose
+    poses.js            # pose JSON format + file save/load
+    Viewport.jsx        # canvas host + drag-and-drop + pose keyboard shortcuts
   panels/
     ModelPanel.jsx      # load button / drop zone, model stats
     MaterialPanel.jsx   # material mode + key-light controls
+    BonePanel.jsx       # bone tree, pose save/load/reset/undo
     ViewPanel.jsx       # grid & background toggles
 ```
 

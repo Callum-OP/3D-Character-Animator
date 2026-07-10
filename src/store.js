@@ -14,8 +14,24 @@ export const useStore = create((set) => ({
   setLoading: (loading) => set({ loading, loadError: null }),
   setLoadError: (loadError) => set({ loadError, loading: false }),
   setModelInfo: (modelInfo) =>
-    set({ modelInfo, loading: false, loadError: null, meshOverrides: {} }),
-  clearModel: () => set({ modelInfo: null, loadError: null, meshOverrides: {} }),
+    set({
+      modelInfo,
+      loading: false,
+      loadError: null,
+      meshOverrides: {},
+      selectedBoneName: null,
+      boneFilter: '',
+      // Default the deform-only filter ON for rigs that have DEF- bones (Rigify).
+      deformOnly: !!(modelInfo.bones && modelInfo.bones.some((b) => b.deform)),
+    }),
+  clearModel: () =>
+    set({
+      modelInfo: null,
+      loadError: null,
+      meshOverrides: {},
+      selectedBoneName: null,
+      boneFilter: '',
+    }),
 
   // ---- Viewport display toggles ----
   showGrid: true,
@@ -78,4 +94,17 @@ export const useStore = create((set) => ({
         [uuid]: { outline: true, ...s.meshOverrides[uuid], shading },
       },
     })),
+
+  // ---- Bone posing (Phase 3) ----
+  selectedBoneName: null, // name of the bone the gizmo is attached to
+  boneFilter: '', // text filter for the bone tree
+  deformOnly: false, // hide non-DEF- bones (defaulted per rig on load)
+  transformSpace: 'local', // gizmo rotation space: 'local' | 'world'
+  showBones: true, // show the pickable bone-dot overlay + gizmo
+
+  setSelectedBoneName: (selectedBoneName) => set({ selectedBoneName }),
+  setBoneFilter: (boneFilter) => set({ boneFilter }),
+  setDeformOnly: (deformOnly) => set({ deformOnly }),
+  setTransformSpace: (transformSpace) => set({ transformSpace }),
+  setShowBones: (showBones) => set({ showBones }),
 }))

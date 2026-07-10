@@ -11,6 +11,7 @@ import {
 } from './scene.js'
 import { useStore } from '../store.js'
 import { SUPPORTED_EXTENSION_RE, SUPPORTED_EXTENSIONS } from './loadModel.js'
+import { selectBone, setTransformSpace, setBonesVisible, undo } from './posing.js'
 
 // The 3D viewport: owns the canvas container and the scene lifecycle, and
 // handles drag-and-drop of model files onto itself.
@@ -63,6 +64,40 @@ export default function Viewport() {
   useEffect(() => {
     setOutlineToggle(outlineEnabled)
   }, [outlineEnabled])
+
+  // --- Bone posing: push selection / gizmo space / overlay visibility ---
+  const selectedBoneName = useStore((s) => s.selectedBoneName)
+  const transformSpace = useStore((s) => s.transformSpace)
+  const showBones = useStore((s) => s.showBones)
+
+  useEffect(() => {
+    selectBone(selectedBoneName)
+  }, [selectedBoneName])
+
+  useEffect(() => {
+    setTransformSpace(transformSpace)
+  }, [transformSpace])
+
+  useEffect(() => {
+    setBonesVisible(showBones)
+  }, [showBones])
+
+  // Keyboard: Esc deselects, Ctrl/Cmd+Z undoes a bone edit. Ignored while typing
+  // in an input (e.g. the bone filter box).
+  useEffect(() => {
+    function onKeyDown(e) {
+      const tag = e.target.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      if (e.key === 'Escape') {
+        useStore.getState().setSelectedBoneName(null)
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault()
+        undo()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
 
   // --- Drag & drop ---
   function onDragOver(e) {

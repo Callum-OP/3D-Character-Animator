@@ -14,6 +14,13 @@ import {
   applyOutlineParams,
   disposeOutline,
 } from './outline.js'
+import {
+  initPosing,
+  setPoseModel,
+  clearPoseModel,
+  updateBoneHelpers,
+  disposePosing,
+} from './posing.js'
 import { useStore } from '../store.js'
 
 // ---------------------------------------------------------------------------
@@ -95,6 +102,18 @@ export function initScene(container) {
   controls.update()
   state.controls = controls
 
+  // --- Bone posing (gizmo + pickable bone dots) ---
+  initPosing({
+    scene,
+    camera,
+    renderer,
+    controls,
+    requestRender,
+    // Report viewport picks up to the store; the Viewport effect then drives
+    // the actual gizmo attach via selectBone (single source of truth).
+    onSelect: (name) => useStore.getState().setSelectedBoneName(name),
+  })
+
   // --- Lights (only affect Toon/Standard modes in Phase 2; harmless in Unlit) ---
   const dirLight = new THREE.DirectionalLight(0xffffff, 2.0)
   dirLight.position.set(2, 4, 3)
@@ -137,6 +156,7 @@ export function requestRender() {
 
 function renderOnce() {
   if (!state.renderer) return
+  updateBoneHelpers() // park bone dots on their (possibly just-moved) bones
   // Route through the outline effect. When the outline is disabled it falls
   // straight through to renderer.render, so there's no overhead when it's off.
   const effect = getOutlineEffect()
@@ -189,6 +209,7 @@ export async function loadModelFile(file) {
     // + shading/outline settings. Non-destructive — originals are kept.
     recordOriginalMaterials(parsed)
     applyModelMaterials()
+    setPoseModel(parsed) // capture rest pose + build the bone-dot overlay
 
     frameCameraToObject(parsed.root)
     store.setModelInfo(parsed.info)
@@ -203,6 +224,7 @@ export async function loadModelFile(file) {
 export function disposeCurrentModel() {
   if (!state.currentModel) return
   const model = state.currentModel
+  clearPoseModel() // detach gizmo + remove bone overlay before the graph goes away
   // Put the real materials back so the deep-dispose walk frees them (and their
   // textures) rather than a generated shell that only borrows those textures...
   restoreOriginalMaterials(model)
@@ -314,6 +336,7 @@ export function setLightSettings(intensity, azimuthDeg, elevationDeg) {
 export function disposeScene() {
   setContinuousRender(false)
   disposeCurrentModel()
+  disposePosing()
   disposeOutline()
 
   if (state.resizeObserver) {

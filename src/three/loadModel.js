@@ -117,9 +117,27 @@ function parseRoot(root, animations, fileName, format, source) {
     // Lightweight mesh list for per-mesh UI controls (outline/shading overrides).
     // uuid is the stable per-load key; name falls back to a positional label.
     meshes: meshes.map((m, i) => ({ uuid: m.uuid, name: m.name || `Mesh ${i + 1}` })),
+    // Flat bone list for the pose panel's tree: depth = number of Bone ancestors
+    // (for indentation); deform flags Rigify's DEF- bones.
+    bones: bones.map((b, i) => ({
+      name: b.name || `Bone ${i + 1}`,
+      depth: boneDepth(b),
+      deform: /^DEF-/.test(b.name || ''),
+    })),
   }
 
   return { source, root, skinnedMeshes, meshes, skeleton, bones, clips, info }
+}
+
+// Count how many Bone ancestors a bone has (used for tree indentation).
+function boneDepth(bone) {
+  let depth = 0
+  let node = bone.parent
+  while (node && node.isBone) {
+    depth++
+    node = node.parent
+  }
+  return depth
 }
 
 function extensionOf(fileName) {

@@ -345,3 +345,94 @@ body {
   padding: 3px 6px;
   font-size: 11px;
 }
+
+/* --- Pose panel --- */
+.pose-actions {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.pose-actions .btn {
+  padding: 7px 6px;
+  font-size: 12px;
+}
+
+.pose-msg {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 8px;
+}
+
+.pose-toggles {
+  display: flex;
+  gap: 14px;
+  margin-top: 10px;
+}
+
+/* Segmented local/world toggle */
+.seg {
+  display: flex;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.seg-btn {
+  flex: 1;
+  padding: 6px 8px;
+  background: var(--panel-bg);
+  color: var(--text-dim);
+  border: none;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.seg-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.bone-filter {
+  width: 100%;
+  margin-top: 8px;
+  padding: 6px 8px;
+  background: var(--panel-bg);
+  color: var(--text);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.bone-tree {
+  max-height: 240px;
+  overflow-y: auto;
+  margin-top: 8px;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+}
+
+.bone-row {
+  font-size: 12px;
+  padding: 3px 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.bone-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.bone-row.selected {
+  background: var(--accent);
+  color: #fff;
+}
+
+.pose-hint {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  margin-top: 8px;
+  line-height: 1.4;
+}
