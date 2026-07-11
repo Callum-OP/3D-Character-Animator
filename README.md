@@ -5,64 +5,43 @@ characters exported from Blender — built to be **dramatically lighter on memor
 than Blender**, which is the whole point of the app.
 
 Load a rigged character, choose how it's shaded (keeping the flat/anime colours
-picked in Blender), pose the bones or play baked animation clips, then export the
-current frame as a transparent PNG that drops straight into a 2D art pipeline
-(e.g. Clip Studio Paint).
+picked in Blender), pose the bones or play baked animation clips.
 
 Everything runs client-side. There is no backend, no upload, no account — files
 never leave your machine (they're parsed via `URL.createObjectURL` over the local
 blob).
 
-## Status
+## Features
 
-The project is being built in phases (see [`references/Plan.md`](references/Plan.md)).
-
-- **Phase 1 — Scaffold & model loading — ✅ done.** Load a model, orbit around it,
-  see its stats, toggle grid/background, dispose cleanly on unload.
-- **Phase 2 — Material modes — ✅ done.** Switch between **Unlit** (raw Blender
-  colours, the default), **Toon** (stepped anime shading with a selectable band
-  count), and **Standard** (original PBR). A key-light control (intensity /
-  direction / height) drives the Toon and Standard modes. An optional
-  **inverted-hull outline** (toggle + width) can be layered on any mode — its
-  thickness is screen-space, so it looks consistent across model scales. A global
-  **Soften** control lifts toon shadows and thins the outline everywhere, and
-  **per-mesh overrides** let you drop the outline and flatten shading on specific
-  parts (e.g. the face).
-- **Phase 3 — Bone posing — ✅ done.** Click a bone (a dot in the viewport or a
-  name in the tree), rotate it with the gizmo to build an FK pose, and
-  save/load/reset poses as JSON. Filterable bone tree with a deform-only toggle,
-  local/world gizmo space, `Esc` to deselect, and `Ctrl+Z` undo (100-deep).
-- **Phase 4 — Animation — ✅ done.** Play baked glTF clips with a timeline
-  scrubber, loop toggle, and speed control; or author a simple in-app keyframe
-  animation (key the selected bone or all posed bones at a time, adjust
-  duration/fps, scrub, and save/load as JSON). Playback and posing are mutually
-  exclusive — the gizmo steps aside while a clip plays and the rest pose is
-  restored on Stop.
-- **Mocap (BVH) import — ✅ done.** Import a `.bvh` motion-capture file and
-  retarget it onto the loaded rig. Bones are auto-mapped **semantically** — each
-  bone is classified into a canonical humanoid slot (Hips, Spine, Forearm L, …) by
-  body part + side, so different naming conventions (Mixamo / CMU / Rigify) line
-  up. A **mapping editor** shows the guess and lets you fix any slot by hand
-  before retargeting, so any skeleton can be made to work. Any clip (baked or
-  mocap) can also be applied as a single **pose** at the scrub time, or **baked**
-  into editable in-app keyframes.
-- **Phase 6 — Polish & friendliness — ✅ done.** One-click light presets
-  (Front/Side/Rim/Top), a cheap blob **ground shadow**, **per-part** show/hide, an
-  optional FPS/memory **performance readout**, a **Help & shortcuts** overlay
-  (press `?`), a welcoming empty state, and plain-language labels throughout for
-  people new to 3D/animation.
-- **Phase 4.5 — Scene objects — ✅ done.** Add any number of props or backgrounds
-  (`.glb`/`.gltf`/`.fbx`) around the character, then **Move / Rotate / Resize** the
-  selected one with a gizmo and **cycle** between them. The character itself is a
-  movable entry too. **Save/Load the scene** layout (placement + pose), **copy &
-  paste poses** (e.g. from a scrubbed mocap frame into your own clip), and record
-  **root motion** — move the character between keyframes so it walks toward a wall
-  instead of animating on the spot. A **shadow-mapping** toggle swaps the small
-  blob shadow for real cast shadows.
-- **Phase 5 — Export — ✅ done.** Save a **transparent PNG** at 1×/2×/4× the
-  viewport resolution, **record the animation to a video** (webm, from the current
-  camera angle), export your in-app animation as **`.bvh`** (round-trips through
-  the importer), and a **Fullscreen** view (Esc to exit) for screen-recording.
+- **Shading modes** — **Unlit** (raw Blender colours, the default), **Toon**
+  (stepped anime shading with a selectable band count), and **Standard** (original
+  PBR), with a key-light control (intensity / direction / height) for the lit
+  modes. An optional black **outline** (screen-space width, so it stays consistent
+  across model scales) can be layered on any mode, a global **Soften** control
+  lifts toon shadows and thins the outline, and **per-mesh overrides** let you drop
+  the outline and flatten shading on specific parts (e.g. the face).
+- **Bone posing** — click a bone (a dot in the viewport or a name in the tree),
+  rotate it with the gizmo to build a pose, and save/load/reset poses as JSON.
+  Filterable bone tree with a deform-only toggle, local/world gizmo space, `Esc` to
+  deselect, and `Ctrl+Z` undo.
+- **Animation** — play baked glTF clips with a timeline scrubber, loop toggle, and
+  speed control, or author your own in-app keyframe animation (key the selected
+  bone or all posed bones, adjust duration/fps, scrub, and save/load as JSON).
+- **Mocap import** — import a `.bvh` motion-capture file and retarget it onto the
+  loaded rig. Bones are auto-mapped by body part and side so different naming
+  conventions (Mixamo / CMU / Rigify) line up, and a mapping editor lets you fix
+  any bone by hand before retargeting. Any clip can also be applied as a single
+  pose or baked into editable keyframes.
+- **Scene objects** — add props or backgrounds (`.glb`/`.gltf`/`.fbx`) around the
+  character, then move / rotate / resize and cycle between them. Save/load the
+  scene layout, copy & paste poses, and record **root motion** so the character can
+  walk across the scene instead of animating on the spot.
+- **Export** — save a **transparent PNG** at 1×/2×/4× the viewport resolution,
+  record the animation to a **video** (webm), export your animation as **`.bvh`**,
+  and a **Fullscreen** view (Esc to exit) for screen-recording.
+- **Friendly by default** — one-click light presets (Front/Side/Rim/Top), a ground
+  shadow (blob or real cast shadows), per-part show/hide, an optional FPS/memory
+  readout, and a **Help & shortcuts** overlay (press `?`).
 
 ### Supported file formats
 
@@ -87,10 +66,6 @@ npm run dev        # start the Vite dev server (prints a local URL)
 
 Then open the printed URL, and either click **Load .glb / .gltf / .fbx** or drag
 a model file onto the viewport.
-
-> **Note (this machine):** HTTPS is intercepted by a corporate/system CA, so npm
-> may hang on install. Prefix commands with the system-CA flag:
-> `NODE_OPTIONS=--use-system-ca npm install`.
 
 ### Other scripts
 
