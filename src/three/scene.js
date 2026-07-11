@@ -165,7 +165,9 @@ export function initScene(container) {
   const dirLight = new THREE.DirectionalLight(0xffffff, 2.0)
   dirLight.position.set(2, 4, 3)
   dirLight.castShadow = false // enabled only in "realistic shadows" mode
-  dirLight.shadow.mapSize.set(2048, 2048)
+  // Larger map keeps shadows crisp over the wide frustum (positionLight sizes it
+  // to cover props + root-motion, not just the character).
+  dirLight.shadow.mapSize.set(4096, 4096)
   dirLight.shadow.bias = -0.0005
   scene.add(dirLight)
   scene.add(dirLight.target) // shadow camera aims at the model via this target
@@ -536,26 +538,30 @@ function placeShadowUnder(box) {
   positionLight()
 }
 
-// Position the key light along its direction, far enough out to light + cast a
-// shadow across the whole model, and fit the shadow camera to it.
+// Position the key light along its direction, high and far enough out to cast
+// shadows across a generous area — not just the character's bounding box, so
+// props and root-motion movement stay shadowed. `r` ~ the model's max dimension.
 function positionLight() {
   const dl = state.dirLight
   if (!dl) return
   const r = state.modelRadius
-  const dist = Math.max(5, r * 2)
+  const dist = Math.max(10, r * 6) // high & far so the frustum sits above the scene
   dl.position.copy(state.modelCenter).addScaledVector(state.lightDir, dist)
   dl.target.position.copy(state.modelCenter)
   dl.target.updateMatrixWorld()
 
   const cam = dl.shadow.camera
-  const half = r * 0.7
+  const half = Math.max(r * 4, 1) // cover ±4× the model size around the centre
   cam.left = -half
   cam.right = half
   cam.top = half
   cam.bottom = -half
-  cam.near = Math.max(0.01, dist - r)
-  cam.far = dist + r
+  cam.near = Math.max(0.01, dist - r * 5)
+  cam.far = dist + r * 5
   cam.updateProjectionMatrix()
+  // Scale-aware normal bias: bigger frustum = bigger texels, so offset along the
+  // surface normal in world units to avoid acne without peter-panning.
+  dl.shadow.normalBias = r * 0.02
 }
 
 // ---------------------------------------------------------------------------
