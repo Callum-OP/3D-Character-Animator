@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
 import { useStore } from '../store.js'
+import EditableValue from './EditableValue.jsx'
 import {
   selectClip,
   selectEdit,
@@ -482,9 +483,15 @@ export default function AnimationPanel() {
           value={Math.min(currentTime, displayDuration || 0)}
           onChange={(e) => onScrub(Number(e.target.value))}
         />
-        <span className="scrub-time">
-          {currentTime.toFixed(2)} / {(displayDuration || 0).toFixed(2)}s
-        </span>
+        <EditableValue
+          className="scrub-time"
+          value={currentTime}
+          min={0}
+          max={displayDuration || 0}
+          onChange={onScrub}
+          format={(v) => `${v.toFixed(2)} / ${(displayDuration || 0).toFixed(2)}s`}
+          label="Current time (seconds)"
+        />
       </div>
 
       <div className="anim-opts">
@@ -502,7 +509,14 @@ export default function AnimationPanel() {
             value={speed}
             onChange={(e) => onSpeed(Number(e.target.value))}
           />
-          <span className="slider-value">{speed.toFixed(1)}×</span>
+          <EditableValue
+            value={speed}
+            min={0.1}
+            max={2}
+            onChange={onSpeed}
+            format={(v) => v.toFixed(1) + '×'}
+            label="Playback speed"
+          />
         </label>
       </div>
 
@@ -552,7 +566,14 @@ export default function AnimationPanel() {
               value={insertTime}
               onChange={(e) => st().setInsertTime(Number(e.target.value))}
             />
-            <span className="slider-value">{insertTime.toFixed(2)}s</span>
+            <EditableValue
+              value={insertTime}
+              min={0}
+              max={animDuration}
+              onChange={(v) => st().setInsertTime(v)}
+              format={(v) => v.toFixed(2) + 's'}
+              label="Insert keyframe at (seconds)"
+            />
           </label>
 
           <div className="kf-actions">

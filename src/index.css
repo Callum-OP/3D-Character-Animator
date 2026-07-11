@@ -430,6 +430,54 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* Click-to-edit numeric readout (shared by sliders and the scrub time). */
+.editable-value {
+  cursor: text;
+  border-radius: 3px;
+  padding: 1px 2px;
+  border-bottom: 1px dotted transparent;
+}
+.editable-value:hover {
+  border-bottom-color: var(--text-dim);
+}
+.editable-value.disabled {
+  cursor: default;
+  pointer-events: none;
+}
+.editable-value:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+/* The number field the readout becomes while editing — keep it the same size
+   so the row doesn't jump. */
+.editable-value-input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  padding: 0 2px;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+/* Hide the spinner arrows so the narrow field isn't cramped. */
+.editable-value-input::-webkit-inner-spin-button,
+.editable-value-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.editable-value-input {
+  -moz-appearance: textfield;
+}
+/* In the scrub row the readout isn't in a fixed grid cell, so give the edit
+   field a comfortable fixed width instead of filling the flex row. */
+.scrub-time.editable-value-input {
+  width: 7ch;
+  text-align: right;
+}
+
 /* --- Per-mesh override list --- */
 .mesh-list {
   max-height: 180px;

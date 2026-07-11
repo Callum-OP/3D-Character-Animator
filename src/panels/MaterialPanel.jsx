@@ -1,4 +1,5 @@
 import { useStore } from '../store.js'
+import EditableValue from './EditableValue.jsx'
 
 // Side-panel section: material mode + key-light controls (Phase 2).
 // Unlit shows raw Blender colours (no lighting), Toon adds stepped anime shading,
@@ -166,8 +167,11 @@ export default function MaterialPanel() {
           disabled={!outlineEnabled}
           onChange={setOutlineWidth}
           // Screen-space thickness; show a friendly 1-decimal number rather than
-          // the raw fraction (0.003 -> "3.0").
+          // the raw fraction (0.003 -> "3.0"), and let typed values use the same
+          // scale.
           format={(v) => (v * 1000).toFixed(1)}
+          toInput={(v) => v * 1000}
+          fromInput={(v) => v / 1000}
         />
       </div>
 
@@ -190,6 +194,8 @@ export default function MaterialPanel() {
           disabled={!softenEnabled}
           onChange={setSoftenAmount}
           format={(v) => Math.round(v * 100) + '%'}
+          toInput={(v) => Math.round(v * 100)}
+          fromInput={(v) => v / 100}
         />
         <div className="radio-hint" style={{ marginTop: 2 }}>
           Lifts toon shadows and thins the outline everywhere.
@@ -254,8 +260,8 @@ export default function MaterialPanel() {
   )
 }
 
-// A labelled range input with a live numeric readout.
-function Slider({ label, value, min, max, step, disabled, onChange, format }) {
+// A labelled range input with a click-to-edit numeric readout.
+function Slider({ label, value, min, max, step, disabled, onChange, format, toInput, fromInput }) {
   return (
     <label className="slider-row">
       <span className="slider-label">{label}</span>
@@ -268,7 +274,17 @@ function Slider({ label, value, min, max, step, disabled, onChange, format }) {
         disabled={disabled}
         onChange={(e) => onChange(Number(e.target.value))}
       />
-      <span className="slider-value">{format(value)}</span>
+      <EditableValue
+        value={value}
+        min={min}
+        max={max}
+        disabled={disabled}
+        onChange={onChange}
+        format={format}
+        toInput={toInput}
+        fromInput={fromInput}
+        label={label}
+      />
     </label>
   )
 }
