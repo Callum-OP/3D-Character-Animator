@@ -34,6 +34,7 @@ import {
   addObject,
   addImage,
   setObjectVisible,
+  setObjectTransform,
   removeObject,
   resetObject,
   disposeObjects,
@@ -41,6 +42,7 @@ import {
   clearCharacterObject,
   getObjectsData,
   applyObjectsData,
+  getObjectsForSave,
 } from './objects.js'
 import { getPose, applyPose } from './posing.js'
 import { useStore } from '../store.js'
@@ -293,6 +295,7 @@ export async function loadModelFile(file) {
   try {
     const parsed = await loadModel(file)
     disposeCurrentModel() // free the previous model FIRST (memory hygiene)
+    parsed.file = file // retain the source blob so the model can be saved to a project
     state.currentModel = parsed
     state.scene.add(parsed.root)
     parsed.root.traverse((o) => {
@@ -328,7 +331,7 @@ export async function loadModelFile(file) {
 // character). Selects it so the gizmo is ready. Errors propagate to the caller.
 export async function addObjectFile(file) {
   const parsed = await loadModel(file)
-  const meta = addObject(parsed, parsed.info.name, parsed.info.format)
+  const meta = addObject(parsed, parsed.info.name, parsed.info.format, file)
   useStore.getState().addSceneObject(meta) // sets selectedObjectId = meta.id
   requestRender()
   return meta
@@ -340,7 +343,7 @@ export async function addObjectFile(file) {
 export async function addImageFile(file) {
   const { texture, aspect } = await loadImageTexture(file)
   const name = file.name.replace(/\.[^.]+$/, '')
-  const meta = addImage(texture, name, aspect)
+  const meta = addImage(texture, name, aspect, file)
   useStore.getState().addSceneObject({ ...meta, kind: 'image' })
   requestRender()
   return meta
@@ -507,6 +510,143 @@ export function applySceneData(json) {
     }
   }
   applyObjectsData(json.objects)
+  requestRender()
+}
+
+// ---------------------------------------------------------------------------
+// Full project save / load (model + props + images + pose seq + style settings)
+//
+// Unlike the transforms-only scene file above, this captures the actual source
+// FILE BLOBS so a whole session can be restored. The record is stored in
+// IndexedDB by ProjectPanel; here we only build and apply the data.
+// ---------------------------------------------------------------------------
+
+// The style settings we persist (a subset of the store that isn't derivable).
+function collectSettings() {
+  const s = useStore.getState()
+  const settings = {
+    materialMode: s.materialMode,
+    toonSteps: s.toonSteps,
+    lightIntensity: s.lightIntensity,
+    lightAzimuth: s.lightAzimuth,
+    lightElevation: s.lightElevation,
+    outlineEnabled: s.outlineEnabled,
+    outlineWidth: s.outlineWidth,
+    softenEnabled: s.softenEnabled,
+    softenAmount: s.softenAmount,
+    showGrid: s.showGrid,
+    solidBackground: s.solidBackground,
+    backgroundColor: s.backgroundColor,
+    showShadow: s.showShadow,
+    shadowMapping: s.shadowMapping,
+    animFps: s.animFps,
+    animDuration: s.animDuration,
+  }
+  // Per-mesh overrides are keyed by mesh uuid, but uuids are regenerated every
+  // time the same file is reloaded. Remap to the mesh's INDEX so it survives a
+  // save→reload round-trip (index order is stable for the same file).
+  const meshes = (state.currentModel && state.currentModel.info.meshes) || []
+  const uuidToIndex = new Map(meshes.map((m, i) => [m.uuid, i]))
+  const byIndex = {}
+  for (const [uuid, ov] of Object.entries(s.meshOverrides)) {
+    const idx = uuidToIndex.get(uuid)
+    if (idx != null) byIndex[idx] = ov
+  }
+  settings.meshOverridesByIndex = byIndex
+  return settings
+}
+
+// Build a complete, serializable-to-IndexedDB project record.
+export function getProjectData() {
+  const s = useStore.getState()
+  let character = null
+  if (state.currentModel && state.currentModel.file) {
+    const root = state.currentModel.root
+    character = {
+      fileName: state.currentModel.file.name,
+      blob: state.currentModel.file,
+      transform: {
+        position: root.position.toArray(),
+        quaternion: root.quaternion.toArray(),
+        scale: root.scale.toArray(),
+      },
+      pose: getPose(),
+    }
+  }
+  return {
+    format: 'project-v1',
+    settings: collectSettings(),
+    character,
+    objects: getObjectsForSave(),
+    animData: s.animData,
+  }
+}
+
+// Restore a project record: tear down the current session, then rebuild the
+// character, props/images, style settings and pose sequence from the saved
+// blobs. Async — models are re-parsed from their blobs.
+export async function applyProjectData(record) {
+  if (!record || record.format !== 'project-v1') {
+    throw new Error('Not a valid saved project.')
+  }
+  const store = useStore.getState()
+
+  // 1. Clear the current props/images and the character.
+  for (const id of store.sceneObjects.filter((o) => !o.isCharacter).map((o) => o.id)) {
+    removeObjectById(id)
+  }
+  disposeCurrentModel()
+
+  // 2. Load the character (this resets much of the store via setModelInfo).
+  if (record.character && record.character.blob) {
+    const c = record.character
+    await loadModelFile(new File([c.blob], c.fileName))
+    const root = state.currentModel.root
+    if (c.transform) {
+      root.position.fromArray(c.transform.position)
+      root.quaternion.fromArray(c.transform.quaternion)
+      root.scale.fromArray(c.transform.scale)
+    }
+    if (c.pose) {
+      try {
+        applyPose(c.pose)
+      } catch {
+        /* pose from a different rig — skip */
+      }
+    }
+  }
+
+  // 3. Apply saved settings (AFTER the load, which would otherwise reset them).
+  const st = record.settings || {}
+  const meshes = (state.currentModel && state.currentModel.info.meshes) || []
+  const meshOverrides = {}
+  for (const [idx, ov] of Object.entries(st.meshOverridesByIndex || {})) {
+    const m = meshes[Number(idx)]
+    if (m) meshOverrides[m.uuid] = ov
+  }
+  const patch = { meshOverrides }
+  for (const k of [
+    'materialMode', 'toonSteps', 'lightIntensity', 'lightAzimuth', 'lightElevation',
+    'outlineEnabled', 'outlineWidth', 'softenEnabled', 'softenAmount',
+    'showGrid', 'solidBackground', 'backgroundColor', 'showShadow', 'shadowMapping',
+    'animFps', 'animDuration',
+  ]) {
+    if (st[k] !== undefined) patch[k] = st[k]
+  }
+  useStore.setState(patch) // Viewport effects push these into the scene reactively
+
+  // 4. Re-add props/images in order, restoring transform + visibility.
+  for (const obj of record.objects || []) {
+    if (!obj.blob) continue
+    const file = new File([obj.blob], obj.fileName)
+    const meta = obj.kind === 'image' ? await addImageFile(file) : await addObjectFile(file)
+    setObjectTransform(meta.id, obj.transform)
+    setObjectVisibleById(meta.id, obj.visible !== false)
+  }
+
+  // 5. Restore the pose / keyframe sequence.
+  useStore.getState().setAnimData(record.animData || { tracks: {}, root: [] })
+
   requestRender()
 }
 

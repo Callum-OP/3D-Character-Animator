@@ -67,7 +67,8 @@ export function clearCharacterObject() {
 }
 
 // Add a loaded model as a scene object. Returns lightweight metadata for the UI.
-export function addObject(parsed, name, format) {
+// `file` (the original File) is retained so the object can be saved to a project.
+export function addObject(parsed, name, format, file) {
   const root = parsed.root
   excludeFromOutline(root) // props aren't part of the toon-outline look
   root.traverse((obj) => {
@@ -78,7 +79,7 @@ export function addObject(parsed, name, format) {
   })
   o.scene.add(root)
   const id = ++idCounter
-  o.objects.push({ id, name, format, root })
+  o.objects.push({ id, name, format, root, kind: 'model', file: file || null })
   o.requestRender()
   return { id, name, format }
 }
@@ -89,7 +90,7 @@ export function addObject(parsed, name, format) {
 // figure out of the box; the user then moves/rotates/scales it like any object.
 // Reference images opt out of shadows and the outline — they're 2D guides, not
 // props the scene should light.
-export function addImage(map, name, aspect) {
+export function addImage(map, name, aspect, file) {
   const h = 1.6
   const w = h * (aspect || 1)
   const geo = new THREE.PlaneGeometry(w, h)
@@ -109,7 +110,7 @@ export function addImage(map, name, aspect) {
   excludeFromOutline(root)
   o.scene.add(root)
   const id = ++idCounter
-  o.objects.push({ id, name, format: 'image', root })
+  o.objects.push({ id, name, format: 'image', root, kind: 'image', file: file || null })
   o.requestRender()
   return { id, name, format: 'image' }
 }
@@ -169,6 +170,40 @@ export function resetObject(id) {
   root.quaternion.identity()
   root.scale.set(1, 1, 1)
   o.requestRender()
+}
+
+// Set an object's full transform at once (used when restoring a saved project).
+export function setObjectTransform(id, t) {
+  const root = rootFor(id)
+  if (!root || !t) return
+  if (t.position) root.position.fromArray(t.position)
+  if (t.quaternion) root.quaternion.fromArray(t.quaternion)
+  if (t.scale) root.scale.fromArray(t.scale)
+  o.requestRender()
+}
+
+// --- Full project save (props + images WITH their source file blobs) ---------
+
+// Everything needed to recreate the props/images: the original file blob, kind,
+// transform and visibility. Entries without a retained blob (e.g. added before
+// this feature, or restored from a transforms-only scene file) are skipped —
+// there's nothing to reload them from.
+export function getObjectsForSave() {
+  return o.objects
+    .filter((e) => e.file)
+    .map((e) => ({
+      kind: e.kind || 'model',
+      fileName: e.file.name,
+      blob: e.file,
+      name: e.name,
+      format: e.format,
+      transform: {
+        position: e.root.position.toArray(),
+        quaternion: e.root.quaternion.toArray(),
+        scale: e.root.scale.toArray(),
+      },
+      visible: e.root.visible,
+    }))
 }
 
 // --- Scene save/load (transforms only) ---------------------------------------

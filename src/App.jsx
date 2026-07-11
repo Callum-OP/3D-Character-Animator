@@ -4,6 +4,7 @@ import MaterialPanel from './panels/MaterialPanel.jsx'
 import BonePanel from './panels/BonePanel.jsx'
 import AnimationPanel from './panels/AnimationPanel.jsx'
 import ObjectsPanel from './panels/ObjectsPanel.jsx'
+import ProjectPanel from './panels/ProjectPanel.jsx'
 import ExportPanel from './panels/ExportPanel.jsx'
 import ViewPanel from './panels/ViewPanel.jsx'
 import HelpOverlay from './panels/HelpOverlay.jsx'
@@ -26,6 +27,7 @@ export default function App() {
           </button>
         </div>
         <ModelPanel />
+        <ProjectPanel />
         <BonePanel />
         <AnimationPanel />
         <ObjectsPanel />

@@ -887,6 +887,30 @@ body {
   border-bottom: none;
 }
 
+/* --- Projects panel (save all) --- */
+.proj-save {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.text-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 6px 8px;
+  background: var(--panel-bg);
+  color: var(--text);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.btn-tiny {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
 .obj-row:hover {
   background: rgba(255, 255, 255, 0.04);
 }
