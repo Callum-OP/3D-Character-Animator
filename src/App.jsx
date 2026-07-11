@@ -11,10 +11,7 @@ export default function App() {
     <div className="app">
       <Viewport />
       <aside className="sidebar">
-        <h1 className="app-title">
-          3D Character Poser
-          <small>Phase 4 — animation</small>
-        </h1>
+        <h1 className="app-title">3D Character Poser</h1>
         <ModelPanel />
         <BonePanel />
         <AnimationPanel />

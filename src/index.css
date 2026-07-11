@@ -549,3 +549,44 @@ body {
 .kf-marker.active {
   background: var(--accent);
 }
+
+/* --- Mocap bone-mapping editor --- */
+.map-editor {
+  margin-top: 8px;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  padding: 8px;
+}
+
+.map-hint {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  line-height: 1.4;
+  margin-bottom: 6px;
+}
+
+.map-list {
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.map-row {
+  display: grid;
+  grid-template-columns: 62px 1fr 1fr;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 0;
+}
+
+.map-slot {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.map-row .select-sm {
+  width: 100%;
+  min-width: 0;
+}

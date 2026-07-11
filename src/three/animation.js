@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { loadBVHClip } from './bvh.js'
+import { parseBVH, retargetParsed, buildSlotMapping, buildNameMatch, mergeNames } from './bvh.js'
 
 // ---------------------------------------------------------------------------
 // Animation (Phase 4)
@@ -23,6 +23,7 @@ const a = {
   model: null,
   bakedClips: [], // AnimationClip[] from the file
   importedClips: [], // AnimationClip[] retargeted from imported BVH mocap
+  pendingBVH: null, // parsed BVH awaiting a confirmed bone mapping
   restQuats: null, // Map<Bone, Quaternion> captured at load
   action: null, // current AnimationAction
   clip: null, // current clip (baked or built)
@@ -59,6 +60,7 @@ export function clearAnimationModel() {
   a.model = null
   a.bakedClips = []
   a.importedClips = []
+  a.pendingBVH = null
   a.restQuats = null
 }
 
@@ -82,14 +84,38 @@ export function selectClip(name, opts = {}) {
 
 // --- Mocap (BVH) -------------------------------------------------------------
 
-// Import + retarget a BVH file onto the loaded model. The retargeted clip joins
-// the playable clip list. Returns { name, matched, total }.
-export async function importBVH(file) {
+// Step 1: parse a BVH and build the auto slot mapping for the mapping editor.
+// Returns { name, sourceBones, targetBones, slots } — nothing is applied yet.
+export async function beginBVHImport(file) {
   if (!a.model) throw new Error('Load a model first.')
-  const { clip, matched, total } = await loadBVHClip(file, a.model)
+  const parsed = await parseBVH(file)
+  const targetBones = (a.model.bones || []).map((b) => b.name)
+  // Full name-match (fingers, spine chains, …) kept alongside the parsed BVH;
+  // the slot mapping is layered on top of it at retarget time.
+  parsed.autoNames = buildNameMatch(targetBones, parsed.bones)
+  a.pendingBVH = parsed
+  return {
+    name: parsed.name,
+    sourceBones: parsed.bones,
+    targetBones,
+    slots: buildSlotMapping(targetBones, parsed.bones),
+  }
+}
+
+// Step 2: retarget the pending BVH using the (possibly hand-edited) slot mapping
+// and add the resulting clip to the playable list. Returns { name, matched, total }.
+export async function applyBVHRetarget(slots) {
+  if (!a.pendingBVH) throw new Error('No BVH is being imported.')
+  const { names, hip } = mergeNames(a.pendingBVH.autoNames, slots)
+  const { clip, matched, total } = await retargetParsed(a.pendingBVH, a.model, names, hip)
   a.importedClips.push(clip)
+  a.pendingBVH = null
   a.refs.requestRender() // the retarget touched the rig; redraw the reset pose
   return { name: clip.name, matched, total }
+}
+
+export function cancelBVHImport() {
+  a.pendingBVH = null
 }
 
 // Sample a clip at one time into a pose map { boneName: [x,y,z,w] } (for "apply

@@ -38,11 +38,14 @@ The project is being built in phases (see [`references/Plan.md`](references/Plan
   duration/fps, scrub, and save/load as JSON). Playback and posing are mutually
   exclusive — the gizmo steps aside while a clip plays and the rest pose is
   restored on Stop.
-- **Mocap (BVH) import — ✅ done.** Import a `.bvh` motion-capture file; it's
-  auto-retargeted onto the loaded rig (bone names matched exactly or normalized).
-  Any clip (baked or mocap) can be applied as a single **pose** at the scrub time,
-  or **baked** into editable in-app keyframes. Retargeting quality depends on the
-  rig being roughly T/A-posed and on mappable bone names.
+- **Mocap (BVH) import — ✅ done.** Import a `.bvh` motion-capture file and
+  retarget it onto the loaded rig. Bones are auto-mapped **semantically** — each
+  bone is classified into a canonical humanoid slot (Hips, Spine, Forearm L, …) by
+  body part + side, so different naming conventions (Mixamo / CMU / Rigify) line
+  up. A **mapping editor** shows the guess and lets you fix any slot by hand
+  before retargeting, so any skeleton can be made to work. Any clip (baked or
+  mocap) can also be applied as a single **pose** at the scrub time, or **baked**
+  into editable in-app keyframes.
 - **Phase 5+ — not yet built:** PNG / image-sequence export.
 
 ### Supported file formats
@@ -121,8 +124,9 @@ Vite build sets `base: '/3D-Character-Animator/'` (see `vite.config.js`). Local
    **Key bone** / **Key all posed** to add keyframes, then Play to preview and
    Save/Load the animation as JSON. (Stop returns to the rest pose so you can keep
    editing.) Under **Clip / mocap** you can also **Import mocap (.bvh)** to
-   retarget a motion onto the rig, and turn any clip into a single pose
-   (**Frame → pose**) or editable keyframes (**Bake → keys**).
+   retarget a motion onto the rig (a mapping editor appears — accept the
+   auto-guess or correct any bone slot, then **Retarget**), and turn any clip into
+   a single pose (**Frame → pose**) or editable keyframes (**Bake → keys**).
 8. The **View** panel toggles the reference grid and switches between a
    transparent background (the default, for compositing) and a solid colour.
 

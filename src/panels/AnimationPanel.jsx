@@ -9,7 +9,9 @@ import {
   scrub,
   setLoop as engineSetLoop,
   setSpeed as engineSetSpeed,
-  importBVH,
+  beginBVHImport,
+  applyBVHRetarget,
+  cancelBVHImport,
   sampleClipToPose,
   bakeClipToTracks,
 } from '../three/animation.js'
@@ -43,6 +45,9 @@ export default function AnimationPanel() {
   const bvhRef = useRef(null)
   const [bvhMsg, setBvhMsg] = useState(null)
   const [bvhBusy, setBvhBusy] = useState(false)
+  // When a BVH is parsed, this holds the mapping editor state until the user
+  // confirms (Retarget) or cancels: { name, sourceBones, targetBones, slots }.
+  const [mapping, setMapping] = useState(null)
 
   if (!modelInfo) return null
 
@@ -192,17 +197,37 @@ export default function AnimationPanel() {
 
   // --- mocap (BVH) + clip-to-pose/keyframes ---------------------------------
 
-  async function onImportBVH(e) {
+  async function onPickBVH(e) {
     const file = e.target.files && e.target.files[0]
     e.target.value = ''
     if (!file) return
     setBvhBusy(true)
-    setBvhMsg('Retargeting mocap…')
+    setBvhMsg(null)
     try {
       stop()
       st().setPlayback('stopped')
       st().setCurrentTime(0)
-      const { name, matched, total } = await importBVH(file)
+      const result = await beginBVHImport(file) // parse + auto-guess mapping
+      setMapping(result)
+    } catch (err) {
+      setBvhMsg(err.message || String(err))
+    } finally {
+      setBvhBusy(false)
+    }
+  }
+
+  // Update one slot's target/source bone in the mapping editor.
+  function setSlot(key, field, value) {
+    setMapping((m) => ({
+      ...m,
+      slots: m.slots.map((s) => (s.key === key ? { ...s, [field]: value } : s)),
+    }))
+  }
+
+  async function onRetarget() {
+    setBvhBusy(true)
+    try {
+      const { name, matched, total } = await applyBVHRetarget(mapping.slots)
       st().addImportedClipName(name)
       st().setPlaybackSource('clip')
       st().setActiveClipName(name)
@@ -210,12 +235,18 @@ export default function AnimationPanel() {
       st().setDuration(d)
       st().setCurrentTime(0)
       st().setPlayback('paused')
-      setBvhMsg(`Imported "${name}" — matched ${matched}/${total} bones.`)
+      setMapping(null)
+      setBvhMsg(`Imported "${name}" — retargeted ${matched} mapped bone(s).`)
     } catch (err) {
       setBvhMsg(err.message || String(err))
     } finally {
       setBvhBusy(false)
     }
+  }
+
+  function onCancelMapping() {
+    cancelBVHImport()
+    setMapping(null)
   }
 
   function onApplyFrameAsPose() {
@@ -263,7 +294,7 @@ export default function AnimationPanel() {
         </button>
       </div>
 
-      {source === 'clip' && (
+      {source === 'clip' && !mapping && (
         <>
           {clipNames.length > 0 && (
             <select
@@ -288,14 +319,14 @@ export default function AnimationPanel() {
                 onClick={() => bvhRef.current?.click()}
                 disabled={bvhBusy}
               >
-                {bvhBusy ? 'Importing…' : 'Import mocap (.bvh)'}
+                {bvhBusy ? 'Parsing…' : 'Import mocap (.bvh)'}
               </button>
               <input
                 ref={bvhRef}
                 type="file"
                 accept=".bvh"
                 style={{ display: 'none' }}
-                onChange={onImportBVH}
+                onChange={onPickBVH}
               />
             </div>
           )}
@@ -313,6 +344,62 @@ export default function AnimationPanel() {
 
           {bvhMsg && <div className="pose-msg">{bvhMsg}</div>}
         </>
+      )}
+
+      {/* Mocap bone-mapping editor */}
+      {mapping && (
+        <div className="map-editor">
+          <div className="field-label" style={{ marginTop: 8 }}>
+            Map “{mapping.name}” bones → this rig
+          </div>
+          <div className="map-hint">
+            Auto-guessed by body part. Fix any wrong rows (leave a row blank to
+            skip it), then Retarget.
+          </div>
+
+          <div className="map-list">
+            {mapping.slots.map((s) => (
+              <div key={s.key} className="map-row">
+                <span className="map-slot">{s.label}</span>
+                <select
+                  className="select select-sm"
+                  title="Character bone"
+                  value={s.target}
+                  onChange={(e) => setSlot(s.key, 'target', e.target.value)}
+                >
+                  <option value="">— rig —</option>
+                  {mapping.targetBones.map((b) => (
+                    <option key={b} value={b}>
+                      {b}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  className="select select-sm"
+                  title="Mocap (BVH) bone"
+                  value={s.source}
+                  onChange={(e) => setSlot(s.key, 'source', e.target.value)}
+                >
+                  <option value="">— mocap —</option>
+                  {mapping.sourceBones.map((b) => (
+                    <option key={b} value={b}>
+                      {b}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ))}
+          </div>
+
+          <div className="kf-actions" style={{ marginTop: 8 }}>
+            <button className="btn" onClick={onRetarget} disabled={bvhBusy}>
+              {bvhBusy ? 'Retargeting…' : 'Retarget'}
+            </button>
+            <button className="btn secondary" onClick={onCancelMapping} disabled={bvhBusy}>
+              Cancel
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Transport */}
