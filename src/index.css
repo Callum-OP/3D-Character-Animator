@@ -897,9 +897,25 @@ body {
 }
 
 .obj-name {
+  flex: 1 1 auto;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.obj-eye {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.75;
+}
+
+.obj-eye:hover {
+  opacity: 1;
 }
 
 .obj-del {

@@ -32,6 +32,8 @@ import {
 import {
   initObjects,
   addObject,
+  addImage,
+  setObjectVisible,
   removeObject,
   resetObject,
   disposeObjects,
@@ -332,10 +334,50 @@ export async function addObjectFile(file) {
   return meta
 }
 
+// Load an image file and add it as a movable reference plane. Like addObjectFile
+// it does NOT replace the character and selects the new plane so the gizmo is
+// ready. Errors propagate to the caller.
+export async function addImageFile(file) {
+  const { texture, aspect } = await loadImageTexture(file)
+  const name = file.name.replace(/\.[^.]+$/, '')
+  const meta = addImage(texture, name, aspect)
+  useStore.getState().addSceneObject({ ...meta, kind: 'image' })
+  requestRender()
+  return meta
+}
+
+// Decode an image File into a THREE.Texture (+ its width/height aspect ratio).
+function loadImageTexture(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file)
+    new THREE.TextureLoader().load(
+      url,
+      (texture) => {
+        URL.revokeObjectURL(url)
+        texture.colorSpace = THREE.SRGBColorSpace // treat the image as sRGB
+        const img = texture.image
+        const aspect = img && img.height ? img.width / img.height : 1
+        resolve({ texture, aspect })
+      },
+      undefined,
+      () => {
+        URL.revokeObjectURL(url)
+        reject(new Error('Could not read that image file.'))
+      },
+    )
+  })
+}
+
 export function removeObjectById(id) {
   removeObject(id)
   useStore.getState().removeSceneObject(id)
   requestRender()
+}
+
+// Show/hide a prop, image, or the character (updates the scene + the store).
+export function setObjectVisibleById(id, visible) {
+  setObjectVisible(id, visible)
+  useStore.getState().setObjectVisible(id, visible)
 }
 
 export function resetObjectById(id) {

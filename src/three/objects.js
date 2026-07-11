@@ -1,3 +1,4 @@
+import * as THREE from 'three'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import { disposeObject } from './loadModel.js'
 
@@ -80,6 +81,45 @@ export function addObject(parsed, name, format) {
   o.objects.push({ id, name, format, root })
   o.requestRender()
   return { id, name, format }
+}
+
+// Add an image as a movable reference plane. `map` is a loaded THREE.Texture;
+// `aspect` = image width / height. The plane is built ~1.6 units tall (a rough
+// character height) and rests on the ground so it lines up with a standing
+// figure out of the box; the user then moves/rotates/scales it like any object.
+// Reference images opt out of shadows and the outline — they're 2D guides, not
+// props the scene should light.
+export function addImage(map, name, aspect) {
+  const h = 1.6
+  const w = h * (aspect || 1)
+  const geo = new THREE.PlaneGeometry(w, h)
+  const mat = new THREE.MeshBasicMaterial({
+    map,
+    transparent: true, // honour PNG alpha
+    side: THREE.DoubleSide, // visible from behind the character too
+    toneMapped: false, // show the image's true colours
+    depthWrite: false, // don't let the flat plane occlude via the depth buffer
+  })
+  const mesh = new THREE.Mesh(geo, mat)
+  mesh.castShadow = false
+  mesh.receiveShadow = false
+  const root = new THREE.Group()
+  root.add(mesh)
+  root.position.y = h / 2 // rest the plane on the ground
+  excludeFromOutline(root)
+  o.scene.add(root)
+  const id = ++idCounter
+  o.objects.push({ id, name, format: 'image', root })
+  o.requestRender()
+  return { id, name, format: 'image' }
+}
+
+// Show or hide an object (prop, image, or the character) without removing it.
+export function setObjectVisible(id, visible) {
+  const root = rootFor(id)
+  if (!root) return
+  root.visible = visible
+  o.requestRender()
 }
 
 export function removeObject(id) {

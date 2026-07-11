@@ -34,7 +34,7 @@ export const useStore = create((set) => ({
       insertTime: 0,
       // The character is a movable entry (kept first) in the objects list.
       sceneObjects: [
-        { id: 'character', name: modelInfo.name, isCharacter: true },
+        { id: 'character', name: modelInfo.name, isCharacter: true, visible: true },
         ...s.sceneObjects.filter((o) => o.id !== 'character'),
       ],
     })),
@@ -164,9 +164,13 @@ export const useStore = create((set) => ({
 
   addSceneObject: (obj) =>
     set((s) => ({
-      sceneObjects: [...s.sceneObjects, obj],
+      sceneObjects: [...s.sceneObjects, { visible: true, ...obj }],
       selectedObjectId: obj.id,
       selectedBoneName: null, // mutually exclusive with bone selection
+    })),
+  setObjectVisible: (id, visible) =>
+    set((s) => ({
+      sceneObjects: s.sceneObjects.map((o) => (o.id === id ? { ...o, visible } : o)),
     })),
   removeSceneObject: (id) =>
     set((s) => ({

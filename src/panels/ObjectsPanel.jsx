@@ -2,8 +2,10 @@ import { useRef, useState } from 'react'
 import { useStore } from '../store.js'
 import {
   addObjectFile,
+  addImageFile,
   removeObjectById,
   resetObjectById,
+  setObjectVisibleById,
   getSceneData,
   applySceneData,
 } from '../three/scene.js'
@@ -25,6 +27,7 @@ export default function ObjectsPanel() {
   const setObjectMode = useStore((s) => s.setObjectMode)
 
   const fileRef = useRef(null)
+  const imageRef = useRef(null)
   const sceneRef = useRef(null)
   const [msg, setMsg] = useState(null)
 
@@ -34,6 +37,14 @@ export default function ObjectsPanel() {
     if (!file) return
     setMsg(null)
     addObjectFile(file).catch((err) => setMsg(err.message || String(err)))
+  }
+
+  function onPickImage(e) {
+    const file = e.target.files && e.target.files[0]
+    e.target.value = ''
+    if (!file) return
+    setMsg(null)
+    addImageFile(file).catch((err) => setMsg(err.message || String(err)))
   }
 
   function onSaveScene() {
@@ -72,18 +83,34 @@ export default function ObjectsPanel() {
     <div className="panel">
       <h2>Objects</h2>
       <p className="panel-hint">
-        Add props and backgrounds to place around your character.
+        Add props, backgrounds and reference images to place around your character.
       </p>
 
-      <button className="btn" onClick={() => fileRef.current?.click()}>
-        + Add object
-      </button>
+      <div className="kf-actions">
+        <button className="btn" onClick={() => fileRef.current?.click()}>
+          + Add object
+        </button>
+        <button
+          className="btn"
+          onClick={() => imageRef.current?.click()}
+          title="Add a reference image as a movable plane (e.g. a pose to copy)"
+        >
+          + Add image
+        </button>
+      </div>
       <input
         ref={fileRef}
         type="file"
         accept=".glb,.gltf,.fbx,model/gltf-binary,model/gltf+json"
         style={{ display: 'none' }}
         onChange={onPick}
+      />
+      <input
+        ref={imageRef}
+        type="file"
+        accept="image/*,.png,.jpg,.jpeg,.webp,.gif"
+        style={{ display: 'none' }}
+        onChange={onPickImage}
       />
 
       <div className="kf-actions" style={{ marginTop: 6 }}>
@@ -151,6 +178,16 @@ export default function ObjectsPanel() {
                 <span className="obj-name">
                   {o.isCharacter ? `${o.name} (character)` : o.name}
                 </span>
+                <button
+                  className="obj-eye"
+                  title={o.visible === false ? 'Show' : 'Hide'}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setObjectVisibleById(o.id, o.visible === false)
+                  }}
+                >
+                  {o.visible === false ? '🙈' : '👁'}
+                </button>
                 {!o.isCharacter && (
                   <button
                     className="obj-del"
