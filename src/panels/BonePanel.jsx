@@ -74,6 +74,10 @@ export default function BonePanel() {
   return (
     <div className="panel">
       <h2>Pose</h2>
+      <p className="panel-hint">
+        Click a dot on the character, then drag the coloured ring to bend that
+        joint.
+      </p>
 
       <div className="pose-actions">
         <button className="btn secondary" onClick={() => resetPose()}>
@@ -100,27 +104,31 @@ export default function BonePanel() {
       {poseMsg && <div className="pose-msg">{poseMsg}</div>}
 
       <div className="pose-toggles">
-        <label className="toggle-row" style={{ padding: 0 }}>
+        <label className="toggle-row" style={{ padding: 0 }} title="Show the joint dots on the character">
           <input
             type="checkbox"
             checked={showBones}
             onChange={(e) => setShowBones(e.target.checked)}
           />
-          Show bones
+          Show joints
         </label>
         {hasDeform && (
-          <label className="toggle-row" style={{ padding: 0 }}>
+          <label
+            className="toggle-row"
+            style={{ padding: 0 }}
+            title="Hide the rig's extra control bones and show only the ones that bend the body"
+          >
             <input
               type="checkbox"
               checked={deformOnly}
               onChange={(e) => setDeformOnly(e.target.checked)}
             />
-            Deform only
+            Hide helper bones
           </label>
         )}
       </div>
 
-      <div className="seg" style={{ marginTop: 8 }}>
+      <div className="seg" style={{ marginTop: 8 }} title="Rotate the joint around its own axes (Local) or the world's (World)">
         <button
           className={'seg-btn' + (transformSpace === 'local' ? ' active' : '')}
           onClick={() => setTransformSpace('local')}
@@ -138,7 +146,7 @@ export default function BonePanel() {
       <input
         className="bone-filter"
         type="text"
-        placeholder="Filter bones…"
+        placeholder="Search joints…"
         value={boneFilter}
         onChange={(e) => setBoneFilter(e.target.value)}
       />

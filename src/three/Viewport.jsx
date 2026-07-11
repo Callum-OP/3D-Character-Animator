@@ -5,6 +5,7 @@ import {
   loadModelFile,
   setGridVisible,
   setBackground,
+  setShadowVisible,
   applyModelMaterials,
   setLightSettings,
   setOutlineToggle,
@@ -12,6 +13,7 @@ import {
 import { useStore } from '../store.js'
 import { SUPPORTED_EXTENSION_RE, SUPPORTED_EXTENSIONS } from './loadModel.js'
 import { selectBone, setTransformSpace, setBonesVisible, undo } from './posing.js'
+import StatsOverlay from '../panels/StatsOverlay.jsx'
 
 // The 3D viewport: owns the canvas container and the scene lifecycle, and
 // handles drag-and-drop of model files onto itself.
@@ -38,6 +40,11 @@ export default function Viewport() {
   useEffect(() => {
     setBackground(solidBackground, backgroundColor)
   }, [solidBackground, backgroundColor])
+
+  const showShadow = useStore((s) => s.showShadow)
+  useEffect(() => {
+    setShadowVisible(showShadow)
+  }, [showShadow])
 
   // All material/shading/outline-width state funnels through applyModelMaterials.
   const materialMode = useStore((s) => s.materialMode)
@@ -88,8 +95,11 @@ export default function Viewport() {
     function onKeyDown(e) {
       const tag = e.target.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
-      if (e.key === 'Escape') {
-        useStore.getState().setSelectedBoneName(null)
+      if (e.key === '?') {
+        useStore.getState().toggleHelp()
+      } else if (e.key === 'Escape') {
+        if (useStore.getState().showHelp) useStore.getState().setShowHelp(false)
+        else useStore.getState().setSelectedBoneName(null)
       } else if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
         e.preventDefault()
         undo()
@@ -125,13 +135,35 @@ export default function Viewport() {
     loadModelFile(file).catch(() => {}) // error is surfaced via the store
   }
 
+  const modelInfo = useStore((s) => s.modelInfo)
+  const loading = useStore((s) => s.loading)
+  const showStats = useStore((s) => s.showStats)
+
   return (
     <div
-      ref={containerRef}
       className={'viewport-wrap' + (dragOver ? ' dragover' : '')}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
-    />
+    >
+      {/* Three.js appends its canvas into this inner host; React-managed overlays
+          live as siblings so React never fights the imperatively-added canvas. */}
+      <div ref={containerRef} className="viewport-canvas-host" />
+
+      {!modelInfo && !loading && (
+        <div className="viewport-empty">
+          <div className="ve-icon">⬚</div>
+          <div className="ve-title">Drop a character here</div>
+          <div className="ve-sub">
+            …or use the <b>Load</b> button in the sidebar.
+            <br />
+            Works with <b>.glb</b>, <b>.gltf</b> and <b>.fbx</b> files.
+          </div>
+          <div className="ve-hint">Press ? any time for help</div>
+        </div>
+      )}
+
+      {showStats && <StatsOverlay />}
+    </div>
   )
 }

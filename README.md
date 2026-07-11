@@ -46,7 +46,12 @@ The project is being built in phases (see [`references/Plan.md`](references/Plan
   before retargeting, so any skeleton can be made to work. Any clip (baked or
   mocap) can also be applied as a single **pose** at the scrub time, or **baked**
   into editable in-app keyframes.
-- **Phase 5+ — not yet built:** PNG / image-sequence export.
+- **Phase 6 — Polish & friendliness — ✅ done.** One-click light presets
+  (Front/Side/Rim/Top), a cheap blob **ground shadow**, **per-part** show/hide, an
+  optional FPS/memory **performance readout**, a **Help & shortcuts** overlay
+  (press `?`), a welcoming empty state, and plain-language labels throughout for
+  people new to 3D/animation.
+- **Phase 5 — not yet built:** PNG / image-sequence export.
 
 ### Supported file formats
 

@@ -52,6 +52,80 @@ body {
   display: block;
 }
 
+/* Inner host for the Three.js canvas; overlays are siblings of this. */
+.viewport-canvas-host {
+  position: absolute;
+  inset: 0;
+}
+
+/* Empty-state welcome shown before a model is loaded */
+.viewport-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 8px;
+  pointer-events: none;
+  color: var(--text);
+  padding: 20px;
+}
+
+.viewport-empty .ve-icon {
+  font-size: 48px;
+  line-height: 1;
+  color: var(--accent);
+  opacity: 0.8;
+}
+
+.viewport-empty .ve-title {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.viewport-empty .ve-sub {
+  font-size: 13px;
+  color: var(--text-dim);
+  line-height: 1.6;
+}
+
+.viewport-empty .ve-hint {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+  border: 1px solid var(--panel-border);
+  border-radius: 20px;
+  padding: 4px 12px;
+}
+
+/* Performance readout overlay */
+.stats-overlay {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  background: rgba(16, 17, 20, 0.72);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  display: grid;
+  gap: 1px;
+}
+
+.stats-overlay div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.stats-overlay span {
+  color: var(--text-dim);
+}
+
 /* Drag-over highlight on the viewport */
 .viewport-wrap.dragover::after {
   content: 'Drop .glb / .gltf / .fbx to load';
@@ -76,18 +150,43 @@ body {
   padding: 14px;
 }
 
+.app-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
 .app-title {
   font-size: 15px;
   font-weight: 600;
-  margin: 0 0 12px;
+  margin: 0;
 }
 
-.app-title small {
-  display: block;
-  font-weight: 400;
-  color: var(--text-dim);
+.app-tagline {
   font-size: 11px;
+  color: var(--text-dim);
   margin-top: 2px;
+}
+
+.help-btn {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px solid var(--panel-border);
+  background: var(--panel-bg-2);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.help-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .panel {
@@ -104,6 +203,41 @@ body {
   letter-spacing: 0.05em;
   color: var(--text-dim);
   margin: 0 0 10px;
+}
+
+/* Plain-language one-liner under a panel heading */
+.panel-hint {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.5;
+  margin: -4px 0 10px;
+}
+
+/* Row of one-click preset buttons (e.g. light directions) */
+.preset-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 5px;
+  margin: 6px 0;
+}
+
+.preset-btn {
+  padding: 6px 4px;
+  background: var(--panel-bg);
+  color: var(--text);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.preset-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.preset-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .btn {
@@ -305,10 +439,15 @@ body {
 
 .mesh-row {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: 1fr auto auto auto;
   align-items: center;
   column-gap: 8px;
   padding: 3px 0;
+}
+
+.mesh-row.mesh-hidden .mesh-name {
+  color: var(--text-dim);
+  text-decoration: line-through;
 }
 
 .mesh-head {
@@ -331,12 +470,13 @@ body {
   text-overflow: ellipsis;
 }
 
-.mesh-outline {
+.mesh-cell {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
 }
 
-.mesh-outline input {
+.mesh-cell input {
   accent-color: var(--accent);
 }
 
@@ -589,4 +729,115 @@ body {
 .map-row .select-sm {
   width: 100%;
   min-width: 0;
+}
+
+/* --- Help & shortcuts overlay --- */
+.help-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 100;
+}
+
+.help-modal {
+  position: relative;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  padding: 22px 24px;
+  max-width: 620px;
+  width: 100%;
+  max-height: 88vh;
+  overflow-y: auto;
+}
+
+.help-modal h2 {
+  margin: 0 0 6px;
+  font-size: 19px;
+}
+
+.help-modal h3 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  margin: 14px 0 6px;
+}
+
+.help-intro {
+  font-size: 13px;
+  color: var(--text-dim);
+  line-height: 1.6;
+  margin: 0 0 6px;
+}
+
+.help-cols {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 20px;
+}
+
+.help-steps,
+.help-keys {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.help-keys {
+  list-style: none;
+  padding-left: 0;
+}
+
+.help-steps code,
+.help-keys b {
+  color: var(--text);
+}
+
+.help-steps code {
+  background: var(--panel-bg-2);
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  padding: 0 4px;
+  font-size: 12px;
+}
+
+.help-tip {
+  margin-top: 16px;
+  padding: 10px 12px;
+  background: rgba(79, 140, 255, 0.08);
+  border: 1px solid rgba(79, 140, 255, 0.25);
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.help-close {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  width: 30px;
+  height: 30px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.help-close:hover {
+  color: var(--text);
+}
+
+@media (max-width: 560px) {
+  .help-cols {
+    grid-template-columns: 1fr;
+  }
 }

@@ -5,9 +5,9 @@ import { useStore } from '../store.js'
 // Standard is the original PBR. The light sliders only affect Toon/Standard, so
 // they're disabled in Unlit mode.
 const MODES = [
-  { value: 'unlit', label: 'Unlit', hint: 'Raw Blender colours, no lighting' },
-  { value: 'toon', label: 'Toon', hint: 'Stepped anime shading' },
-  { value: 'standard', label: 'Standard', hint: 'Original PBR lighting' },
+  { value: 'unlit', label: 'Flat colour', hint: 'Exact colours, no lighting' },
+  { value: 'toon', label: 'Cartoon', hint: 'Anime-style stepped shading' },
+  { value: 'standard', label: 'Realistic', hint: 'Full 3D lighting' },
 ]
 
 const TOON_STEP_OPTIONS = [2, 3, 4, 5]
@@ -15,6 +15,14 @@ const SHADING_OPTIONS = [
   { value: 'full', label: 'Full' },
   { value: 'soft', label: 'Soft' },
   { value: 'flat', label: 'Flat' },
+]
+
+// Friendly one-click light directions (azimuth°, elevation°).
+const LIGHT_PRESETS = [
+  { label: 'Front', az: 0, el: 20 },
+  { label: 'Side', az: 75, el: 30 },
+  { label: 'Rim', az: 155, el: 45 },
+  { label: 'Top', az: 15, el: 80 },
 ]
 
 export default function MaterialPanel() {
@@ -42,13 +50,20 @@ export default function MaterialPanel() {
   const setSoftenAmount = useStore((s) => s.setSoftenAmount)
   const setMeshOutline = useStore((s) => s.setMeshOutline)
   const setMeshShading = useStore((s) => s.setMeshShading)
+  const setMeshVisible = useStore((s) => s.setMeshVisible)
 
   const lit = materialMode !== 'unlit' // lights only matter for toon/standard
   const meshes = modelInfo?.meshes || []
 
+  function applyLightPreset(p) {
+    setLightAzimuth(p.az)
+    setLightElevation(p.el)
+  }
+
   return (
     <div className="panel">
-      <h2>Material</h2>
+      <h2>Look</h2>
+      <p className="panel-hint">Choose how the character is shaded and outlined.</p>
 
       <div className="radio-group">
         {MODES.map((m) => (
@@ -84,11 +99,24 @@ export default function MaterialPanel() {
 
       <div className={'light-controls' + (lit ? '' : ' disabled')}>
         <div className="field-label" style={{ marginTop: 4 }}>
-          Key light {lit ? '' : '(unused in Unlit)'}
+          Light {lit ? '' : '(only affects Cartoon / Realistic)'}
+        </div>
+
+        <div className="preset-row">
+          {LIGHT_PRESETS.map((p) => (
+            <button
+              key={p.label}
+              className="preset-btn"
+              disabled={!lit}
+              onClick={() => applyLightPreset(p)}
+            >
+              {p.label}
+            </button>
+          ))}
         </div>
 
         <Slider
-          label="Intensity"
+          label="Brightness"
           min={0}
           max={5}
           step={0.1}
@@ -170,36 +198,44 @@ export default function MaterialPanel() {
 
       {meshes.length > 0 && (
         <div className="light-controls">
-          <div className="field-label">Per-mesh (e.g. face)</div>
+          <div className="field-label">Parts (hide, outline or flatten the face, etc.)</div>
           <div className="mesh-row mesh-head">
-            <span>Mesh</span>
-            <span>Line</span>
-            <span>Shade</span>
+            <span>Part</span>
+            <span title="Show / hide this part">Show</span>
+            <span title="Outline this part">Line</span>
+            <span title="Shading (Flat = no lighting)">Shade</span>
           </div>
           <div className="mesh-list">
             {meshes.map((m) => {
               const ov = meshOverrides[m.uuid] || {}
+              const visible = ov.visible !== false
               const outlineOn = ov.outline !== false
               const shading = ov.shading || 'full'
               return (
-                <div key={m.uuid} className="mesh-row">
+                <div key={m.uuid} className={'mesh-row' + (visible ? '' : ' mesh-hidden')}>
                   <span className="mesh-name" title={m.name}>
                     {m.name}
                   </span>
-                  <label
-                    className="mesh-outline"
-                    title="Draw an outline around this mesh"
-                  >
+                  <label className="mesh-cell" title="Show / hide this part">
+                    <input
+                      type="checkbox"
+                      checked={visible}
+                      onChange={(e) => setMeshVisible(m.uuid, e.target.checked)}
+                    />
+                  </label>
+                  <label className="mesh-cell" title="Draw an outline around this part">
                     <input
                       type="checkbox"
                       checked={outlineOn}
+                      disabled={!visible}
                       onChange={(e) => setMeshOutline(m.uuid, e.target.checked)}
                     />
                   </label>
                   <select
                     className="select select-sm"
                     value={shading}
-                    title="Shading for this mesh (Flat = no lighting)"
+                    disabled={!visible}
+                    title="Shading for this part (Flat = no lighting)"
                     onChange={(e) => setMeshShading(m.uuid, e.target.value)}
                   >
                     {SHADING_OPTIONS.map((o) => (

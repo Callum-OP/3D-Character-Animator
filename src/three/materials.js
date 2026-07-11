@@ -98,8 +98,12 @@ export function applyMaterials(model, opts) {
   const store = model.materials
 
   for (const mesh of model.meshes) {
-    const shading = (overrides[mesh.uuid] && overrides[mesh.uuid].shading) || 'full'
+    const ov = overrides[mesh.uuid]
+    const shading = (ov && ov.shading) || 'full'
     const original = store.originals.get(mesh)
+
+    // Per-mesh visibility (hide clothing layers, etc.).
+    mesh.visible = !(ov && ov.visible === false)
 
     // 'flat' (or Unlit mode) → raw colour, no lighting.
     if (mode === 'unlit' || shading === 'flat') {

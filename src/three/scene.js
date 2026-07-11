@@ -52,6 +52,7 @@ const state = {
   controls: null,
   container: null,
   gridHelper: null,
+  shadow: null, // cheap blob ground shadow (Phase 6)
   dirLight: null,
   ambientLight: null,
 
@@ -61,6 +62,7 @@ const state = {
   continuous: false, // when true, render every frame (for animation playback)
   animId: 0,
   clock: null, // THREE.Clock for per-frame deltas while playing
+  fps: 0, // smoothed frames-per-second while playing (for the stats readout)
   resizeObserver: null,
 }
 
@@ -149,12 +151,29 @@ export function initScene(container) {
   scene.add(gridHelper)
   state.gridHelper = gridHelper
 
+  // --- Blob ground shadow (cheap: a soft radial sprite, not shadow mapping) ---
+  const shadow = new THREE.Mesh(
+    new THREE.PlaneGeometry(1, 1),
+    new THREE.MeshBasicMaterial({
+      map: makeShadowTexture(),
+      transparent: true,
+      depthWrite: false,
+      opacity: 0.6,
+    }),
+  )
+  shadow.rotation.x = -Math.PI / 2 // lay flat on the ground
+  shadow.renderOrder = -1 // draw before the model
+  shadow.material.userData.outlineParameters = { visible: false } // never outline it
+  scene.add(shadow)
+  state.shadow = shadow
+
   // --- Sync initial UI toggles from the store ---
   const s = useStore.getState()
   setGridVisible(s.showGrid)
   setBackground(s.solidBackground, s.backgroundColor)
   setLightSettings(s.lightIntensity, s.lightAzimuth, s.lightElevation)
   setOutlineEnabled(s.outlineEnabled)
+  setShadowVisible(s.showShadow)
 
   // --- Resize handling ---
   const resizeObserver = new ResizeObserver(() => handleResize())
@@ -194,12 +213,15 @@ export function setContinuousRender(on) {
       if (!state.continuous) return
       state.animId = requestAnimationFrame(tick)
       const delta = state.clock ? state.clock.getDelta() : 0
+      // Smoothed FPS for the stats readout (only meaningful while playing).
+      if (delta > 0) state.fps = state.fps * 0.9 + (1 / delta) * 0.1
       updateAnimation(delta) // advance the mixer before drawing
       renderOnce()
     }
     state.animId = requestAnimationFrame(tick)
   } else {
     cancelAnimationFrame(state.animId)
+    state.fps = 0
     requestRender()
   }
 }
@@ -287,6 +309,18 @@ function frameCameraToObject(object) {
 
   state.controls.target.copy(center)
   state.controls.update()
+
+  placeShadowUnder(box)
+}
+
+// Park the blob shadow on the ground under the model, sized to its footprint.
+function placeShadowUnder(box) {
+  if (!state.shadow) return
+  const size = box.getSize(new THREE.Vector3())
+  const center = box.getCenter(new THREE.Vector3())
+  const footprint = Math.max(size.x, size.z) * 1.6
+  state.shadow.scale.set(footprint, footprint, 1)
+  state.shadow.position.set(center.x, box.min.y + footprint * 0.001, center.z)
 }
 
 // ---------------------------------------------------------------------------
@@ -296,6 +330,43 @@ function frameCameraToObject(object) {
 export function setGridVisible(visible) {
   if (state.gridHelper) state.gridHelper.visible = visible
   requestRender()
+}
+
+export function setShadowVisible(visible) {
+  if (state.shadow) state.shadow.visible = visible
+  requestRender()
+}
+
+// A soft radial gradient used as the blob-shadow texture (opaque centre → clear
+// edge). Generated once on a small canvas — no external asset.
+function makeShadowTexture() {
+  const size = 128
+  const canvas = document.createElement('canvas')
+  canvas.width = canvas.height = size
+  const ctx = canvas.getContext('2d')
+  const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2)
+  g.addColorStop(0, 'rgba(0,0,0,0.55)')
+  g.addColorStop(0.6, 'rgba(0,0,0,0.25)')
+  g.addColorStop(1, 'rgba(0,0,0,0)')
+  ctx.fillStyle = g
+  ctx.fillRect(0, 0, size, size)
+  return new THREE.CanvasTexture(canvas)
+}
+
+// Live renderer stats for the (optional) corner readout. Proves the low-overhead
+// claim: triangle/draw counts, GPU resource counts, JS heap, and playback FPS.
+export function getStats() {
+  if (!state.renderer) return null
+  const info = state.renderer.info
+  const mem = typeof performance !== 'undefined' && performance.memory
+  return {
+    fps: state.continuous ? Math.round(state.fps) : null,
+    triangles: info.render.triangles,
+    calls: info.render.calls,
+    geometries: info.memory.geometries,
+    textures: info.memory.textures,
+    heapMB: mem ? Math.round(mem.usedJSHeapSize / 1048576) : null,
+  }
 }
 
 export function setBackground(solid, color) {
@@ -378,6 +449,12 @@ export function disposeScene() {
     state.gridHelper.geometry.dispose()
     state.gridHelper.material.dispose()
     state.gridHelper = null
+  }
+  if (state.shadow) {
+    state.shadow.geometry.dispose()
+    if (state.shadow.material.map) state.shadow.material.map.dispose()
+    state.shadow.material.dispose()
+    state.shadow = null
   }
   if (state.renderer) {
     state.renderer.dispose()

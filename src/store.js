@@ -51,10 +51,17 @@ export const useStore = create((set) => ({
   showGrid: true,
   solidBackground: false, // false = transparent (the default, for compositing)
   backgroundColor: '#202127',
+  showShadow: true, // cheap blob ground shadow (Phase 6 polish)
+  showStats: false, // FPS / memory readout overlay (Phase 6 polish)
+  showHelp: false, // help & shortcuts overlay
 
   setShowGrid: (showGrid) => set({ showGrid }),
   setSolidBackground: (solidBackground) => set({ solidBackground }),
   setBackgroundColor: (backgroundColor) => set({ backgroundColor }),
+  setShowShadow: (showShadow) => set({ showShadow }),
+  setShowStats: (showStats) => set({ showStats }),
+  setShowHelp: (showHelp) => set({ showHelp }),
+  toggleHelp: () => set((s) => ({ showHelp: !s.showHelp })),
 
   // ---- Material mode (Phase 2) ----
   // 'unlit' is the default: raw base colour, no lighting — matches Blender's
@@ -106,6 +113,13 @@ export const useStore = create((set) => ({
       meshOverrides: {
         ...s.meshOverrides,
         [uuid]: { outline: true, ...s.meshOverrides[uuid], shading },
+      },
+    })),
+  setMeshVisible: (uuid, visible) =>
+    set((s) => ({
+      meshOverrides: {
+        ...s.meshOverrides,
+        [uuid]: { outline: true, shading: 'full', ...s.meshOverrides[uuid], visible },
       },
     })),
 

@@ -274,7 +274,11 @@ export default function AnimationPanel() {
 
   return (
     <div className="panel">
-      <h2>Animation</h2>
+      <h2>Animate</h2>
+      <p className="panel-hint">
+        Play a ready-made animation or motion file, or make your own by posing and
+        adding keyframes.
+      </p>
 
       {/* Source selector */}
       <div className="seg">
@@ -282,15 +286,17 @@ export default function AnimationPanel() {
           className={'seg-btn' + (source === 'clip' ? ' active' : '')}
           disabled={!hasClips && !hasBones}
           onClick={() => onSourceChange('clip')}
+          title="Play a built-in animation or an imported motion file"
         >
-          Clip / mocap
+          Play a clip
         </button>
         <button
           className={'seg-btn' + (source === 'edit' ? ' active' : '')}
           disabled={!hasBones}
           onClick={() => onSourceChange('edit')}
+          title="Build your own animation from keyframes"
         >
-          In-app
+          Make your own
         </button>
       </div>
 
@@ -319,7 +325,7 @@ export default function AnimationPanel() {
                 onClick={() => bvhRef.current?.click()}
                 disabled={bvhBusy}
               >
-                {bvhBusy ? 'Parsing…' : 'Import mocap (.bvh)'}
+                {bvhBusy ? 'Parsing…' : 'Import motion (.bvh)'}
               </button>
               <input
                 ref={bvhRef}
@@ -333,11 +339,19 @@ export default function AnimationPanel() {
 
           {activeClipName && hasBones && (
             <div className="kf-actions" style={{ marginTop: 6 }}>
-              <button className="btn secondary" onClick={onApplyFrameAsPose}>
-                Frame → pose
+              <button
+                className="btn secondary"
+                onClick={onApplyFrameAsPose}
+                title="Freeze the current frame as an editable pose"
+              >
+                Use as pose
               </button>
-              <button className="btn secondary" onClick={onBake}>
-                Bake → keys
+              <button
+                className="btn secondary"
+                onClick={onBake}
+                title="Turn this clip into editable keyframes"
+              >
+                Edit keyframes
               </button>
             </div>
           )}
@@ -490,11 +504,20 @@ export default function AnimationPanel() {
           </label>
 
           <div className="kf-actions">
-            <button className="btn secondary" onClick={onAddKey} disabled={!selectedBoneName}>
-              Key bone
+            <button
+              className="btn secondary"
+              onClick={onAddKey}
+              disabled={!selectedBoneName}
+              title="Save the selected joint's rotation at this time"
+            >
+              Keyframe joint
             </button>
-            <button className="btn secondary" onClick={onKeyAll}>
-              Key all posed
+            <button
+              className="btn secondary"
+              onClick={onKeyAll}
+              title="Save every moved joint's rotation at this time"
+            >
+              Keyframe all
             </button>
           </div>
 
