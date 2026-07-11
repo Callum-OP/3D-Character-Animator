@@ -6,6 +6,7 @@ import {
   setGridVisible,
   setBackground,
   setShadowVisible,
+  setShadowMapping,
   applyModelMaterials,
   setLightSettings,
   setOutlineToggle,
@@ -13,6 +14,7 @@ import {
 import { useStore } from '../store.js'
 import { SUPPORTED_EXTENSION_RE, SUPPORTED_EXTENSIONS } from './loadModel.js'
 import { selectBone, setTransformSpace, setBonesVisible, undo } from './posing.js'
+import { selectObject, setObjectMode } from './objects.js'
 import StatsOverlay from '../panels/StatsOverlay.jsx'
 
 // The 3D viewport: owns the canvas container and the scene lifecycle, and
@@ -42,9 +44,13 @@ export default function Viewport() {
   }, [solidBackground, backgroundColor])
 
   const showShadow = useStore((s) => s.showShadow)
+  const shadowMapping = useStore((s) => s.shadowMapping)
   useEffect(() => {
     setShadowVisible(showShadow)
   }, [showShadow])
+  useEffect(() => {
+    setShadowMapping(shadowMapping)
+  }, [shadowMapping])
 
   // All material/shading/outline-width state funnels through applyModelMaterials.
   const materialMode = useStore((s) => s.materialMode)
@@ -88,6 +94,18 @@ export default function Viewport() {
   useEffect(() => {
     setBonesVisible(showBones)
   }, [showBones])
+
+  // --- Scene objects: push selection / gizmo mode into the objects manager ---
+  const selectedObjectId = useStore((s) => s.selectedObjectId)
+  const objectMode = useStore((s) => s.objectMode)
+
+  useEffect(() => {
+    selectObject(selectedObjectId)
+  }, [selectedObjectId])
+
+  useEffect(() => {
+    setObjectMode(objectMode)
+  }, [objectMode])
 
   // Keyboard: Esc deselects, Ctrl/Cmd+Z undoes a bone edit. Ignored while typing
   // in an input (e.g. the bone filter box).

@@ -28,7 +28,12 @@ const a = {
   action: null, // current AnimationAction
   clip: null, // current clip (baked or built)
   editClip: null, // built in-app clip, disposed/rebuilt on demand
+  editRoot: null, // character root-motion keyframes [{time,pos,quat}] (edit source only)
+  rootRest: null, // character root transform at playback start (restored on stop)
 }
+
+const _qa = new THREE.Quaternion()
+const _qb = new THREE.Quaternion()
 
 export function initAnimation(refs) {
   a.refs = refs
@@ -57,6 +62,8 @@ export function clearAnimationModel() {
   a.action = null
   a.clip = null
   a.editClip = null
+  a.editRoot = null
+  a.rootRest = null
   a.model = null
   a.bakedClips = []
   a.importedClips = []
@@ -68,7 +75,10 @@ export function clearAnimationModel() {
 export function updateAnimation(delta) {
   if (!a.mixer) return
   a.mixer.update(delta)
-  if (a.action) a.refs.onTime(a.action.time)
+  if (a.action) {
+    sampleRoot(a.action.time) // drive character world motion (edit source only)
+    a.refs.onTime(a.action.time)
+  }
 }
 
 // --- Source selection --------------------------------------------------------
@@ -78,6 +88,7 @@ export function updateAnimation(delta) {
 export function selectClip(name, opts = {}) {
   const clip = findClip(name)
   if (!clip) return 0
+  a.editRoot = null // baked/mocap clips are in-place (no root motion)
   activate(clip, opts)
   return clip.duration
 }
@@ -173,13 +184,15 @@ export function bakeClipToTracks(name, fps, duration) {
   return { tracks, duration: dur }
 }
 
-// Build the in-app clip from keyframe tracks and make it the active action.
-// tracks: { [boneName]: [{ time, quat:[x,y,z,w] }] }. Returns the duration used.
-export function selectEdit(tracks, duration, opts = {}) {
+// Build the in-app clip from keyframe tracks + optional root motion, and make it
+// the active action. tracks: { [boneName]: [{time, quat}] }; rootKeys:
+// [{time, pos, quat}] for the character's world motion. Returns the duration.
+export function selectEdit(tracks, rootKeys, duration, opts = {}) {
   // Drop the previous in-app clip's cached action so rebuilds don't accumulate.
   if (a.editClip && a.mixer) a.mixer.uncacheClip(a.editClip)
   const clip = buildEditClip(tracks, duration)
   a.editClip = clip
+  a.editRoot = rootKeys && rootKeys.length ? [...rootKeys].sort((x, y) => x.time - y.time) : null
   activate(clip, opts)
   return clip.duration
 }
@@ -200,13 +213,15 @@ export function pause() {
   a.refs.requestRender()
 }
 
-// Stop playback, return the rig to its rest pose, and hand control back to posing.
+// Stop playback, return the rig to its rest pose + pre-play placement, and hand
+// control back to posing.
 export function stop() {
   if (a.mixer) a.mixer.stopAllAction()
   a.action = null
   a.clip = null
   a.refs.setContinuousRender(false)
   restoreRest()
+  restoreRootRest()
   a.refs.resumePosing()
   a.refs.onTime(0)
   a.refs.requestRender()
@@ -227,6 +242,7 @@ export function scrub(t) {
   if (!a.action || !a.clip) return
   a.action.time = Math.max(0, Math.min(t, a.clip.duration))
   a.mixer.update(0) // apply bindings at the new time without advancing
+  sampleRoot(a.action.time)
   a.refs.requestRender()
 }
 
@@ -245,10 +261,50 @@ function quatClose(x, y) {
   )
 }
 
+// Sample the character root-motion keyframes at time t and drive model.root.
+function sampleRoot(t) {
+  const keys = a.editRoot
+  if (!keys || keys.length === 0 || !a.model) return
+  const root = a.model.root
+  if (t <= keys[0].time) return applyRootKey(root, keys[0])
+  if (t >= keys[keys.length - 1].time) return applyRootKey(root, keys[keys.length - 1])
+  let i = 0
+  while (i < keys.length - 1 && keys[i + 1].time < t) i++
+  const k0 = keys[i]
+  const k1 = keys[i + 1]
+  const span = k1.time - k0.time
+  const f = span > 0 ? (t - k0.time) / span : 0
+  root.position.set(
+    k0.pos[0] + (k1.pos[0] - k0.pos[0]) * f,
+    k0.pos[1] + (k1.pos[1] - k0.pos[1]) * f,
+    k0.pos[2] + (k1.pos[2] - k0.pos[2]) * f,
+  )
+  _qa.fromArray(k0.quat)
+  _qb.fromArray(k1.quat)
+  root.quaternion.slerpQuaternions(_qa, _qb, f)
+}
+
+function applyRootKey(root, k) {
+  root.position.fromArray(k.pos)
+  root.quaternion.fromArray(k.quat)
+}
+
+function restoreRootRest() {
+  if (a.rootRest && a.model) {
+    a.model.root.position.fromArray(a.rootRest.pos)
+    a.model.root.quaternion.fromArray(a.rootRest.quat)
+  }
+  a.rootRest = null
+}
+
 function activate(clip, opts) {
   if (!a.mixer) return
   a.mixer.stopAllAction()
   a.clip = clip
+  // Remember where the character is placed now, so Stop returns it there.
+  if (a.model) {
+    a.rootRest = { pos: a.model.root.position.toArray(), quat: a.model.root.quaternion.toArray() }
+  }
   const action = a.mixer.clipAction(clip)
   action.reset()
   action.setLoop(opts.loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity)

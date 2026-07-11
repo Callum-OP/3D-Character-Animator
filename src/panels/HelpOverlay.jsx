@@ -39,7 +39,12 @@ export default function HelpOverlay() {
                 (<code>.bvh</code>), or make your own with keyframes.
               </li>
               <li>
-                <b>Style it.</b> Pick a look (Unlit / Toon / Standard), add an
+                <b>Add props (optional).</b> In Objects, add backgrounds or items
+                and drag the gizmo to move, rotate or resize them around your
+                character.
+              </li>
+              <li>
+                <b>Style it.</b> Pick a look (Flat / Cartoon / Realistic), add an
                 outline, tweak the light, and hide parts you don't want.
               </li>
             </ol>

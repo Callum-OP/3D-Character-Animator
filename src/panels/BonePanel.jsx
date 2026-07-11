@@ -14,14 +14,29 @@ export default function BonePanel() {
   const transformSpace = useStore((s) => s.transformSpace)
   const showBones = useStore((s) => s.showBones)
 
+  const poseClipboard = useStore((s) => s.poseClipboard)
   const setSelectedBoneName = useStore((s) => s.setSelectedBoneName)
   const setBoneFilter = useStore((s) => s.setBoneFilter)
   const setDeformOnly = useStore((s) => s.setDeformOnly)
   const setTransformSpace = useStore((s) => s.setTransformSpace)
   const setShowBones = useStore((s) => s.setShowBones)
+  const setPoseClipboard = useStore((s) => s.setPoseClipboard)
 
   const fileInputRef = useRef(null)
   const [poseMsg, setPoseMsg] = useState(null)
+
+  // Copy the current pose (e.g. from a scrubbed mocap frame) and paste it
+  // elsewhere — onto another frame of your own animation, say.
+  function onCopy() {
+    setPoseClipboard(getPose())
+    setPoseMsg('Pose copied.')
+  }
+
+  function onPaste() {
+    if (!poseClipboard) return
+    const { applied, missing } = applyPose(poseClipboard)
+    setPoseMsg(`Pasted ${applied} bone(s)` + (missing.length ? `, ${missing.length} skipped.` : '.'))
+  }
 
   const bones = modelInfo?.bones || []
   const hasDeform = bones.some((b) => b.deform)
@@ -85,6 +100,17 @@ export default function BonePanel() {
         </button>
         <button className="btn secondary" onClick={() => undo()}>
           Undo
+        </button>
+        <button className="btn secondary" onClick={onCopy} title="Copy the current pose">
+          Copy
+        </button>
+        <button
+          className="btn secondary"
+          onClick={onPaste}
+          disabled={!poseClipboard}
+          title="Apply the copied pose"
+        >
+          Paste
         </button>
         <button className="btn secondary" onClick={onSave}>
           Save

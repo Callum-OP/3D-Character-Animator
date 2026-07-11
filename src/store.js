@@ -14,7 +14,7 @@ export const useStore = create((set) => ({
   setLoading: (loading) => set({ loading, loadError: null }),
   setLoadError: (loadError) => set({ loadError, loading: false }),
   setModelInfo: (modelInfo) =>
-    set({
+    set((s) => ({
       modelInfo,
       loading: false,
       loadError: null,
@@ -30,11 +30,16 @@ export const useStore = create((set) => ({
       importedClipNames: [],
       duration: 0,
       currentTime: 0,
-      animData: { tracks: {} },
+      animData: { tracks: {}, root: [] },
       insertTime: 0,
-    }),
+      // The character is a movable entry (kept first) in the objects list.
+      sceneObjects: [
+        { id: 'character', name: modelInfo.name, isCharacter: true },
+        ...s.sceneObjects.filter((o) => o.id !== 'character'),
+      ],
+    })),
   clearModel: () =>
-    set({
+    set((s) => ({
       modelInfo: null,
       loadError: null,
       meshOverrides: {},
@@ -44,14 +49,17 @@ export const useStore = create((set) => ({
       activeClipName: null,
       importedClipNames: [],
       currentTime: 0,
-      animData: { tracks: {} },
-    }),
+      animData: { tracks: {}, root: [] },
+      sceneObjects: s.sceneObjects.filter((o) => o.id !== 'character'),
+      selectedObjectId: s.selectedObjectId === 'character' ? null : s.selectedObjectId,
+    })),
 
   // ---- Viewport display toggles ----
   showGrid: true,
   solidBackground: false, // false = transparent (the default, for compositing)
   backgroundColor: '#202127',
-  showShadow: true, // cheap blob ground shadow (Phase 6 polish)
+  showShadow: true, // ground shadow on/off
+  shadowMapping: false, // true = real cast shadows; false = cheap blob
   showStats: false, // FPS / memory readout overlay (Phase 6 polish)
   showHelp: false, // help & shortcuts overlay
 
@@ -59,6 +67,7 @@ export const useStore = create((set) => ({
   setSolidBackground: (solidBackground) => set({ solidBackground }),
   setBackgroundColor: (backgroundColor) => set({ backgroundColor }),
   setShowShadow: (showShadow) => set({ showShadow }),
+  setShadowMapping: (shadowMapping) => set({ shadowMapping }),
   setShowStats: (showStats) => set({ showStats }),
   setShowHelp: (showHelp) => set({ showHelp }),
   toggleHelp: () => set((s) => ({ showHelp: !s.showHelp })),
@@ -129,12 +138,37 @@ export const useStore = create((set) => ({
   deformOnly: false, // hide non-DEF- bones (defaulted per rig on load)
   transformSpace: 'local', // gizmo rotation space: 'local' | 'world'
   showBones: true, // show the pickable bone-dot overlay + gizmo
+  poseClipboard: null, // a copied pose ({ format:'pose-v1', bones:{...} }) for paste
 
-  setSelectedBoneName: (selectedBoneName) => set({ selectedBoneName }),
+  setPoseClipboard: (poseClipboard) => set({ poseClipboard }),
+
+  setSelectedBoneName: (selectedBoneName) =>
+    // Selecting a bone deselects any scene object (one gizmo at a time).
+    set(selectedBoneName != null ? { selectedBoneName, selectedObjectId: null } : { selectedBoneName }),
   setBoneFilter: (boneFilter) => set({ boneFilter }),
   setDeformOnly: (deformOnly) => set({ deformOnly }),
   setTransformSpace: (transformSpace) => set({ transformSpace }),
   setShowBones: (showBones) => set({ showBones }),
+
+  // ---- Scene objects (props / backgrounds, Phase 4.5) ----
+  sceneObjects: [], // [{ id, name, format }] — independent of the character
+  selectedObjectId: null,
+  objectMode: 'translate', // gizmo mode: 'translate' | 'rotate' | 'scale'
+
+  addSceneObject: (obj) =>
+    set((s) => ({
+      sceneObjects: [...s.sceneObjects, obj],
+      selectedObjectId: obj.id,
+      selectedBoneName: null, // mutually exclusive with bone selection
+    })),
+  removeSceneObject: (id) =>
+    set((s) => ({
+      sceneObjects: s.sceneObjects.filter((o) => o.id !== id),
+      selectedObjectId: s.selectedObjectId === id ? null : s.selectedObjectId,
+    })),
+  setSelectedObjectId: (id) =>
+    set(id != null ? { selectedObjectId: id, selectedBoneName: null } : { selectedObjectId: id }),
+  setObjectMode: (objectMode) => set({ objectMode }),
 
   // ---- Animation (Phase 4) ----
   playback: 'stopped', // 'stopped' | 'playing' | 'paused'
@@ -160,13 +194,40 @@ export const useStore = create((set) => ({
   animFps: 24,
   animDuration: 2,
   insertTime: 0, // where "Add keyframe" inserts (seconds)
-  animData: { tracks: {} },
+  // tracks = bone rotations; root = character world motion [{ time, pos:[3], quat:[4] }]
+  animData: { tracks: {}, root: [] },
 
   setAnimFps: (animFps) => set({ animFps }),
   setAnimDuration: (animDuration) => set({ animDuration }),
   setInsertTime: (insertTime) => set({ insertTime }),
-  setAnimData: (animData) => set({ animData }),
-  clearAnim: () => set({ animData: { tracks: {} } }),
+  setAnimData: (animData) =>
+    set({ animData: { tracks: animData.tracks || {}, root: animData.root || [] } }),
+  clearAnim: () => set({ animData: { tracks: {}, root: [] } }),
+
+  // Insert/replace a character root-motion keyframe (world position + rotation).
+  addRootKeyframe: (time, pos, quat) =>
+    set((s) => {
+      const root = (s.animData.root || []).filter((k) => k.time !== time)
+      root.push({ time, pos, quat })
+      root.sort((a, b) => a.time - b.time)
+      return { animData: { ...s.animData, root } }
+    }),
+  deleteRootKeyframe: (time) =>
+    set((s) => ({
+      animData: { ...s.animData, root: (s.animData.root || []).filter((k) => k.time !== time) },
+    })),
+
+  // Remove every keyframe (all joints + the position) at a given time.
+  deleteAllAtTime: (time) =>
+    set((s) => {
+      const tracks = {}
+      for (const [name, keys] of Object.entries(s.animData.tracks)) {
+        const kept = keys.filter((k) => Math.abs(k.time - time) > 1e-6)
+        if (kept.length) tracks[name] = kept
+      }
+      const root = (s.animData.root || []).filter((k) => Math.abs(k.time - time) > 1e-6)
+      return { animData: { tracks, root } }
+    }),
 
   // Insert/replace a keyframe for one bone at a time.
   addKeyframe: (name, time, quat) =>

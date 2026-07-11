@@ -29,6 +29,18 @@ import {
   clearAnimationModel,
   updateAnimation,
 } from './animation.js'
+import {
+  initObjects,
+  addObject,
+  removeObject,
+  resetObject,
+  disposeObjects,
+  setCharacterObject,
+  clearCharacterObject,
+  getObjectsData,
+  applyObjectsData,
+} from './objects.js'
+import { getPose, applyPose } from './posing.js'
 import { useStore } from '../store.js'
 
 // ---------------------------------------------------------------------------
@@ -53,8 +65,14 @@ const state = {
   container: null,
   gridHelper: null,
   shadow: null, // cheap blob ground shadow (Phase 6)
+  shadowReceiver: null, // plane that catches real cast shadows
+  shadowOn: true, // master ground-shadow toggle
+  shadowMap: false, // real shadow mapping vs blob
   dirLight: null,
   ambientLight: null,
+  lightDir: new THREE.Vector3(0.3, 0.6, 0.7), // unit direction to the key light
+  modelCenter: new THREE.Vector3(0, 1, 0),
+  modelRadius: 1, // ~max model dimension, for light distance + shadow camera
 
   currentModel: null, // parsed result from loadGLB (or null)
 
@@ -86,6 +104,8 @@ export function initScene(container) {
   renderer.setSize(width, height)
   renderer.setClearColor(0x000000, 0) // fully transparent clear
   renderer.outputColorSpace = THREE.SRGBColorSpace
+  renderer.shadowMap.enabled = true // used only when "realistic shadows" is on
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap
   container.appendChild(renderer.domElement)
   state.renderer = renderer
 
@@ -136,10 +156,17 @@ export function initScene(container) {
     onEnded: () => useStore.getState().setPlayback('paused'),
   })
 
+  // --- Scene objects (props / backgrounds with a move/rotate/scale gizmo) ---
+  initObjects({ scene, camera, renderer, controls, requestRender })
+
   // --- Lights (only affect Toon/Standard modes in Phase 2; harmless in Unlit) ---
   const dirLight = new THREE.DirectionalLight(0xffffff, 2.0)
   dirLight.position.set(2, 4, 3)
+  dirLight.castShadow = false // enabled only in "realistic shadows" mode
+  dirLight.shadow.mapSize.set(2048, 2048)
+  dirLight.shadow.bias = -0.0005
   scene.add(dirLight)
+  scene.add(dirLight.target) // shadow camera aims at the model via this target
   state.dirLight = dirLight
 
   const ambientLight = new THREE.AmbientLight(0xffffff, 0.6)
@@ -167,6 +194,18 @@ export function initScene(container) {
   scene.add(shadow)
   state.shadow = shadow
 
+  // --- Real cast-shadow receiver (transparent plane that shows only shadows) ---
+  const receiver = new THREE.Mesh(
+    new THREE.PlaneGeometry(1, 1),
+    new THREE.ShadowMaterial({ opacity: 0.35 }),
+  )
+  receiver.rotation.x = -Math.PI / 2
+  receiver.receiveShadow = true
+  receiver.visible = false
+  receiver.material.userData.outlineParameters = { visible: false }
+  scene.add(receiver)
+  state.shadowReceiver = receiver
+
   // --- Sync initial UI toggles from the store ---
   const s = useStore.getState()
   setGridVisible(s.showGrid)
@@ -174,6 +213,7 @@ export function initScene(container) {
   setLightSettings(s.lightIntensity, s.lightAzimuth, s.lightElevation)
   setOutlineEnabled(s.outlineEnabled)
   setShadowVisible(s.showShadow)
+  setShadowMapping(s.shadowMapping)
 
   // --- Resize handling ---
   const resizeObserver = new ResizeObserver(() => handleResize())
@@ -249,6 +289,13 @@ export async function loadModelFile(file) {
     disposeCurrentModel() // free the previous model FIRST (memory hygiene)
     state.currentModel = parsed
     state.scene.add(parsed.root)
+    parsed.root.traverse((o) => {
+      if (o.isMesh) {
+        o.castShadow = true
+        o.receiveShadow = true
+      }
+    })
+    setCharacterObject(parsed.root, parsed.info.name) // make the character movable
 
     // Record the as-loaded (Standard/PBR) materials, then apply the active mode
     // + shading/outline settings. Non-destructive — originals are kept.
@@ -267,10 +314,87 @@ export async function loadModelFile(file) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Scene objects (props / backgrounds) — independent of the character model
+// ---------------------------------------------------------------------------
+
+// Load a file and add it as a movable scene object (does NOT replace the
+// character). Selects it so the gizmo is ready. Errors propagate to the caller.
+export async function addObjectFile(file) {
+  const parsed = await loadModel(file)
+  const meta = addObject(parsed, parsed.info.name, parsed.info.format)
+  useStore.getState().addSceneObject(meta) // sets selectedObjectId = meta.id
+  requestRender()
+  return meta
+}
+
+export function removeObjectById(id) {
+  removeObject(id)
+  useStore.getState().removeSceneObject(id)
+  requestRender()
+}
+
+export function resetObjectById(id) {
+  resetObject(id)
+}
+
+// Current character root transform (for "keyframe position" root motion).
+export function getCharacterRootTransform() {
+  if (!state.currentModel) return null
+  const r = state.currentModel.root
+  return { pos: r.position.toArray(), quat: r.quaternion.toArray() }
+}
+
+// ---------------------------------------------------------------------------
+// Scene save / load (layout: character + object transforms + current pose)
+// ---------------------------------------------------------------------------
+
+// Capture the placement of the character and every prop, plus the current pose.
+// NOTE: this stores TRANSFORMS, not geometry — reload the same files, then Load
+// scene to restore where everything sat.
+export function getSceneData() {
+  const data = { format: 'scene-v1', objects: getObjectsData() }
+  if (state.currentModel) {
+    const root = state.currentModel.root
+    data.character = {
+      name: state.currentModel.info.name,
+      position: root.position.toArray(),
+      quaternion: root.quaternion.toArray(),
+      scale: root.scale.toArray(),
+      pose: getPose(),
+    }
+  }
+  return data
+}
+
+// Apply a saved scene layout to what's currently loaded (matched by name).
+export function applySceneData(json) {
+  if (!json || json.format !== 'scene-v1') {
+    throw new Error('Not a valid scene file (expected format "scene-v1").')
+  }
+  if (json.character && state.currentModel) {
+    const root = state.currentModel.root
+    const c = json.character
+    if (c.position) root.position.fromArray(c.position)
+    if (c.quaternion) root.quaternion.fromArray(c.quaternion)
+    if (c.scale) root.scale.fromArray(c.scale)
+    if (c.pose) {
+      try {
+        applyPose(c.pose)
+      } catch {
+        /* pose from a different rig — skip */
+      }
+    }
+  }
+  applyObjectsData(json.objects)
+  requestRender()
+}
+
 export function disposeCurrentModel() {
   if (!state.currentModel) return
   const model = state.currentModel
   setContinuousRender(false) // stop any playback before tearing the model down
+  clearCharacterObject() // unregister the movable-character entry
   clearAnimationModel() // dispose the mixer
   clearPoseModel() // detach gizmo + remove bone overlay before the graph goes away
   // Put the real materials back so the deep-dispose walk frees them (and their
@@ -313,14 +437,49 @@ function frameCameraToObject(object) {
   placeShadowUnder(box)
 }
 
-// Park the blob shadow on the ground under the model, sized to its footprint.
+// Park the ground shadows under the model and size the shadow camera. Scale-aware
+// so it works for both metre-scale glTF and centimetre-scale FBX.
 function placeShadowUnder(box) {
-  if (!state.shadow) return
   const size = box.getSize(new THREE.Vector3())
   const center = box.getCenter(new THREE.Vector3())
-  const footprint = Math.max(size.x, size.z) * 1.6
-  state.shadow.scale.set(footprint, footprint, 1)
-  state.shadow.position.set(center.x, box.min.y + footprint * 0.001, center.z)
+  const maxDim = Math.max(size.x, size.y, size.z)
+  state.modelCenter.copy(center)
+  state.modelRadius = Math.max(maxDim, 0.5)
+
+  if (state.shadow) {
+    // Much smaller now — just the contact footprint under the feet.
+    const footprint = Math.max(size.x, size.z) * 0.7
+    state.shadow.scale.set(footprint, footprint, 1)
+    state.shadow.position.set(center.x, box.min.y + maxDim * 0.001, center.z)
+  }
+  if (state.shadowReceiver) {
+    const r = maxDim * 6
+    state.shadowReceiver.scale.set(r, r, 1)
+    state.shadowReceiver.position.set(center.x, box.min.y, center.z)
+  }
+  positionLight()
+}
+
+// Position the key light along its direction, far enough out to light + cast a
+// shadow across the whole model, and fit the shadow camera to it.
+function positionLight() {
+  const dl = state.dirLight
+  if (!dl) return
+  const r = state.modelRadius
+  const dist = Math.max(5, r * 2)
+  dl.position.copy(state.modelCenter).addScaledVector(state.lightDir, dist)
+  dl.target.position.copy(state.modelCenter)
+  dl.target.updateMatrixWorld()
+
+  const cam = dl.shadow.camera
+  const half = r * 0.7
+  cam.left = -half
+  cam.right = half
+  cam.top = half
+  cam.bottom = -half
+  cam.near = Math.max(0.01, dist - r)
+  cam.far = dist + r
+  cam.updateProjectionMatrix()
 }
 
 // ---------------------------------------------------------------------------
@@ -333,7 +492,23 @@ export function setGridVisible(visible) {
 }
 
 export function setShadowVisible(visible) {
-  if (state.shadow) state.shadow.visible = visible
+  state.shadowOn = visible
+  applyShadowMode()
+}
+
+export function setShadowMapping(on) {
+  state.shadowMap = on
+  applyShadowMode()
+}
+
+// The blob and the real cast-shadow are mutually exclusive: blob when shadows are
+// on but shadow-mapping is off; real shadows when both are on.
+function applyShadowMode() {
+  const blobOn = state.shadowOn && !state.shadowMap
+  const realOn = state.shadowOn && state.shadowMap
+  if (state.shadow) state.shadow.visible = blobOn
+  if (state.shadowReceiver) state.shadowReceiver.visible = realOn
+  if (state.dirLight) state.dirLight.castShadow = realOn
   requestRender()
 }
 
@@ -417,12 +592,12 @@ export function setLightSettings(intensity, azimuthDeg, elevationDeg) {
 
   const az = (azimuthDeg * Math.PI) / 180
   const el = (elevationDeg * Math.PI) / 180
-  const r = 5
-  state.dirLight.position.set(
-    r * Math.cos(el) * Math.sin(az),
-    r * Math.sin(el),
-    r * Math.cos(el) * Math.cos(az),
+  state.lightDir.set(
+    Math.cos(el) * Math.sin(az),
+    Math.sin(el),
+    Math.cos(el) * Math.cos(az),
   )
+  positionLight() // reposition the light + shadow camera along the new direction
   requestRender()
 }
 
@@ -433,6 +608,7 @@ export function setLightSettings(intensity, azimuthDeg, elevationDeg) {
 export function disposeScene() {
   setContinuousRender(false)
   disposeCurrentModel()
+  disposeObjects()
   disposePosing()
   disposeOutline()
 
@@ -455,6 +631,11 @@ export function disposeScene() {
     if (state.shadow.material.map) state.shadow.material.map.dispose()
     state.shadow.material.dispose()
     state.shadow = null
+  }
+  if (state.shadowReceiver) {
+    state.shadowReceiver.geometry.dispose()
+    state.shadowReceiver.material.dispose()
+    state.shadowReceiver = null
   }
   if (state.renderer) {
     state.renderer.dispose()

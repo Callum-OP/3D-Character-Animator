@@ -6,11 +6,13 @@ import { useStore } from '../store.js'
 export default function ViewPanel() {
   const showGrid = useStore((s) => s.showGrid)
   const showShadow = useStore((s) => s.showShadow)
+  const shadowMapping = useStore((s) => s.shadowMapping)
   const solidBackground = useStore((s) => s.solidBackground)
   const backgroundColor = useStore((s) => s.backgroundColor)
   const showStats = useStore((s) => s.showStats)
   const setShowGrid = useStore((s) => s.setShowGrid)
   const setShowShadow = useStore((s) => s.setShowShadow)
+  const setShadowMapping = useStore((s) => s.setShadowMapping)
   const setSolidBackground = useStore((s) => s.setSolidBackground)
   const setBackgroundColor = useStore((s) => s.setBackgroundColor)
   const setShowStats = useStore((s) => s.setShowStats)
@@ -36,6 +38,17 @@ export default function ViewPanel() {
         />
         Ground shadow
       </label>
+
+      {showShadow && (
+        <label className="toggle-row" style={{ paddingLeft: 22 }} title="Real cast shadows instead of a simple blob">
+          <input
+            type="checkbox"
+            checked={shadowMapping}
+            onChange={(e) => setShadowMapping(e.target.checked)}
+          />
+          Realistic shadows
+        </label>
+      )}
 
       <label className="toggle-row">
         <input

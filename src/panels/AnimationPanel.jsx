@@ -16,6 +16,26 @@ import {
   bakeClipToTracks,
 } from '../three/animation.js'
 import { getBoneQuaternion, getPosedBones, applyPose } from '../three/posing.js'
+import { getCharacterRootTransform } from '../three/scene.js'
+
+// Collect every keyframe time across all joints + the character position, with a
+// count of what's keyed at each — for the overview/manage list.
+function collectKeyframes(animData) {
+  const map = new Map()
+  for (const keys of Object.values(animData.tracks || {})) {
+    for (const k of keys) {
+      const e = map.get(k.time) || { time: k.time, joints: 0, pos: false }
+      e.joints++
+      map.set(k.time, e)
+    }
+  }
+  for (const k of animData.root || []) {
+    const e = map.get(k.time) || { time: k.time, joints: 0, pos: false }
+    e.pos = true
+    map.set(k.time, e)
+  }
+  return [...map.values()].sort((a, b) => a.time - b.time)
+}
 
 // Side-panel section: play baked clips or author a simple in-app keyframe
 // animation. Playback drives the bones, so it's mutually exclusive with posing —
@@ -45,6 +65,7 @@ export default function AnimationPanel() {
   const bvhRef = useRef(null)
   const [bvhMsg, setBvhMsg] = useState(null)
   const [bvhBusy, setBvhBusy] = useState(false)
+  const [kfMsg, setKfMsg] = useState(null) // feedback after adding a keyframe
   // When a BVH is parsed, this holds the mapping editor state until the user
   // confirms (Retarget) or cancels: { name, sourceBones, targetBones, slots }.
   const [mapping, setMapping] = useState(null)
@@ -63,6 +84,7 @@ export default function AnimationPanel() {
   const displayDuration = source === 'edit' ? animDuration : duration
   const snap = (t) => Math.round(t * animFps) / animFps // to the fps grid
   const boneKeys = (selectedBoneName && animData.tracks[selectedBoneName]) || []
+  const allKeyframes = collectKeyframes(animData)
 
   // --- transport handlers ---------------------------------------------------
 
@@ -96,7 +118,7 @@ export default function AnimationPanel() {
 
   function onPlay() {
     if (source === 'edit') {
-      const d = selectEdit(animData.tracks, animDuration, { loop, speed })
+      const d = selectEdit(animData.tracks, animData.root, animDuration, { loop, speed })
       st().setDuration(d)
     } else if (playback === 'stopped' && activeClipName) {
       const d = selectClip(activeClipName, { loop, speed })
@@ -125,7 +147,7 @@ export default function AnimationPanel() {
     // Arm the source if we're stopped so there's an action to evaluate.
     if (playback === 'stopped') {
       if (source === 'edit') {
-        const d = selectEdit(animData.tracks, animDuration, { loop, speed })
+        const d = selectEdit(animData.tracks, animData.root, animDuration, { loop, speed })
         st().setDuration(d)
       } else if (activeClipName) {
         selectClip(activeClipName, { loop, speed })
@@ -154,12 +176,36 @@ export default function AnimationPanel() {
   function onAddKey() {
     if (!selectedBoneName) return
     const quat = getBoneQuaternion(selectedBoneName)
-    if (quat) st().addKeyframe(selectedBoneName, snap(insertTime), quat)
+    if (!quat) return
+    const t = snap(insertTime)
+    st().addKeyframe(selectedBoneName, t, quat)
+    setKfMsg(
+      `Saved “${selectedBoneName}” at ${t.toFixed(2)}s. Now move the time slider, change the pose, add another keyframe — then Play.`,
+    )
   }
 
   function onKeyAll() {
     const posed = getPosedBones()
-    if (posed.length) st().addKeyframesAtTime(posed, snap(insertTime))
+    if (!posed.length) {
+      setKfMsg('Nothing to save — pose a joint (drag a ring) first, then add a keyframe.')
+      return
+    }
+    const t = snap(insertTime)
+    st().addKeyframesAtTime(posed, t)
+    setKfMsg(`Saved ${posed.length} posed joint(s) at ${t.toFixed(2)}s.`)
+  }
+
+  // Keyframe the character's world placement (for root motion — walking toward a
+  // wall, etc.). Move the character (Objects → the character entry), then key it.
+  function onKeyPosition() {
+    const tr = getCharacterRootTransform()
+    if (!tr) return
+    const t = snap(insertTime)
+    st().addRootKeyframe(t, tr.pos, tr.quat)
+    const n = (animData.root ? animData.root.filter((k) => k.time !== t).length : 0) + 1
+    setKfMsg(
+      `Saved the character's position at ${t.toFixed(2)}s (${n} total). Move the character in Objects at a different time and save again — it'll glide between them on Play.`,
+    )
   }
 
   function onSaveAnim() {
@@ -168,6 +214,7 @@ export default function AnimationPanel() {
       fps: animFps,
       duration: animDuration,
       tracks: animData.tracks,
+      root: animData.root || [],
     }
     const blob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
@@ -188,7 +235,7 @@ export default function AnimationPanel() {
         if (json.format !== 'anim-v1') throw new Error('Not an anim-v1 file.')
         st().setAnimFps(json.fps || 24)
         st().setAnimDuration(json.duration || 2)
-        st().setAnimData({ tracks: json.tracks || {} })
+        st().setAnimData({ tracks: json.tracks || {}, root: json.root || [] })
       } catch (err) {
         console.warn('Failed to load animation:', err)
       }
@@ -463,7 +510,12 @@ export default function AnimationPanel() {
       {source === 'edit' && hasBones && (
         <div className="keyframe-editor">
           <div className="field-label" style={{ marginTop: 4 }}>
-            Keyframes {playback !== 'stopped' && '(Stop to edit)'}
+            Keyframes {playback !== 'stopped' && '(press Stop to edit)'}
+          </div>
+          <div className="kf-help">
+            A keyframe is a snapshot at a moment in time. Pose the character, add a
+            keyframe, move the time, pose differently, add another — <b>Play</b>{' '}
+            smoothly blends between them.
           </div>
 
           <div className="kf-numbers">
@@ -508,38 +560,88 @@ export default function AnimationPanel() {
               className="btn secondary"
               onClick={onAddKey}
               disabled={!selectedBoneName}
-              title="Save the selected joint's rotation at this time"
+              title="Save the currently-selected joint's rotation at this time"
             >
-              Keyframe joint
+              Key selected joint
             </button>
             <button
               className="btn secondary"
               onClick={onKeyAll}
-              title="Save every moved joint's rotation at this time"
+              title="Save every joint you've posed, at this time"
             >
-              Keyframe all
+              Key whole pose
             </button>
           </div>
 
-          {/* Marker strip for the selected bone's keyframes */}
-          <div className="kf-strip-label">
-            {selectedBoneName ? `Keys: ${selectedBoneName}` : 'Select a bone to see its keys'}
+          <button
+            className="btn secondary"
+            style={{ marginTop: 6 }}
+            onClick={onKeyPosition}
+            title="Save the character's world position at this time (move it in Objects first)"
+          >
+            Keyframe position {animData.root && animData.root.length ? `(${animData.root.length})` : ''}
+          </button>
+
+          {kfMsg && <div className="pose-msg">{kfMsg}</div>}
+
+          {/* All keyframes: click a row to jump there (re-pose + re-key to edit),
+              or delete it. The dot marks whichever the selected joint is keyed at. */}
+          <div className="field-label" style={{ marginTop: 10 }}>
+            All keyframes ({allKeyframes.length})
           </div>
-          <div className="kf-strip">
-            {boneKeys.map((k, i) => (
-              <button
-                key={i}
-                className={'kf-marker' + (Math.abs(k.time - insertTime) < 1e-4 ? ' active' : '')}
-                style={{ left: `${(k.time / (animDuration || 1)) * 100}%` }}
-                title={`${k.time.toFixed(2)}s — click to jump, right-click to delete`}
-                onClick={() => st().setInsertTime(k.time)}
-                onContextMenu={(e) => {
-                  e.preventDefault()
-                  st().deleteKeyframe(selectedBoneName, k.time)
-                }}
-              />
-            ))}
+          <div className="kf-list">
+            {allKeyframes.length === 0 && (
+              <div className="empty" style={{ padding: '6px 8px' }}>
+                None yet — add keyframes above, then Play.
+              </div>
+            )}
+            {allKeyframes.map((k) => {
+              const hasSelBone =
+                selectedBoneName &&
+                (animData.tracks[selectedBoneName] || []).some(
+                  (b) => Math.abs(b.time - k.time) < 1e-6,
+                )
+              return (
+                <div
+                  key={k.time}
+                  className={'kf-list-row' + (Math.abs(k.time - insertTime) < 1e-4 ? ' active' : '')}
+                  title="Jump here (then re-pose and re-key to edit)"
+                  onClick={() => st().setInsertTime(k.time)}
+                >
+                  <span className="kf-time">{k.time.toFixed(2)}s</span>
+                  <span className="kf-what">
+                    {k.joints > 0 && (
+                      <span className={'kf-tag' + (hasSelBone ? ' sel' : '')}>
+                        {k.joints} joint{k.joints > 1 ? 's' : ''}
+                      </span>
+                    )}
+                    {k.pos && <span className="kf-tag pos">position</span>}
+                  </span>
+                  <button
+                    className="kf-del"
+                    title="Delete all keyframes at this time"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      st().deleteAllAtTime(k.time)
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
+              )
+            })}
           </div>
+
+          {selectedBoneName && boneKeys.length > 0 && (
+            <button
+              className="btn secondary"
+              style={{ marginTop: 6 }}
+              onClick={() => st().deleteKeyframe(selectedBoneName, snap(insertTime))}
+              title={`Remove only ${selectedBoneName}'s keyframe at the current time`}
+            >
+              Delete “{selectedBoneName}” key here
+            </button>
+          )}
 
           <div className="kf-actions" style={{ marginTop: 8 }}>
             <button className="btn secondary" onClick={onSaveAnim}>

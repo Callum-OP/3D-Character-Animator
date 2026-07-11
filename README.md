@@ -51,6 +51,14 @@ The project is being built in phases (see [`references/Plan.md`](references/Plan
   optional FPS/memory **performance readout**, a **Help & shortcuts** overlay
   (press `?`), a welcoming empty state, and plain-language labels throughout for
   people new to 3D/animation.
+- **Phase 4.5 — Scene objects — ✅ done.** Add any number of props or backgrounds
+  (`.glb`/`.gltf`/`.fbx`) around the character, then **Move / Rotate / Resize** the
+  selected one with a gizmo and **cycle** between them. The character itself is a
+  movable entry too. **Save/Load the scene** layout (placement + pose), **copy &
+  paste poses** (e.g. from a scrubbed mocap frame into your own clip), and record
+  **root motion** — move the character between keyframes so it walks toward a wall
+  instead of animating on the spot. A **shadow-mapping** toggle swaps the small
+  blob shadow for real cast shadows.
 - **Phase 5 — not yet built:** PNG / image-sequence export.
 
 ### Supported file formats
@@ -156,13 +164,17 @@ src/
     poses.js            # pose JSON format + file save/load
     animation.js        # AnimationMixer: baked clips + in-app keyframe clips
     bvh.js              # BVH mocap import + retarget onto the loaded rig
+    objects.js          # scene props/backgrounds + move/rotate/scale gizmo
     Viewport.jsx        # canvas host + drag-and-drop + pose keyboard shortcuts
   panels/
     ModelPanel.jsx      # load button / drop zone, model stats
     MaterialPanel.jsx   # material mode + key-light controls
     BonePanel.jsx       # bone tree, pose save/load/reset/undo
     AnimationPanel.jsx  # clip playback + in-app keyframing
-    ViewPanel.jsx       # grid & background toggles
+    ObjectsPanel.jsx    # add / move / cycle props & backgrounds
+    ViewPanel.jsx       # scene toggles (grid, shadow, background, stats)
+    HelpOverlay.jsx     # ? help & shortcuts
+    StatsOverlay.jsx    # optional FPS/memory readout
 ```
 
 ## Design principles (low overhead is the point)
