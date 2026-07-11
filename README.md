@@ -59,7 +59,10 @@ The project is being built in phases (see [`references/Plan.md`](references/Plan
   **root motion** — move the character between keyframes so it walks toward a wall
   instead of animating on the spot. A **shadow-mapping** toggle swaps the small
   blob shadow for real cast shadows.
-- **Phase 5 — not yet built:** PNG / image-sequence export.
+- **Phase 5 — Export — ✅ done.** Save a **transparent PNG** at 1×/2×/4× the
+  viewport resolution, **record the animation to a video** (webm, from the current
+  camera angle), export your in-app animation as **`.bvh`** (round-trips through
+  the importer), and a **Fullscreen** view (Esc to exit) for screen-recording.
 
 ### Supported file formats
 
@@ -172,6 +175,7 @@ src/
     BonePanel.jsx       # bone tree, pose save/load/reset/undo
     AnimationPanel.jsx  # clip playback + in-app keyframing
     ObjectsPanel.jsx    # add / move / cycle props & backgrounds
+    ExportPanel.jsx     # PNG / video / BVH / fullscreen export
     ViewPanel.jsx       # scene toggles (grid, shadow, background, stats)
     HelpOverlay.jsx     # ? help & shortcuts
     StatsOverlay.jsx    # optional FPS/memory readout

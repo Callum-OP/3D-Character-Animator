@@ -72,6 +72,13 @@ export const useStore = create((set) => ({
   setShowHelp: (showHelp) => set({ showHelp }),
   toggleHelp: () => set((s) => ({ showHelp: !s.showHelp })),
 
+  // ---- Export (Phase 5) ----
+  exportScale: 2, // PNG resolution multiplier (1× / 2× / 4×)
+  recording: false, // true while capturing a video
+
+  setExportScale: (exportScale) => set({ exportScale }),
+  setRecording: (recording) => set({ recording }),
+
   // ---- Material mode (Phase 2) ----
   // 'unlit' is the default: raw base colour, no lighting — matches Blender's
   // flat colours exactly and side-steps FBX lighting artifacts.

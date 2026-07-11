@@ -135,7 +135,10 @@ export function sampleClipToPose(name, time) {
   const clip = findClip(name)
   if (!clip || !a.model) return null
   const mixer = new THREE.AnimationMixer(a.model.root)
-  mixer.clipAction(clip).play()
+  const act = mixer.clipAction(clip)
+  act.loop = THREE.LoopOnce
+  act.clampWhenFinished = true
+  act.play()
   mixer.setTime(Math.max(0, Math.min(time, clip.duration)))
   const out = {}
   for (const b of a.model.bones) {
@@ -157,7 +160,10 @@ export function bakeClipToTracks(name, fps, duration) {
   const dur = duration || clip.duration
   const frames = Math.max(2, Math.round(dur * fps) + 1)
   const mixer = new THREE.AnimationMixer(a.model.root)
-  mixer.clipAction(clip).play()
+  const act = mixer.clipAction(clip)
+  act.loop = THREE.LoopOnce
+  act.clampWhenFinished = true
+  act.play()
 
   const tracks = {}
   for (const b of a.model.bones) tracks[b.name] = []
@@ -244,6 +250,125 @@ export function scrub(t) {
   a.mixer.update(0) // apply bindings at the new time without advancing
   sampleRoot(a.action.time)
   a.refs.requestRender()
+}
+
+// --- BVH export --------------------------------------------------------------
+
+const RAD2DEG = 180 / Math.PI
+const _e = new THREE.Euler()
+const _wp = new THREE.Vector3()
+
+function fmtNum(n) {
+  return (Math.abs(n) < 1e-6 ? 0 : n).toFixed(4)
+}
+
+// Interpolate the character root-motion keys at time t onto an object3D.
+function applyRootAt(keys, t, obj) {
+  if (t <= keys[0].time) return applyRootKey(obj, keys[0])
+  if (t >= keys[keys.length - 1].time) return applyRootKey(obj, keys[keys.length - 1])
+  let i = 0
+  while (i < keys.length - 1 && keys[i + 1].time < t) i++
+  const k0 = keys[i]
+  const k1 = keys[i + 1]
+  const span = k1.time - k0.time
+  const f = span > 0 ? (t - k0.time) / span : 0
+  obj.position.set(
+    k0.pos[0] + (k1.pos[0] - k0.pos[0]) * f,
+    k0.pos[1] + (k1.pos[1] - k0.pos[1]) * f,
+    k0.pos[2] + (k1.pos[2] - k0.pos[2]) * f,
+  )
+  _qa.fromArray(k0.quat)
+  _qb.fromArray(k1.quat)
+  obj.quaternion.slerpQuaternions(_qa, _qb, f)
+}
+
+// Export the in-app animation (bone rotations + character root motion) as BVH
+// text. Rotations use 'ZXY' Euler order to match our BVHLoader's channel order,
+// so re-importing round-trips. Single-root skeletons only; the root joint's
+// position channels carry the character's world motion.
+export function exportAnimationBVH(animData, fps, duration) {
+  if (!a.model || !a.model.bones || a.model.bones.length === 0) return null
+  const bones = a.model.bones
+  const boneSet = new Set(bones)
+  const childrenOf = new Map(bones.map((b) => [b, []]))
+  const roots = []
+  for (const b of bones) {
+    if (b.parent && boneSet.has(b.parent)) childrenOf.get(b.parent).push(b)
+    else roots.push(b)
+  }
+  if (roots.length === 0) return null
+  const rootBone = roots[0]
+  const isRoot = (b) => b === rootBone
+
+  // --- sample the animation frame by frame ---
+  const clip = buildEditClip(animData.tracks, duration)
+  const mixer = new THREE.AnimationMixer(a.model.root)
+  const bvhAction = mixer.clipAction(clip)
+  bvhAction.loop = THREE.LoopOnce // don't wrap when sampling the final frame
+  bvhAction.clampWhenFinished = true
+  bvhAction.play()
+  const rootKeys = (animData.root || []).slice().sort((x, y) => x.time - y.time)
+  const savedPos = a.model.root.position.clone()
+  const savedQuat = a.model.root.quaternion.clone()
+
+  const numFrames = Math.max(2, Math.round(duration * fps) + 1)
+  const frameTime = duration / (numFrames - 1)
+  const frames = []
+  for (let f = 0; f < numFrames; f++) {
+    const t = f * frameTime
+    mixer.setTime(t)
+    if (rootKeys.length) applyRootAt(rootKeys, t, a.model.root)
+    a.model.root.updateWorldMatrix(true, true)
+    const rot = new Map()
+    for (const b of bones) {
+      _e.setFromQuaternion(b.quaternion, 'ZXY')
+      rot.set(b, [_e.z * RAD2DEG, _e.x * RAD2DEG, _e.y * RAD2DEG])
+    }
+    rootBone.getWorldPosition(_wp)
+    frames.push({ rot, rootPos: [_wp.x, _wp.y, _wp.z] })
+  }
+  mixer.stopAllAction()
+  mixer.uncacheClip(clip)
+  restoreRest()
+  a.model.root.position.copy(savedPos)
+  a.model.root.quaternion.copy(savedQuat)
+  a.model.root.updateWorldMatrix(true, true)
+
+  // --- write HIERARCHY (rest offsets), collecting the channel order ---
+  const order = []
+  let out = 'HIERARCHY\n'
+  const write = (bone, depth) => {
+    const pad = '\t'.repeat(depth)
+    out += `${pad}${isRoot(bone) ? 'ROOT' : 'JOINT'} ${bone.name || 'bone'}\n${pad}{\n`
+    const off = isRoot(bone) ? [0, 0, 0] : bone.position.toArray()
+    out += `${pad}\tOFFSET ${fmtNum(off[0])} ${fmtNum(off[1])} ${fmtNum(off[2])}\n`
+    out += isRoot(bone)
+      ? `${pad}\tCHANNELS 6 Xposition Yposition Zposition Zrotation Xrotation Yrotation\n`
+      : `${pad}\tCHANNELS 3 Zrotation Xrotation Yrotation\n`
+    order.push(bone)
+    const kids = childrenOf.get(bone)
+    if (kids.length === 0) {
+      const L = bone.position.length() || 0.1
+      out += `${pad}\tEnd Site\n${pad}\t{\n${pad}\t\tOFFSET 0 ${fmtNum(L)} 0\n${pad}\t}\n`
+    } else {
+      for (const k of kids) write(k, depth + 1)
+    }
+    out += `${pad}}\n`
+  }
+  write(rootBone, 0)
+
+  // --- write MOTION (channel values per frame, in the same order) ---
+  out += `MOTION\nFrames: ${numFrames}\nFrame Time: ${frameTime.toFixed(6)}\n`
+  for (const fr of frames) {
+    const parts = []
+    for (const b of order) {
+      if (isRoot(b)) parts.push(fmtNum(fr.rootPos[0]), fmtNum(fr.rootPos[1]), fmtNum(fr.rootPos[2]))
+      const r = fr.rot.get(b)
+      parts.push(fmtNum(r[0]), fmtNum(r[1]), fmtNum(r[2]))
+    }
+    out += parts.join(' ') + '\n'
+  }
+  return out
 }
 
 // --- internals ---------------------------------------------------------------

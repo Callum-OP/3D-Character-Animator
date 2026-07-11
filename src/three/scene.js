@@ -81,6 +81,8 @@ const state = {
   animId: 0,
   clock: null, // THREE.Clock for per-frame deltas while playing
   fps: 0, // smoothed frames-per-second while playing (for the stats readout)
+  recorder: null, // MediaRecorder while capturing a video
+  recordedChunks: [],
   resizeObserver: null,
 }
 
@@ -343,6 +345,80 @@ export function getCharacterRootTransform() {
   if (!state.currentModel) return null
   const r = state.currentModel.root
   return { pos: r.position.toArray(), quat: r.quaternion.toArray() }
+}
+
+// ---------------------------------------------------------------------------
+// Export (Phase 5): PNG, video recording, fullscreen
+// ---------------------------------------------------------------------------
+
+function timestamp() {
+  const d = new Date()
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+// Render the current frame at `scale`× the viewport resolution and save a PNG.
+// Transparent background is preserved (alpha), so it drops into 2D art.
+export function exportPNG(scale = 2, name = 'render') {
+  if (!state.renderer || !state.container) return
+  const w = state.container.clientWidth || 1
+  const h = state.container.clientHeight || 1
+  state.renderer.setSize(w * scale, h * scale, false) // false: keep CSS size, bigger buffer
+  renderOnce()
+  state.renderer.domElement.toBlob((blob) => {
+    if (blob) downloadBlob(blob, `${name}_${timestamp()}.png`)
+    state.renderer.setSize(w, h, false) // restore
+    requestRender()
+  }, 'image/png')
+}
+
+// True if the browser can record the canvas to a video.
+export function canRecordVideo() {
+  return typeof MediaRecorder !== 'undefined' && !!state.renderer?.domElement?.captureStream
+}
+
+// Start recording the live canvas to a webm video. Returns false if unsupported.
+export function startRecording(fps = 30) {
+  if (!canRecordVideo()) return false
+  const stream = state.renderer.domElement.captureStream(fps)
+  const types = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']
+  const mimeType = types.find((t) => MediaRecorder.isTypeSupported(t)) || ''
+  const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined)
+  state.recordedChunks = []
+  recorder.ondataavailable = (e) => {
+    if (e.data && e.data.size) state.recordedChunks.push(e.data)
+  }
+  recorder.start()
+  state.recorder = recorder
+  return true
+}
+
+// Stop recording and download the webm.
+export function stopRecordingAndDownload(name = 'animation') {
+  const recorder = state.recorder
+  if (!recorder) return
+  recorder.onstop = () => {
+    const blob = new Blob(state.recordedChunks, { type: 'video/webm' })
+    downloadBlob(blob, `${name}_${timestamp()}.webm`)
+    state.recordedChunks = []
+  }
+  recorder.stop()
+  state.recorder = null
+}
+
+// Enter fullscreen on the viewport (Esc exits — browser default).
+export function enterFullscreen() {
+  const el = state.container && state.container.parentElement
+  if (el && el.requestFullscreen) el.requestFullscreen()
 }
 
 // ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@ import MaterialPanel from './panels/MaterialPanel.jsx'
 import BonePanel from './panels/BonePanel.jsx'
 import AnimationPanel from './panels/AnimationPanel.jsx'
 import ObjectsPanel from './panels/ObjectsPanel.jsx'
+import ExportPanel from './panels/ExportPanel.jsx'
 import ViewPanel from './panels/ViewPanel.jsx'
 import HelpOverlay from './panels/HelpOverlay.jsx'
 import { useStore } from './store.js'
@@ -30,6 +31,7 @@ export default function App() {
         <ObjectsPanel />
         <MaterialPanel />
         <ViewPanel />
+        <ExportPanel />
       </aside>
       <HelpOverlay />
     </div>
