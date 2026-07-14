@@ -149,6 +149,8 @@ export function initScene(container) {
     // Report viewport picks up to the store; the Viewport effect then drives
     // the actual gizmo attach via selectBone (single source of truth).
     onSelect: (name) => useStore.getState().setSelectedBoneName(name),
+    // Any pose edit bumps a counter so the rotation sliders re-read the bone.
+    onPoseChange: () => useStore.getState().bumpPoseVersion(),
   })
 
   // --- Animation (baked clips + in-app keyframing) ---

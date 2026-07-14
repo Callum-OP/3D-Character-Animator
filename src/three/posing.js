@@ -11,10 +11,12 @@ import { poseToJSON, validatePose } from './poses.js'
 //   cloud with sizeAttenuation off) and pick the nearest dot to the click in
 //   screen space. Dots ignore depth so occluded bones stay pickable.
 // - A capped undo stack records rotation edits (gizmo drag, reset, pose load) as
-//   batches of { bone, before, after } quaternions.
+//   batches of { bone, before, after } quaternions. A matching redo stack is
+//   cleared whenever a fresh edit lands.
 // ---------------------------------------------------------------------------
 
 const UNDO_LIMIT = 100
+const SNAP_DEG = 15 // rotation snap increment (checkbox or Shift-hold)
 const DOT_SIZE_PX = 9 // bone dot diameter in pixels (screen-constant)
 const PICK_THRESHOLD_PX = 12 // click must land within this of a dot to select
 const DRAG_SLOP_PX = 4 // pointer travel above this is an orbit-drag, not a click
@@ -30,6 +32,7 @@ const p = {
   controls: null,
   requestRender: null,
   onSelect: null, // (boneName|null) => void — reports picks up to the store
+  onPoseChange: null, // () => void — any pose edit (drag, undo, reset…); UI resync
 
   transform: null, // TransformControls
   helper: null, // transform.getHelper() (added to scene)
@@ -47,9 +50,13 @@ const p = {
 
   selected: null, // selected Bone (or null)
   undoStack: [],
+  redoStack: [],
   dragBefore: null, // selected bone's quaternion at drag start
+  adjustBefore: null, // { bone, quat } captured by beginBoneAdjust (slider drags)
   pointerDown: null, // { x, y, axis } for click-vs-drag discrimination
   suspended: false, // true while animation playback drives the bones
+  snapDeg: null, // rotation snap increment in degrees (null = free rotate)
+  shiftHeld: false, // Shift temporarily inverts the snap setting
 }
 
 const _v = new THREE.Vector3() // scratch, reused every helper update
@@ -61,6 +68,7 @@ export function initPosing(refs) {
   p.controls = refs.controls
   p.requestRender = refs.requestRender
   p.onSelect = refs.onSelect
+  p.onPoseChange = refs.onPoseChange || null
 
   const transform = new TransformControls(p.camera, p.renderer.domElement)
   transform.setMode('rotate')
@@ -70,7 +78,10 @@ export function initPosing(refs) {
   transform.addEventListener('dragging-changed', (e) => {
     p.controls.enabled = !e.value
   })
-  transform.addEventListener('objectChange', () => p.requestRender())
+  transform.addEventListener('objectChange', () => {
+    notifyPoseChange() // keep the rotation sliders in sync while dragging
+    p.requestRender()
+  })
   transform.addEventListener('mouseDown', () => {
     if (p.selected) p.dragBefore = p.selected.quaternion.clone()
   })
@@ -96,6 +107,16 @@ export function initPosing(refs) {
   p._onPointerUp = onPointerUp
   dom.addEventListener('pointerdown', p._onPointerDown)
   dom.addEventListener('pointerup', p._onPointerUp)
+
+  // Holding Shift temporarily inverts the angle-snap setting (snap when it's
+  // off, free-rotate when it's on) — like precision modifiers in art programs.
+  p._onKeyChange = (e) => {
+    if (e.key !== 'Shift' || p.shiftHeld === (e.type === 'keydown')) return
+    p.shiftHeld = e.type === 'keydown'
+    applyRotationSnap()
+  }
+  window.addEventListener('keydown', p._onKeyChange)
+  window.addEventListener('keyup', p._onKeyChange)
 }
 
 // Bind the posing system to a freshly loaded model: capture rest rotations and
@@ -161,8 +182,10 @@ export function clearPoseModel() {
   if (p.transform) p.transform.detach()
   p.selected = null
   p.dragBefore = null
+  p.adjustBefore = null
   p.suspended = false
   p.undoStack = []
+  p.redoStack = []
   if (p.points) {
     p.scene.remove(p.points)
     p.pointsGeom.dispose()
@@ -246,6 +269,76 @@ export function getPosedBones() {
   return out
 }
 
+// A bone's current rotation as X/Y/Z degrees RELATIVE TO ITS REST POSE, so
+// (0, 0, 0) always means "straight" — far friendlier than raw quaternions.
+export function getBoneEulerDelta(name) {
+  const bone = p.boneMap.get(name)
+  const rest = bone && p.restQuats.get(bone)
+  if (!bone || !rest) return null
+  const delta = rest.clone().invert().multiply(bone.quaternion)
+  const e = new THREE.Euler().setFromQuaternion(delta, 'XYZ')
+  return {
+    x: THREE.MathUtils.radToDeg(e.x),
+    y: THREE.MathUtils.radToDeg(e.y),
+    z: THREE.MathUtils.radToDeg(e.z),
+  }
+}
+
+// Set a bone's rotation from rest-relative X/Y/Z degrees (the panel sliders).
+// Undo batching is the caller's job via beginBoneAdjust/endBoneAdjust.
+export function setBoneEulerDelta(name, deg) {
+  const bone = p.boneMap.get(name)
+  const rest = bone && p.restQuats.get(bone)
+  if (!bone || !rest) return
+  const e = new THREE.Euler(
+    THREE.MathUtils.degToRad(deg.x),
+    THREE.MathUtils.degToRad(deg.y),
+    THREE.MathUtils.degToRad(deg.z),
+    'XYZ',
+  )
+  bone.quaternion.copy(rest).multiply(new THREE.Quaternion().setFromEuler(e))
+  updateBoneHelpers()
+  p.requestRender()
+}
+
+// Bracket a continuous slider drag so it lands as ONE undo entry.
+export function beginBoneAdjust(name) {
+  const bone = p.boneMap.get(name)
+  if (bone) p.adjustBefore = { bone, quat: bone.quaternion.clone() }
+}
+
+export function endBoneAdjust() {
+  const adj = p.adjustBefore
+  p.adjustBefore = null
+  if (!adj || adj.bone.quaternion.equals(adj.quat)) return
+  pushUndo([{ bone: adj.bone, before: adj.quat, after: adj.bone.quaternion.clone() }])
+}
+
+// Restore a single bone to its rest rotation (undoable).
+export function resetBone(name) {
+  const bone = p.boneMap.get(name)
+  const rest = bone && p.restQuats.get(bone)
+  if (!bone || !rest || bone.quaternion.equals(rest)) return
+  pushUndo([{ bone, before: bone.quaternion.clone(), after: rest.clone() }])
+  bone.quaternion.copy(rest)
+  updateBoneHelpers()
+  notifyPoseChange()
+  p.requestRender()
+}
+
+// The selected bone's parent bone name (for "select parent" navigation).
+export function getBoneParentName(name) {
+  const bone = p.boneMap.get(name)
+  const parent = bone && bone.parent
+  return parent && parent.isBone && p.boneMap.has(parent.name) ? parent.name : null
+}
+
+// Turn gizmo angle snapping on (degrees) or off (null). Shift-hold inverts it.
+export function setRotationSnapDeg(deg) {
+  p.snapDeg = deg
+  applyRotationSnap()
+}
+
 export function setTransformSpace(space) {
   if (p.transform) p.transform.setSpace(space)
   p.requestRender()
@@ -270,7 +363,41 @@ export function resetPose() {
   }
   if (changes.length) pushUndo(changes)
   updateBoneHelpers()
+  notifyPoseChange()
   p.requestRender()
+}
+
+// Flip the pose left ↔ right as one undoable batch. Each bone takes its
+// mirrored counterpart's rest-relative rotation (found by the usual L/R naming
+// conventions), reflected across the character's centre plane; bones with no
+// counterpart (spine, head…) mirror in place. Works on the mirrored-rig
+// conventions Mixamo/Rigify-style skeletons follow.
+export function mirrorPose() {
+  if (!p.model || p.bones.length === 0) return 0
+  const snapshot = new Map(p.bones.map((b) => [b, b.quaternion.clone()]))
+  const changes = []
+  for (const bone of p.bones) {
+    const restDst = p.restQuats.get(bone)
+    if (!restDst) continue
+    const counterpart = mirrorBoneName(bone.name)
+    const src = counterpart ? p.boneMap.get(counterpart) : bone
+    const restSrc = p.restQuats.get(src)
+    if (!restSrc) continue
+    // Rest-relative rotation of the source side…
+    const delta = restSrc.clone().invert().multiply(snapshot.get(src))
+    // …reflected across the YZ plane: axis x flips, so (x,y,z,w) → (x,-y,-z,w).
+    delta.set(delta.x, -delta.y, -delta.z, delta.w)
+    const after = restDst.clone().multiply(delta)
+    if (!bone.quaternion.equals(after)) {
+      changes.push({ bone, before: bone.quaternion.clone(), after: after.clone() })
+      bone.quaternion.copy(after)
+    }
+  }
+  if (changes.length) pushUndo(changes)
+  updateBoneHelpers()
+  notifyPoseChange()
+  p.requestRender()
+  return changes.length
 }
 
 // Apply a parsed pose (validated) as one undoable batch. Bones absent from this
@@ -296,6 +423,7 @@ export function applyPose(json) {
   }
   if (changes.length) pushUndo(changes)
   updateBoneHelpers()
+  notifyPoseChange()
   p.requestRender()
   return { applied: Object.keys(json.bones).length - missing.length, missing }
 }
@@ -308,7 +436,19 @@ export function undo() {
   const batch = p.undoStack.pop()
   if (!batch) return
   for (const { bone, before } of batch) bone.quaternion.copy(before)
+  p.redoStack.push(batch)
   updateBoneHelpers()
+  notifyPoseChange()
+  p.requestRender()
+}
+
+export function redo() {
+  const batch = p.redoStack.pop()
+  if (!batch) return
+  for (const { bone, after } of batch) bone.quaternion.copy(after)
+  p.undoStack.push(batch)
+  updateBoneHelpers()
+  notifyPoseChange()
   p.requestRender()
 }
 
@@ -317,6 +457,11 @@ export function disposePosing() {
   if (dom) {
     dom.removeEventListener('pointerdown', p._onPointerDown)
     dom.removeEventListener('pointerup', p._onPointerUp)
+  }
+  if (p._onKeyChange) {
+    window.removeEventListener('keydown', p._onKeyChange)
+    window.removeEventListener('keyup', p._onKeyChange)
+    p._onKeyChange = null
   }
   clearPoseModel()
   if (p.helper) {
@@ -337,7 +482,48 @@ export function disposePosing() {
 
 function pushUndo(batch) {
   p.undoStack.push(batch)
+  p.redoStack = [] // a fresh edit invalidates the redo history
   if (p.undoStack.length > UNDO_LIMIT) p.undoStack.shift()
+}
+
+function notifyPoseChange() {
+  if (p.onPoseChange) p.onPoseChange()
+}
+
+// The effective gizmo snap: the checkbox setting, inverted while Shift is held.
+function applyRotationSnap() {
+  if (!p.transform) return
+  const snapOn = p.shiftHeld ? !p.snapDeg : !!p.snapDeg
+  p.transform.setRotationSnap(snapOn ? THREE.MathUtils.degToRad(p.snapDeg || SNAP_DEG) : null)
+}
+
+// Find a bone's opposite-side counterpart by the common L/R naming schemes
+// (Left/Right words, .L/.R, _l/_r, l_/r_ affixes). Returns a name that actually
+// exists in this rig, or null for centre bones.
+const SIDE_PATTERNS = [
+  [/Left/g, 'Right'],
+  [/Right/g, 'Left'],
+  [/left/g, 'right'],
+  [/right/g, 'left'],
+  [/LEFT/g, 'RIGHT'],
+  [/RIGHT/g, 'LEFT'],
+  [/([._-])L($|[._-])/g, '$1R$2'],
+  [/([._-])R($|[._-])/g, '$1L$2'],
+  [/([._-])l($|[._-])/g, '$1r$2'],
+  [/([._-])r($|[._-])/g, '$1l$2'],
+  [/^L([._-])/, 'R$1'],
+  [/^R([._-])/, 'L$1'],
+  [/^l([._-])/, 'r$1'],
+  [/^r([._-])/, 'l$1'],
+]
+
+function mirrorBoneName(name) {
+  for (const [re, sub] of SIDE_PATTERNS) {
+    re.lastIndex = 0
+    const swapped = name.replace(re, sub)
+    if (swapped !== name && p.boneMap.has(swapped)) return swapped
+  }
+  return null
 }
 
 function commitDragUndo() {

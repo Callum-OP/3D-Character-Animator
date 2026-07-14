@@ -32,7 +32,8 @@ export default function HelpOverlay() {
               </li>
               <li>
                 <b>Pose it.</b> Click a dot on the character (or a name in the Pose
-                list), then drag the coloured ring to rotate that joint.
+                list), then drag the coloured ring — or the X/Y/Z sliders — to
+                bend that joint.
               </li>
               <li>
                 <b>Animate it.</b> Play a built-in clip, import motion capture
@@ -76,6 +77,18 @@ export default function HelpOverlay() {
               </li>
               <li>
                 <b>Ctrl / Cmd + Z</b> — undo a pose change
+              </li>
+              <li>
+                <b>Ctrl / Cmd + Shift + Z</b> — redo it
+              </li>
+              <li>
+                <b>Shift</b> (while rotating) — snap to 15° steps
+              </li>
+              <li>
+                <b>Space</b> — play / pause the animation
+              </li>
+              <li>
+                <b>← / →</b> — step one frame back / forward
               </li>
             </ul>
           </div>

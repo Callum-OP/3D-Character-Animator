@@ -13,7 +13,15 @@ import {
 } from './scene.js'
 import { useStore } from '../store.js'
 import { SUPPORTED_EXTENSION_RE, SUPPORTED_EXTENSIONS } from './loadModel.js'
-import { selectBone, setTransformSpace, setBonesVisible, setPickableBones, undo } from './posing.js'
+import {
+  selectBone,
+  setTransformSpace,
+  setBonesVisible,
+  setPickableBones,
+  setRotationSnapDeg,
+  undo,
+  redo,
+} from './posing.js'
 import { selectObject, setObjectMode } from './objects.js'
 import StatsOverlay from '../panels/StatsOverlay.jsx'
 
@@ -95,6 +103,11 @@ export default function Viewport() {
     setBonesVisible(showBones)
   }, [showBones])
 
+  const rotationSnap = useStore((s) => s.rotationSnap)
+  useEffect(() => {
+    setRotationSnapDeg(rotationSnap ? 15 : null)
+  }, [rotationSnap])
+
   // "Hide helper bones" trims the dot overlay + picking to the primary bones.
   // (modelInfo is also a dep so a freshly loaded rig gets its filter applied.)
   const deformOnly = useStore((s) => s.deformOnly)
@@ -118,8 +131,8 @@ export default function Viewport() {
     setObjectMode(objectMode)
   }, [objectMode])
 
-  // Keyboard: Esc deselects, Ctrl/Cmd+Z undoes a bone edit. Ignored while typing
-  // in an input (e.g. the bone filter box).
+  // Keyboard: Esc deselects, Ctrl/Cmd+Z undoes a bone edit, Ctrl/Cmd+Shift+Z or
+  // Ctrl/Cmd+Y redoes it. Ignored while typing in an input (e.g. the filter box).
   useEffect(() => {
     function onKeyDown(e) {
       const tag = e.target.tagName
@@ -129,6 +142,12 @@ export default function Viewport() {
       } else if (e.key === 'Escape') {
         if (useStore.getState().showHelp) useStore.getState().setShowHelp(false)
         else useStore.getState().setSelectedBoneName(null)
+      } else if (
+        (e.ctrlKey || e.metaKey) &&
+        (e.key === 'y' || e.key === 'Y' || ((e.key === 'z' || e.key === 'Z') && e.shiftKey))
+      ) {
+        e.preventDefault()
+        redo()
       } else if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
         e.preventDefault()
         undo()

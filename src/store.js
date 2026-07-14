@@ -150,9 +150,15 @@ export const useStore = create((set) => ({
   deformOnly: false, // hide helper bones (_end/twist/vol/DEF- rule; set per rig on load)
   transformSpace: 'local', // gizmo rotation space: 'local' | 'world'
   showBones: true, // show the pickable bone-dot overlay + gizmo
+  rotationSnap: false, // rotate in 15° steps (hold Shift for the opposite)
   poseClipboard: null, // a copied pose ({ format:'pose-v1', bones:{...} }) for paste
+  // Bumped by the posing engine on every pose edit (gizmo drag, undo, reset…)
+  // so the rotation sliders can re-read the selected bone's angles.
+  poseVersion: 0,
 
   setPoseClipboard: (poseClipboard) => set({ poseClipboard }),
+  setRotationSnap: (rotationSnap) => set({ rotationSnap }),
+  bumpPoseVersion: () => set((s) => ({ poseVersion: s.poseVersion + 1 })),
 
   setSelectedBoneName: (selectedBoneName) =>
     // Selecting a bone deselects any scene object (one gizmo at a time).

@@ -1,7 +1,98 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store.js'
-import { resetPose, applyPose, getPose, undo } from '../three/posing.js'
+import {
+  resetPose,
+  resetBone,
+  applyPose,
+  getPose,
+  undo,
+  redo,
+  mirrorPose,
+  getBoneEulerDelta,
+  setBoneEulerDelta,
+  beginBoneAdjust,
+  endBoneAdjust,
+  getBoneParentName,
+} from '../three/posing.js'
 import { downloadPose, readPoseFile } from '../three/poses.js'
+import EditableValue from './EditableValue.jsx'
+
+const AXES = ['x', 'y', 'z']
+
+// X/Y/Z rotation sliders for the selected joint, in degrees relative to the
+// rest pose (0° = straight) — for people more at home with numbers and sliders
+// than a 3D ring gizmo. Kept in sync with gizmo drags via poseVersion; while a
+// slider is being dragged we own the euler state so quaternion→euler round
+// trips can't make the other two sliders jump.
+function JointRotation({ boneName, disabled }) {
+  const poseVersion = useStore((s) => s.poseVersion)
+  const [euler, setEuler] = useState(null)
+  const draggingRef = useRef(false)
+
+  useEffect(() => {
+    if (draggingRef.current) return
+    setEuler(getBoneEulerDelta(boneName))
+  }, [boneName, poseVersion])
+
+  if (!euler) return null
+
+  function apply(axis, v) {
+    const next = { ...euler, [axis]: v }
+    // A one-shot change (typed value, keyboard nudge) is its own undo entry;
+    // pointer drags are bracketed by begin/end so the whole drag is one entry.
+    const oneShot = !draggingRef.current
+    if (oneShot) beginBoneAdjust(boneName)
+    setBoneEulerDelta(boneName, next)
+    if (oneShot) endBoneAdjust()
+    setEuler(next)
+  }
+
+  function onDragStart() {
+    if (disabled) return
+    draggingRef.current = true
+    beginBoneAdjust(boneName)
+  }
+
+  function onDragEnd() {
+    if (!draggingRef.current) return
+    draggingRef.current = false
+    endBoneAdjust()
+    setEuler(getBoneEulerDelta(boneName))
+  }
+
+  return (
+    <>
+      {AXES.map((axis) => (
+        <label className="slider-row" key={axis}>
+          <span className={`slider-label axis-label axis-${axis}`}>
+            {axis.toUpperCase()} bend
+          </span>
+          <input
+            type="range"
+            min={-180}
+            max={180}
+            step={1}
+            disabled={disabled}
+            value={Math.round(euler[axis])}
+            onPointerDown={onDragStart}
+            onPointerUp={onDragEnd}
+            onLostPointerCapture={onDragEnd}
+            onChange={(e) => apply(axis, Number(e.target.value))}
+          />
+          <EditableValue
+            value={euler[axis]}
+            min={-180}
+            max={180}
+            disabled={disabled}
+            onChange={(v) => apply(axis, v)}
+            format={(v) => `${Math.round(v)}°`}
+            label={`${axis.toUpperCase()} rotation (degrees from rest)`}
+          />
+        </label>
+      ))}
+    </>
+  )
+}
 
 // Side-panel section: pick a bone to pose, and save/load/reset the pose.
 // Selection is the store's job (viewport picks and this tree both write
@@ -13,6 +104,8 @@ export default function BonePanel() {
   const deformOnly = useStore((s) => s.deformOnly)
   const transformSpace = useStore((s) => s.transformSpace)
   const showBones = useStore((s) => s.showBones)
+  const rotationSnap = useStore((s) => s.rotationSnap)
+  const playback = useStore((s) => s.playback)
 
   const poseClipboard = useStore((s) => s.poseClipboard)
   const setSelectedBoneName = useStore((s) => s.setSelectedBoneName)
@@ -20,6 +113,7 @@ export default function BonePanel() {
   const setDeformOnly = useStore((s) => s.setDeformOnly)
   const setTransformSpace = useStore((s) => s.setTransformSpace)
   const setShowBones = useStore((s) => s.setShowBones)
+  const setRotationSnap = useStore((s) => s.setRotationSnap)
   const setPoseClipboard = useStore((s) => s.setPoseClipboard)
 
   const fileInputRef = useRef(null)
@@ -38,9 +132,22 @@ export default function BonePanel() {
     setPoseMsg(`Pasted ${applied} bone(s)` + (missing.length ? `, ${missing.length} skipped.` : '.'))
   }
 
+  function onMirror() {
+    const changed = mirrorPose()
+    setPoseMsg(changed ? 'Pose flipped left ↔ right.' : 'Nothing to mirror — pose a joint first.')
+  }
+
   const bones = modelInfo?.bones || []
   // Offer the helper-bone toggle only when the rig actually has both kinds.
   const hasHelpers = bones.some((b) => b.deform) && bones.some((b) => !b.deform)
+
+  // The selected joint's panel entry (+ its parent, for chain navigation).
+  const selectedBone = selectedBoneName ? bones.find((b) => b.name === selectedBoneName) : null
+  const parentName = selectedBone ? getBoneParentName(selectedBoneName) : null
+  const parentBone = parentName ? bones.find((b) => b.name === parentName) : null
+  // Posing steps aside whenever an animation source is armed (same rule the
+  // gizmo follows), so the sliders can't fight the mixer.
+  const posingLocked = playback !== 'stopped'
 
   if (!modelInfo) {
     return (
@@ -101,11 +208,21 @@ export default function BonePanel() {
       </p>
 
       <div className="pose-actions">
-        <button className="btn secondary" onClick={() => resetPose()}>
+        <button className="btn secondary" onClick={() => resetPose()} title="Straighten every joint back to the rest pose">
           Reset
         </button>
-        <button className="btn secondary" onClick={() => undo()}>
+        <button className="btn secondary" onClick={() => undo()} title="Undo the last pose change (Ctrl+Z)">
           Undo
+        </button>
+        <button className="btn secondary" onClick={() => redo()} title="Redo an undone pose change (Ctrl+Shift+Z)">
+          Redo
+        </button>
+        <button
+          className="btn secondary"
+          onClick={onMirror}
+          title="Flip the whole pose left ↔ right (great for walk cycles)"
+        >
+          Mirror
         </button>
         <button className="btn secondary" onClick={onCopy} title="Copy the current pose">
           Copy
@@ -144,6 +261,18 @@ export default function BonePanel() {
           />
           Show joints
         </label>
+        <label
+          className="toggle-row"
+          style={{ padding: 0 }}
+          title="Rotate in 15° steps for tidy, repeatable angles — hold Shift while dragging for the opposite behaviour"
+        >
+          <input
+            type="checkbox"
+            checked={rotationSnap}
+            onChange={(e) => setRotationSnap(e.target.checked)}
+          />
+          Snap 15°
+        </label>
         {hasHelpers && (
           <label
             className="toggle-row"
@@ -174,6 +303,40 @@ export default function BonePanel() {
           World
         </button>
       </div>
+
+      {selectedBone && (
+        <div className={'joint-controls' + (posingLocked ? ' disabled' : '')}>
+          <div className="joint-header">
+            <span className="joint-name" title={selectedBone.name}>
+              {selectedBone.label || selectedBone.name}
+            </span>
+            {parentBone && (
+              <button
+                className="joint-parent"
+                title={`Select the parent joint (${parentBone.name})`}
+                onClick={() => setSelectedBoneName(parentBone.name)}
+              >
+                ↑ {parentBone.label || parentBone.name}
+              </button>
+            )}
+          </div>
+          {posingLocked ? (
+            <div className="joint-locked">Press Stop to pose while an animation is loaded.</div>
+          ) : (
+            <>
+              <JointRotation boneName={selectedBoneName} disabled={posingLocked} />
+              <button
+                className="btn secondary"
+                style={{ width: '100%', marginTop: 4 }}
+                onClick={() => resetBone(selectedBoneName)}
+                title="Straighten only this joint back to its rest rotation"
+              >
+                Straighten this joint
+              </button>
+            </>
+          )}
+        </div>
+      )}
 
       <input
         className="bone-filter"
@@ -207,8 +370,9 @@ export default function BonePanel() {
       </div>
 
       <div className="pose-hint">
-        Click a bone dot or a name to select, drag the ring gizmo to rotate.
-        Esc deselects · Ctrl+Z undoes.
+        Click a bone dot or a name to select, then drag the ring gizmo or the
+        X/Y/Z sliders to bend it. Esc deselects · Ctrl+Z undoes · Ctrl+Shift+Z
+        redoes · hold Shift to snap.
       </div>
     </div>
   )

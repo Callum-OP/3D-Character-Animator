@@ -631,6 +631,74 @@ body {
   line-height: 1.4;
 }
 
+/* --- Selected-joint rotation controls --- */
+.joint-controls {
+  margin-top: 8px;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  padding: 6px 8px 8px;
+  background: var(--panel-bg-2);
+}
+
+.joint-controls.disabled {
+  opacity: 0.6;
+}
+
+.joint-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.joint-name {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.joint-parent {
+  flex: 0 1 auto;
+  max-width: 55%;
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.joint-parent:hover {
+  color: var(--accent);
+}
+
+.joint-locked {
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 2px 0 4px;
+}
+
+/* Colour the X/Y/Z labels to match the gizmo's ring colours. */
+.axis-label {
+  font-weight: 600;
+}
+.axis-x {
+  color: #e5637c;
+}
+.axis-y {
+  color: #7ec96f;
+}
+.axis-z {
+  color: #5aa2e8;
+}
+
 /* --- Animation panel --- */
 .transport {
   display: grid;
@@ -660,6 +728,56 @@ body {
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+/* --- Frame stepping (◀ frame N / M ▶) --- */
+.frame-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.frame-btn {
+  flex: 0 0 auto;
+  width: 34px;
+  padding: 4px 0;
+  background: var(--panel-bg-2);
+  color: var(--text);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.frame-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.frame-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.frame-label {
+  flex: 1;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* The typeable frame number inside the label. */
+.frame-num {
+  font-size: 11px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.frame-num.editable-value-input {
+  width: 6ch;
+  text-align: center;
 }
 
 .anim-opts {

@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store.js'
 import EditableValue from './EditableValue.jsx'
 import {
@@ -38,6 +38,48 @@ function collectKeyframes(animData) {
   return [...map.values()].sort((a, b) => a.time - b.time)
 }
 
+// One-frame back/forward stepping on the fps grid, with a typeable frame
+// number — so you can land exactly on "the next frame" instead of nudging a
+// slider and guessing. `onChange` receives a time in seconds.
+function FrameStepper({ time, duration, fps, onChange }) {
+  const frame = Math.round(time * fps)
+  const total = Math.max(0, Math.round(duration * fps))
+  const toTime = (f) => Math.min(Math.max(f / fps, 0), duration || 0)
+  return (
+    <div className="frame-row">
+      <button
+        className="frame-btn"
+        title={`Back one frame (1/${fps}s)`}
+        onClick={() => onChange(toTime(frame - 1))}
+        disabled={frame <= 0}
+      >
+        ◀
+      </button>
+      <span className="frame-label">
+        Frame{' '}
+        <EditableValue
+          value={frame}
+          min={0}
+          max={total}
+          onChange={(f) => onChange(toTime(Math.round(f)))}
+          format={(f) => `${Math.round(f)}`}
+          className="frame-num"
+          label="Frame number"
+        />{' '}
+        / {total}
+      </span>
+      <button
+        className="frame-btn"
+        title={`Forward one frame (1/${fps}s)`}
+        onClick={() => onChange(toTime(frame + 1))}
+        disabled={frame >= total}
+      >
+        ▶
+      </button>
+    </div>
+  )
+}
+
 // Side-panel section: play baked clips or author a simple in-app keyframe
 // animation. Playback drives the bones, so it's mutually exclusive with posing —
 // the engine suspends the gizmo while a clip is armed and restores the rest pose
@@ -70,6 +112,39 @@ export default function AnimationPanel() {
   // When a BVH is parsed, this holds the mapping editor state until the user
   // confirms (Retarget) or cancels: { name, sourceBones, targetBones, slots }.
   const [mapping, setMapping] = useState(null)
+
+  // Space = play/pause, ←/→ = step one frame (the insert time while authoring
+  // keyframes, otherwise the playhead). Re-registered every render so the
+  // handler always closes over fresh state; ignored while typing in a field.
+  useEffect(() => {
+    function onKey(e) {
+      const tag = e.target.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target.isContentEditable)
+        return
+      if (!modelInfo) return
+      if (e.key === ' ') {
+        // Space is the transport toggle everywhere outside text fields — a
+        // clicked button keeps focus, so blur it or its native Space activation
+        // fires on keyup too. Buttons remain keyboard-activatable via Enter.
+        e.preventDefault()
+        if (tag === 'BUTTON') e.target.blur()
+        onPauseToggle()
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        const dir = e.key === 'ArrowLeft' ? -1 : 1
+        const step = (t, dur) =>
+          Math.min(Math.max((Math.round(t * animFps) + dir) / animFps, 0), dur)
+        if (source === 'edit' && playback === 'stopped') {
+          e.preventDefault()
+          st().setInsertTime(step(insertTime, animDuration))
+        } else if (source === 'edit' || activeClipName) {
+          e.preventDefault()
+          onScrub(step(currentTime, source === 'edit' ? animDuration : duration))
+        }
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
 
   if (!modelInfo) return null
 
@@ -494,6 +569,15 @@ export default function AnimationPanel() {
         />
       </div>
 
+      {displayDuration > 0 && (
+        <FrameStepper
+          time={Math.min(currentTime, displayDuration)}
+          duration={displayDuration}
+          fps={animFps}
+          onChange={onScrub}
+        />
+      )}
+
       <div className="anim-opts">
         <label className="toggle-row" style={{ padding: 0 }}>
           <input type="checkbox" checked={loop} onChange={(e) => onLoop(e.target.checked)} />
@@ -575,6 +659,13 @@ export default function AnimationPanel() {
               label="Insert keyframe at (seconds)"
             />
           </label>
+
+          <FrameStepper
+            time={insertTime}
+            duration={animDuration}
+            fps={animFps}
+            onChange={(t) => st().setInsertTime(t)}
+          />
 
           <div className="kf-actions">
             <button
