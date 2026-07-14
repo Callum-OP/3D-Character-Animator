@@ -1,7 +1,7 @@
 import { useStore } from '../store.js'
 import EditableValue from './EditableValue.jsx'
 
-// Side-panel section: material mode + key-light controls (Phase 2).
+// Side-panel section: material mode + key-light controls.
 // Unlit shows raw Blender colours (no lighting), Toon adds stepped anime shading,
 // Standard is the original PBR. The light sliders only affect Toon/Standard, so
 // they're disabled in Unlit mode.

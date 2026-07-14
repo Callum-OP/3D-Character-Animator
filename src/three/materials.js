@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 
 // ---------------------------------------------------------------------------
-// Material modes (Phase 2) + per-mesh shading overrides
+// Material modes + per-mesh shading overrides
 //
 // Blender node shaders can't be exported, but glTF carries the Principled BSDF
 // data (baseColorFactor/Texture, emissive, alpha, …) which GLTFLoader turns into

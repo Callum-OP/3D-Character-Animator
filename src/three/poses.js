@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// Pose serialization (Phase 3)
+// Pose serialization
 //
 // A pose is just each bone's LOCAL rotation quaternion, keyed by bone name:
 //   { format: "pose-v1", bones: { [boneName]: [x, y, z, w] } }

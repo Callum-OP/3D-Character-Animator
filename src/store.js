@@ -65,7 +65,7 @@ export const useStore = create((set) => ({
   backgroundColor: '#202127',
   showShadow: true, // ground shadow on/off
   shadowMapping: false, // true = real cast shadows; false = cheap blob
-  showStats: false, // FPS / memory readout overlay (Phase 6 polish)
+  showStats: false, // FPS / memory readout overlay
   showHelp: false, // help & shortcuts overlay
 
   setShowGrid: (showGrid) => set({ showGrid }),
@@ -77,14 +77,14 @@ export const useStore = create((set) => ({
   setShowHelp: (showHelp) => set({ showHelp }),
   toggleHelp: () => set((s) => ({ showHelp: !s.showHelp })),
 
-  // ---- Export (Phase 5) ----
+  // ---- Export ----
   exportScale: 2, // PNG resolution multiplier (1× / 2× / 4×)
   recording: false, // true while capturing a video
 
   setExportScale: (exportScale) => set({ exportScale }),
   setRecording: (recording) => set({ recording }),
 
-  // ---- Material mode (Phase 2) ----
+  // ---- Material mode ----
   // 'unlit' is the default: raw base colour, no lighting — matches Blender's
   // flat colours exactly and side-steps FBX lighting artifacts.
   materialMode: 'unlit', // 'unlit' | 'toon' | 'standard'
@@ -144,7 +144,7 @@ export const useStore = create((set) => ({
       },
     })),
 
-  // ---- Bone posing (Phase 3) ----
+  // ---- Bone posing ----
   selectedBoneName: null, // name of the bone the gizmo is attached to
   boneFilter: '', // text filter for the bone tree
   deformOnly: false, // hide helper bones (_end/twist/vol/DEF- rule; set per rig on load)
@@ -162,7 +162,7 @@ export const useStore = create((set) => ({
   setTransformSpace: (transformSpace) => set({ transformSpace }),
   setShowBones: (showBones) => set({ showBones }),
 
-  // ---- Scene objects (props / backgrounds, Phase 4.5) ----
+  // ---- Scene objects (props / backgrounds) ----
   sceneObjects: [], // [{ id, name, format }] — independent of the character
   selectedObjectId: null,
   objectMode: 'translate', // gizmo mode: 'translate' | 'rotate' | 'scale'
@@ -186,7 +186,7 @@ export const useStore = create((set) => ({
     set(id != null ? { selectedObjectId: id, selectedBoneName: null } : { selectedObjectId: id }),
   setObjectMode: (objectMode) => set({ objectMode }),
 
-  // ---- Animation (Phase 4) ----
+  // ---- Animation ----
   playback: 'stopped', // 'stopped' | 'playing' | 'paused'
   playbackSource: 'edit', // 'clip' (baked) | 'edit' (in-app keyframes)
   activeClipName: null, // selected clip (baked or imported)

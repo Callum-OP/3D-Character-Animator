@@ -3,7 +3,7 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 import { disposeObject } from './loadModel.js'
 
 // ---------------------------------------------------------------------------
-// Scene objects (Phase 4.5)
+// Scene objects
 //
 // Props and backgrounds the character can interact with — separate from the one
 // posable character model. Any number can be added; each is a plain Object3D you

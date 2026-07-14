@@ -68,7 +68,7 @@ const state = {
   controls: null,
   container: null,
   gridHelper: null,
-  shadow: null, // cheap blob ground shadow (Phase 6)
+  shadow: null, // cheap blob ground shadow
   shadowReceiver: null, // plane that catches real cast shadows
   shadowOn: true, // master ground-shadow toggle
   shadowMap: false, // real shadow mapping vs blob
@@ -99,8 +99,8 @@ export function initScene(container) {
 
   // --- Renderer ---
   // alpha:true + no scene.background => transparent output (for compositing).
-  // preserveDrawingBuffer:true is required so we can read pixels for PNG export
-  // in Phase 5. antialias:true for clean edges.
+  // preserveDrawingBuffer:true is required so we can read pixels for PNG export.
+  // antialias:true for clean edges.
   const renderer = new THREE.WebGLRenderer({
     alpha: true,
     antialias: true,
@@ -165,7 +165,7 @@ export function initScene(container) {
   // --- Scene objects (props / backgrounds with a move/rotate/scale gizmo) ---
   initObjects({ scene, camera, renderer, controls, requestRender })
 
-  // --- Lights (only affect Toon/Standard modes in Phase 2; harmless in Unlit) ---
+  // --- Lights (only affect Toon/Standard modes; harmless in Unlit) ---
   const dirLight = new THREE.DirectionalLight(0xffffff, 2.0)
   dirLight.position.set(2, 4, 3)
   dirLight.castShadow = false // enabled only in "realistic shadows" mode
@@ -395,7 +395,7 @@ export function getCharacterRootTransform() {
 }
 
 // ---------------------------------------------------------------------------
-// Export (Phase 5): PNG, video recording, fullscreen
+// Export: PNG, video recording, fullscreen
 // ---------------------------------------------------------------------------
 
 function timestamp() {
@@ -819,7 +819,7 @@ export function setBackground(solid, color) {
 }
 
 // ---------------------------------------------------------------------------
-// Material mode + lighting (Phase 2)
+// Material mode + lighting
 // ---------------------------------------------------------------------------
 
 // Re-apply materials + outline to the loaded model from the current store state.

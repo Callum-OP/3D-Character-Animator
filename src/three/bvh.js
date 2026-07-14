@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// BVH mocap import + retargeting (Phase 4 future-work)
+// BVH mocap import + retargeting
 //
 import * as THREE from 'three'
 

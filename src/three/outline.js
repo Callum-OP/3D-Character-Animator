@@ -1,7 +1,7 @@
 import { OutlineEffect } from 'three/examples/jsm/effects/OutlineEffect.js'
 
 // ---------------------------------------------------------------------------
-// Inverted-hull outline (pulled forward from Phase 5)
+// Inverted-hull outline
 //
 // Wraps the renderer in three's OutlineEffect, which draws the classic anime
 // outline: each mesh is re-drawn as black back-faces pushed out along the

@@ -2,11 +2,11 @@ import * as THREE from 'three'
 import { parseBVH, retargetParsed, buildSlotMapping, buildNameMatch, mergeNames } from './bvh.js'
 
 // ---------------------------------------------------------------------------
-// Animation (Phase 4)
+// Animation
 //
 // One AnimationMixer per model (rooted at model.root) plays either a baked glTF
 // clip OR an in-app clip built from keyframe tracks. Both are bone-name-keyed, so
-// the same mixer handles them and in-app data stays portable (BVH retarget later).
+// the same mixer handles them and in-app data stays portable.
 //
 // Playback drives the bones, so it is mutually exclusive with interactive posing:
 // starting playback suspends the gizmo (via refs), stopping restores the rest

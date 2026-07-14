@@ -29,7 +29,7 @@ export const SUPPORTED_EXTENSION_RE = new RegExp(
  * Dispatches on file extension: .glb/.gltf use GLTFLoader, .fbx uses FBXLoader.
  * No server round-trip: we parse from an object URL over the local File blob.
  *
- * Returns a plain object describing everything Phase 1+ needs:
+ * Returns a plain object describing everything the app needs:
  *   {
  *     source,          // raw loader result (gltf object, or FBX Group)
  *     root,            // THREE.Group/Object3D to add to the scene
@@ -41,7 +41,7 @@ export const SUPPORTED_EXTENSION_RE = new RegExp(
  *     info,            // { name, format, meshCount, boneCount, clipNames }
  *   }
  *
- * NOTE: Draco/KTX2/meshopt compression is not wired up in v1. If a Blender glTF
+ * NOTE: Draco/KTX2/meshopt compression is not wired up. If a Blender glTF
  * export uses Draco mesh compression, the loader will throw; we surface a clear
  * message telling the user to re-export without it.
  */
@@ -79,7 +79,7 @@ export async function loadModel(file) {
   }
 }
 
-// Backwards-compatible alias for the original Phase 1 entry point.
+// Backwards-compatible alias (some callers still import loadGLB).
 export { loadModel as loadGLB }
 
 // Walk a loaded scene graph and collect the references the app cares about.

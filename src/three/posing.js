@@ -3,10 +3,10 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 import { poseToJSON, validatePose } from './poses.js'
 
 // ---------------------------------------------------------------------------
-// Bone posing (Phase 3)
+// Bone posing
 //
 // - A TransformControls gizmo (rotate mode) attaches to the selected bone. FK
-//   only: rotating a bone deforms the SkinnedMesh via the skeleton. No IK in v1.
+//   only: rotating a bone deforms the SkinnedMesh via the skeleton (no IK).
 // - Bones have no geometry, so we draw a screen-constant dot per bone (a Points
 //   cloud with sizeAttenuation off) and pick the nearest dot to the click in
 //   screen space. Dots ignore depth so occluded bones stay pickable.
