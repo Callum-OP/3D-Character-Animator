@@ -93,6 +93,8 @@ const state = {
   controls: null,
   container: null,
   gridHelper: null,
+  ground: null, // solid ground plane (toggleable)
+  groundY: 0, // floor height (where the ground/shadow planes sit)
   shadow: null, // cheap blob ground shadow
   shadowReceiver: null, // plane that catches real cast shadows
   shadowOn: true, // master ground-shadow toggle
@@ -253,6 +255,20 @@ export function initScene(container) {
   scene.add(gridHelper)
   state.gridHelper = gridHelper
 
+  // --- Solid ground plane (toggleable; also the floor the ragdoll lands on) ---
+  const ground = new THREE.Mesh(
+    new THREE.CircleGeometry(1, 64),
+    new THREE.MeshStandardMaterial({ color: 0x2b2e36, roughness: 1, metalness: 0 }),
+  )
+  ground.rotation.x = -Math.PI / 2
+  ground.scale.set(10, 10, 1)
+  ground.renderOrder = -2 // draw before the blob shadow (which skips depth writes)
+  ground.receiveShadow = true
+  ground.visible = false
+  ground.material.userData.outlineParameters = { visible: false } // never outline it
+  scene.add(ground)
+  state.ground = ground
+
   // --- Blob ground shadow (cheap: a soft radial sprite, not shadow mapping) ---
   const shadow = new THREE.Mesh(
     new THREE.PlaneGeometry(1, 1),
@@ -284,6 +300,7 @@ export function initScene(container) {
   // --- Sync initial UI toggles from the store ---
   const s = useStore.getState()
   setGridVisible(s.showGrid)
+  setGroundVisible(s.showGround)
   setBackground(s.solidBackground, s.backgroundColor)
   setLightSettings(s.lightIntensity, s.lightAzimuth, s.lightElevation)
   setOutlineEnabled(s.outlineEnabled)
@@ -642,6 +659,8 @@ function collectSettings() {
     softenEnabled: s.softenEnabled,
     softenAmount: s.softenAmount,
     showGrid: s.showGrid,
+    showGround: s.showGround,
+    limbLimits: s.limbLimits,
     solidBackground: s.solidBackground,
     backgroundColor: s.backgroundColor,
     showShadow: s.showShadow,
@@ -741,7 +760,7 @@ export async function applyProjectData(record) {
   for (const k of [
     'materialMode', 'toonSteps', 'lightIntensity', 'lightAzimuth', 'lightElevation',
     'outlineEnabled', 'outlineWidth', 'softenEnabled', 'softenAmount',
-    'showGrid', 'solidBackground', 'backgroundColor', 'showShadow', 'shadowMapping',
+    'showGrid', 'showGround', 'limbLimits', 'solidBackground', 'backgroundColor', 'showShadow', 'shadowMapping',
     'animFps', 'animDuration',
   ]) {
     if (st[k] !== undefined) patch[k] = st[k]
@@ -825,7 +844,14 @@ function placeShadowUnder(box) {
   const maxDim = Math.max(size.x, size.y, size.z)
   state.modelCenter.copy(center)
   state.modelRadius = Math.max(maxDim, 0.5)
+  state.groundY = box.min.y
 
+  if (state.ground) {
+    const r = maxDim * 6
+    state.ground.scale.set(r, r, 1)
+    // A hair below the shadow planes so they never z-fight with it.
+    state.ground.position.set(center.x, box.min.y - maxDim * 0.002, center.z)
+  }
   if (state.shadow) {
     // Much smaller now — just the contact footprint under the feet.
     const footprint = Math.max(size.x, size.z) * 0.7
@@ -873,6 +899,17 @@ function positionLight() {
 export function setGridVisible(visible) {
   if (state.gridHelper) state.gridHelper.visible = visible
   requestRender()
+}
+
+export function setGroundVisible(visible) {
+  if (state.ground) state.ground.visible = visible
+  requestRender()
+}
+
+// The floor height (world Y) that the ground/shadow planes sit at — the surface
+// a ragdolling character falls onto.
+export function getGroundY() {
+  return state.groundY
 }
 
 export function setShadowVisible(visible) {
@@ -1011,6 +1048,11 @@ export function disposeScene() {
     state.gridHelper.geometry.dispose()
     state.gridHelper.material.dispose()
     state.gridHelper = null
+  }
+  if (state.ground) {
+    state.ground.geometry.dispose()
+    state.ground.material.dispose()
+    state.ground = null
   }
   if (state.shadow) {
     state.shadow.geometry.dispose()

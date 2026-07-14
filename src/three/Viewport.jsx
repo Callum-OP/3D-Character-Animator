@@ -4,6 +4,7 @@ import {
   disposeScene,
   loadModelFile,
   setGridVisible,
+  setGroundVisible,
   setBackground,
   setShadowVisible,
   setShadowMapping,
@@ -31,6 +32,7 @@ import {
   undo as undoMeshEdit,
   redo as redoMeshEdit,
 } from './meshedit.js'
+import { setLimitsEnabled } from './limits.js'
 import { selectObject, setObjectMode } from './objects.js'
 import { selectCamera, setCameraGizmoMode } from './cameras.js'
 import StatsOverlay from '../panels/StatsOverlay.jsx'
@@ -59,12 +61,17 @@ export default function Viewport() {
 
   // Push relevant store changes into the (non-reactive) scene manager.
   const showGrid = useStore((s) => s.showGrid)
+  const showGround = useStore((s) => s.showGround)
   const solidBackground = useStore((s) => s.solidBackground)
   const backgroundColor = useStore((s) => s.backgroundColor)
 
   useEffect(() => {
     setGridVisible(showGrid)
   }, [showGrid])
+
+  useEffect(() => {
+    setGroundVisible(showGround)
+  }, [showGround])
 
   useEffect(() => {
     setBackground(solidBackground, backgroundColor)
@@ -147,6 +154,11 @@ export default function Viewport() {
   useEffect(() => {
     setRotationSnapDeg(rotationSnap ? 15 : null)
   }, [rotationSnap])
+
+  const limbLimits = useStore((s) => s.limbLimits)
+  useEffect(() => {
+    setLimitsEnabled(limbLimits)
+  }, [limbLimits])
 
   // "Hide helper bones" trims the dot overlay + picking to the primary bones.
   // (modelInfo is also a dep so a freshly loaded rig gets its filter applied.)

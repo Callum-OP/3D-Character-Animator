@@ -591,8 +591,9 @@ body {
 }
 
 .pose-toggles {
-  display: flex;
-  gap: 14px;
+  display: grid;
+  grid-template-columns: 1fr 1fr; /* two per row — a single row overflows */
+  gap: 4px 14px;
   margin-top: 10px;
 }
 

@@ -13,6 +13,7 @@ import {
   beginBoneAdjust,
   endBoneAdjust,
   getBoneParentName,
+  applyLimitsToPose,
 } from '../three/posing.js'
 import { downloadPose, readPoseFile } from '../three/poses.js'
 import EditableValue from './EditableValue.jsx'
@@ -105,6 +106,7 @@ export default function BonePanel() {
   const transformSpace = useStore((s) => s.transformSpace)
   const showBones = useStore((s) => s.showBones)
   const rotationSnap = useStore((s) => s.rotationSnap)
+  const limbLimits = useStore((s) => s.limbLimits)
   const playback = useStore((s) => s.playback)
 
   const poseClipboard = useStore((s) => s.poseClipboard)
@@ -114,6 +116,7 @@ export default function BonePanel() {
   const setTransformSpace = useStore((s) => s.setTransformSpace)
   const setShowBones = useStore((s) => s.setShowBones)
   const setRotationSnap = useStore((s) => s.setRotationSnap)
+  const setLimbLimits = useStore((s) => s.setLimbLimits)
   const setPoseClipboard = useStore((s) => s.setPoseClipboard)
 
   const fileInputRef = useRef(null)
@@ -273,6 +276,18 @@ export default function BonePanel() {
           />
           Snap 15°
         </label>
+        <label
+          className="toggle-row"
+          style={{ padding: 0 }}
+          title="Keep joints inside natural human ranges while you pose — elbows and knees only bend the right way. Applies to new posing and the ragdoll; loaded poses and animations are left untouched."
+        >
+          <input
+            type="checkbox"
+            checked={limbLimits}
+            onChange={(e) => setLimbLimits(e.target.checked)}
+          />
+          Limb limits
+        </label>
         {hasHelpers && (
           <label
             className="toggle-row"
@@ -288,6 +303,24 @@ export default function BonePanel() {
           </label>
         )}
       </div>
+
+      {limbLimits && (
+        <button
+          className="btn secondary"
+          style={{ width: '100%', marginTop: 6 }}
+          onClick={() => {
+            const n = applyLimitsToPose()
+            setPoseMsg(
+              n
+                ? `Nudged ${n} joint(s) back into their natural range.`
+                : 'The pose is already within the limits.',
+            )
+          }}
+          title="Pull the current pose (e.g. a loaded pose or a mocap frame) back inside the natural joint ranges — undoable"
+        >
+          Apply limits to current pose
+        </button>
+      )}
 
       <div className="seg" style={{ marginTop: 8 }} title="Rotate the joint around its own axes (Local) or the world's (World)">
         <button

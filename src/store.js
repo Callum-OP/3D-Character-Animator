@@ -72,6 +72,7 @@ export const useStore = create((set) => ({
 
   // ---- Viewport display toggles ----
   showGrid: true,
+  showGround: false, // solid ground plane (also what a ragdoll falls onto)
   solidBackground: false, // false = transparent (the default, for compositing)
   backgroundColor: '#202127',
   showShadow: true, // ground shadow on/off
@@ -80,6 +81,7 @@ export const useStore = create((set) => ({
   showHelp: false, // help & shortcuts overlay
 
   setShowGrid: (showGrid) => set({ showGrid }),
+  setShowGround: (showGround) => set({ showGround }),
   setSolidBackground: (solidBackground) => set({ solidBackground }),
   setBackgroundColor: (backgroundColor) => set({ backgroundColor }),
   setShowShadow: (showShadow) => set({ showShadow }),
@@ -162,6 +164,7 @@ export const useStore = create((set) => ({
   transformSpace: 'local', // gizmo rotation space: 'local' | 'world'
   showBones: true, // show the pickable bone-dot overlay + gizmo
   rotationSnap: false, // rotate in 15° steps (hold Shift for the opposite)
+  limbLimits: true, // keep new poses (and the ragdoll) inside natural joint ranges
   poseClipboard: null, // a copied pose ({ format:'pose-v1', bones:{...} }) for paste
   // Bumped by the posing engine on every pose edit (gizmo drag, undo, reset…)
   // so the rotation sliders can re-read the selected bone's angles.
@@ -169,6 +172,7 @@ export const useStore = create((set) => ({
 
   setPoseClipboard: (poseClipboard) => set({ poseClipboard }),
   setRotationSnap: (rotationSnap) => set({ rotationSnap }),
+  setLimbLimits: (limbLimits) => set({ limbLimits }),
   bumpPoseVersion: () => set((s) => ({ poseVersion: s.poseVersion + 1 })),
 
   setSelectedBoneName: (selectedBoneName) =>

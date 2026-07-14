@@ -168,6 +168,19 @@ export function cancelBVHImport() {
   a.pendingBVH = null
 }
 
+// Register a programmatically built clip (e.g. a baked ragdoll fall) so it
+// plays like the imported ones. The name is made unique so repeated runs
+// don't collide. Returns the final name (null if no model is loaded).
+export function addGeneratedClip(clip) {
+  if (!a.model) return null
+  const base = clip.name || 'Clip'
+  let name = base
+  for (let n = 2; findClip(name); n++) name = `${base} ${n}`
+  clip.name = name
+  a.importedClips.push(clip)
+  return name
+}
+
 // Sample a clip at one time into a pose map { boneName: [x,y,z,w] } (for "apply
 // frame as pose"). Leaves the rig at rest afterwards.
 export function sampleClipToPose(name, time) {

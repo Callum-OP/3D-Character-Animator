@@ -5,12 +5,14 @@ import { useStore } from '../store.js'
 // dropping into 2D art.
 export default function ViewPanel() {
   const showGrid = useStore((s) => s.showGrid)
+  const showGround = useStore((s) => s.showGround)
   const showShadow = useStore((s) => s.showShadow)
   const shadowMapping = useStore((s) => s.shadowMapping)
   const solidBackground = useStore((s) => s.solidBackground)
   const backgroundColor = useStore((s) => s.backgroundColor)
   const showStats = useStore((s) => s.showStats)
   const setShowGrid = useStore((s) => s.setShowGrid)
+  const setShowGround = useStore((s) => s.setShowGround)
   const setShowShadow = useStore((s) => s.setShowShadow)
   const setShadowMapping = useStore((s) => s.setShadowMapping)
   const setSolidBackground = useStore((s) => s.setSolidBackground)
@@ -28,6 +30,15 @@ export default function ViewPanel() {
       <label className="toggle-row">
         <input type="checkbox" checked={showGrid} onChange={(e) => setShowGrid(e.target.checked)} />
         Show floor grid
+      </label>
+
+      <label className="toggle-row" title="A solid floor under the character (it's also what a ragdoll falls onto)">
+        <input
+          type="checkbox"
+          checked={showGround}
+          onChange={(e) => setShowGround(e.target.checked)}
+        />
+        Show ground
       </label>
 
       <label className="toggle-row">

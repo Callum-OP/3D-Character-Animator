@@ -1,6 +1,12 @@
 import * as THREE from 'three'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import { poseToJSON, validatePose } from './poses.js'
+import {
+  setLimitsModel,
+  clearLimitsModel,
+  clampBoneLocal,
+  clampQuaternionForBone,
+} from './limits.js'
 
 // ---------------------------------------------------------------------------
 // Bone posing
@@ -82,6 +88,7 @@ export function initPosing(refs) {
     p.controls.enabled = !e.value && !p.controls.locked
   })
   transform.addEventListener('objectChange', () => {
+    if (p.selected) clampBoneLocal(p.selected) // keep gizmo edits inside the limb limits
     notifyPoseChange() // keep the rotation sliders in sync while dragging
     p.requestRender()
   })
@@ -134,6 +141,7 @@ export function setPoseModel(model) {
     p.boneMap.set(b.name, b)
     p.restQuats.set(b, b.quaternion.clone())
   }
+  setLimitsModel(model) // measure the limb limits against this rest pose
   if (p.bones.length === 0) return
 
   // One dot per bone (buffer sized for the full set; drawRange trims it when a
@@ -204,6 +212,7 @@ export function clearPoseModel() {
   p.restQuats = new Map()
   p.pickable = []
   p.pickableNames = null
+  clearLimitsModel()
 }
 
 // Called each render (before draw) to park each dot on its bone's head and tint
@@ -319,8 +328,28 @@ export function setBoneEulerDelta(name, deg) {
     'XYZ',
   )
   bone.quaternion.copy(rest).multiply(new THREE.Quaternion().setFromEuler(e))
+  clampBoneLocal(bone) // slider edits respect the limb limits too
   updateBoneHelpers()
   p.requestRender()
+}
+
+// Clamp the CURRENT pose — however it was made (loaded file, mocap frame,
+// mirror…) — to the limb limits, as one undoable batch. This is the explicit
+// override; passive posing never rewrites an existing pose. Returns how many
+// joints changed.
+export function applyLimitsToPose() {
+  const changes = []
+  for (const bone of p.bones) {
+    const before = bone.quaternion.clone()
+    if (clampQuaternionForBone(bone, bone.quaternion)) {
+      changes.push({ bone, before, after: bone.quaternion.clone() })
+    }
+  }
+  if (changes.length) pushUndo(changes)
+  updateBoneHelpers()
+  notifyPoseChange()
+  p.requestRender()
+  return changes.length
 }
 
 // Bracket a continuous slider drag so it lands as ONE undo entry.

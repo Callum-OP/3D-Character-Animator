@@ -15,9 +15,11 @@ import {
   cancelBVHImport,
   sampleClipToPose,
   bakeClipToTracks,
+  addGeneratedClip,
 } from '../three/animation.js'
 import { getBoneQuaternion, getPosedBones, applyPose } from '../three/posing.js'
-import { getCharacterRootTransform } from '../three/scene.js'
+import { getCharacterRootTransform, getCurrentModel, getGroundY } from '../three/scene.js'
+import { simulateRagdollClip } from '../three/ragdoll.js'
 
 // Collect every keyframe time across joints, the character position, parts and
 // cameras, with a count of what's keyed at each — for the overview/manage list.
@@ -113,6 +115,7 @@ export default function AnimationPanel() {
   const [bvhMsg, setBvhMsg] = useState(null)
   const [bvhBusy, setBvhBusy] = useState(false)
   const [kfMsg, setKfMsg] = useState(null) // feedback after adding a keyframe
+  const [ragdollMsg, setRagdollMsg] = useState(null) // feedback after a ragdoll bake
   // When a BVH is parsed, this holds the mapping editor state until the user
   // confirms (Retarget) or cancels: { name, sourceBones, targetBones, slots }.
   const [mapping, setMapping] = useState(null)
@@ -396,6 +399,34 @@ export default function AnimationPanel() {
     setBvhMsg(`Applied frame @ ${currentTime.toFixed(2)}s as the current pose.`)
   }
 
+  // Drop the character limply from whatever it looks like right now (a manual
+  // pose, or a paused clip frame), bake the fall as a clip and play it.
+  function onRagdoll() {
+    if (playback === 'playing') {
+      pause() // freeze the current frame — the fall starts from what's on screen
+      st().setPlayback('paused')
+    }
+    const res = simulateRagdollClip(getCurrentModel(), {
+      groundY: getGroundY(),
+      fps: animFps,
+      limits: st().limbLimits,
+    })
+    if (!res) {
+      setRagdollMsg('This model has no skeleton to ragdoll.')
+      return
+    }
+    const name = addGeneratedClip(res.clip)
+    st().addImportedClipName(name)
+    st().setPlaybackSource('clip')
+    st().setActiveClipName(name)
+    const d = selectClip(name, { loop, speed })
+    st().setDuration(d)
+    st().setCurrentTime(0)
+    play()
+    st().setPlayback('playing')
+    setRagdollMsg(`Flop! Saved as the clip “${name}” — replay it any time from the clip list.`)
+  }
+
   function onBake() {
     if (!activeClipName) return
     const res = bakeClipToTracks(activeClipName, animFps, duration || undefined)
@@ -435,6 +466,22 @@ export default function AnimationPanel() {
           Make your own
         </button>
       </div>
+
+      {/* Ragdoll: drop the character limply and keep the fall as a clip */}
+      {hasBones && !mapping && (
+        <>
+          <div className="kf-actions" style={{ marginTop: 8 }}>
+            <button
+              className="btn secondary"
+              onClick={onRagdoll}
+              title="Let the character fall limply to the ground from its current pose — the fall is saved as a clip"
+            >
+              💥 Ragdoll to ground
+            </button>
+          </div>
+          {ragdollMsg && <div className="pose-msg">{ragdollMsg}</div>}
+        </>
+      )}
 
       {source === 'clip' && !mapping && (
         <>
