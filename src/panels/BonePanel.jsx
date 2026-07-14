@@ -39,7 +39,8 @@ export default function BonePanel() {
   }
 
   const bones = modelInfo?.bones || []
-  const hasDeform = bones.some((b) => b.deform)
+  // Offer the helper-bone toggle only when the rig actually has both kinds.
+  const hasHelpers = bones.some((b) => b.deform) && bones.some((b) => !b.deform)
 
   if (!modelInfo) {
     return (
@@ -62,7 +63,12 @@ export default function BonePanel() {
   const filter = boneFilter.trim().toLowerCase()
   const visibleBones = bones.filter((b) => {
     if (deformOnly && !b.deform) return false
-    if (filter && !b.name.toLowerCase().includes(filter)) return false
+    if (
+      filter &&
+      !b.name.toLowerCase().includes(filter) &&
+      !(b.label && b.label.toLowerCase().includes(filter))
+    )
+      return false
     return true
   })
 
@@ -138,11 +144,11 @@ export default function BonePanel() {
           />
           Show joints
         </label>
-        {hasDeform && (
+        {hasHelpers && (
           <label
             className="toggle-row"
             style={{ padding: 0 }}
-            title="Hide the rig's extra control bones and show only the ones that bend the body"
+            title="Hide the rig's extra bones (bone tips, twist/volume correctives, sockets) and show only the ones you'd pose by hand"
           >
             <input
               type="checkbox"
@@ -177,6 +183,12 @@ export default function BonePanel() {
         onChange={(e) => setBoneFilter(e.target.value)}
       />
 
+      {visibleBones.length < bones.length && (
+        <div className="bone-count">
+          Showing {visibleBones.length} of {bones.length} joints
+        </div>
+      )}
+
       <div className="bone-tree">
         {visibleBones.length === 0 && <div className="empty">No matching bones.</div>}
         {visibleBones.map((b) => (
@@ -189,7 +201,7 @@ export default function BonePanel() {
               setSelectedBoneName(b.name === selectedBoneName ? null : b.name)
             }
           >
-            {b.name}
+            {b.label || b.name}
           </div>
         ))}
       </div>

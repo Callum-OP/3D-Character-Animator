@@ -592,6 +592,12 @@ body {
   font-size: 12px;
 }
 
+.bone-count {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  margin-top: 6px;
+}
+
 .bone-tree {
   max-height: 240px;
   overflow-y: auto;

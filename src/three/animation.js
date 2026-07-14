@@ -47,7 +47,11 @@ export function setAnimationModel(model) {
   a.importedClips = []
   a.mixer = new THREE.AnimationMixer(model.root)
   a.restQuats = new Map()
-  for (const b of model.bones || []) a.restQuats.set(b, b.quaternion.clone())
+  a.restPos = new Map()
+  for (const b of model.bones || []) {
+    a.restQuats.set(b, b.quaternion.clone())
+    a.restPos.set(b, b.position.clone()) // retargeted clips animate the hip's position
+  }
   // A LoopOnce clip reaching its end fires 'finished' → report a soft pause.
   a.mixer.addEventListener('finished', onFinished)
 }
@@ -69,6 +73,7 @@ export function clearAnimationModel() {
   a.importedClips = []
   a.pendingBVH = null
   a.restQuats = null
+  a.restPos = null
 }
 
 // Advance the mixer (called from the scene's continuous loop) and report time.
@@ -118,6 +123,7 @@ export async function beginBVHImport(file) {
 export async function applyBVHRetarget(slots) {
   if (!a.pendingBVH) throw new Error('No BVH is being imported.')
   const { names, hip } = mergeNames(a.pendingBVH.autoNames, slots)
+  restoreRest() // the retarget measures the rig's rest pose — make sure it's in it
   const { clip, matched, total } = await retargetParsed(a.pendingBVH, a.model, names, hip)
   a.importedClips.push(clip)
   a.pendingBVH = null
@@ -460,6 +466,7 @@ function buildEditClip(tracks, duration) {
 function restoreRest() {
   if (!a.restQuats) return
   for (const [bone, q] of a.restQuats) bone.quaternion.copy(q)
+  if (a.restPos) for (const [bone, p] of a.restPos) bone.position.copy(p)
 }
 
 function onFinished() {

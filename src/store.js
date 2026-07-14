@@ -21,8 +21,13 @@ export const useStore = create((set) => ({
       meshOverrides: {},
       selectedBoneName: null,
       boneFilter: '',
-      // Default the deform-only filter ON for rigs that have DEF- bones (Rigify).
-      deformOnly: !!(modelInfo.bones && modelInfo.bones.some((b) => b.deform)),
+      // Default the helper-bone filter ON when the rig has both primary and
+      // helper bones (Rigify DEF- rigs, Mixamo _end tails, game-rig correctives).
+      deformOnly: !!(
+        modelInfo.bones &&
+        modelInfo.bones.some((b) => b.deform) &&
+        modelInfo.bones.some((b) => !b.deform)
+      ),
       // Reset animation state for the new rig.
       playback: 'stopped',
       playbackSource: modelInfo.clipNames && modelInfo.clipNames.length ? 'clip' : 'edit',
@@ -142,7 +147,7 @@ export const useStore = create((set) => ({
   // ---- Bone posing (Phase 3) ----
   selectedBoneName: null, // name of the bone the gizmo is attached to
   boneFilter: '', // text filter for the bone tree
-  deformOnly: false, // hide non-DEF- bones (defaulted per rig on load)
+  deformOnly: false, // hide helper bones (_end/twist/vol/DEF- rule; set per rig on load)
   transformSpace: 'local', // gizmo rotation space: 'local' | 'world'
   showBones: true, // show the pickable bone-dot overlay + gizmo
   poseClipboard: null, // a copied pose ({ format:'pose-v1', bones:{...} }) for paste

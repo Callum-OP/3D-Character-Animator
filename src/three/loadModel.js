@@ -118,15 +118,55 @@ function parseRoot(root, animations, fileName, format, source) {
     // uuid is the stable per-load key; name falls back to a positional label.
     meshes: meshes.map((m, i) => ({ uuid: m.uuid, name: m.name || `Mesh ${i + 1}` })),
     // Flat bone list for the pose panel's tree: depth = number of Bone ancestors
-    // (for indentation); deform flags Rigify's DEF- bones.
-    bones: bones.map((b, i) => ({
-      name: b.name || `Bone ${i + 1}`,
-      depth: boneDepth(b),
-      deform: /^DEF-/.test(b.name || ''),
-    })),
+    // (for indentation); deform=false marks helper bones the UI can hide.
+    bones: classifyBones(bones),
   }
 
   return { source, root, skinnedMeshes, meshes, skeleton, bones, clips, info }
+}
+
+// --- Bone classification -----------------------------------------------------
+//
+// Dense game rigs (Mixamo, Unreal/Marvel-Rivals-style exports) carry hundreds of
+// bones nobody poses by hand: auto-generated "_end" tail bones, twist/volume/
+// roll correctives, weapon sockets. Flag those as deform=false so the UI can
+// hide their dots and rows. Two schemes:
+// - Rigify rigs (any DEF- bone present): primary = the DEF- bones, as before.
+// - Everything else: primary = bones that don't match the helper name patterns.
+
+// Blender/Sketchfab tail bones: "..._end", possibly followed by uniquifying
+// numeric suffixes ("HeadTop_End_07", "index_03_l_end_0458").
+const END_BONE_RE = /_end(_\d+)*$/i
+// Twist / volume-preservation / roll correctives, sockets and weapon mounts.
+const HELPER_BONE_RE = /(twist|(^|_)vol(ume)?(_|$)|socket|weapon|(^|_)roll(_|$)|(^|_)ik(_|$))/i
+
+function classifyBones(bones) {
+  const names = bones.map((b, i) => b.name || `Bone ${i + 1}`)
+  const rigify = names.some((n) => /^DEF-/.test(n))
+  const labels = displayLabels(names)
+  return bones.map((b, i) => ({
+    name: names[i],
+    label: labels[i],
+    depth: boneDepth(b),
+    deform: rigify
+      ? /^DEF-/.test(names[i])
+      : !(END_BONE_RE.test(names[i]) || HELPER_BONE_RE.test(names[i])),
+  }))
+}
+
+// Human-friendly display names: drop "mixamorig:"-style namespace prefixes and
+// the "_0NN" uniquifying suffixes Sketchfab's FBX→glTF pipeline appends — but
+// only when the stripped names stay unique across the whole rig, so we never
+// show two bones with the same label. Selection/pose files always use the real
+// name; labels are display-only.
+function displayLabels(names) {
+  const noNs = names.map((n) => (n.includes(':') ? n.slice(n.lastIndexOf(':') + 1) : n))
+  const stripped = noNs.map((n) => n.replace(/_0?\d+$/, ''))
+  const strippedOk =
+    stripped.every(Boolean) && new Set(stripped).size === stripped.length
+  if (strippedOk) return stripped
+  const noNsOk = noNs.every(Boolean) && new Set(noNs).size === noNs.length
+  return noNsOk ? noNs : names
 }
 
 // Count how many Bone ancestors a bone has (used for tree indentation).

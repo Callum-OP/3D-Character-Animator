@@ -13,7 +13,7 @@ import {
 } from './scene.js'
 import { useStore } from '../store.js'
 import { SUPPORTED_EXTENSION_RE, SUPPORTED_EXTENSIONS } from './loadModel.js'
-import { selectBone, setTransformSpace, setBonesVisible, undo } from './posing.js'
+import { selectBone, setTransformSpace, setBonesVisible, setPickableBones, undo } from './posing.js'
 import { selectObject, setObjectMode } from './objects.js'
 import StatsOverlay from '../panels/StatsOverlay.jsx'
 
@@ -95,6 +95,17 @@ export default function Viewport() {
     setBonesVisible(showBones)
   }, [showBones])
 
+  // "Hide helper bones" trims the dot overlay + picking to the primary bones.
+  // (modelInfo is also a dep so a freshly loaded rig gets its filter applied.)
+  const deformOnly = useStore((s) => s.deformOnly)
+  const modelInfo = useStore((s) => s.modelInfo)
+  useEffect(() => {
+    const bones = modelInfo?.bones || []
+    setPickableBones(
+      deformOnly ? bones.filter((b) => b.deform).map((b) => b.name) : null,
+    )
+  }, [deformOnly, modelInfo])
+
   // --- Scene objects: push selection / gizmo mode into the objects manager ---
   const selectedObjectId = useStore((s) => s.selectedObjectId)
   const objectMode = useStore((s) => s.objectMode)
@@ -153,7 +164,6 @@ export default function Viewport() {
     loadModelFile(file).catch(() => {}) // error is surfaced via the store
   }
 
-  const modelInfo = useStore((s) => s.modelInfo)
   const loading = useStore((s) => s.loading)
   const showStats = useStore((s) => s.showStats)
 

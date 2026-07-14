@@ -38,6 +38,8 @@ const p = {
   bones: [],
   boneMap: new Map(), // name -> Bone
   restQuats: new Map(), // Bone -> THREE.Quaternion (rotation at load)
+  pickable: [], // bones shown as dots / clickable (subset of bones)
+  pickableNames: null, // Set of names restricting pickable, or null = all
 
   points: null,
   pointsGeom: null,
@@ -110,7 +112,8 @@ export function setPoseModel(model) {
   }
   if (p.bones.length === 0) return
 
-  // One dot per bone. positions filled every render; colors flag the selection.
+  // One dot per bone (buffer sized for the full set; drawRange trims it when a
+  // helper-bone filter is active). Positions filled every render.
   const geom = new THREE.BufferGeometry()
   geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(p.bones.length * 3), 3))
   geom.setAttribute('color', new THREE.BufferAttribute(new Float32Array(p.bones.length * 3), 3))
@@ -131,7 +134,26 @@ export function setPoseModel(model) {
   p.pointsGeom = geom
   p.pointsMat = mat
 
+  applyPickableFilter()
   updateBoneHelpers()
+}
+
+// Restrict the dot overlay and click-picking to the named bones (null = all).
+// Used to hide helper bones on dense game rigs — a 684-joint rig is unpickable
+// with every dot drawn. Selection by name (panel, poses) still reaches every
+// bone; this only trims the dots.
+export function setPickableBones(names) {
+  p.pickableNames = names ? new Set(names) : null
+  applyPickableFilter()
+  updateBoneHelpers()
+  p.requestRender()
+}
+
+function applyPickableFilter() {
+  p.pickable = p.pickableNames
+    ? p.bones.filter((b) => p.pickableNames.has(b.name))
+    : p.bones
+  if (p.pointsGeom) p.pointsGeom.setDrawRange(0, p.pickable.length)
 }
 
 // Detach the gizmo and tear down the overlay (called on model unload).
@@ -153,6 +175,8 @@ export function clearPoseModel() {
   p.bones = []
   p.boneMap = new Map()
   p.restQuats = new Map()
+  p.pickable = []
+  p.pickableNames = null
 }
 
 // Called each render (before draw) to park each dot on its bone's head and tint
@@ -162,8 +186,8 @@ export function updateBoneHelpers() {
   p.model.root.updateWorldMatrix(true, true) // refresh bone world matrices
   const pos = p.pointsGeom.attributes.position
   const col = p.pointsGeom.attributes.color
-  for (let i = 0; i < p.bones.length; i++) {
-    const bone = p.bones[i]
+  for (let i = 0; i < p.pickable.length; i++) {
+    const bone = p.pickable[i]
     bone.getWorldPosition(_v)
     pos.setXYZ(i, _v.x, _v.y, _v.z)
     const c = bone === p.selected ? SELECTED_COLOR : BASE_COLOR
@@ -343,24 +367,32 @@ function onPointerUp(e) {
   p.onSelect(name) // null on empty-space click → deselect
 }
 
-// Nearest-dot-in-screen-space pick. Returns a bone name or null.
+// Nearest-dot-in-screen-space pick. Returns a bone name or null. When several
+// dots overlap within PICK_TIE_PX of each other (common on dense rigs), the
+// bone nearest the camera wins — you pick what you can see, not what's buried
+// inside the mesh behind it.
+const PICK_TIE_PX = 4
+
 function pickBoneName(e) {
   const rect = p.renderer.domElement.getBoundingClientRect()
   const px = e.clientX - rect.left
   const py = e.clientY - rect.top
 
-  let best = null
-  let bestDist = PICK_THRESHOLD_PX
-  for (const bone of p.bones) {
+  let best = null // { name, d, z }
+  for (const bone of p.pickable) {
     bone.getWorldPosition(_v).project(p.camera)
     if (_v.z > 1) continue // behind the camera
     const sx = (_v.x * 0.5 + 0.5) * rect.width
     const sy = (-_v.y * 0.5 + 0.5) * rect.height
     const d = Math.hypot(sx - px, sy - py)
-    if (d < bestDist) {
-      bestDist = d
-      best = bone.name
+    if (d >= PICK_THRESHOLD_PX) continue
+    if (
+      !best ||
+      d < best.d - PICK_TIE_PX ||
+      (d < best.d + PICK_TIE_PX && _v.z < best.z)
+    ) {
+      best = { name: bone.name, d, z: _v.z }
     }
   }
-  return best
+  return best ? best.name : null
 }
