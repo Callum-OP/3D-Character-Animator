@@ -126,6 +126,44 @@ body {
   color: var(--text-dim);
 }
 
+/* View / Pose / Mesh mode switcher, floating at the top of the viewport */
+.mode-toolbar {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(16, 17, 20, 0.72);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+.mode-toolbar .seg-btn {
+  background: transparent;
+  padding: 6px 16px;
+}
+
+.mode-toolbar .seg-btn.active {
+  background: var(--accent);
+}
+
+/* Banner shown while the viewport looks through a placed camera */
+.camera-view-banner {
+  position: absolute;
+  top: 48px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(16, 17, 20, 0.72);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12px;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+
+.camera-view-banner:hover {
+  background: rgba(79, 140, 255, 0.18);
+}
+
 /* Drag-over highlight on the viewport */
 .viewport-wrap.dragover::after {
   content: 'Drop .glb / .gltf / .fbx to load';
@@ -579,6 +617,37 @@ body {
 .seg-btn.active {
   background: var(--accent);
   color: #fff;
+}
+
+/* Mesh-mode transform rows: a label + three click-to-type axis values */
+.xform-row {
+  display: grid;
+  grid-template-columns: 52px 1fr 1fr 1fr;
+  gap: 4px;
+  align-items: center;
+  margin-top: 6px;
+}
+
+.xform-label {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.xform-value {
+  font-size: 12px;
+  text-align: center;
+  padding: 4px 2px;
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  font-variant-numeric: tabular-nums;
+  cursor: text;
+  min-width: 0;
+}
+
+input.xform-value {
+  width: 100%;
+  background: var(--panel-bg);
+  color: var(--text);
 }
 
 .bone-filter {

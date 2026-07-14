@@ -22,13 +22,36 @@ import {
   disposePosing,
   suspendPosing,
   resumePosing,
+  setViewCamera as setPosingViewCamera,
 } from './posing.js'
+import {
+  initCameras,
+  getCameraById,
+  setActiveCameraBody,
+  getCamerasData,
+  applyCamerasData,
+  clearCameras,
+  disposeCameras,
+  setViewCamera as setCamerasViewCamera,
+} from './cameras.js'
 import {
   initAnimation,
   setAnimationModel,
   clearAnimationModel,
   updateAnimation,
 } from './animation.js'
+import {
+  initMeshEdit,
+  setMeshEditModel,
+  clearMeshEditModel,
+  updateMeshEditHelpers,
+  disposeMeshEdit,
+  getMeshEditsData,
+  applyMeshEditsData,
+  suspendMeshEdit,
+  resumeMeshEdit,
+  setViewCamera as setMeshEditViewCamera,
+} from './meshedit.js'
 import {
   initObjects,
   addObject,
@@ -43,6 +66,7 @@ import {
   getObjectsData,
   applyObjectsData,
   getObjectsForSave,
+  setViewCamera as setObjectsViewCamera,
 } from './objects.js'
 import { getPose, applyPose } from './posing.js'
 import { useStore } from '../store.js'
@@ -79,6 +103,7 @@ const state = {
   modelRadius: 1, // ~max model dimension, for light distance + shadow camera
 
   currentModel: null, // parsed result from loadGLB (or null)
+  viewCamera: null, // placed camera the viewport looks through (null = free view)
 
   renderScheduled: false,
   continuous: false, // when true, render every frame (for animation playback)
@@ -153,19 +178,47 @@ export function initScene(container) {
     onPoseChange: () => useStore.getState().bumpPoseVersion(),
   })
 
+  // --- Mesh editing (part gizmo + click-to-pick, active in Mesh mode) ---
+  initMeshEdit({
+    scene,
+    camera,
+    renderer,
+    controls,
+    requestRender,
+    onSelect: (uuid) => useStore.getState().setSelectedMeshUuid(uuid),
+    onChange: () => useStore.getState().bumpMeshVersion(),
+  })
+
   // --- Animation (baked clips + in-app keyframing) ---
   state.clock = new THREE.Clock()
   initAnimation({
     requestRender,
     setContinuousRender,
-    suspendPosing,
-    resumePosing,
+    // Playback drives bones AND keyed parts, so both editors step aside.
+    suspendPosing: () => {
+      suspendPosing()
+      suspendMeshEdit()
+    },
+    resumePosing: () => {
+      resumePosing()
+      resumeMeshEdit()
+    },
     onTime: (t) => useStore.getState().setCurrentTime(t),
     onEnded: () => useStore.getState().setPlayback('paused'),
   })
 
   // --- Scene objects (props / backgrounds with a move/rotate/scale gizmo) ---
   initObjects({ scene, camera, renderer, controls, requestRender })
+
+  // --- Placeable cameras (frame shots, look through them, keyframe them) ---
+  initCameras({
+    scene,
+    camera,
+    renderer,
+    controls,
+    requestRender,
+    getSceneScale: () => state.modelRadius,
+  })
 
   // --- Lights (only affect Toon/Standard modes; harmless in Unlit) ---
   const dirLight = new THREE.DirectionalLight(0xffffff, 2.0)
@@ -246,11 +299,13 @@ export function requestRender() {
 function renderOnce() {
   if (!state.renderer) return
   updateBoneHelpers() // park bone dots on their (possibly just-moved) bones
+  updateMeshEditHelpers() // keep the part-selection box hugging its mesh
+  const camera = state.viewCamera || state.camera
   // Route through the outline effect. When the outline is disabled it falls
   // straight through to renderer.render, so there's no overhead when it's off.
   const effect = getOutlineEffect()
-  if (effect) effect.render(state.scene, state.camera)
-  else state.renderer.render(state.scene, state.camera)
+  if (effect) effect.render(state.scene, camera)
+  else state.renderer.render(state.scene, camera)
 }
 
 // Continuous render loop, used later for animation playback. Off by default.
@@ -284,6 +339,10 @@ function handleResize() {
   renderer.setSize(width, height)
   camera.aspect = width / height
   camera.updateProjectionMatrix()
+  if (state.viewCamera) {
+    state.viewCamera.aspect = width / height
+    state.viewCamera.updateProjectionMatrix()
+  }
   requestRender()
 }
 
@@ -313,6 +372,7 @@ export async function loadModelFile(file) {
     recordOriginalMaterials(parsed)
     applyModelMaterials()
     setPoseModel(parsed) // capture rest pose + build the bone-dot overlay
+    setMeshEditModel(parsed) // capture part rest transforms for Mesh mode
     setAnimationModel(parsed) // new mixer + baked clips
 
     frameCameraToObject(parsed.root)
@@ -387,6 +447,32 @@ export function setObjectVisibleById(id, visible) {
 
 export function resetObjectById(id) {
   resetObject(id)
+}
+
+// ---------------------------------------------------------------------------
+// View-through-camera: render the viewport from a placed camera
+// ---------------------------------------------------------------------------
+
+// Switch the viewport to look through a placed camera (or null = free view).
+// Orbit is locked while inside a camera (the camera is moved with its gizmo or
+// keyframes, not by orbiting); every gizmo/picker is retargeted to the active
+// camera so interaction still works in the camera view.
+export function setViewCameraById(id) {
+  const cam = id != null ? getCameraById(id) : null
+  state.viewCamera = cam
+  setActiveCameraBody(cam ? id : null) // hide the body of the camera we're inside
+  if (cam && state.container) {
+    cam.aspect = (state.container.clientWidth || 1) / (state.container.clientHeight || 1)
+    cam.updateProjectionMatrix()
+  }
+  state.controls.locked = !!cam
+  state.controls.enabled = !cam
+  const active = cam || state.camera
+  setPosingViewCamera(active)
+  setMeshEditViewCamera(active)
+  setObjectsViewCamera(active)
+  setCamerasViewCamera(active)
+  requestRender()
 }
 
 // Current character root transform (for "keyframe position" root motion).
@@ -478,7 +564,7 @@ export function enterFullscreen() {
 // NOTE: this stores TRANSFORMS, not geometry — reload the same files, then Load
 // scene to restore where everything sat.
 export function getSceneData() {
-  const data = { format: 'scene-v1', objects: getObjectsData() }
+  const data = { format: 'scene-v1', objects: getObjectsData(), cameras: getCamerasData() }
   if (state.currentModel) {
     const root = state.currentModel.root
     data.character = {
@@ -487,6 +573,7 @@ export function getSceneData() {
       quaternion: root.quaternion.toArray(),
       scale: root.scale.toArray(),
       pose: getPose(),
+      meshEdits: getMeshEditsData(),
     }
   }
   return data
@@ -510,8 +597,14 @@ export function applySceneData(json) {
         /* pose from a different rig — skip */
       }
     }
+    applyMeshEditsData(c.meshEdits)
   }
   applyObjectsData(json.objects)
+  if (Array.isArray(json.cameras)) {
+    clearCameras()
+    const metas = applyCamerasData(json.cameras)
+    useStore.setState({ sceneCameras: metas, selectedCameraId: null, viewCameraId: null })
+  }
   requestRender()
 }
 
@@ -573,6 +666,7 @@ export function getProjectData() {
         scale: root.scale.toArray(),
       },
       pose: getPose(),
+      meshEdits: getMeshEditsData(),
     }
   }
   return {
@@ -580,6 +674,7 @@ export function getProjectData() {
     settings: collectSettings(),
     character,
     objects: getObjectsForSave(),
+    cameras: getCamerasData(),
     animData: s.animData,
   }
 }
@@ -593,10 +688,13 @@ export async function applyProjectData(record) {
   }
   const store = useStore.getState()
 
-  // 1. Clear the current props/images and the character.
+  // 1. Clear the current props/images, cameras and the character.
   for (const id of store.sceneObjects.filter((o) => !o.isCharacter).map((o) => o.id)) {
     removeObjectById(id)
   }
+  setViewCameraById(null)
+  clearCameras()
+  useStore.setState({ sceneCameras: [], selectedCameraId: null, viewCameraId: null })
   disposeCurrentModel()
 
   // 2. Load the character (this resets much of the store via setModelInfo).
@@ -616,6 +714,7 @@ export async function applyProjectData(record) {
         /* pose from a different rig — skip */
       }
     }
+    applyMeshEditsData(c.meshEdits)
   }
 
   // 3. Apply saved settings (AFTER the load, which would otherwise reset them).
@@ -646,6 +745,12 @@ export async function applyProjectData(record) {
     setObjectVisibleById(meta.id, obj.visible !== false)
   }
 
+  // 4b. Recreate the placed cameras (procedural — no blobs involved).
+  if (Array.isArray(record.cameras) && record.cameras.length) {
+    const metas = applyCamerasData(record.cameras)
+    useStore.setState({ sceneCameras: metas, selectedCameraId: null, viewCameraId: null })
+  }
+
   // 5. Restore the pose / keyframe sequence.
   useStore.getState().setAnimData(record.animData || { tracks: {}, root: [] })
 
@@ -659,6 +764,7 @@ export function disposeCurrentModel() {
   clearCharacterObject() // unregister the movable-character entry
   clearAnimationModel() // dispose the mixer
   clearPoseModel() // detach gizmo + remove bone overlay before the graph goes away
+  clearMeshEditModel() // detach the part gizmo + drop mesh references
   // Put the real materials back so the deep-dispose walk frees them (and their
   // textures) rather than a generated shell that only borrows those textures...
   restoreOriginalMaterials(model)
@@ -875,7 +981,9 @@ export function disposeScene() {
   setContinuousRender(false)
   disposeCurrentModel()
   disposeObjects()
+  disposeCameras()
   disposePosing()
+  disposeMeshEdit()
   disposeOutline()
 
   if (state.resizeObserver) {

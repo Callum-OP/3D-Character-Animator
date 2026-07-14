@@ -1,5 +1,15 @@
 import * as THREE from 'three'
 import { parseBVH, retargetParsed, buildSlotMapping, buildNameMatch, mergeNames } from './bvh.js'
+import {
+  sampleMeshTracks,
+  getMeshPlaybackSnapshot,
+  applyMeshPlaybackSnapshot,
+} from './meshedit.js'
+import {
+  sampleCameraTracks,
+  getCamerasPlaybackSnapshot,
+  applyCamerasPlaybackSnapshot,
+} from './cameras.js'
 
 // ---------------------------------------------------------------------------
 // Animation
@@ -29,7 +39,11 @@ const a = {
   clip: null, // current clip (baked or built)
   editClip: null, // built in-app clip, disposed/rebuilt on demand
   editRoot: null, // character root-motion keyframes [{time,pos,quat}] (edit source only)
+  editMeshes: null, // part-motion tracks { [meshIndex]: [{time,pos,quat,scale}] } (edit source only)
+  editCameras: null, // camera-motion tracks { [name]: [{time,pos,quat}] } (edit source only)
   rootRest: null, // character root transform at playback start (restored on stop)
+  meshRest: null, // part placements at playback start (restored on stop)
+  camerasRest: null, // camera placements at playback start (restored on stop)
 }
 
 const _qa = new THREE.Quaternion()
@@ -67,7 +81,11 @@ export function clearAnimationModel() {
   a.clip = null
   a.editClip = null
   a.editRoot = null
+  a.editMeshes = null
+  a.editCameras = null
   a.rootRest = null
+  a.meshRest = null
+  a.camerasRest = null
   a.model = null
   a.bakedClips = []
   a.importedClips = []
@@ -81,8 +99,11 @@ export function updateAnimation(delta) {
   if (!a.mixer) return
   a.mixer.update(delta)
   if (a.action) {
-    sampleRoot(a.action.time) // drive character world motion (edit source only)
-    a.refs.onTime(a.action.time)
+    const t = a.action.time
+    sampleRoot(t) // drive character world motion (edit source only)
+    if (a.editMeshes) sampleMeshTracks(a.editMeshes, t) // part motion
+    if (a.editCameras) sampleCameraTracks(a.editCameras, t) // camera motion
+    a.refs.onTime(t)
   }
 }
 
@@ -94,6 +115,8 @@ export function selectClip(name, opts = {}) {
   const clip = findClip(name)
   if (!clip) return 0
   a.editRoot = null // baked/mocap clips are in-place (no root motion)
+  a.editMeshes = null // …and don't drive parts or cameras
+  a.editCameras = null
   activate(clip, opts)
   return clip.duration
 }
@@ -196,17 +219,36 @@ export function bakeClipToTracks(name, fps, duration) {
   return { tracks, duration: dur }
 }
 
-// Build the in-app clip from keyframe tracks + optional root motion, and make it
-// the active action. tracks: { [boneName]: [{time, quat}] }; rootKeys:
-// [{time, pos, quat}] for the character's world motion. Returns the duration.
-export function selectEdit(tracks, rootKeys, duration, opts = {}) {
+// Build the in-app clip from the full keyframe data (bone tracks + root motion
+// + part motion + camera motion), and make it the active action. Bone tracks go
+// through the mixer; the rest are sampled manually each frame. Returns the
+// duration.
+export function selectEdit(animData, duration, opts = {}) {
   // Drop the previous in-app clip's cached action so rebuilds don't accumulate.
   if (a.editClip && a.mixer) a.mixer.uncacheClip(a.editClip)
-  const clip = buildEditClip(tracks, duration)
+  const clip = buildEditClip(animData.tracks || {}, duration)
   a.editClip = clip
+  const rootKeys = animData.root
   a.editRoot = rootKeys && rootKeys.length ? [...rootKeys].sort((x, y) => x.time - y.time) : null
+  a.editMeshes = hasKeys(animData.meshes) ? sortTracks(animData.meshes) : null
+  a.editCameras = hasKeys(animData.cameras) ? sortTracks(animData.cameras) : null
+  // Remember where the driven parts/cameras sit now, so Stop puts them back.
+  a.meshRest = a.editMeshes ? getMeshPlaybackSnapshot() : null
+  a.camerasRest = a.editCameras ? getCamerasPlaybackSnapshot() : null
   activate(clip, opts)
   return clip.duration
+}
+
+function hasKeys(tracks) {
+  return tracks && Object.values(tracks).some((keys) => keys && keys.length)
+}
+
+function sortTracks(tracks) {
+  const out = {}
+  for (const [key, keys] of Object.entries(tracks)) {
+    if (keys && keys.length) out[key] = [...keys].sort((x, y) => x.time - y.time)
+  }
+  return out
 }
 
 // --- Transport ---------------------------------------------------------------
@@ -234,6 +276,10 @@ export function stop() {
   a.refs.setContinuousRender(false)
   restoreRest()
   restoreRootRest()
+  applyMeshPlaybackSnapshot(a.meshRest)
+  a.meshRest = null
+  applyCamerasPlaybackSnapshot(a.camerasRest)
+  a.camerasRest = null
   a.refs.resumePosing()
   a.refs.onTime(0)
   a.refs.requestRender()
@@ -255,6 +301,8 @@ export function scrub(t) {
   a.action.time = Math.max(0, Math.min(t, a.clip.duration))
   a.mixer.update(0) // apply bindings at the new time without advancing
   sampleRoot(a.action.time)
+  if (a.editMeshes) sampleMeshTracks(a.editMeshes, a.action.time)
+  if (a.editCameras) sampleCameraTracks(a.editCameras, a.action.time)
   a.refs.requestRender()
 }
 

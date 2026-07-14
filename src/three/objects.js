@@ -42,7 +42,8 @@ export function initObjects(refs) {
   transform.setMode('translate')
   transform.setSize(0.9)
   transform.addEventListener('dragging-changed', (e) => {
-    o.controls.enabled = !e.value // don't orbit while dragging the gizmo
+    // Don't orbit while dragging; stay locked if a camera view has orbit off.
+    o.controls.enabled = !e.value && !o.controls.locked
   })
   transform.addEventListener('objectChange', () => o.requestRender())
   o.transform = transform
@@ -160,6 +161,12 @@ export function setObjectMode(mode) {
   if (!o.transform) return
   o.transform.setMode(mode) // 'translate' | 'rotate' | 'scale'
   o.requestRender()
+}
+
+// Swap the camera the gizmo works against (view-through-camera mode).
+export function setViewCamera(camera) {
+  o.camera = camera
+  if (o.transform) o.transform.camera = camera
 }
 
 // Reset the selected/target object back to the scene origin, unrotated, unscaled.

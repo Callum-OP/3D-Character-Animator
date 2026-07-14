@@ -54,7 +54,7 @@ export default function ExportPanel() {
     stop()
     let durSec
     if (s.playbackSource === 'edit') {
-      durSec = selectEdit(s.animData.tracks, s.animData.root, s.animDuration, {
+      durSec = selectEdit(s.animData, s.animDuration, {
         loop: false,
         speed: s.speed,
       })

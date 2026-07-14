@@ -6,6 +6,15 @@ import { create } from 'zustand'
 // are referenced by mutable module state, not React state. Putting live GPU
 // objects in a reactive store would cause needless re-renders and retain memory.
 export const useStore = create((set) => ({
+  // ---- Interaction mode ----
+  // 'view'  — navigate only: no gizmos, no picking.
+  // 'bone'  — pose the skeleton (bone dots + rotate gizmo).
+  // 'mesh'  — move/rotate/scale individual parts (eyes, hair…) of the character.
+  // Selections are remembered across mode switches; only the active mode's
+  // gizmo and picking are live.
+  mode: 'bone',
+  setMode: (mode) => set({ mode }),
+
   // ---- Loaded model info (metadata only, mirrors what's in the scene) ----
   modelInfo: null, // { name, meshCount, boneCount, clipNames: string[] }
   loading: false,
@@ -20,6 +29,7 @@ export const useStore = create((set) => ({
       loadError: null,
       meshOverrides: {},
       selectedBoneName: null,
+      selectedMeshUuid: null,
       boneFilter: '',
       // Default the helper-bone filter ON when the rig has both primary and
       // helper bones (Rigify DEF- rigs, Mixamo _end tails, game-rig correctives).
@@ -35,7 +45,7 @@ export const useStore = create((set) => ({
       importedClipNames: [],
       duration: 0,
       currentTime: 0,
-      animData: { tracks: {}, root: [] },
+      animData: { tracks: {}, root: [], meshes: {}, cameras: {} },
       insertTime: 0,
       // The character is a movable entry (kept first) in the objects list.
       sceneObjects: [
@@ -49,12 +59,13 @@ export const useStore = create((set) => ({
       loadError: null,
       meshOverrides: {},
       selectedBoneName: null,
+      selectedMeshUuid: null,
       boneFilter: '',
       playback: 'stopped',
       activeClipName: null,
       importedClipNames: [],
       currentTime: 0,
-      animData: { tracks: {}, root: [] },
+      animData: { tracks: {}, root: [], meshes: {}, cameras: {} },
       sceneObjects: s.sceneObjects.filter((o) => o.id !== 'character'),
       selectedObjectId: s.selectedObjectId === 'character' ? null : s.selectedObjectId,
     })),
@@ -161,8 +172,24 @@ export const useStore = create((set) => ({
   bumpPoseVersion: () => set((s) => ({ poseVersion: s.poseVersion + 1 })),
 
   setSelectedBoneName: (selectedBoneName) =>
-    // Selecting a bone deselects any scene object (one gizmo at a time).
-    set(selectedBoneName != null ? { selectedBoneName, selectedObjectId: null } : { selectedBoneName }),
+    // Selecting a bone deselects any scene object/camera (one gizmo at a time).
+    set(
+      selectedBoneName != null
+        ? { selectedBoneName, selectedObjectId: null, selectedCameraId: null }
+        : { selectedBoneName },
+    ),
+
+  // ---- Mesh editing (Mesh mode) ----
+  selectedMeshUuid: null, // uuid of the part the mesh gizmo is attached to
+  meshGizmoMode: 'translate', // 'translate' | 'rotate' | 'scale'
+  // Bumped by the mesh-edit engine on every edit (gizmo drag, undo, reset…)
+  // so the transform fields can re-read the selected part's values.
+  meshVersion: 0,
+
+  setSelectedMeshUuid: (selectedMeshUuid) => set({ selectedMeshUuid }),
+  setMeshGizmoMode: (meshGizmoMode) => set({ meshGizmoMode }),
+  bumpMeshVersion: () => set((s) => ({ meshVersion: s.meshVersion + 1 })),
+
   setBoneFilter: (boneFilter) => set({ boneFilter }),
   setDeformOnly: (deformOnly) => set({ deformOnly }),
   setTransformSpace: (transformSpace) => set({ transformSpace }),
@@ -177,7 +204,8 @@ export const useStore = create((set) => ({
     set((s) => ({
       sceneObjects: [...s.sceneObjects, { visible: true, ...obj }],
       selectedObjectId: obj.id,
-      selectedBoneName: null, // mutually exclusive with bone selection
+      selectedBoneName: null, // mutually exclusive with bone/camera selection
+      selectedCameraId: null,
     })),
   setObjectVisible: (id, visible) =>
     set((s) => ({
@@ -189,8 +217,45 @@ export const useStore = create((set) => ({
       selectedObjectId: s.selectedObjectId === id ? null : s.selectedObjectId,
     })),
   setSelectedObjectId: (id) =>
-    set(id != null ? { selectedObjectId: id, selectedBoneName: null } : { selectedObjectId: id }),
+    set(
+      id != null
+        ? { selectedObjectId: id, selectedBoneName: null, selectedCameraId: null }
+        : { selectedObjectId: id },
+    ),
   setObjectMode: (objectMode) => set({ objectMode }),
+
+  // ---- Scene cameras ----
+  sceneCameras: [], // [{ id, name, fov }] — placeable cameras, independent of the model
+  selectedCameraId: null, // camera the gizmo is attached to
+  cameraGizmoMode: 'translate', // 'translate' | 'rotate'
+  viewCameraId: null, // camera the viewport looks through (null = free view)
+
+  addSceneCamera: (cam) =>
+    set((s) => ({
+      sceneCameras: [...s.sceneCameras, cam],
+      selectedCameraId: cam.id,
+      selectedObjectId: null, // one gizmo at a time
+      selectedBoneName: null,
+    })),
+  removeSceneCamera: (id) =>
+    set((s) => ({
+      sceneCameras: s.sceneCameras.filter((cam) => cam.id !== id),
+      selectedCameraId: s.selectedCameraId === id ? null : s.selectedCameraId,
+      viewCameraId: s.viewCameraId === id ? null : s.viewCameraId,
+    })),
+  setSceneCameras: (sceneCameras) => set({ sceneCameras }),
+  setSelectedCameraId: (id) =>
+    set(
+      id != null
+        ? { selectedCameraId: id, selectedObjectId: null, selectedBoneName: null }
+        : { selectedCameraId: id },
+    ),
+  setCameraGizmoMode: (cameraGizmoMode) => set({ cameraGizmoMode }),
+  setCameraFov: (id, fov) =>
+    set((s) => ({
+      sceneCameras: s.sceneCameras.map((cam) => (cam.id === id ? { ...cam, fov } : cam)),
+    })),
+  setViewCameraId: (viewCameraId) => set({ viewCameraId }),
 
   // ---- Animation ----
   playback: 'stopped', // 'stopped' | 'playing' | 'paused'
@@ -216,15 +281,46 @@ export const useStore = create((set) => ({
   animFps: 24,
   animDuration: 2,
   insertTime: 0, // where "Add keyframe" inserts (seconds)
-  // tracks = bone rotations; root = character world motion [{ time, pos:[3], quat:[4] }]
-  animData: { tracks: {}, root: [] },
+  // tracks = bone rotations; root = character world motion [{ time, pos:[3], quat:[4] }];
+  // meshes = part motion keyed by mesh INDEX [{ time, pos:[3], quat:[4], scale:[3] }];
+  // cameras = camera motion keyed by camera NAME [{ time, pos:[3], quat:[4] }]
+  animData: { tracks: {}, root: [], meshes: {}, cameras: {} },
 
   setAnimFps: (animFps) => set({ animFps }),
   setAnimDuration: (animDuration) => set({ animDuration }),
   setInsertTime: (insertTime) => set({ insertTime }),
   setAnimData: (animData) =>
-    set({ animData: { tracks: animData.tracks || {}, root: animData.root || [] } }),
-  clearAnim: () => set({ animData: { tracks: {}, root: [] } }),
+    set({
+      animData: {
+        tracks: animData.tracks || {},
+        root: animData.root || [],
+        meshes: animData.meshes || {},
+        cameras: animData.cameras || {},
+      },
+    }),
+  clearAnim: () => set({ animData: { tracks: {}, root: [], meshes: {}, cameras: {} } }),
+
+  // Insert/replace a part keyframe (full local position + rotation + scale).
+  addMeshKeyframe: (index, time, key) =>
+    set((s) => {
+      const meshes = { ...(s.animData.meshes || {}) }
+      const keys = (meshes[index] || []).filter((k) => k.time !== time)
+      keys.push({ time, ...key })
+      keys.sort((a, b) => a.time - b.time)
+      meshes[index] = keys
+      return { animData: { ...s.animData, meshes } }
+    }),
+
+  // Insert/replace a camera keyframe (world position + rotation), by camera name.
+  addCameraKeyframe: (name, time, key) =>
+    set((s) => {
+      const cameras = { ...(s.animData.cameras || {}) }
+      const keys = (cameras[name] || []).filter((k) => k.time !== time)
+      keys.push({ time, ...key })
+      keys.sort((a, b) => a.time - b.time)
+      cameras[name] = keys
+      return { animData: { ...s.animData, cameras } }
+    }),
 
   // Insert/replace a character root-motion keyframe (world position + rotation).
   addRootKeyframe: (time, pos, quat) =>
@@ -239,16 +335,27 @@ export const useStore = create((set) => ({
       animData: { ...s.animData, root: (s.animData.root || []).filter((k) => k.time !== time) },
     })),
 
-  // Remove every keyframe (all joints + the position) at a given time.
+  // Remove every keyframe (joints, position, parts, cameras) at a given time.
   deleteAllAtTime: (time) =>
     set((s) => {
+      const near = (k) => Math.abs(k.time - time) <= 1e-6
       const tracks = {}
       for (const [name, keys] of Object.entries(s.animData.tracks)) {
-        const kept = keys.filter((k) => Math.abs(k.time - time) > 1e-6)
+        const kept = keys.filter((k) => !near(k))
         if (kept.length) tracks[name] = kept
       }
-      const root = (s.animData.root || []).filter((k) => Math.abs(k.time - time) > 1e-6)
-      return { animData: { tracks, root } }
+      const root = (s.animData.root || []).filter((k) => !near(k))
+      const meshes = {}
+      for (const [idx, keys] of Object.entries(s.animData.meshes || {})) {
+        const kept = keys.filter((k) => !near(k))
+        if (kept.length) meshes[idx] = kept
+      }
+      const cameras = {}
+      for (const [name, keys] of Object.entries(s.animData.cameras || {})) {
+        const kept = keys.filter((k) => !near(k))
+        if (kept.length) cameras[name] = kept
+      }
+      return { animData: { tracks, root, meshes, cameras } }
     }),
 
   // Insert/replace a keyframe for one bone at a time.
@@ -257,7 +364,7 @@ export const useStore = create((set) => ({
       const keys = (s.animData.tracks[name] || []).filter((k) => k.time !== time)
       keys.push({ time, quat })
       keys.sort((a, b) => a.time - b.time)
-      return { animData: { tracks: { ...s.animData.tracks, [name]: keys } } }
+      return { animData: { ...s.animData, tracks: { ...s.animData.tracks, [name]: keys } } }
     }),
 
   // Key several bones at the same time (for "key all posed bones").
@@ -270,7 +377,7 @@ export const useStore = create((set) => ({
         keys.sort((a, b) => a.time - b.time)
         tracks[name] = keys
       }
-      return { animData: { tracks } }
+      return { animData: { ...s.animData, tracks } }
     }),
 
   deleteKeyframe: (name, time) =>
@@ -279,6 +386,6 @@ export const useStore = create((set) => ({
       const keys = (tracks[name] || []).filter((k) => k.time !== time)
       if (keys.length) tracks[name] = keys
       else delete tracks[name]
-      return { animData: { tracks } }
+      return { animData: { ...s.animData, tracks } }
     }),
 }))

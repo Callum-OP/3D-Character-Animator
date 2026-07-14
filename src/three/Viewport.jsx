@@ -10,6 +10,7 @@ import {
   applyModelMaterials,
   setLightSettings,
   setOutlineToggle,
+  setViewCameraById,
 } from './scene.js'
 import { useStore } from '../store.js'
 import { SUPPORTED_EXTENSION_RE, SUPPORTED_EXTENSIONS } from './loadModel.js'
@@ -19,11 +20,29 @@ import {
   setBonesVisible,
   setPickableBones,
   setRotationSnapDeg,
+  setPosingEnabled,
   undo,
   redo,
 } from './posing.js'
+import {
+  selectMesh,
+  setMeshEditEnabled,
+  setMeshGizmoMode,
+  undo as undoMeshEdit,
+  redo as redoMeshEdit,
+} from './meshedit.js'
 import { selectObject, setObjectMode } from './objects.js'
+import { selectCamera, setCameraGizmoMode } from './cameras.js'
 import StatsOverlay from '../panels/StatsOverlay.jsx'
+
+// The viewport's mode switcher. Number keys jump straight to a mode.
+const MODE_BUTTONS = [
+  { value: 'view', label: 'View', title: 'Just look around — no gizmos (1)' },
+  { value: 'bone', label: 'Pose', title: 'Select joints and bend them (2)' },
+  { value: 'mesh', label: 'Mesh', title: 'Move, rotate or resize parts like eyes and hair (3)' },
+]
+const MODE_KEYS = { 1: 'view', 2: 'bone', 3: 'mesh' }
+const GIZMO_KEYS = { w: 'translate', e: 'rotate', r: 'scale' }
 
 // The 3D viewport: owns the canvas container and the scene lifecycle, and
 // handles drag-and-drop of model files onto itself.
@@ -86,6 +105,27 @@ export default function Viewport() {
     setOutlineToggle(outlineEnabled)
   }, [outlineEnabled])
 
+  // --- Interaction mode: only the active mode's gizmo + picking are live ---
+  const mode = useStore((s) => s.mode)
+  const setMode = useStore((s) => s.setMode)
+
+  useEffect(() => {
+    setPosingEnabled(mode === 'bone')
+    setMeshEditEnabled(mode === 'mesh')
+  }, [mode])
+
+  // --- Mesh editing: push selection / gizmo mode into the mesh-edit manager ---
+  const selectedMeshUuid = useStore((s) => s.selectedMeshUuid)
+  const meshGizmoMode = useStore((s) => s.meshGizmoMode)
+
+  useEffect(() => {
+    selectMesh(selectedMeshUuid)
+  }, [selectedMeshUuid])
+
+  useEffect(() => {
+    setMeshGizmoMode(meshGizmoMode)
+  }, [meshGizmoMode])
+
   // --- Bone posing: push selection / gizmo space / overlay visibility ---
   const selectedBoneName = useStore((s) => s.selectedBoneName)
   const transformSpace = useStore((s) => s.transformSpace)
@@ -131,26 +171,63 @@ export default function Viewport() {
     setObjectMode(objectMode)
   }, [objectMode])
 
-  // Keyboard: Esc deselects, Ctrl/Cmd+Z undoes a bone edit, Ctrl/Cmd+Shift+Z or
-  // Ctrl/Cmd+Y redoes it. Ignored while typing in an input (e.g. the filter box).
+  // --- Cameras: push selection / gizmo mode / view-through into the managers ---
+  const selectedCameraId = useStore((s) => s.selectedCameraId)
+  const cameraGizmoMode = useStore((s) => s.cameraGizmoMode)
+  const viewCameraId = useStore((s) => s.viewCameraId)
+  const sceneCameras = useStore((s) => s.sceneCameras)
+  const viewCameraName = sceneCameras.find((cam) => cam.id === viewCameraId)?.name
+
+  useEffect(() => {
+    selectCamera(selectedCameraId)
+  }, [selectedCameraId])
+
+  useEffect(() => {
+    setCameraGizmoMode(cameraGizmoMode)
+  }, [cameraGizmoMode])
+
+  useEffect(() => {
+    setViewCameraById(viewCameraId)
+  }, [viewCameraId])
+
+  // Keyboard: 1/2/3 switch mode, W/E/R pick the Mesh-mode gizmo tool, Esc
+  // deselects, Ctrl/Cmd+Z undoes an edit in the active mode, Ctrl/Cmd+Shift+Z
+  // or Ctrl/Cmd+Y redoes it. Ignored while typing in an input.
   useEffect(() => {
     function onKeyDown(e) {
       const tag = e.target.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      const s = useStore.getState()
+      const plainKey = !e.ctrlKey && !e.metaKey && !e.altKey
       if (e.key === '?') {
-        useStore.getState().toggleHelp()
+        s.toggleHelp()
       } else if (e.key === 'Escape') {
-        if (useStore.getState().showHelp) useStore.getState().setShowHelp(false)
-        else useStore.getState().setSelectedBoneName(null)
+        if (s.showHelp) s.setShowHelp(false)
+        else if (s.viewCameraId != null) s.setViewCameraId(null) // leave the camera view
+        else if (s.mode === 'mesh') s.setSelectedMeshUuid(null)
+        else s.setSelectedBoneName(null)
+      } else if (plainKey && e.key === '0') {
+        // Toggle looking through a camera (the selected one, else the first).
+        if (s.viewCameraId != null) s.setViewCameraId(null)
+        else {
+          const cam = s.sceneCameras.find((x) => x.id === s.selectedCameraId) || s.sceneCameras[0]
+          if (cam) s.setViewCameraId(cam.id)
+        }
+      } else if (plainKey && MODE_KEYS[e.key]) {
+        s.setMode(MODE_KEYS[e.key])
+      } else if (plainKey && s.mode === 'mesh' && GIZMO_KEYS[e.key.toLowerCase()]) {
+        s.setMeshGizmoMode(GIZMO_KEYS[e.key.toLowerCase()])
       } else if (
         (e.ctrlKey || e.metaKey) &&
         (e.key === 'y' || e.key === 'Y' || ((e.key === 'z' || e.key === 'Z') && e.shiftKey))
       ) {
         e.preventDefault()
-        redo()
+        if (s.mode === 'mesh') redoMeshEdit()
+        else redo()
       } else if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
         e.preventDefault()
-        undo()
+        if (s.mode === 'mesh') undoMeshEdit()
+        else undo()
       }
     }
     window.addEventListener('keydown', onKeyDown)
@@ -196,6 +273,31 @@ export default function Viewport() {
       {/* Three.js appends its canvas into this inner host; React-managed overlays
           live as siblings so React never fights the imperatively-added canvas. */}
       <div ref={containerRef} className="viewport-canvas-host" />
+
+      {modelInfo && (
+        <div className="mode-toolbar seg" title="What clicking and dragging does in the view">
+          {MODE_BUTTONS.map((b) => (
+            <button
+              key={b.value}
+              className={'seg-btn' + (mode === b.value ? ' active' : '')}
+              title={b.title}
+              onClick={() => setMode(b.value)}
+            >
+              {b.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {viewCameraId != null && (
+        <button
+          className="camera-view-banner"
+          title="Back to the free view (Esc or 0)"
+          onClick={() => useStore.getState().setViewCameraId(null)}
+        >
+          🎥 {viewCameraName || 'Camera'} — click or press Esc to exit
+        </button>
+      )}
 
       {!modelInfo && !loading && (
         <div className="viewport-empty">

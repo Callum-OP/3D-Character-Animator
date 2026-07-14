@@ -19,21 +19,24 @@ import {
 import { getBoneQuaternion, getPosedBones, applyPose } from '../three/posing.js'
 import { getCharacterRootTransform } from '../three/scene.js'
 
-// Collect every keyframe time across all joints + the character position, with a
-// count of what's keyed at each — for the overview/manage list.
+// Collect every keyframe time across joints, the character position, parts and
+// cameras, with a count of what's keyed at each — for the overview/manage list.
 function collectKeyframes(animData) {
   const map = new Map()
-  for (const keys of Object.values(animData.tracks || {})) {
-    for (const k of keys) {
-      const e = map.get(k.time) || { time: k.time, joints: 0, pos: false }
-      e.joints++
-      map.set(k.time, e)
-    }
+  const entry = (t) => {
+    const e = map.get(t) || { time: t, joints: 0, pos: false, parts: 0, cameras: 0 }
+    map.set(t, e)
+    return e
   }
-  for (const k of animData.root || []) {
-    const e = map.get(k.time) || { time: k.time, joints: 0, pos: false }
-    e.pos = true
-    map.set(k.time, e)
+  for (const keys of Object.values(animData.tracks || {})) {
+    for (const k of keys) entry(k.time).joints++
+  }
+  for (const k of animData.root || []) entry(k.time).pos = true
+  for (const keys of Object.values(animData.meshes || {})) {
+    for (const k of keys) entry(k.time).parts++
+  }
+  for (const keys of Object.values(animData.cameras || {})) {
+    for (const k of keys) entry(k.time).cameras++
   }
   return [...map.values()].sort((a, b) => a.time - b.time)
 }
@@ -194,7 +197,7 @@ export default function AnimationPanel() {
 
   function onPlay() {
     if (source === 'edit') {
-      const d = selectEdit(animData.tracks, animData.root, animDuration, { loop, speed })
+      const d = selectEdit(animData, animDuration, { loop, speed })
       st().setDuration(d)
     } else if (playback === 'stopped' && activeClipName) {
       const d = selectClip(activeClipName, { loop, speed })
@@ -223,7 +226,7 @@ export default function AnimationPanel() {
     // Arm the source if we're stopped so there's an action to evaluate.
     if (playback === 'stopped') {
       if (source === 'edit') {
-        const d = selectEdit(animData.tracks, animData.root, animDuration, { loop, speed })
+        const d = selectEdit(animData, animDuration, { loop, speed })
         st().setDuration(d)
       } else if (activeClipName) {
         selectClip(activeClipName, { loop, speed })
@@ -291,6 +294,8 @@ export default function AnimationPanel() {
       duration: animDuration,
       tracks: animData.tracks,
       root: animData.root || [],
+      meshes: animData.meshes || {},
+      cameras: animData.cameras || {},
     }
     const blob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
@@ -311,7 +316,12 @@ export default function AnimationPanel() {
         if (json.format !== 'anim-v1') throw new Error('Not an anim-v1 file.')
         st().setAnimFps(json.fps || 24)
         st().setAnimDuration(json.duration || 2)
-        st().setAnimData({ tracks: json.tracks || {}, root: json.root || [] })
+        st().setAnimData({
+          tracks: json.tracks || {},
+          root: json.root || [],
+          meshes: json.meshes || {},
+          cameras: json.cameras || {},
+        })
       } catch (err) {
         console.warn('Failed to load animation:', err)
       }
@@ -728,6 +738,16 @@ export default function AnimationPanel() {
                       </span>
                     )}
                     {k.pos && <span className="kf-tag pos">position</span>}
+                    {k.parts > 0 && (
+                      <span className="kf-tag">
+                        {k.parts} part{k.parts > 1 ? 's' : ''}
+                      </span>
+                    )}
+                    {k.cameras > 0 && (
+                      <span className="kf-tag pos">
+                        {k.cameras} camera{k.cameras > 1 ? 's' : ''}
+                      </span>
+                    )}
                   </span>
                   <button
                     className="kf-del"

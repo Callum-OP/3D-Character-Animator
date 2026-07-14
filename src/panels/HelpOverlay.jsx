@@ -36,6 +36,11 @@ export default function HelpOverlay() {
                 bend that joint.
               </li>
               <li>
+                <b>Adjust its parts (optional).</b> Switch to <b>Mesh</b> mode
+                (top of the view) and click a part — eyes, hair, clothing — to
+                move, rotate or resize just that piece.
+              </li>
+              <li>
                 <b>Animate it.</b> Play a built-in clip, import motion capture
                 (<code>.bvh</code>), or make your own with keyframes.
               </li>
@@ -43,6 +48,11 @@ export default function HelpOverlay() {
                 <b>Add props (optional).</b> In Objects, add backgrounds or items
                 and drag the gizmo to move, rotate or resize them around your
                 character.
+              </li>
+              <li>
+                <b>Frame it (optional).</b> In Cameras, add a camera that captures
+                the current view, look through it (📷), and keyframe it to move
+                during the animation.
               </li>
               <li>
                 <b>Style it.</b> Pick a look (Flat / Cartoon / Realistic), add an
@@ -64,7 +74,10 @@ export default function HelpOverlay() {
                 <b>Scroll</b> — zoom in / out
               </li>
               <li>
-                <b>Click a dot</b> — select a joint to pose
+                <b>Click a dot</b> — select a joint to pose (Pose mode)
+              </li>
+              <li>
+                <b>Click a part</b> — select it to move / resize (Mesh mode)
               </li>
             </ul>
             <h3>Keyboard</h3>
@@ -73,10 +86,19 @@ export default function HelpOverlay() {
                 <b>?</b> — open / close this help
               </li>
               <li>
+                <b>1 / 2 / 3</b> — View, Pose or Mesh mode
+              </li>
+              <li>
+                <b>W / E / R</b> — move, rotate or resize (Mesh mode)
+              </li>
+              <li>
+                <b>0</b> — look through a camera / back to the free view
+              </li>
+              <li>
                 <b>Esc</b> — deselect / close
               </li>
               <li>
-                <b>Ctrl / Cmd + Z</b> — undo a pose change
+                <b>Ctrl / Cmd + Z</b> — undo a pose or part change
               </li>
               <li>
                 <b>Ctrl / Cmd + Shift + Z</b> — redo it

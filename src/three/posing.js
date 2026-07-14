@@ -49,6 +49,8 @@ const p = {
   pointsMat: null,
 
   selected: null, // selected Bone (or null)
+  enabled: true, // false outside Bone mode: overlay hidden, gizmo detached, no picking
+  overlayVisible: true, // the user's "Show joints" toggle (independent of mode)
   undoStack: [],
   redoStack: [],
   dragBefore: null, // selected bone's quaternion at drag start
@@ -74,9 +76,10 @@ export function initPosing(refs) {
   transform.setMode('rotate')
   transform.setSpace('local')
   transform.setSize(0.8)
-  // Suspend orbit while dragging the gizmo so the two don't fight.
+  // Suspend orbit while dragging the gizmo so the two don't fight (and stay
+  // locked if a camera view has orbit off).
   transform.addEventListener('dragging-changed', (e) => {
-    p.controls.enabled = !e.value
+    p.controls.enabled = !e.value && !p.controls.locked
   })
   transform.addEventListener('objectChange', () => {
     notifyPoseChange() // keep the rotation sliders in sync while dragging
@@ -156,6 +159,7 @@ export function setPoseModel(model) {
   p.pointsMat = mat
 
   applyPickableFilter()
+  applyOverlayVisibility()
   updateBoneHelpers()
 }
 
@@ -226,10 +230,26 @@ export function updateBoneHelpers() {
 export function selectBone(name) {
   const bone = name ? p.boneMap.get(name) || null : null
   p.selected = bone
-  if (!p.suspended) {
+  if (!p.suspended && p.enabled) {
     if (bone) p.transform.attach(bone)
     else p.transform.detach()
+  } else if (!bone) {
+    p.transform.detach()
   }
+  applyOverlayVisibility() // attach/detach set helper visibility; re-apply the gates
+  p.requestRender()
+}
+
+// Enable/disable interactive posing as a whole (Bone mode on/off). Unlike
+// suspend/resume (playback-driven), this also hides the dot overlay. The
+// selection is remembered so switching back re-attaches the gizmo.
+export function setPosingEnabled(enabled) {
+  p.enabled = enabled
+  if (p.transform) {
+    if (enabled && p.selected && !p.suspended) p.transform.attach(p.selected)
+    else if (!enabled) p.transform.detach()
+  }
+  applyOverlayVisibility()
   p.requestRender()
 }
 
@@ -238,12 +258,14 @@ export function selectBone(name) {
 export function suspendPosing() {
   p.suspended = true
   if (p.transform) p.transform.detach()
+  applyOverlayVisibility()
   p.requestRender()
 }
 
 export function resumePosing() {
   p.suspended = false
-  if (p.selected && p.transform) p.transform.attach(p.selected)
+  if (p.enabled && p.selected && p.transform) p.transform.attach(p.selected)
+  applyOverlayVisibility()
   p.requestRender()
 }
 
@@ -344,11 +366,27 @@ export function setTransformSpace(space) {
   p.requestRender()
 }
 
+// Swap the camera the dot-picking projection and gizmo work against (used when
+// the viewport looks through a placed camera).
+export function setViewCamera(camera) {
+  p.camera = camera
+  if (p.transform) p.transform.camera = camera
+}
+
 export function setBonesVisible(visible) {
-  if (p.points) p.points.visible = visible
-  // Hide the gizmo too when the overlay is hidden (keeps the view clean).
-  if (p.helper) p.helper.visible = visible
+  p.overlayVisible = visible
+  applyOverlayVisibility()
   p.requestRender()
+}
+
+// The dots (and gizmo) show only when the user toggle is on AND Bone mode is
+// active. Hiding the helper with the overlay keeps the view clean. The helper
+// additionally needs a bone attached — forcing a detached TransformControls
+// visible would draw the gizmo floating at the world origin.
+function applyOverlayVisibility() {
+  const on = p.overlayVisible && p.enabled
+  if (p.points) p.points.visible = on
+  if (p.helper) p.helper.visible = on && !!p.selected && !p.suspended
 }
 
 // Restore every bone to its rest rotation as one undoable batch.
