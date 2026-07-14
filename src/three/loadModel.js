@@ -1,9 +1,54 @@
+import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
+
+// Minimal reader for the deprecated KHR_materials_pbrSpecularGlossiness
+// extension, which GLTFLoader no longer supports — without this, materials on
+// such files (common in older Sketchfab conversions) fall back to an untextured
+// default and the model shows up blank. Map what this app actually renders:
+// diffuse texture/colour onto map/color, glossiness onto an approximate
+// roughness. The specular term has no metallic-roughness equivalent and is
+// ignored — fine here, since the app defaults to unlit shading anyway.
+class GLTFSpecularGlossinessExtension {
+  constructor(parser) {
+    this.parser = parser
+    this.name = 'KHR_materials_pbrSpecularGlossiness'
+  }
+
+  getMaterialType(materialIndex) {
+    const def = this.parser.json.materials[materialIndex]
+    return def.extensions && def.extensions[this.name] ? THREE.MeshStandardMaterial : null
+  }
+
+  extendMaterialParams(materialIndex, materialParams) {
+    const def = this.parser.json.materials[materialIndex]
+    const ext = def.extensions && def.extensions[this.name]
+    if (!ext) return Promise.resolve()
+
+    const pending = []
+    const diffuse = ext.diffuseFactor || [1, 1, 1, 1]
+    materialParams.color = new THREE.Color().setRGB(
+      diffuse[0],
+      diffuse[1],
+      diffuse[2],
+      THREE.LinearSRGBColorSpace,
+    )
+    materialParams.opacity = diffuse[3] !== undefined ? diffuse[3] : 1
+    if (ext.diffuseTexture) {
+      pending.push(
+        this.parser.assignTexture(materialParams, 'map', ext.diffuseTexture, THREE.SRGBColorSpace),
+      )
+    }
+    materialParams.metalness = 0
+    materialParams.roughness = ext.glossinessFactor !== undefined ? 1 - ext.glossinessFactor : 1
+    return Promise.all(pending)
+  }
+}
 
 // glTF is the common case, so its loader is bundled eagerly. FBXLoader drags in
 // fflate + NURBS helpers (~hundreds of KB), so it is code-split behind a dynamic
 // import and only fetched the first time someone actually opens a .fbx file.
 const gltfLoader = new GLTFLoader()
+gltfLoader.register((parser) => new GLTFSpecularGlossinessExtension(parser))
 let fbxLoader = null
 
 async function getFbxLoader() {
