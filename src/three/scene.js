@@ -27,6 +27,7 @@ import {
 import {
   initCameras,
   getCameraById,
+  getCameraIdByName,
   setActiveCameraBody,
   getCamerasData,
   applyCamerasData,
@@ -205,6 +206,17 @@ export function initScene(container) {
     },
     onTime: (t) => useStore.getState().setCurrentTime(t),
     onEnded: () => useStore.getState().setPlayback('paused'),
+    // Camera cuts: switch the view to the cut camera (by name); a null cut
+    // means "before the first cut" → show the pre-play view again. A cut
+    // naming a deleted camera is ignored (the view just stays put).
+    onCameraCut: (name, restViewId) => {
+      const store = useStore.getState()
+      if (name == null) return store.setViewCameraId(restViewId ?? null)
+      const id = getCameraIdByName(name)
+      if (id != null) store.setViewCameraId(id)
+    },
+    getViewCameraId: () => useStore.getState().viewCameraId,
+    setViewCameraId: (id) => useStore.getState().setViewCameraId(id),
   })
 
   // --- Scene objects (props / backgrounds with a move/rotate/scale gizmo) ---

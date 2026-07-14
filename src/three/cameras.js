@@ -133,6 +133,12 @@ export function getCameraById(id) {
   return entry ? entry.camera : null
 }
 
+// Resolve a camera's id from its name (camera cuts are stored by name).
+export function getCameraIdByName(name) {
+  const entry = c.cameras.find((e) => e.name === name)
+  return entry ? entry.id : null
+}
+
 // Hide the body visual of the camera being looked through (it would fill the
 // frame); show everyone else's.
 export function setActiveCameraBody(id) {

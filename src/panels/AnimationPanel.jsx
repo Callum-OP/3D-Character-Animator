@@ -24,7 +24,7 @@ import { getCharacterRootTransform } from '../three/scene.js'
 function collectKeyframes(animData) {
   const map = new Map()
   const entry = (t) => {
-    const e = map.get(t) || { time: t, joints: 0, pos: false, parts: 0, cameras: 0 }
+    const e = map.get(t) || { time: t, joints: 0, pos: false, parts: 0, cameras: 0, cut: null }
     map.set(t, e)
     return e
   }
@@ -38,6 +38,7 @@ function collectKeyframes(animData) {
   for (const keys of Object.values(animData.cameras || {})) {
     for (const k of keys) entry(k.time).cameras++
   }
+  for (const k of animData.cuts || []) entry(k.time).cut = k.camera
   return [...map.values()].sort((a, b) => a.time - b.time)
 }
 
@@ -296,6 +297,7 @@ export default function AnimationPanel() {
       root: animData.root || [],
       meshes: animData.meshes || {},
       cameras: animData.cameras || {},
+      cuts: animData.cuts || [],
     }
     const blob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
@@ -321,6 +323,7 @@ export default function AnimationPanel() {
           root: json.root || [],
           meshes: json.meshes || {},
           cameras: json.cameras || {},
+          cuts: json.cuts || [],
         })
       } catch (err) {
         console.warn('Failed to load animation:', err)
@@ -748,6 +751,7 @@ export default function AnimationPanel() {
                         {k.cameras} camera{k.cameras > 1 ? 's' : ''}
                       </span>
                     )}
+                    {k.cut && <span className="kf-tag pos">✂ {k.cut}</span>}
                   </span>
                   <button
                     className="kf-del"

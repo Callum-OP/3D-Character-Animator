@@ -32,6 +32,8 @@ export default function CamerasPanel() {
 
   const selected = sceneCameras.find((cam) => cam.id === selectedCameraId) || null
   const keyCount = selected ? (animData.cameras?.[selected.name] || []).length : 0
+  const cuts = animData.cuts || []
+  const cutCount = selected ? cuts.filter((k) => k.camera === selected.name).length : 0
 
   function onAdd() {
     const meta = addCamera()
@@ -55,6 +57,14 @@ export default function CamerasPanel() {
     if (!key) return
     const t = Math.round(insertTime * animFps) / animFps // snap to the fps grid
     st().addCameraKeyframe(selected.name, t, { pos: key.pos, quat: key.quat })
+  }
+
+  // Insert a camera cut: during playback the view switches to this camera from
+  // the insert time until the next cut.
+  function onCutHere() {
+    if (!selected) return
+    const t = Math.round(insertTime * animFps) / animFps
+    st().addCameraCut(t, selected.name)
   }
 
   return (
@@ -129,6 +139,19 @@ export default function CamerasPanel() {
 
           {selected && (
             <div className="joint-controls">
+              <button
+                className={selected.id === viewCameraId ? 'btn secondary' : 'btn'}
+                style={{ width: '100%' }}
+                onClick={() =>
+                  setViewCameraId(selected.id === viewCameraId ? null : selected.id)
+                }
+                title="See exactly what this camera sees — exports and videos film whatever the view shows (0 toggles, Esc exits)"
+              >
+                {selected.id === viewCameraId
+                  ? 'Exit camera view (Esc)'
+                  : `👁 Look through ${selected.name}`}
+              </button>
+
               <label className="slider-row">
                 <span className="slider-label">Zoom (FOV)</span>
                 <input
@@ -160,9 +183,16 @@ export default function CamerasPanel() {
                 <button
                   className="btn secondary"
                   onClick={onKeyCamera}
-                  title="Save this camera's position at the Animate panel's insert time"
+                  title="Save this camera's position at the Animate panel's insert time — key it at two times and it glides between them"
                 >
                   Key camera{keyCount ? ` (${keyCount})` : ''}
+                </button>
+                <button
+                  className="btn secondary"
+                  onClick={onCutHere}
+                  title="Switch the view to this camera from the insert time on (until the next cut) — like cutting between shots"
+                >
+                  Cut here{cutCount ? ` (${cutCount})` : ''}
                 </button>
               </div>
             </div>
@@ -170,8 +200,10 @@ export default function CamerasPanel() {
 
           <div className="pose-hint">
             📷 looks through a camera (0 toggles, Esc exits) — exports and
-            recordings use whatever the view shows. Key the camera at two times
-            in “Make your own” and it glides between them on Play.
+            recordings use whatever the view shows. <b>Key camera</b> at two
+            times makes one camera glide between them; <b>Cut here</b> hard-
+            switches to a camera at a time, so several cameras can share one
+            animation like film shots.
           </div>
         </>
       )}

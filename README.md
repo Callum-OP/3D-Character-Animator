@@ -20,13 +20,28 @@ blob).
   across model scales) can be layered on any mode, a global **Soften** control
   lifts toon shadows and thins the outline, and **per-mesh overrides** let you drop
   the outline and flatten shading on specific parts (e.g. the face).
+- **Interaction modes** — a **View / Pose / Mesh** switcher at the top of the
+  viewport (keys `1`/`2`/`3`). View is navigation only; Pose is the bone workflow;
+  Mesh selects individual parts.
 - **Bone posing** — click a bone (a dot in the viewport or a name in the tree),
   rotate it with the gizmo to build a pose, and save/load/reset poses as JSON.
   Filterable bone tree with a deform-only toggle, local/world gizmo space, `Esc` to
   deselect, and `Ctrl+Z` undo.
+- **Mesh editing** — in Mesh mode, click any part of the character (eyes, hair,
+  clothing…) and move / rotate / resize just that piece (`W`/`E`/`R` switch tools).
+  Parts pivot around their own centre, skinned parts keep following the skeleton
+  (an offset eye still turns with the head), typed X/Y/Z values, per-part reset,
+  and its own `Ctrl+Z` undo.
 - **Animation** — play baked glTF clips with a timeline scrubber, loop toggle, and
   speed control, or author your own in-app keyframe animation (key the selected
   bone or all posed bones, adjust duration/fps, scrub, and save/load as JSON).
+  Mesh parts and cameras are keyframable on the same timeline (**Key part** /
+  **Key camera**).
+- **Cameras** — place any number of cameras (each spawns framing the current
+  view), look through one (`0` toggles, `Esc` exits), adjust FOV, keyframe a
+  camera to glide between placements, and add **cuts** so the view hard-switches
+  between cameras at set times during playback — exports and video recordings
+  follow whatever the view shows.
 - **Mocap import** — import a `.bvh` motion-capture file and retarget it onto the
   loaded rig. Bones are auto-mapped by body part and side so different naming
   conventions (Mixamo / CMU / Rigify) line up, and a mapping editor lets you fix
@@ -37,8 +52,10 @@ blob).
   scene layout, copy & paste poses, and record **root motion** so the character can
   walk across the scene instead of animating on the spot.
 - **Export** — save a **transparent PNG** at 1×/2×/4× the viewport resolution,
-  record the animation to a **video** (webm), export your animation as **`.bvh`**,
-  and a **Fullscreen** view (Esc to exit) for screen-recording.
+  record the animation to a **video** (webm) that automatically films through
+  your placed camera (with a **Preview video** button to check the shot first —
+  the panel always says what it will film through), export your animation as
+  **`.bvh`**, and a **Fullscreen** view (Esc to exit) for screen-recording.
 - **Friendly by default** — one-click light presets (Front/Side/Rim/Top), a ground
   shadow (blob or real cast shadows), per-part show/hide, an optional FPS/memory
   readout, and a **Help & shortcuts** overlay (press `?`).
@@ -118,8 +135,18 @@ Vite build sets `base: '/3D-Character-Animator/'` (see `vite.config.js`). Local
    retarget a motion onto the rig (a mapping editor appears — accept the
    auto-guess or correct any bone slot, then **Retarget**), and turn any clip into
    a single pose (**Frame → pose**) or editable keyframes (**Bake → keys**).
-8. The **View** panel toggles the reference grid and switches between a
-   transparent background (the default, for compositing) and a solid colour.
+8. Switch to **Mesh** mode (toolbar or key `3`) to adjust individual parts: click
+   a part in the viewport or the **Parts** list, drag the gizmo (`W` move /
+   `E` rotate / `R` resize) or type exact values, and **Key part** to animate it
+   on the timeline.
+9. The **Cameras** panel places cameras: orbit until the shot looks right, then
+   **+ Add camera (from this view)**. Click 📷 (or press `0`) to look through
+   it — PNG export and **Record video** capture that view. **Key camera** at two
+   times makes it glide between placements; **Cut here** switches the view to
+   that camera at the insert time, so several cameras can cover one animation
+   like film shots (the view cuts automatically during playback and recording).
+10. The **View** panel toggles the reference grid and switches between a
+    transparent background (the default, for compositing) and a solid colour.
 
 ## Tech stack
 
@@ -143,13 +170,17 @@ src/
     animation.js        # AnimationMixer: baked clips + in-app keyframe clips
     bvh.js              # BVH mocap import + retarget onto the loaded rig
     objects.js          # scene props/backgrounds + move/rotate/scale gizmo
-    Viewport.jsx        # canvas host + drag-and-drop + pose keyboard shortcuts
+    meshedit.js         # Mesh mode: pick parts, pivot-centred gizmo, keyframes
+    cameras.js          # placeable cameras: rigs, view-through, cuts, keyframes
+    Viewport.jsx        # canvas host + drag-and-drop + mode/keyboard shortcuts
   panels/
     ModelPanel.jsx      # load button / drop zone, model stats
     MaterialPanel.jsx   # material mode + key-light controls
     BonePanel.jsx       # bone tree, pose save/load/reset/undo
+    MeshPanel.jsx       # Mesh mode: part list, transform values, part keyframes
     AnimationPanel.jsx  # clip playback + in-app keyframing
     ObjectsPanel.jsx    # add / move / cycle props & backgrounds
+    CamerasPanel.jsx    # place cameras, look through, keyframe + cuts
     ExportPanel.jsx     # PNG / video / BVH / fullscreen export
     ViewPanel.jsx       # scene toggles (grid, shadow, background, stats)
     HelpOverlay.jsx     # ? help & shortcuts

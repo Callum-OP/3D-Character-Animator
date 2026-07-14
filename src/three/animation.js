@@ -41,9 +41,13 @@ const a = {
   editRoot: null, // character root-motion keyframes [{time,pos,quat}] (edit source only)
   editMeshes: null, // part-motion tracks { [meshIndex]: [{time,pos,quat,scale}] } (edit source only)
   editCameras: null, // camera-motion tracks { [name]: [{time,pos,quat}] } (edit source only)
+  editCuts: null, // camera cuts [{time, camera: name}] (edit source only, sorted)
   rootRest: null, // character root transform at playback start (restored on stop)
   meshRest: null, // part placements at playback start (restored on stop)
   camerasRest: null, // camera placements at playback start (restored on stop)
+  viewRest: null, // viewCameraId before cuts took over (restored on stop)
+  hasViewRest: false,
+  lastCut: undefined, // camera name of the cut currently applied (dedupes store writes)
 }
 
 const _qa = new THREE.Quaternion()
@@ -83,9 +87,13 @@ export function clearAnimationModel() {
   a.editRoot = null
   a.editMeshes = null
   a.editCameras = null
+  a.editCuts = null
   a.rootRest = null
   a.meshRest = null
   a.camerasRest = null
+  a.viewRest = null
+  a.hasViewRest = false
+  a.lastCut = undefined
   a.model = null
   a.bakedClips = []
   a.importedClips = []
@@ -103,6 +111,7 @@ export function updateAnimation(delta) {
     sampleRoot(t) // drive character world motion (edit source only)
     if (a.editMeshes) sampleMeshTracks(a.editMeshes, t) // part motion
     if (a.editCameras) sampleCameraTracks(a.editCameras, t) // camera motion
+    sampleCuts(t) // hard-switch the view to the cut camera
     a.refs.onTime(t)
   }
 }
@@ -115,8 +124,9 @@ export function selectClip(name, opts = {}) {
   const clip = findClip(name)
   if (!clip) return 0
   a.editRoot = null // baked/mocap clips are in-place (no root motion)
-  a.editMeshes = null // …and don't drive parts or cameras
+  a.editMeshes = null // …and don't drive parts, cameras or cuts
   a.editCameras = null
+  a.editCuts = null
   activate(clip, opts)
   return clip.duration
 }
@@ -232,11 +242,36 @@ export function selectEdit(animData, duration, opts = {}) {
   a.editRoot = rootKeys && rootKeys.length ? [...rootKeys].sort((x, y) => x.time - y.time) : null
   a.editMeshes = hasKeys(animData.meshes) ? sortTracks(animData.meshes) : null
   a.editCameras = hasKeys(animData.cameras) ? sortTracks(animData.cameras) : null
+  const cuts = animData.cuts
+  a.editCuts = cuts && cuts.length ? [...cuts].sort((x, y) => x.time - y.time) : null
   // Remember where the driven parts/cameras sit now, so Stop puts them back.
   a.meshRest = a.editMeshes ? getMeshPlaybackSnapshot() : null
   a.camerasRest = a.editCameras ? getCamerasPlaybackSnapshot() : null
+  // Remember which camera (if any) the user was looking through before the
+  // cuts take over, so Stop returns to their view.
+  if (a.editCuts && !a.hasViewRest) {
+    a.viewRest = a.refs.getViewCameraId ? a.refs.getViewCameraId() : null
+    a.hasViewRest = true
+    a.lastCut = undefined
+  }
   activate(clip, opts)
   return clip.duration
+}
+
+// Apply the camera cut in effect at time t: the view switches to the camera of
+// the latest cut at or before t; before the first cut it shows the pre-play
+// view. Only pushes a change when the target actually differs.
+function sampleCuts(t) {
+  if (!a.editCuts || !a.refs.onCameraCut) return
+  let cut = null
+  for (const k of a.editCuts) {
+    if (k.time <= t + 1e-6) cut = k
+    else break
+  }
+  const target = cut ? cut.camera : null // null = the pre-play view
+  if (target === a.lastCut) return
+  a.lastCut = target
+  a.refs.onCameraCut(target, a.viewRest)
 }
 
 function hasKeys(tracks) {
@@ -280,6 +315,12 @@ export function stop() {
   a.meshRest = null
   applyCamerasPlaybackSnapshot(a.camerasRest)
   a.camerasRest = null
+  if (a.hasViewRest) {
+    if (a.refs.setViewCameraId) a.refs.setViewCameraId(a.viewRest)
+    a.viewRest = null
+    a.hasViewRest = false
+    a.lastCut = undefined
+  }
   a.refs.resumePosing()
   a.refs.onTime(0)
   a.refs.requestRender()
@@ -303,6 +344,7 @@ export function scrub(t) {
   sampleRoot(a.action.time)
   if (a.editMeshes) sampleMeshTracks(a.editMeshes, a.action.time)
   if (a.editCameras) sampleCameraTracks(a.editCameras, a.action.time)
+  sampleCuts(a.action.time)
   a.refs.requestRender()
 }
 

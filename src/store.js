@@ -45,7 +45,7 @@ export const useStore = create((set) => ({
       importedClipNames: [],
       duration: 0,
       currentTime: 0,
-      animData: { tracks: {}, root: [], meshes: {}, cameras: {} },
+      animData: { tracks: {}, root: [], meshes: {}, cameras: {}, cuts: [] },
       insertTime: 0,
       // The character is a movable entry (kept first) in the objects list.
       sceneObjects: [
@@ -65,7 +65,7 @@ export const useStore = create((set) => ({
       activeClipName: null,
       importedClipNames: [],
       currentTime: 0,
-      animData: { tracks: {}, root: [], meshes: {}, cameras: {} },
+      animData: { tracks: {}, root: [], meshes: {}, cameras: {}, cuts: [] },
       sceneObjects: s.sceneObjects.filter((o) => o.id !== 'character'),
       selectedObjectId: s.selectedObjectId === 'character' ? null : s.selectedObjectId,
     })),
@@ -283,8 +283,10 @@ export const useStore = create((set) => ({
   insertTime: 0, // where "Add keyframe" inserts (seconds)
   // tracks = bone rotations; root = character world motion [{ time, pos:[3], quat:[4] }];
   // meshes = part motion keyed by mesh INDEX [{ time, pos:[3], quat:[4], scale:[3] }];
-  // cameras = camera motion keyed by camera NAME [{ time, pos:[3], quat:[4] }]
-  animData: { tracks: {}, root: [], meshes: {}, cameras: {} },
+  // cameras = camera motion keyed by camera NAME [{ time, pos:[3], quat:[4] }];
+  // cuts = camera switches [{ time, camera: name }] — the view hard-cuts to that
+  // camera from that time on during playback (one cut per time)
+  animData: { tracks: {}, root: [], meshes: {}, cameras: {}, cuts: [] },
 
   setAnimFps: (animFps) => set({ animFps }),
   setAnimDuration: (animDuration) => set({ animDuration }),
@@ -296,9 +298,27 @@ export const useStore = create((set) => ({
         root: animData.root || [],
         meshes: animData.meshes || {},
         cameras: animData.cameras || {},
+        cuts: animData.cuts || [],
       },
     }),
-  clearAnim: () => set({ animData: { tracks: {}, root: [], meshes: {}, cameras: {} } }),
+  clearAnim: () =>
+    set({ animData: { tracks: {}, root: [], meshes: {}, cameras: {}, cuts: [] } }),
+
+  // Insert/replace a camera cut: from this time on, the view is this camera.
+  addCameraCut: (time, camera) =>
+    set((s) => {
+      const cuts = (s.animData.cuts || []).filter((k) => k.time !== time)
+      cuts.push({ time, camera })
+      cuts.sort((a, b) => a.time - b.time)
+      return { animData: { ...s.animData, cuts } }
+    }),
+  deleteCameraCut: (time) =>
+    set((s) => ({
+      animData: {
+        ...s.animData,
+        cuts: (s.animData.cuts || []).filter((k) => Math.abs(k.time - time) > 1e-6),
+      },
+    })),
 
   // Insert/replace a part keyframe (full local position + rotation + scale).
   addMeshKeyframe: (index, time, key) =>
@@ -355,7 +375,8 @@ export const useStore = create((set) => ({
         const kept = keys.filter((k) => !near(k))
         if (kept.length) cameras[name] = kept
       }
-      return { animData: { tracks, root, meshes, cameras } }
+      const cuts = (s.animData.cuts || []).filter((k) => !near(k))
+      return { animData: { tracks, root, meshes, cameras, cuts } }
     }),
 
   // Insert/replace a keyframe for one bone at a time.
