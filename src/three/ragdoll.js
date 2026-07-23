@@ -96,7 +96,22 @@ export function simulateRagdollClip(model, opts = {}) {
   parentOf.forEach((pi, i) => {
     if (pi < 0) visit(i)
   })
-  const rootIndex = order[0]
+  // Pick the root with the largest subtree
+  const roots = []
+  parentOf.forEach((pi, i) => { if (pi < 0) roots.push(i) })
+
+  function subtreeSize(i) {
+    let n = 1
+    for (const c of childrenOf[i]) n += subtreeSize(c)
+    return n
+  }
+
+  let rootIndex = roots[0]
+  let bestSize = -1
+  for (const r of roots) {
+    const size = subtreeSize(r)
+    if (size > bestSize) { bestSize = size; rootIndex = r }
+  }
 
   // --- pick the core skeleton worth simulating ---
   // Load-time classification (model.info.bones is index-aligned with bones):
