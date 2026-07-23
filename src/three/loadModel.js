@@ -139,6 +139,7 @@ function parseRoot(root, animations, fileName, format, source) {
 
   root.traverse((obj) => {
     if (obj.isSkinnedMesh) {
+      obj.frustumCulled = false
       skinnedMeshes.push(obj)
       if (!skeleton && obj.skeleton) skeleton = obj.skeleton
       if (obj.skeleton) {
