@@ -22,7 +22,7 @@ const o = {
   camera: null,
   renderer: null,
   controls: null,
-  requestRender: () => {},
+  requestRender: null,
 
   transform: null, // TransformControls (move/rotate/scale)
   helper: null,
@@ -216,6 +216,12 @@ export function getObjectsForSave() {
 // --- Scene save/load (transforms only) ---------------------------------------
 
 // Transforms of every prop (by name) for saving a scene layout.
+// Live Object3D roots for every prop currently in the scene — used by the
+// ragdoll to build obstacle colliders. Excludes the character itself.
+export function getObjectRoots() {
+  return o.objects.map((e) => e.root)
+}
+
 export function getObjectsData() {
   return o.objects.map((e) => ({
     name: e.name,

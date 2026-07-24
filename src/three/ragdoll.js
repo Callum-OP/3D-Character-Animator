@@ -43,8 +43,11 @@ const GRAVITY_MS2 = 9.8
 const SUBSTEP = 1 / 120 // physics step (seconds)
 const ITERATIONS = 8 // constraint relaxations per substep
 const DAMPING = 0.992 // per-substep velocity keep (heavy, fleshy drag)
-const FRICTION = 0.7 // per-substep tangential velocity kill on ground contact
+const FRICTION = 0.85 // per-substep tangential velocity kill on ground/obstacle contact
 const RESTITUTION = 0.1 // fraction of impact speed kept as bounce (flesh thuds)
+const STATIC_FRICTION_EPS = 0.006 // world units/substep — below this, snap tangential speed to zero
+                                    // instead of just damping it, so resting contact truly stops rather
+                                    // than creeping forever under small constant forces (joint tone, etc.)
 const TIP_SPEED = 0.4 // initial topple: the top of the body starts at this × height /s
 const STRAIGHTEN = 0.12 // per-substep spring of each joint back toward its start angle
 const TONE_TIME = 2 // muscle tone fades to zero over this long, so the body can rest
@@ -96,21 +99,30 @@ export function simulateRagdollClip(model, opts = {}) {
   parentOf.forEach((pi, i) => {
     if (pi < 0) visit(i)
   })
-  // Pick the root with the largest subtree
+  // Some rigs export more than one bone with no bone-parent — e.g. a leftover
+  // empty helper bone alongside the real skeleton root (Hips). Just taking
+  // order[0] can grab that stray bone instead, in which case the one position
+  // track we write never lands on anything gravity actually acts on: the real
+  // skeleton rotates correctly relative to Hips, but Hips itself — and so the
+  // whole body — never translates, and just flails in place. Pick whichever
+  // no-parent bone has the biggest subtree; that's always the real root.
   const roots = []
-  parentOf.forEach((pi, i) => { if (pi < 0) roots.push(i) })
-
+  parentOf.forEach((pi, i) => {
+    if (pi < 0) roots.push(i)
+  })
   function subtreeSize(i) {
     let n = 1
     for (const c of childrenOf[i]) n += subtreeSize(c)
     return n
   }
-
   let rootIndex = roots[0]
   let bestSize = -1
   for (const r of roots) {
     const size = subtreeSize(r)
-    if (size > bestSize) { bestSize = size; rootIndex = r }
+    if (size > bestSize) {
+      bestSize = size
+      rootIndex = r
+    }
   }
 
   // --- pick the core skeleton worth simulating ---
@@ -273,8 +285,85 @@ export function simulateRagdollClip(model, opts = {}) {
     const impact = p.y - q.y // downward travel this substep (negative)
     p.y = fl
     if (impact < 0) q.y = fl + impact * RESTITUTION // flip a fraction into a bounce
-    q.x += (p.x - q.x) * FRICTION // grip: bleed off sliding
+    snapFriction(p, q)
+  }
+
+  // Tangential grip on a resting contact: damp toward zero, then snap the
+  // remainder to zero once it's small enough — otherwise a small constant
+  // push (e.g. the joint-tone springs) never fully stops, it just decays
+  // forever, which reads as a permanent slow creep on a finite surface.
+  function snapFriction(p, q) {
+    q.x += (p.x - q.x) * FRICTION
     q.z += (p.z - q.z) * FRICTION
+    if (Math.abs(p.x - q.x) < STATIC_FRICTION_EPS) q.x = p.x
+    if (Math.abs(p.z - q.z) < STATIC_FRICTION_EPS) q.z = p.z
+  }
+
+  // --- obstacles: static world-space AABBs (props/furniture) the corpse can
+  // land on or pile up against. Same treatment as the floor, but resolved as
+  // a box push-out (shortest exit axis) instead of a single Y plane, and
+  // inflated by each particle's own contact radius so limbs don't clip in.
+  const obstacles = (opts.obstacles || []).map((box) => box.clone())
+
+  function obstaclePenetration(p, r, box) {
+    if (
+      p.x < box.min.x - r || p.x > box.max.x + r ||
+      p.y < box.min.y - r || p.y > box.max.y + r ||
+      p.z < box.min.z - r || p.z > box.max.z + r
+    ) return null
+    const dx1 = p.x - (box.min.x - r), dx2 = (box.max.x + r) - p.x
+    const dy1 = p.y - (box.min.y - r), dy2 = (box.max.y + r) - p.y
+    const dz1 = p.z - (box.min.z - r), dz2 = (box.max.z + r) - p.z
+    const minX = Math.min(dx1, dx2), minY_ = Math.min(dy1, dy2), minZ = Math.min(dz1, dz2)
+    const smallest = Math.min(minX, minY_, minZ)
+    if (smallest === minY_) return { axis: 'y', out: dy1 < dy2 ? -dy1 : dy2, top: dy1 < dy2 }
+    if (smallest === minX) return { axis: 'x', out: dx1 < dx2 ? -dx1 : dx2 }
+    return { axis: 'z', out: dz1 < dz2 ? -dz1 : dz2 }
+  }
+
+  // Position-only push-out — safe to call every relaxation iteration, same as
+  // the floor clamp does. No velocity/friction here, so it can't fight the
+  // constraint solver across iterations the way a full response would.
+  function clampObstacles(i) {
+    const p = pos[i]
+    const r = radii[i]
+    let best = null
+    for (const box of obstacles) {
+      const hit = obstaclePenetration(p, r, box)
+      if (hit && (!best || Math.abs(hit.out) > Math.abs(best.out))) best = hit
+    }
+    if (!best) return
+    if (best.axis === 'y') p.y += best.out
+    else if (best.axis === 'x') p.x += best.out
+    else p.z += best.out
+  }
+
+  // Full response — bounce/friction on landing, velocity killed into a wall.
+  // Called once per substep (integrate + final), matching applyGround.
+  function applyObstacles(i) {
+    const p = pos[i]
+    const r = radii[i]
+    const q = prev[i]
+    let best = null
+    for (const box of obstacles) {
+      const hit = obstaclePenetration(p, r, box)
+      if (hit && (!best || Math.abs(hit.out) > Math.abs(best.out))) best = hit
+    }
+    if (!best) return
+    if (best.axis === 'y') {
+      p.y += best.out
+      if (best.top) {
+        const impact = p.y - q.y
+        if (impact < 0) q.y = p.y + impact * RESTITUTION
+        snapFriction(p, q)
+      }
+    } else if (best.axis === 'x') {
+      p.x += best.out
+      q.x = p.x
+    } else {
+      p.z += best.out
+      q.z = p.z
+    }
   }
 
   function step(tone) {
@@ -290,6 +379,7 @@ export function simulateRagdollClip(model, opts = {}) {
       p.y += vy - gravity * SUBSTEP * SUBSTEP
       p.z += vz
       applyGround(i)
+      applyObstacles(i)
     }
     // Relax the hard constraints toward their rest lengths.
     for (let it = 0; it < ITERATIONS; it++) {
@@ -310,10 +400,11 @@ export function simulateRagdollClip(model, opts = {}) {
         pb.y -= dy * corr
         pb.z -= dz * corr
       }
-      // Relaxation must never push anything underground.
+      // Relaxation must never push anything underground or into an obstacle.
       for (let i = 0; i < pos.length; i++) {
         const fl = groundY + radii[i]
         if (pos[i].y < fl) pos[i].y = fl
+        clampObstacles(i)
       }
     }
     // Soft joint tone: nudge every joint back toward its starting angle. The
@@ -339,6 +430,7 @@ export function simulateRagdollClip(model, opts = {}) {
     maxSpeed = 0
     for (let i = 0; i < pos.length; i++) {
       applyGround(i)
+      applyObstacles(i)
       const s = pos[i].distanceTo(prev[i]) / SUBSTEP
       if (s > maxSpeed) maxSpeed = s
     }

@@ -19,7 +19,9 @@ import {
 } from '../three/animation.js'
 import { getBoneQuaternion, getPosedBones, applyPose } from '../three/posing.js'
 import { getCharacterRootTransform, getCurrentModel, getGroundY } from '../three/scene.js'
+import * as THREE from 'three'
 import { simulateRagdollClip } from '../three/ragdoll.js'
+import { getObjectRoots } from '../three/objects.js'
 
 // Collect every keyframe time across joints, the character position, parts and
 // cameras, with a count of what's keyed at each — for the overview/manage list.
@@ -413,10 +415,20 @@ export default function AnimationPanel() {
       pause() // freeze the current frame — the fall starts from what's on screen
       st().setPlayback('paused')
     }
+    const obstacles = []
+    for (const root of getObjectRoots()) {
+      if (!root.visible) continue
+      root.updateWorldMatrix(true, true)
+      root.traverse((obj) => {
+        if (obj.isMesh) obstacles.push(new THREE.Box3().setFromObject(obj))
+      })
+    }
+
     const res = simulateRagdollClip(getCurrentModel(), {
       groundY: getGroundY(),
       fps: animFps,
       limits: st().limbLimits,
+      obstacles,
     })
     if (!res) {
       setRagdollMsg('This model has no skeleton to ragdoll.')
