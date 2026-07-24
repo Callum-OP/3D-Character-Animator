@@ -185,6 +185,14 @@ export function getLinkedMorphTargets(sourceMesh, morphName) {
   return results
 }
 
+// Stable index of a mesh within the current character's mesh list — the same
+// order every time the same file is (re)loaded, unlike mesh.uuid which is
+// regenerated on every parse. Used to key morph (shape-key) keyframes so they
+// survive a save → reload round-trip.
+export function getMeshIndex(mesh) {
+  return m.meshes.indexOf(mesh)
+}
+
 // Detach the gizmo and drop all references (called on model unload).
 export function clearMeshEditModel() {
   if (m.transform) m.transform.detach()

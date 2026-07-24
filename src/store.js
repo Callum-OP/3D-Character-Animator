@@ -387,13 +387,13 @@ export const useStore = create((set) => ({
       }
       const cuts = (s.animData.cuts || []).filter((k) => !near(k))
       const morphs = {}
-      for (const [meshUuid, byName] of Object.entries(s.animData.morphs || {})) {
+      for (const [meshIndex, byName] of Object.entries(s.animData.morphs || {})) {
         const kept = {}
         for (const [morphName, keys] of Object.entries(byName || {})) {
           const next = (keys || []).filter((k) => !near(k))
           if (next.length) kept[morphName] = next
         }
-        if (Object.keys(kept).length) morphs[meshUuid] = kept
+        if (Object.keys(kept).length) morphs[meshIndex] = kept
       }
       return { animData: { tracks, root, meshes, cameras, cuts, morphs } }
     }),
@@ -429,28 +429,31 @@ export const useStore = create((set) => ({
       return { animData: { ...s.animData, tracks } }
     }),
 
-  // Morphs: { [meshUuid]: { [morphName]: [{ time, value }] } }
-  addMorphKeyframe: (meshUuid, morphName, time, value) =>
+  // Morphs: { [meshIndex]: { [morphName]: [{ time, value }] } }
+  // Keyed by the mesh's stable index (not mesh.uuid — uuids are regenerated
+  // every time the model file is reloaded, which would silently orphan
+  // saved shape-key tracks after a save/reload round trip).
+  addMorphKeyframe: (meshIndex, morphName, time, value) =>
     set((s) => {
       const existingMorphs = { ...(s.animData.morphs || {}) }
-      const meshMorphs = { ...(existingMorphs[meshUuid] || {}) }
+      const meshMorphs = { ...(existingMorphs[meshIndex] || {}) }
       const keys = (meshMorphs[morphName] || []).filter((k) => k.time !== time)
       keys.push({ time, value })
       keys.sort((a, b) => a.time - b.time)
       meshMorphs[morphName] = keys
-      existingMorphs[meshUuid] = meshMorphs
+      existingMorphs[meshIndex] = meshMorphs
       return { animData: { ...s.animData, morphs: existingMorphs } }
     }),
 
-  deleteMorphKeyframe: (meshUuid, morphName, time) =>
+  deleteMorphKeyframe: (meshIndex, morphName, time) =>
     set((s) => {
       const existingMorphs = { ...(s.animData.morphs || {}) }
-      const meshMorphs = { ...(existingMorphs[meshUuid] || {}) }
+      const meshMorphs = { ...(existingMorphs[meshIndex] || {}) }
       const keys = (meshMorphs[morphName] || []).filter((k) => k.time !== time)
       if (keys.length) meshMorphs[morphName] = keys
       else delete meshMorphs[morphName]
-      if (Object.keys(meshMorphs).length) existingMorphs[meshUuid] = meshMorphs
-      else delete existingMorphs[meshUuid]
+      if (Object.keys(meshMorphs).length) existingMorphs[meshIndex] = meshMorphs
+      else delete existingMorphs[meshIndex]
       return { animData: { ...s.animData, morphs: existingMorphs } }
     }),
 }))

@@ -42,7 +42,7 @@ const a = {
   editMeshes: null, // part-motion tracks { [meshIndex]: [{time,pos,quat,scale}] } (edit source only)
   editCameras: null, // camera-motion tracks { [name]: [{time,pos,quat}] } (edit source only)
   editCuts: null, // camera cuts [{time, camera: name}] (edit source only, sorted)
-  editMorphs: null, // morph-key tracks { [meshUuid]: { [morphName]: [{time,value}] } } (edit source only)
+  editMorphs: null, // morph-key tracks { [meshIndex]: { [morphName]: [{time,value}] } } (edit source only)
   rootRest: null, // character root transform at playback start (restored on stop)
   meshRest: null, // part placements at playback start (restored on stop)
   morphRest: null, // morph target values at playback start (restored on stop)
@@ -312,20 +312,20 @@ function sortTracks(tracks) {
 
 function sortMorphTracks(tracks) {
   const out = {}
-  for (const [meshUuid, byName] of Object.entries(tracks || {})) {
+  for (const [meshIndex, byName] of Object.entries(tracks || {})) {
     const sortedByName = {}
     for (const [morphName, keys] of Object.entries(byName || {})) {
       if (keys && keys.length) sortedByName[morphName] = [...keys].sort((x, y) => x.time - y.time)
     }
-    if (Object.keys(sortedByName).length) out[meshUuid] = sortedByName
+    if (Object.keys(sortedByName).length) out[meshIndex] = sortedByName
   }
   return out
 }
 
 function sampleMorphTracks(tracks, t) {
   if (!tracks) return
-  for (const [meshUuid, byName] of Object.entries(tracks)) {
-    const mesh = a.refs.getObjectByUuid?.(meshUuid)
+  for (const [meshIndex, byName] of Object.entries(tracks)) {
+    const mesh = a.model?.meshes?.[Number(meshIndex)]
     if (!mesh?.morphTargetDictionary || !mesh.morphTargetInfluences) continue
     for (const [morphName, keys] of Object.entries(byName)) {
       if (!keys || keys.length === 0) continue
@@ -363,8 +363,8 @@ function applyMorphKey(mesh, index, keys, t) {
 function getMorphPlaybackSnapshot(tracks) {
   if (!tracks) return null
   const snap = []
-  for (const [meshUuid, byName] of Object.entries(tracks)) {
-    const mesh = a.refs.getObjectByUuid?.(meshUuid)
+  for (const [meshIndex, byName] of Object.entries(tracks)) {
+    const mesh = a.model?.meshes?.[Number(meshIndex)]
     if (!mesh?.morphTargetDictionary || !mesh.morphTargetInfluences) continue
     const values = {}
     for (const [morphName] of Object.entries(byName)) {
@@ -372,7 +372,7 @@ function getMorphPlaybackSnapshot(tracks) {
       if (index == null) continue
       values[morphName] = mesh.morphTargetInfluences[index]
     }
-    if (Object.keys(values).length) snap.push({ meshUuid, values })
+    if (Object.keys(values).length) snap.push({ mesh, values })
   }
   return snap.length ? snap : null
 }
@@ -380,7 +380,7 @@ function getMorphPlaybackSnapshot(tracks) {
 function applyMorphPlaybackSnapshot(snap) {
   if (!snap) return
   for (const entry of snap) {
-    const mesh = a.refs.getObjectByUuid?.(entry.meshUuid)
+    const mesh = entry.mesh
     if (!mesh?.morphTargetDictionary || !mesh.morphTargetInfluences) continue
     for (const [morphName, value] of Object.entries(entry.values)) {
       const index = mesh.morphTargetDictionary[morphName]
@@ -658,8 +658,8 @@ function buildEditClip(tracks, duration, morphs = {}) {
     for (const k of sorted) values.push(k.quat[0], k.quat[1], k.quat[2], k.quat[3])
     kfTracks.push(new THREE.QuaternionKeyframeTrack(name + '.quaternion', times, values))
   }
-  for (const [meshUuid, byName] of Object.entries(morphs)) {
-    const mesh = a.refs.getObjectByUuid?.(meshUuid)
+  for (const [meshIndex, byName] of Object.entries(morphs)) {
+    const mesh = a.model?.meshes?.[Number(meshIndex)]
     if (!mesh?.morphTargetDictionary) continue
     for (const [morphName, keys] of Object.entries(byName)) {
       if (!keys?.length) continue
@@ -668,7 +668,7 @@ function buildEditClip(tracks, duration, morphs = {}) {
       const sorted = [...keys].sort((x, y) => x.time - y.time)
       kfTracks.push(
         new THREE.NumberKeyframeTrack(
-          `${meshUuid}.morphTargetInfluences[${index}]`,
+          `${mesh.uuid}.morphTargetInfluences[${index}]`,
           sorted.map((k) => k.time),
           sorted.map((k) => k.value)
         )

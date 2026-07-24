@@ -9,6 +9,7 @@ import {
   undo,
   redo,
   getLinkedMorphTargets,
+  getMeshIndex,
 } from '../three/meshedit.js'
 import { getCurrentModel, requestRender } from '../three/scene.js'
 import EditableValue from './EditableValue.jsx'
@@ -221,10 +222,10 @@ export default function MeshPanel() {
                       onClick={() => {
                         const currentValue = morphValues[idx] ?? 0
                         const t = snap(insertTime)
-                        st().addMorphKeyframe(selectedMesh.uuid, name, t, currentValue)
+                        st().addMorphKeyframe(getMeshIndex(selectedMesh), name, t, currentValue)
                         if (linkedShapeKeys) {
                           for (const link of getLinkedMorphTargets(selectedMesh, name)) {
-                            st().addMorphKeyframe(link.mesh.uuid, name, t, currentValue)
+                            st().addMorphKeyframe(getMeshIndex(link.mesh), name, t, currentValue)
                           }
                         }
                       }}
