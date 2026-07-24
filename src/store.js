@@ -186,12 +186,17 @@ export const useStore = create((set) => ({
   // ---- Mesh editing (Mesh mode) ----
   selectedMeshUuid: null, // uuid of the part the mesh gizmo is attached to
   meshGizmoMode: 'translate', // 'translate' | 'rotate' | 'scale'
+  // When on, dragging a shape key also drives same-named shape keys on other
+  // meshes of this character that sit close by (e.g. teeth/eyes/eyebrows
+  // exported as separate meshes from the face). Off = only the selected mesh.
+  linkedShapeKeys: true,
   // Bumped by the mesh-edit engine on every edit (gizmo drag, undo, reset…)
   // so the transform fields can re-read the selected part's values.
   meshVersion: 0,
 
   setSelectedMeshUuid: (selectedMeshUuid) => set({ selectedMeshUuid }),
   setMeshGizmoMode: (meshGizmoMode) => set({ meshGizmoMode }),
+  setLinkedShapeKeys: (linkedShapeKeys) => set({ linkedShapeKeys }),
   bumpMeshVersion: () => set((s) => ({ meshVersion: s.meshVersion + 1 })),
 
   setBoneFilter: (boneFilter) => set({ boneFilter }),

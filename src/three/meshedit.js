@@ -147,6 +147,44 @@ export function setMeshEditModel(model) {
   }
 }
 
+// How many bounding-radii apart two parts can be and still count as "close
+// enough" to link shape keys — generous, since a face's teeth/eyes/eyebrows
+// meshes are often modelled with their own small bounding box near, but not
+// overlapping, the head mesh's.
+const MORPH_LINK_PROXIMITY_FACTOR = 3
+
+function getWorldBoundingSphere(mesh) {
+  if (!mesh.geometry.boundingSphere) mesh.geometry.computeBoundingSphere()
+  const sphere = mesh.geometry.boundingSphere
+  mesh.updateMatrixWorld()
+  const center = sphere.center.clone().applyMatrix4(mesh.matrixWorld)
+  const worldScale = mesh.getWorldScale(new THREE.Vector3())
+  const radius = sphere.radius * Math.max(worldScale.x, worldScale.y, worldScale.z)
+  return { center, radius }
+}
+
+// Find other meshes on the current character that expose a morph target of
+// the same name and sit close by in world space. Used to mirror a shape-key
+// slider across meshes that are really "one face" split into parts (teeth,
+// eyes, eyebrows…) by the exporter, without touching unrelated meshes that
+// happen to reuse the same shape-key name (e.g. a second character later).
+export function getLinkedMorphTargets(sourceMesh, morphName) {
+  if (!sourceMesh || !m.meshes.length) return []
+  const src = getWorldBoundingSphere(sourceMesh)
+  const results = []
+  for (const mesh of m.meshes) {
+    if (mesh === sourceMesh) continue
+    const dict = mesh.morphTargetDictionary
+    if (!dict || !(morphName in dict) || !mesh.morphTargetInfluences) continue
+    const other = getWorldBoundingSphere(mesh)
+    const threshold = (src.radius + other.radius) * MORPH_LINK_PROXIMITY_FACTOR
+    if (src.center.distanceTo(other.center) <= threshold) {
+      results.push({ mesh, idx: dict[morphName] })
+    }
+  }
+  return results
+}
+
 // Detach the gizmo and drop all references (called on model unload).
 export function clearMeshEditModel() {
   if (m.transform) m.transform.detach()

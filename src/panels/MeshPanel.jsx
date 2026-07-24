@@ -8,8 +8,9 @@ import {
   resetAllMeshes,
   undo,
   redo,
+  getLinkedMorphTargets,
 } from '../three/meshedit.js'
-import { getCurrentModel } from '../three/scene.js'
+import { getCurrentModel, requestRender } from '../three/scene.js'
 import EditableValue from './EditableValue.jsx'
 
 // Side-panel section for Mesh mode: pick a part of the character (eyes, hair,
@@ -32,6 +33,8 @@ export default function MeshPanel() {
   const setMeshGizmoMode = useStore((s) => s.setMeshGizmoMode)
   const meshOverrides = useStore((s) => s.meshOverrides)
   const setMeshVisible = useStore((s) => s.setMeshVisible)
+  const linkedShapeKeys = useStore((s) => s.linkedShapeKeys)
+  const setLinkedShapeKeys = useStore((s) => s.setLinkedShapeKeys)
   const animData = useStore((s) => s.animData)
   const animFps = useStore((s) => s.animFps)
   const insertTime = useStore((s) => s.insertTime)
@@ -176,6 +179,18 @@ export default function MeshPanel() {
                 <span className="joint-name">Shape keys</span>
                 <span className="joint-parent">{selectedMesh.name}</span>
               </div>
+              <label
+                className="morph-label"
+                style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}
+                title="When on, moving a shape key also moves same-named shape keys on other nearby parts of this character (e.g. separate teeth/eyes/eyebrows meshes). Turn off to edit only this mesh, or once you have several characters loaded and don't want them to affect each other."
+              >
+                <input
+                  type="checkbox"
+                  checked={linkedShapeKeys}
+                  onChange={(e) => setLinkedShapeKeys(e.target.checked)}
+                />
+                Link matching shape keys on nearby parts
+              </label>
               {morphEntries.map(({ idx, name }) => {
                 const value = morphValues[idx] ?? 0
                 return (
@@ -192,6 +207,12 @@ export default function MeshPanel() {
                         if (!Number.isFinite(nextValue)) return
                         selectedMesh.morphTargetInfluences[idx] = nextValue
                         setMorphValues((prev) => ({ ...prev, [idx]: nextValue }))
+                        if (linkedShapeKeys) {
+                          for (const link of getLinkedMorphTargets(selectedMesh, name)) {
+                            link.mesh.morphTargetInfluences[link.idx] = nextValue
+                          }
+                        }
+                        requestRender()
                       }}
                     />
                     <span className="morph-value">{value.toFixed(2)}</span>
