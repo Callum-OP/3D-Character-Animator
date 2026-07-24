@@ -129,11 +129,28 @@ export function initScene(container) {
   // alpha:true + no scene.background => transparent output (for compositing).
   // preserveDrawingBuffer:true is required so we can read pixels for PNG export.
   // antialias:true for clean edges.
-  const renderer = new THREE.WebGLRenderer({
-    alpha: true,
-    antialias: true,
-    preserveDrawingBuffer: true,
-  })
+  let renderer
+  try {
+    renderer = new THREE.WebGLRenderer({
+      alpha: true,
+      antialias: true,
+      preserveDrawingBuffer: true,
+    })
+  } catch (err) {
+    const message =
+      err?.message || 'This browser environment cannot create a WebGL context.'
+    useStore.getState().setLoadError(
+      `Unable to start the 3D viewport. ${message}`,
+    )
+    return
+  }
+
+  if (!renderer?.domElement) {
+    useStore.getState().setLoadError(
+      'Unable to start the 3D viewport. The browser did not create a rendering canvas.',
+    )
+    return
+  }
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)) // cap DPR (memory)
   renderer.setSize(width, height)
   renderer.setClearColor(0x000000, 0) // fully transparent clear
@@ -197,6 +214,7 @@ export function initScene(container) {
   initAnimation({
     requestRender,
     setContinuousRender,
+    getObjectByUuid: (uuid) => state.currentModel?.root?.getObjectByProperty?.('uuid', uuid) || null,
     // Playback drives bones AND keyed parts, so both editors step aside.
     suspendPosing: () => {
       suspendPosing()
@@ -494,8 +512,10 @@ export function setViewCameraById(id) {
     cam.aspect = (state.container.clientWidth || 1) / (state.container.clientHeight || 1)
     cam.updateProjectionMatrix()
   }
-  state.controls.locked = !!cam
-  state.controls.enabled = !cam
+  if (state.controls) {
+    state.controls.locked = !!cam
+    state.controls.enabled = !cam
+  }
   const active = cam || state.camera
   setPosingViewCamera(active)
   setMeshEditViewCamera(active)

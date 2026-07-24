@@ -1,3 +1,4 @@
+import { useEffect, useMemo, useState } from 'react'
 import { useStore } from '../store.js'
 import {
   getMeshDelta,
@@ -8,6 +9,7 @@ import {
   undo,
   redo,
 } from '../three/meshedit.js'
+import { getCurrentModel } from '../three/scene.js'
 import EditableValue from './EditableValue.jsx'
 
 // Side-panel section for Mesh mode: pick a part of the character (eyes, hair,
@@ -35,20 +37,65 @@ export default function MeshPanel() {
   const insertTime = useStore((s) => s.insertTime)
   const st = useStore.getState
   useStore((s) => s.meshVersion) // re-render on every mesh edit (gizmo drag, undo…)
+  const [, setMorphVersion] = useState(0)
+  const [morphEntries, setMorphEntries] = useState([])
+  const [morphValues, setMorphValues] = useState({})
 
+  const currentModel = getCurrentModel()
   const meshes = modelInfo?.meshes || []
-  const selected = meshes.find((mesh) => mesh.uuid === selectedMeshUuid) || null
-  const selectedIndex = selected ? meshes.indexOf(selected) : -1
-  const delta = selected ? getMeshDelta(selected.uuid) : null
+  const selectedMeta = meshes.find((mesh) => mesh.uuid === selectedMeshUuid) || null
+  const selectedMesh = selectedMeta
+    ? currentModel?.meshes?.find((mesh) => mesh.uuid === selectedMeta.uuid) || null
+    : null
+  const selectedIndex = selectedMeta ? meshes.indexOf(selectedMeta) : -1
+  const delta = selectedMesh ? getMeshDelta(selectedMesh.uuid) : null
   const keyCount = selectedIndex >= 0 ? (animData.meshes?.[selectedIndex] || []).length : 0
+  const snap = (t) => Math.round(t * animFps) / animFps
+
+  function forceRerender() {
+    setMorphVersion((v) => v + 1)
+  }
 
   function onKeyPart() {
-    if (selectedIndex < 0) return
-    const key = getMeshKeyValue(selected.uuid)
+    if (selectedIndex < 0 || !selectedMesh) return
+    const key = getMeshKeyValue(selectedMesh.uuid)
     if (!key) return
-    const t = Math.round(insertTime * animFps) / animFps // snap to the fps grid
+    const t = snap(insertTime)
     st().addMeshKeyframe(selectedIndex, t, key)
   }
+
+  useEffect(() => {
+    if (!selectedMesh || !selectedMesh.morphTargetInfluences) {
+      setMorphEntries([])
+      setMorphValues({})
+      return
+    }
+
+    const dictionary = selectedMesh.morphTargetDictionary || {}
+    const namesByIndex = new Map(
+      Object.entries(dictionary).map(([name, idx]) => [Number(idx), name]),
+    )
+    const positionMorphs = selectedMesh.geometry?.morphAttributes?.position || []
+    const entries = Array.from(selectedMesh.morphTargetInfluences, (_, idx) => ({
+      idx,
+      name:
+        namesByIndex.get(idx) ||
+        positionMorphs[idx]?.name ||
+        `Shape key ${idx + 1}`,
+    }))
+    setMorphEntries(entries)
+
+    const values = {}
+    for (let i = 0; i < selectedMesh.morphTargetInfluences.length; i += 1) {
+      values[i] = selectedMesh.morphTargetInfluences[i]
+    }
+    setMorphValues(values)
+  }, [
+    selectedMesh?.uuid,
+    selectedMesh?.morphTargetInfluences?.length,
+    selectedMesh?.morphTargetDictionary,
+    selectedMesh?.geometry?.morphAttributes?.position?.length,
+  ])
 
   if (!modelInfo) {
     return (
@@ -96,11 +143,11 @@ export default function MeshPanel() {
         </button>
       </div>
 
-      {selected && delta && (
+      {selectedMesh && delta && (
         <div className="joint-controls">
           <div className="joint-header">
-            <span className="joint-name" title={selected.name}>
-              {selected.name}
+            <span className="joint-name" title={selectedMesh.name}>
+              {selectedMesh.name}
             </span>
           </div>
 
@@ -108,25 +155,66 @@ export default function MeshPanel() {
             label="Move"
             values={delta.offset}
             format={(v) => v.toFixed(2)}
-            onChange={(offset) => setMeshDelta(selected.uuid, { offset })}
+            onChange={(offset) => setMeshDelta(selectedMesh.uuid, { offset })}
           />
           <XformRow
             label="Rotate"
             values={delta.rotation}
             format={(v) => Math.round(v) + '°'}
-            onChange={(rotation) => setMeshDelta(selected.uuid, { rotation })}
+            onChange={(rotation) => setMeshDelta(selectedMesh.uuid, { rotation })}
           />
           <XformRow
             label="Resize"
             values={delta.scale}
             format={(v) => v.toFixed(2) + '×'}
-            onChange={(scale) => setMeshDelta(selected.uuid, { scale })}
+            onChange={(scale) => setMeshDelta(selectedMesh.uuid, { scale })}
           />
+
+          {selectedMesh && morphEntries.length > 0 && (
+            <div className="joint-controls" style={{ marginTop: 8 }}>
+              <div className="joint-header">
+                <span className="joint-name">Shape keys</span>
+                <span className="joint-parent">{selectedMesh.name}</span>
+              </div>
+              {morphEntries.map(({ idx, name }) => {
+                const value = morphValues[idx] ?? 0
+                return (
+                  <div key={`${selectedMesh.uuid}-${idx}`} className="morph-row">
+                    <label className="morph-label">{name}</label>
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={value}
+                      onChange={(e) => {
+                        const nextValue = Math.min(1, Math.max(0, parseFloat(e.target.value)))
+                        if (!Number.isFinite(nextValue)) return
+                        selectedMesh.morphTargetInfluences[idx] = nextValue
+                        setMorphValues((prev) => ({ ...prev, [idx]: nextValue }))
+                      }}
+                    />
+                    <span className="morph-value">{value.toFixed(2)}</span>
+                    <button
+                      className="btn secondary"
+                      onClick={() => {
+                        const currentValue = morphValues[idx] ?? 0
+                        st().addMorphKeyframe(selectedMesh.uuid, name, snap(insertTime), currentValue)
+                      }}
+                      title={`Save “${name}” at the current insert time`}
+                    >
+                      Key
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          )}
 
           <div className="kf-actions" style={{ marginTop: 6 }}>
             <button
               className="btn secondary"
-              onClick={() => resetMesh(selected.uuid)}
+              onClick={() => resetMesh(selectedMesh.uuid)}
               title="Put only this part back where it started"
             >
               Reset this part

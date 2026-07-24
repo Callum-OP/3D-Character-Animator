@@ -40,7 +40,7 @@ const m = {
   camera: null,
   renderer: null,
   controls: null,
-  requestRender: null,
+  requestRender: () => {},
   onSelect: null, // (meshUuid|null) => void — reports picks up to the store
   onChange: null, // () => void — any transform edit; the panel re-reads values
 

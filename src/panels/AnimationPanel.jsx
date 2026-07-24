@@ -26,7 +26,7 @@ import { simulateRagdollClip } from '../three/ragdoll.js'
 function collectKeyframes(animData) {
   const map = new Map()
   const entry = (t) => {
-    const e = map.get(t) || { time: t, joints: 0, pos: false, parts: 0, cameras: 0, cut: null }
+    const e = map.get(t) || { time: t, joints: 0, pos: false, parts: 0, cameras: 0, morphs: 0, cut: null }
     map.set(t, e)
     return e
   }
@@ -39,6 +39,11 @@ function collectKeyframes(animData) {
   }
   for (const keys of Object.values(animData.cameras || {})) {
     for (const k of keys) entry(k.time).cameras++
+  }
+  for (const byName of Object.values(animData.morphs || {})) {
+    for (const keys of Object.values(byName || {})) {
+      for (const k of keys) entry(k.time).morphs++
+    }
   }
   for (const k of animData.cuts || []) entry(k.time).cut = k.camera
   return [...map.values()].sort((a, b) => a.time - b.time)
@@ -301,6 +306,7 @@ export default function AnimationPanel() {
       meshes: animData.meshes || {},
       cameras: animData.cameras || {},
       cuts: animData.cuts || [],
+      morphs: animData.morphs || {},
     }
     const blob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
@@ -327,6 +333,7 @@ export default function AnimationPanel() {
           meshes: json.meshes || {},
           cameras: json.cameras || {},
           cuts: json.cuts || [],
+          morphs: json.morphs || {},
         })
       } catch (err) {
         console.warn('Failed to load animation:', err)
@@ -798,6 +805,7 @@ export default function AnimationPanel() {
                         {k.cameras} camera{k.cameras > 1 ? 's' : ''}
                       </span>
                     )}
+                    {k.morphs > 0 && <span className="kf-tag">{k.morphs} shape key{k.morphs > 1 ? 's' : ''}</span>}
                     {k.cut && <span className="kf-tag pos">✂ {k.cut}</span>}
                   </span>
                   <button

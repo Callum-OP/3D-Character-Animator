@@ -702,6 +702,35 @@ input.xform-value {
 }
 
 /* --- Selected-joint rotation controls --- */
+.morph-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 1fr auto auto;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.morph-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.morph-row input[type='range'] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.morph-value {
+  font-size: 11px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  min-width: 34px;
+  text-align: right;
+}
+
 .joint-controls {
   margin-top: 8px;
   border: 1px solid var(--panel-border);

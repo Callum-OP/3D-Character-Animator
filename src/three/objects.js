@@ -22,7 +22,7 @@ const o = {
   camera: null,
   renderer: null,
   controls: null,
-  requestRender: null,
+  requestRender: () => {},
 
   transform: null, // TransformControls (move/rotate/scale)
   helper: null,

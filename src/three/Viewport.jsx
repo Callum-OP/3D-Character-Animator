@@ -273,6 +273,7 @@ export default function Viewport() {
   }
 
   const loading = useStore((s) => s.loading)
+  const loadError = useStore((s) => s.loadError)
   const showStats = useStore((s) => s.showStats)
 
   return (
@@ -313,14 +314,20 @@ export default function Viewport() {
 
       {!modelInfo && !loading && (
         <div className="viewport-empty">
-          <div className="ve-icon">⬚</div>
-          <div className="ve-title">Drop a character here</div>
+          <div className="ve-icon">{loadError ? '⚠' : '⬚'}</div>
+          <div className="ve-title">{loadError ? 'Unable to start the 3D view' : 'Drop a character here'}</div>
           <div className="ve-sub">
-            …or use the <b>Load</b> button in the sidebar.
-            <br />
-            Works with <b>.glb</b>, <b>.gltf</b> and <b>.fbx</b> files.
+            {loadError ? (
+              <span>{loadError}</span>
+            ) : (
+              <>
+                …or use the <b>Load</b> button in the sidebar.
+                <br />
+                Works with <b>.glb</b>, <b>.gltf</b> and <b>.fbx</b> files.
+              </>
+            )}
           </div>
-          <div className="ve-hint">Press ? any time for help</div>
+          {!loadError && <div className="ve-hint">Press ? any time for help</div>}
         </div>
       )}
 

@@ -36,7 +36,7 @@ const p = {
   camera: null,
   renderer: null,
   controls: null,
-  requestRender: null,
+  requestRender: () => {},
   onSelect: null, // (boneName|null) => void — reports picks up to the store
   onPoseChange: null, // () => void — any pose edit (drag, undo, reset…); UI resync
 
@@ -240,9 +240,9 @@ export function selectBone(name) {
   const bone = name ? p.boneMap.get(name) || null : null
   p.selected = bone
   if (!p.suspended && p.enabled) {
-    if (bone) p.transform.attach(bone)
-    else p.transform.detach()
-  } else if (!bone) {
+    if (bone && p.transform) p.transform.attach(bone)
+    else if (p.transform) p.transform.detach()
+  } else if (!bone && p.transform) {
     p.transform.detach()
   }
   applyOverlayVisibility() // attach/detach set helper visibility; re-apply the gates

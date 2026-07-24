@@ -24,7 +24,7 @@ const c = {
   camera: null, // the free viewport camera (spawn template + gizmo view)
   renderer: null,
   controls: null,
-  requestRender: null,
+  requestRender: () => {},
   getSceneScale: null, // () => rough model size, for the body visual
 
   transform: null,
@@ -256,7 +256,7 @@ export function clearCameras() {
   if (c.transform) c.transform.detach()
   c.selected = null
   for (const entry of c.cameras) {
-    c.scene.remove(entry.rig)
+    c.scene?.remove?.(entry.rig)
     disposeBody(entry.body)
   }
   c.cameras = []

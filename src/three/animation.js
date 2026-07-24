@@ -42,8 +42,10 @@ const a = {
   editMeshes: null, // part-motion tracks { [meshIndex]: [{time,pos,quat,scale}] } (edit source only)
   editCameras: null, // camera-motion tracks { [name]: [{time,pos,quat}] } (edit source only)
   editCuts: null, // camera cuts [{time, camera: name}] (edit source only, sorted)
+  editMorphs: null, // morph-key tracks { [meshUuid]: { [morphName]: [{time,value}] } } (edit source only)
   rootRest: null, // character root transform at playback start (restored on stop)
   meshRest: null, // part placements at playback start (restored on stop)
+  morphRest: null, // morph target values at playback start (restored on stop)
   camerasRest: null, // camera placements at playback start (restored on stop)
   viewRest: null, // viewCameraId before cuts took over (restored on stop)
   hasViewRest: false,
@@ -88,8 +90,10 @@ export function clearAnimationModel() {
   a.editMeshes = null
   a.editCameras = null
   a.editCuts = null
+  a.editMorphs = null
   a.rootRest = null
   a.meshRest = null
+  a.morphRest = null
   a.camerasRest = null
   a.viewRest = null
   a.hasViewRest = false
@@ -110,6 +114,7 @@ export function updateAnimation(delta) {
     const t = a.action.time
     sampleRoot(t) // drive character world motion (edit source only)
     if (a.editMeshes) sampleMeshTracks(a.editMeshes, t) // part motion
+    if (a.editMorphs) sampleMorphTracks(a.editMorphs, t) // shape-key motion
     if (a.editCameras) sampleCameraTracks(a.editCameras, t) // camera motion
     sampleCuts(t) // hard-switch the view to the cut camera
     a.refs.onTime(t)
@@ -249,16 +254,18 @@ export function bakeClipToTracks(name, fps, duration) {
 export function selectEdit(animData, duration, opts = {}) {
   // Drop the previous in-app clip's cached action so rebuilds don't accumulate.
   if (a.editClip && a.mixer) a.mixer.uncacheClip(a.editClip)
-  const clip = buildEditClip(animData.tracks || {}, duration)
+  const clip = buildEditClip(animData.tracks || {}, duration, animData.morphs || {})
   a.editClip = clip
   const rootKeys = animData.root
   a.editRoot = rootKeys && rootKeys.length ? [...rootKeys].sort((x, y) => x.time - y.time) : null
   a.editMeshes = hasKeys(animData.meshes) ? sortTracks(animData.meshes) : null
+  a.editMorphs = hasMorphKeys(animData.morphs) ? sortMorphTracks(animData.morphs) : null
   a.editCameras = hasKeys(animData.cameras) ? sortTracks(animData.cameras) : null
   const cuts = animData.cuts
   a.editCuts = cuts && cuts.length ? [...cuts].sort((x, y) => x.time - y.time) : null
   // Remember where the driven parts/cameras sit now, so Stop puts them back.
   a.meshRest = a.editMeshes ? getMeshPlaybackSnapshot() : null
+  a.morphRest = a.editMorphs ? getMorphPlaybackSnapshot(a.editMorphs) : null
   a.camerasRest = a.editCameras ? getCamerasPlaybackSnapshot() : null
   // Remember which camera (if any) the user was looking through before the
   // cuts take over, so Stop returns to their view.
@@ -291,12 +298,94 @@ function hasKeys(tracks) {
   return tracks && Object.values(tracks).some((keys) => keys && keys.length)
 }
 
+function hasMorphKeys(tracks) {
+  return tracks && Object.values(tracks).some((byName) => byName && Object.values(byName).some((keys) => keys && keys.length))
+}
+
 function sortTracks(tracks) {
   const out = {}
   for (const [key, keys] of Object.entries(tracks)) {
     if (keys && keys.length) out[key] = [...keys].sort((x, y) => x.time - y.time)
   }
   return out
+}
+
+function sortMorphTracks(tracks) {
+  const out = {}
+  for (const [meshUuid, byName] of Object.entries(tracks || {})) {
+    const sortedByName = {}
+    for (const [morphName, keys] of Object.entries(byName || {})) {
+      if (keys && keys.length) sortedByName[morphName] = [...keys].sort((x, y) => x.time - y.time)
+    }
+    if (Object.keys(sortedByName).length) out[meshUuid] = sortedByName
+  }
+  return out
+}
+
+function sampleMorphTracks(tracks, t) {
+  if (!tracks) return
+  for (const [meshUuid, byName] of Object.entries(tracks)) {
+    const mesh = a.refs.getObjectByUuid?.(meshUuid)
+    if (!mesh?.morphTargetDictionary || !mesh.morphTargetInfluences) continue
+    for (const [morphName, keys] of Object.entries(byName)) {
+      if (!keys || keys.length === 0) continue
+      const index = mesh.morphTargetDictionary[morphName]
+      if (index == null) continue
+      applyMorphKey(mesh, index, keys, t)
+    }
+    mesh.updateMorphTargets?.()
+  }
+}
+
+function applyMorphKey(mesh, index, keys, t) {
+  if (!mesh.morphTargetInfluences) return
+  if (t <= keys[0].time) {
+    mesh.morphTargetInfluences[index] = keys[0].value
+    return
+  }
+  const last = keys[keys.length - 1]
+  if (t >= last.time) {
+    mesh.morphTargetInfluences[index] = last.value
+    return
+  }
+  let i = 0
+  while (i < keys.length - 1 && keys[i + 1].time < t) i++
+  const k0 = keys[i]
+  const k1 = keys[i + 1]
+  const span = k1.time - k0.time
+  const f = span > 0 ? (t - k0.time) / span : 0
+  mesh.morphTargetInfluences[index] = k0.value + (k1.value - k0.value) * f
+}
+
+function getMorphPlaybackSnapshot(tracks) {
+  if (!tracks) return null
+  const snap = []
+  for (const [meshUuid, byName] of Object.entries(tracks)) {
+    const mesh = a.refs.getObjectByUuid?.(meshUuid)
+    if (!mesh?.morphTargetDictionary || !mesh.morphTargetInfluences) continue
+    const values = {}
+    for (const [morphName] of Object.entries(byName)) {
+      const index = mesh.morphTargetDictionary[morphName]
+      if (index == null) continue
+      values[morphName] = mesh.morphTargetInfluences[index]
+    }
+    if (Object.keys(values).length) snap.push({ meshUuid, values })
+  }
+  return snap.length ? snap : null
+}
+
+function applyMorphPlaybackSnapshot(snap) {
+  if (!snap) return
+  for (const entry of snap) {
+    const mesh = a.refs.getObjectByUuid?.(entry.meshUuid)
+    if (!mesh?.morphTargetDictionary || !mesh.morphTargetInfluences) continue
+    for (const [morphName, value] of Object.entries(entry.values)) {
+      const index = mesh.morphTargetDictionary[morphName]
+      if (index == null) continue
+      mesh.morphTargetInfluences[index] = value
+    }
+    mesh.updateMorphTargets?.()
+  }
 }
 
 // --- Transport ---------------------------------------------------------------
@@ -326,6 +415,8 @@ export function stop() {
   restoreRootRest()
   applyMeshPlaybackSnapshot(a.meshRest)
   a.meshRest = null
+  applyMorphPlaybackSnapshot(a.morphRest)
+  a.morphRest = null
   applyCamerasPlaybackSnapshot(a.camerasRest)
   a.camerasRest = null
   if (a.hasViewRest) {
@@ -356,6 +447,7 @@ export function scrub(t) {
   a.mixer.update(0) // apply bindings at the new time without advancing
   sampleRoot(a.action.time)
   if (a.editMeshes) sampleMeshTracks(a.editMeshes, a.action.time)
+  if (a.editMorphs) sampleMorphTracks(a.editMorphs, a.action.time)
   if (a.editCameras) sampleCameraTracks(a.editCameras, a.action.time)
   sampleCuts(a.action.time)
   a.refs.requestRender()
@@ -553,7 +645,7 @@ function activate(clip, opts) {
   a.refs.requestRender()
 }
 
-function buildEditClip(tracks, duration) {
+function buildEditClip(tracks, duration, morphs = {}) {
   const kfTracks = []
   for (const [name, keys] of Object.entries(tracks)) {
     if (!keys || keys.length === 0) continue
@@ -562,6 +654,23 @@ function buildEditClip(tracks, duration) {
     const values = []
     for (const k of sorted) values.push(k.quat[0], k.quat[1], k.quat[2], k.quat[3])
     kfTracks.push(new THREE.QuaternionKeyframeTrack(name + '.quaternion', times, values))
+  }
+  for (const [meshUuid, byName] of Object.entries(morphs)) {
+    const mesh = a.refs.getObjectByUuid?.(meshUuid)
+    if (!mesh?.morphTargetDictionary) continue
+    for (const [morphName, keys] of Object.entries(byName)) {
+      if (!keys?.length) continue
+      const index = mesh.morphTargetDictionary[morphName]
+      if (index == null) continue
+      const sorted = [...keys].sort((x, y) => x.time - y.time)
+      kfTracks.push(
+        new THREE.NumberKeyframeTrack(
+          `${meshUuid}.morphTargetInfluences[${index}]`,
+          sorted.map((k) => k.time),
+          sorted.map((k) => k.value)
+        )
+      )
+    }
   }
   return new THREE.AnimationClip('in-app', duration, kfTracks)
 }

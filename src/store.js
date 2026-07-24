@@ -45,7 +45,7 @@ export const useStore = create((set) => ({
       importedClipNames: [],
       duration: 0,
       currentTime: 0,
-      animData: { tracks: {}, root: [], meshes: {}, cameras: {}, cuts: [] },
+      animData: { tracks: {}, root: [], meshes: {}, cameras: {}, cuts: [], morphs: {} },
       insertTime: 0,
       // The character is a movable entry (kept first) in the objects list.
       sceneObjects: [
@@ -65,14 +65,14 @@ export const useStore = create((set) => ({
       activeClipName: null,
       importedClipNames: [],
       currentTime: 0,
-      animData: { tracks: {}, root: [], meshes: {}, cameras: {}, cuts: [] },
+      animData: { tracks: {}, root: [], meshes: {}, cameras: {}, cuts: [], morphs: {} },
       sceneObjects: s.sceneObjects.filter((o) => o.id !== 'character'),
       selectedObjectId: s.selectedObjectId === 'character' ? null : s.selectedObjectId,
     })),
 
   // ---- Viewport display toggles ----
   showGrid: true,
-  showGround: false, // solid ground plane (also what a ragdoll falls onto)
+  showGround: false, // solid ground plane
   solidBackground: false, // false = transparent (the default, for compositing)
   backgroundColor: '#202127',
   showShadow: true, // ground shadow on/off
@@ -303,10 +303,11 @@ export const useStore = create((set) => ({
         meshes: animData.meshes || {},
         cameras: animData.cameras || {},
         cuts: animData.cuts || [],
+        morphs: animData.morphs || {},
       },
     }),
   clearAnim: () =>
-    set({ animData: { tracks: {}, root: [], meshes: {}, cameras: {}, cuts: [] } }),
+    set({ animData: { tracks: {}, root: [], meshes: {}, cameras: {}, cuts: [], morphs: {} } }),
 
   // Insert/replace a camera cut: from this time on, the view is this camera.
   addCameraCut: (time, camera) =>
@@ -380,7 +381,16 @@ export const useStore = create((set) => ({
         if (kept.length) cameras[name] = kept
       }
       const cuts = (s.animData.cuts || []).filter((k) => !near(k))
-      return { animData: { tracks, root, meshes, cameras, cuts } }
+      const morphs = {}
+      for (const [meshUuid, byName] of Object.entries(s.animData.morphs || {})) {
+        const kept = {}
+        for (const [morphName, keys] of Object.entries(byName || {})) {
+          const next = (keys || []).filter((k) => !near(k))
+          if (next.length) kept[morphName] = next
+        }
+        if (Object.keys(kept).length) morphs[meshUuid] = kept
+      }
+      return { animData: { tracks, root, meshes, cameras, cuts, morphs } }
     }),
 
   // Insert/replace a keyframe for one bone at a time.
@@ -412,5 +422,30 @@ export const useStore = create((set) => ({
       if (keys.length) tracks[name] = keys
       else delete tracks[name]
       return { animData: { ...s.animData, tracks } }
+    }),
+
+  // Morphs: { [meshUuid]: { [morphName]: [{ time, value }] } }
+  addMorphKeyframe: (meshUuid, morphName, time, value) =>
+    set((s) => {
+      const existingMorphs = { ...(s.animData.morphs || {}) }
+      const meshMorphs = { ...(existingMorphs[meshUuid] || {}) }
+      const keys = (meshMorphs[morphName] || []).filter((k) => k.time !== time)
+      keys.push({ time, value })
+      keys.sort((a, b) => a.time - b.time)
+      meshMorphs[morphName] = keys
+      existingMorphs[meshUuid] = meshMorphs
+      return { animData: { ...s.animData, morphs: existingMorphs } }
+    }),
+
+  deleteMorphKeyframe: (meshUuid, morphName, time) =>
+    set((s) => {
+      const existingMorphs = { ...(s.animData.morphs || {}) }
+      const meshMorphs = { ...(existingMorphs[meshUuid] || {}) }
+      const keys = (meshMorphs[morphName] || []).filter((k) => k.time !== time)
+      if (keys.length) meshMorphs[morphName] = keys
+      else delete meshMorphs[morphName]
+      if (Object.keys(meshMorphs).length) existingMorphs[meshUuid] = meshMorphs
+      else delete existingMorphs[meshUuid]
+      return { animData: { ...s.animData, morphs: existingMorphs } }
     }),
 }))
