@@ -333,7 +333,10 @@ function sampleMorphTracks(tracks, t) {
       if (index == null) continue
       applyMorphKey(mesh, index, keys, t)
     }
-    mesh.updateMorphTargets?.()
+    // NOTE: do not call mesh.updateMorphTargets() here — in three.js that
+    // rebuilds morphTargetInfluences/morphTargetDictionary from scratch
+    // (all-zero), which would wipe out the values just set above. The
+    // renderer picks up in-place array mutations on its own.
   }
 }
 
@@ -384,7 +387,7 @@ function applyMorphPlaybackSnapshot(snap) {
       if (index == null) continue
       mesh.morphTargetInfluences[index] = value
     }
-    mesh.updateMorphTargets?.()
+    // (see note in sampleMorphTracks — no updateMorphTargets() call here either)
   }
 }
 

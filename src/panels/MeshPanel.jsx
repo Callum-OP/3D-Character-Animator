@@ -220,7 +220,13 @@ export default function MeshPanel() {
                       className="btn secondary"
                       onClick={() => {
                         const currentValue = morphValues[idx] ?? 0
-                        st().addMorphKeyframe(selectedMesh.uuid, name, snap(insertTime), currentValue)
+                        const t = snap(insertTime)
+                        st().addMorphKeyframe(selectedMesh.uuid, name, t, currentValue)
+                        if (linkedShapeKeys) {
+                          for (const link of getLinkedMorphTargets(selectedMesh, name)) {
+                            st().addMorphKeyframe(link.mesh.uuid, name, t, currentValue)
+                          }
+                        }
                       }}
                       title={`Save “${name}” at the current insert time`}
                     >

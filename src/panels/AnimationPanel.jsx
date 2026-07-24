@@ -584,8 +584,8 @@ export default function AnimationPanel() {
                   onChange={(e) => setSlot(s.key, 'target', e.target.value)}
                 >
                   <option value="">— rig —</option>
-                  {mapping.targetBones.map((b) => (
-                    <option key={b} value={b}>
+                  {mapping.targetBones.map((b, i) => (
+                    <option key={`${b}-${i}`} value={b}>
                       {b}
                     </option>
                   ))}
@@ -597,8 +597,8 @@ export default function AnimationPanel() {
                   onChange={(e) => setSlot(s.key, 'source', e.target.value)}
                 >
                   <option value="">— mocap —</option>
-                  {mapping.sourceBones.map((b) => (
-                    <option key={b} value={b}>
+                  {mapping.sourceBones.map((b, i) => (
+                    <option key={`${b}-${i}`} value={b}>
                       {b}
                     </option>
                   ))}
