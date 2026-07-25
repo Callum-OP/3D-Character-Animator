@@ -29,7 +29,12 @@ const o = {
   objects: [], // { id, name, format, root } — props only
   characterRoot: null, // the character model root (id 'character'); owned elsewhere
   selected: null, // selected root (or null)
+  undoStack: [],
+  redoStack: [],
+  dragBefore: null, // selected root's TRS at gizmo-drag start
 }
+
+const UNDO_LIMIT = 100
 
 export function initObjects(refs) {
   o.scene = refs.scene
@@ -46,6 +51,13 @@ export function initObjects(refs) {
     o.controls.enabled = !e.value && !o.controls.locked
   })
   transform.addEventListener('objectChange', () => o.requestRender())
+  transform.addEventListener('mouseDown', () => {
+    if (o.selected) o.dragBefore = snapshot(o.selected)
+  })
+  transform.addEventListener('mouseUp', () => {
+    commitDragUndo()
+    o.requestRender()
+  })
   o.transform = transform
 
   const helper = transform.getHelper()
@@ -151,6 +163,8 @@ export function removeObject(id) {
   disposeUnattachedPropMaterials(entry)
   disposeObject(entry.root)
   o.objects.splice(idx, 1)
+  o.undoStack = o.undoStack.filter((b) => b.root !== entry.root)
+  o.redoStack = o.redoStack.filter((b) => b.root !== entry.root)
   o.requestRender()
 }
 
@@ -242,9 +256,11 @@ export function setViewCamera(camera) {
 export function resetObject(id) {
   const root = rootFor(id)
   if (!root) return
+  const before = snapshot(root)
   root.position.set(0, 0, 0)
   root.quaternion.identity()
   root.scale.set(1, 1, 1)
+  pushUndoIfChanged(root, before)
   o.requestRender()
 }
 
@@ -256,6 +272,58 @@ export function setObjectTransform(id, t) {
   if (t.quaternion) root.quaternion.fromArray(t.quaternion)
   if (t.scale) root.scale.fromArray(t.scale)
   o.requestRender()
+}
+
+// Undo/redo for moving, rotating, or resizing a prop/image/character with the
+// gizmo (or hitting Reset). Mirrors the mesh-edit undo stack: each drag is one
+// undo step, keyed by the root object so redo/undo still work if the user
+// selects something else in between.
+export function undo() {
+  const batch = o.undoStack.pop()
+  if (!batch) return
+  applySnapshot(batch.root, batch.before)
+  o.redoStack.push(batch)
+  o.requestRender()
+}
+
+export function redo() {
+  const batch = o.redoStack.pop()
+  if (!batch) return
+  applySnapshot(batch.root, batch.after)
+  o.undoStack.push(batch)
+  o.requestRender()
+}
+
+function snapshot(root) {
+  return {
+    position: root.position.clone(),
+    quaternion: root.quaternion.clone(),
+    scale: root.scale.clone(),
+  }
+}
+
+function applySnapshot(root, snap) {
+  root.position.copy(snap.position)
+  root.quaternion.copy(snap.quaternion)
+  root.scale.copy(snap.scale)
+}
+
+function sameSnapshot(a, b) {
+  return a.position.equals(b.position) && a.quaternion.equals(b.quaternion) && a.scale.equals(b.scale)
+}
+
+function pushUndoIfChanged(root, before) {
+  const after = snapshot(root)
+  if (sameSnapshot(before, after)) return
+  o.undoStack.push({ root, before, after })
+  o.redoStack = [] // a fresh edit invalidates any redo history
+  if (o.undoStack.length > UNDO_LIMIT) o.undoStack.shift()
+}
+
+function commitDragUndo() {
+  if (!o.selected || !o.dragBefore) return
+  pushUndoIfChanged(o.selected, o.dragBefore)
+  o.dragBefore = null
 }
 
 // --- Full project save (props + images WITH their source file blobs) ---------
@@ -327,6 +395,9 @@ export function disposeObjects() {
   }
   o.objects = []
   o.selected = null
+  o.undoStack = []
+  o.redoStack = []
+  o.dragBefore = null
   o.characterRoot = null // owned by the model system; not disposed here
   if (o.helper && o.scene) o.scene.remove(o.helper)
   if (o.transform) {

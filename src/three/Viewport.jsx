@@ -33,7 +33,7 @@ import {
   redo as redoMeshEdit,
 } from './meshedit.js'
 import { setLimitsEnabled } from './limits.js'
-import { selectObject, setObjectMode } from './objects.js'
+import { selectObject, setObjectMode, undo as undoObject, redo as redoObject } from './objects.js'
 import { selectCamera, setCameraGizmoMode } from './cameras.js'
 import StatsOverlay from '../panels/StatsOverlay.jsx'
 
@@ -203,8 +203,10 @@ export default function Viewport() {
   }, [viewCameraId])
 
   // Keyboard: 1/2/3 switch mode, W/E/R pick the Mesh-mode gizmo tool, Esc
-  // deselects, Ctrl/Cmd+Z undoes an edit in the active mode, Ctrl/Cmd+Shift+Z
-  // or Ctrl/Cmd+Y redoes it. Ignored while typing in an input.
+  // deselects, Ctrl/Cmd+Z undoes an edit — a prop/image/character move or
+  // resize if one's selected, otherwise the active mode's edit (mesh or
+  // bone). Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y redoes it. Ignored while typing
+  // in an input.
   useEffect(() => {
     function onKeyDown(e) {
       const tag = e.target.tagName
@@ -234,11 +236,13 @@ export default function Viewport() {
         (e.key === 'y' || e.key === 'Y' || ((e.key === 'z' || e.key === 'Z') && e.shiftKey))
       ) {
         e.preventDefault()
-        if (s.mode === 'mesh') redoMeshEdit()
+        if (s.selectedObjectId != null) redoObject()
+        else if (s.mode === 'mesh') redoMeshEdit()
         else redo()
       } else if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
         e.preventDefault()
-        if (s.mode === 'mesh') undoMeshEdit()
+        if (s.selectedObjectId != null) undoObject()
+        else if (s.mode === 'mesh') undoMeshEdit()
         else undo()
       }
     }
