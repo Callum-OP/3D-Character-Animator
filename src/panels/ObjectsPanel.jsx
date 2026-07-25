@@ -6,6 +6,8 @@ import {
   removeObjectById,
   resetObjectById,
   setObjectVisibleById,
+  setObjectLitById,
+  setObjectCastShadowById,
   getSceneData,
   applySceneData,
 } from '../three/scene.js'
@@ -188,6 +190,30 @@ export default function ObjectsPanel() {
                 >
                   {o.visible === false ? '🙈' : '👁'}
                 </button>
+                {o.kind === 'model' && (
+                  <>
+                    <button
+                      className="obj-eye"
+                      title={o.lit === false ? 'Not affected by lighting — click to re-light' : 'Affected by scene lighting — click to make flat/unlit'}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setObjectLitById(o.id, o.lit === false)
+                      }}
+                    >
+                      {o.lit === false ? '💡' : '☀️'}
+                    </button>
+                    <button
+                      className="obj-eye"
+                      title={o.castShadow === false ? 'Shadows off — click to cast shadows' : 'Casts shadows — click to ignore shadows'}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setObjectCastShadowById(o.id, o.castShadow === false)
+                      }}
+                    >
+                      {o.castShadow === false ? '🚫' : '🌑'}
+                    </button>
+                  </>
+                )}
                 {!o.isCharacter && (
                   <button
                     className="obj-del"

@@ -176,10 +176,10 @@ export const useStore = create((set) => ({
   bumpPoseVersion: () => set((s) => ({ poseVersion: s.poseVersion + 1 })),
 
   setSelectedBoneName: (selectedBoneName) =>
-    // Selecting a bone deselects any scene object/camera (one gizmo at a time).
+    // Selecting a bone deselects any scene object/camera/light (one gizmo at a time).
     set(
       selectedBoneName != null
-        ? { selectedBoneName, selectedObjectId: null, selectedCameraId: null }
+        ? { selectedBoneName, selectedObjectId: null, selectedCameraId: null, selectedLightId: null }
         : { selectedBoneName },
     ),
 
@@ -213,12 +213,21 @@ export const useStore = create((set) => ({
     set((s) => ({
       sceneObjects: [...s.sceneObjects, { visible: true, ...obj }],
       selectedObjectId: obj.id,
-      selectedBoneName: null, // mutually exclusive with bone/camera selection
+      selectedBoneName: null, // mutually exclusive with bone/camera/light selection
       selectedCameraId: null,
+      selectedLightId: null,
     })),
   setObjectVisible: (id, visible) =>
     set((s) => ({
       sceneObjects: s.sceneObjects.map((o) => (o.id === id ? { ...o, visible } : o)),
+    })),
+  setObjectLit: (id, lit) =>
+    set((s) => ({
+      sceneObjects: s.sceneObjects.map((o) => (o.id === id ? { ...o, lit } : o)),
+    })),
+  setObjectCastShadow: (id, castShadow) =>
+    set((s) => ({
+      sceneObjects: s.sceneObjects.map((o) => (o.id === id ? { ...o, castShadow } : o)),
     })),
   removeSceneObject: (id) =>
     set((s) => ({
@@ -228,7 +237,7 @@ export const useStore = create((set) => ({
   setSelectedObjectId: (id) =>
     set(
       id != null
-        ? { selectedObjectId: id, selectedBoneName: null, selectedCameraId: null }
+        ? { selectedObjectId: id, selectedBoneName: null, selectedCameraId: null, selectedLightId: null }
         : { selectedObjectId: id },
     ),
   setObjectMode: (objectMode) => set({ objectMode }),
@@ -245,6 +254,7 @@ export const useStore = create((set) => ({
       selectedCameraId: cam.id,
       selectedObjectId: null, // one gizmo at a time
       selectedBoneName: null,
+      selectedLightId: null,
     })),
   removeSceneCamera: (id) =>
     set((s) => ({
@@ -256,7 +266,7 @@ export const useStore = create((set) => ({
   setSelectedCameraId: (id) =>
     set(
       id != null
-        ? { selectedCameraId: id, selectedObjectId: null, selectedBoneName: null }
+        ? { selectedCameraId: id, selectedObjectId: null, selectedBoneName: null, selectedLightId: null }
         : { selectedCameraId: id },
     ),
   setCameraGizmoMode: (cameraGizmoMode) => set({ cameraGizmoMode }),
@@ -265,6 +275,43 @@ export const useStore = create((set) => ({
       sceneCameras: s.sceneCameras.map((cam) => (cam.id === id ? { ...cam, fov } : cam)),
     })),
   setViewCameraId: (viewCameraId) => set({ viewCameraId }),
+
+  // ---- Scene lights ----
+  sceneLights: [], // [{ id, name, color, intensity, castShadow }] — placeable lights
+  selectedLightId: null, // light the gizmo is attached to
+
+  addSceneLight: (light) =>
+    set((s) => ({
+      sceneLights: [...s.sceneLights, light],
+      selectedLightId: light.id,
+      selectedObjectId: null, // one gizmo at a time
+      selectedCameraId: null,
+      selectedBoneName: null,
+    })),
+  removeSceneLight: (id) =>
+    set((s) => ({
+      sceneLights: s.sceneLights.filter((lt) => lt.id !== id),
+      selectedLightId: s.selectedLightId === id ? null : s.selectedLightId,
+    })),
+  setSceneLights: (sceneLights) => set({ sceneLights }),
+  setSelectedLightId: (id) =>
+    set(
+      id != null
+        ? { selectedLightId: id, selectedObjectId: null, selectedCameraId: null, selectedBoneName: null }
+        : { selectedLightId: id },
+    ),
+  setLightColor: (id, color) =>
+    set((s) => ({
+      sceneLights: s.sceneLights.map((lt) => (lt.id === id ? { ...lt, color } : lt)),
+    })),
+  setLightIntensity: (id, intensity) =>
+    set((s) => ({
+      sceneLights: s.sceneLights.map((lt) => (lt.id === id ? { ...lt, intensity } : lt)),
+    })),
+  setLightCastShadow: (id, castShadow) =>
+    set((s) => ({
+      sceneLights: s.sceneLights.map((lt) => (lt.id === id ? { ...lt, castShadow } : lt)),
+    })),
 
   // ---- Animation ----
   playback: 'stopped', // 'stopped' | 'playing' | 'paused'

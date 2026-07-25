@@ -36,6 +36,20 @@ import {
   setViewCamera as setCamerasViewCamera,
 } from './cameras.js'
 import {
+  initLights,
+  addLight,
+  removeLight,
+  selectLight,
+  setLightColor,
+  setLightIntensity,
+  setLightCastShadow,
+  getLightsData,
+  applyLightsData,
+  clearLights,
+  disposeLights,
+  setViewCamera as setLightsViewCamera,
+} from './lights.js'
+import {
   initAnimation,
   setAnimationModel,
   clearAnimationModel,
@@ -59,6 +73,8 @@ import {
   addImage,
   setObjectVisible,
   setObjectTransform,
+  setObjectLit,
+  setObjectCastShadow,
   removeObject,
   resetObject,
   disposeObjects,
@@ -244,6 +260,16 @@ export function initScene(container) {
 
   // --- Placeable cameras (frame shots, look through them, keyframe them) ---
   initCameras({
+    scene,
+    camera,
+    renderer,
+    controls,
+    requestRender,
+    getSceneScale: () => state.modelRadius,
+  })
+
+  // --- Placeable point lights (add and move light sources around the scene) ---
+  initLights({
     scene,
     camera,
     renderer,
@@ -492,6 +518,18 @@ export function setObjectVisibleById(id, visible) {
   useStore.getState().setObjectVisible(id, visible)
 }
 
+// Toggle whether a prop responds to scene lighting (updates the scene + the store).
+export function setObjectLitById(id, lit) {
+  setObjectLit(id, lit)
+  useStore.getState().setObjectLit(id, lit)
+}
+
+// Toggle whether a prop casts shadows (updates the scene + the store).
+export function setObjectCastShadowById(id, castShadow) {
+  setObjectCastShadow(id, castShadow)
+  useStore.getState().setObjectCastShadow(id, castShadow)
+}
+
 export function resetObjectById(id) {
   resetObject(id)
 }
@@ -521,6 +559,7 @@ export function setViewCameraById(id) {
   setMeshEditViewCamera(active)
   setObjectsViewCamera(active)
   setCamerasViewCamera(active)
+  setLightsViewCamera(active)
   requestRender()
 }
 
@@ -613,7 +652,12 @@ export function enterFullscreen() {
 // NOTE: this stores TRANSFORMS, not geometry — reload the same files, then Load
 // scene to restore where everything sat.
 export function getSceneData() {
-  const data = { format: 'scene-v1', objects: getObjectsData(), cameras: getCamerasData() }
+  const data = {
+    format: 'scene-v1',
+    objects: getObjectsData(),
+    cameras: getCamerasData(),
+    lights: getLightsData(),
+  }
   if (state.currentModel) {
     const root = state.currentModel.root
     data.character = {
@@ -653,6 +697,11 @@ export function applySceneData(json) {
     clearCameras()
     const metas = applyCamerasData(json.cameras)
     useStore.setState({ sceneCameras: metas, selectedCameraId: null, viewCameraId: null })
+  }
+  if (Array.isArray(json.lights)) {
+    clearLights()
+    const metas = applyLightsData(json.lights)
+    useStore.setState({ sceneLights: metas, selectedLightId: null })
   }
   requestRender()
 }
@@ -726,6 +775,7 @@ export function getProjectData() {
     character,
     objects: getObjectsForSave(),
     cameras: getCamerasData(),
+    lights: getLightsData(),
     animData: s.animData,
   }
 }
@@ -746,6 +796,8 @@ export async function applyProjectData(record) {
   setViewCameraById(null)
   clearCameras()
   useStore.setState({ sceneCameras: [], selectedCameraId: null, viewCameraId: null })
+  clearLights()
+  useStore.setState({ sceneLights: [], selectedLightId: null })
   disposeCurrentModel()
 
   // 2. Load the character (this resets much of the store via setModelInfo).
@@ -794,12 +846,22 @@ export async function applyProjectData(record) {
     const meta = obj.kind === 'image' ? await addImageFile(file) : await addObjectFile(file)
     setObjectTransform(meta.id, obj.transform)
     setObjectVisibleById(meta.id, obj.visible !== false)
+    if (obj.kind !== 'image') {
+      if (obj.lit === false) setObjectLitById(meta.id, false)
+      if (obj.castShadow === false) setObjectCastShadowById(meta.id, false)
+    }
   }
 
   // 4b. Recreate the placed cameras (procedural — no blobs involved).
   if (Array.isArray(record.cameras) && record.cameras.length) {
     const metas = applyCamerasData(record.cameras)
     useStore.setState({ sceneCameras: metas, selectedCameraId: null, viewCameraId: null })
+  }
+
+  // 4c. Recreate the placed lights (procedural — no blobs involved).
+  if (Array.isArray(record.lights) && record.lights.length) {
+    const metas = applyLightsData(record.lights)
+    useStore.setState({ sceneLights: metas, selectedLightId: null })
   }
 
   // 5. Restore the pose / keyframe sequence.
@@ -1051,6 +1113,7 @@ export function disposeScene() {
   disposeCurrentModel()
   disposeObjects()
   disposeCameras()
+  disposeLights()
   disposePosing()
   disposeMeshEdit()
   disposeOutline()

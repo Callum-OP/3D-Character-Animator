@@ -6,6 +6,7 @@ import MeshPanel from './panels/MeshPanel.jsx'
 import AnimationPanel from './panels/AnimationPanel.jsx'
 import ObjectsPanel from './panels/ObjectsPanel.jsx'
 import CamerasPanel from './panels/CamerasPanel.jsx'
+import LightsPanel from './panels/LightsPanel.jsx'
 import ProjectPanel from './panels/ProjectPanel.jsx'
 import ExportPanel from './panels/ExportPanel.jsx'
 import ViewPanel from './panels/ViewPanel.jsx'
@@ -38,6 +39,7 @@ export default function App() {
         <AnimationPanel />
         <ObjectsPanel />
         <CamerasPanel />
+        <LightsPanel />
         <MaterialPanel />
         <ViewPanel />
         <ExportPanel />

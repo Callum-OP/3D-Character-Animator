@@ -72,17 +72,31 @@ export function clearCharacterObject() {
 export function addObject(parsed, name, format, file) {
   const root = parsed.root
   excludeFromOutline(root) // props aren't part of the toon-outline look
+  const meshes = []
   root.traverse((obj) => {
     if (obj.isMesh) {
       obj.castShadow = true
       obj.receiveShadow = true
+      meshes.push(obj)
     }
   })
   o.scene.add(root)
   const id = ++idCounter
-  o.objects.push({ id, name, format, root, kind: 'model', file: file || null })
+  o.objects.push({
+    id,
+    name,
+    format,
+    root,
+    kind: 'model',
+    file: file || null,
+    meshes,
+    originalMaterials: meshes.map((m) => m.material), // for the lit/unlit toggle
+    unlitMaterials: null, // built lazily the first time lighting is turned off
+    lit: true,
+    castShadow: true,
+  })
   o.requestRender()
-  return { id, name, format }
+  return { id, name, format, kind: 'model', lit: true, castShadow: true }
 }
 
 // Add an image as a movable reference plane. `map` is a loaded THREE.Texture;
@@ -113,7 +127,7 @@ export function addImage(map, name, aspect, file) {
   const id = ++idCounter
   o.objects.push({ id, name, format: 'image', root, kind: 'image', file: file || null })
   o.requestRender()
-  return { id, name, format: 'image' }
+  return { id, name, format: 'image', kind: 'image' }
 }
 
 // Show or hide an object (prop, image, or the character) without removing it.
@@ -134,9 +148,64 @@ export function removeObject(id) {
     o.selected = null
   }
   o.scene.remove(entry.root)
+  disposeUnattachedPropMaterials(entry)
   disposeObject(entry.root)
   o.objects.splice(idx, 1)
   o.requestRender()
+}
+
+// Toggle whether a prop responds to the scene's lights. Off swaps in a flat
+// MeshBasicMaterial clone (same map/colour, zero shading) — useful for a
+// backdrop or prop that should stay visually constant regardless of the light
+// rig. Only applies to model props; reference images are already unlit.
+export function setObjectLit(id, lit) {
+  const entry = o.objects.find((e) => e.id === id && e.kind === 'model')
+  if (!entry) return
+  entry.lit = lit
+  if (!lit && !entry.unlitMaterials) {
+    entry.unlitMaterials = entry.meshes.map((m) =>
+      Array.isArray(m.material) ? m.material.map(toUnlit) : toUnlit(m.material),
+    )
+  }
+  const source = lit ? entry.originalMaterials : entry.unlitMaterials
+  entry.meshes.forEach((mesh, i) => {
+    mesh.material = source[i]
+  })
+  o.requestRender()
+}
+
+// Toggle whether a prop casts shadows (it still receives them either way).
+export function setObjectCastShadow(id, castShadow) {
+  const entry = o.objects.find((e) => e.id === id && e.kind === 'model')
+  if (!entry) return
+  entry.castShadow = castShadow
+  for (const mesh of entry.meshes) mesh.castShadow = castShadow
+  o.requestRender()
+}
+
+function toUnlit(mat) {
+  return new THREE.MeshBasicMaterial({
+    map: mat.map || null,
+    color: mat.color ? mat.color.clone() : new THREE.Color(0xffffff),
+    transparent: mat.transparent,
+    opacity: mat.opacity,
+    alphaTest: mat.alphaTest,
+    side: mat.side,
+    toneMapped: mat.toneMapped,
+  })
+}
+
+// Dispose whichever of the lit/unlit material sets ISN'T currently attached
+// (the attached set is disposed normally, textures and all, by disposeObject).
+// Plain .dispose() only — the shared texture is freed once, via the attached
+// set, so this must not touch it again.
+function disposeUnattachedPropMaterials(entry) {
+  if (!entry.unlitMaterials) return
+  const other = entry.lit ? entry.unlitMaterials : entry.originalMaterials
+  for (const m of other) {
+    const mats = Array.isArray(m) ? m : [m]
+    for (const mat of mats) mat.dispose()
+  }
 }
 
 // Resolve an id (numeric prop id or 'character') to its root object.
@@ -210,6 +279,8 @@ export function getObjectsForSave() {
         scale: e.root.scale.toArray(),
       },
       visible: e.root.visible,
+      lit: e.kind === 'model' ? e.lit : undefined,
+      castShadow: e.kind === 'model' ? e.castShadow : undefined,
     }))
 }
 
@@ -251,6 +322,7 @@ export function disposeObjects() {
   if (o.transform) o.transform.detach()
   for (const e of o.objects) {
     if (o.scene) o.scene.remove(e.root)
+    disposeUnattachedPropMaterials(e)
     disposeObject(e.root)
   }
   o.objects = []
