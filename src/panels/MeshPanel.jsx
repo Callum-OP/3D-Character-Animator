@@ -11,7 +11,29 @@ import {
   getLinkedMorphTargets,
   getMeshIndex,
 } from '../three/meshedit.js'
-import { getCurrentModel, requestRender } from '../three/scene.js'
+import {
+  getCurrentModel,
+  requestRender,
+  bakeClothAnimation,
+  hasBakedTimeline,
+  clearBakedTimeline,
+} from '../three/scene.js'
+import {
+  FABRIC_PRESETS,
+  isClothEnabled,
+  enableCloth,
+  disableCloth,
+  bakeCloth,
+  resetCloth,
+  setPinTool,
+  setBrushSize,
+  clearPins,
+  setClothPlaying,
+  isClothPlaying,
+  stepClothOnce,
+  applyFabricPreset,
+} from '../three/clothmod.js'
+import { getClipDuration } from '../three/animation.js'
 import EditableValue from './EditableValue.jsx'
 
 // Side-panel section for Mesh mode: pick a part of the character (eyes, hair,
@@ -44,6 +66,12 @@ export default function MeshPanel() {
   const [, setMorphVersion] = useState(0)
   const [morphEntries, setMorphEntries] = useState([])
   const [morphValues, setMorphValues] = useState({})
+  const [clothVersion, setClothVersion] = useState(0)
+  const [pinTool, setPinToolState] = useState('add')
+  const [brushSize, setBrushSizeState] = useState(3)
+  const [fabricPreset, setFabricPreset] = useState('cotton')
+  const [bakeFps, setBakeFps] = useState(24)
+  const [bakeStatus, setBakeStatus] = useState('')
 
   const currentModel = getCurrentModel()
   const meshes = modelInfo?.meshes || []
@@ -58,6 +86,64 @@ export default function MeshPanel() {
 
   function forceRerender() {
     setMorphVersion((v) => v + 1)
+  }
+
+  const clothOn = selectedMesh ? isClothEnabled(selectedMesh.uuid) : false
+
+  function bumpCloth() {
+    setClothVersion((v) => v + 1)
+  }
+
+  function onToggleCloth(on) {
+    if (!selectedMesh || !currentModel) return
+    if (on) {
+      const others = currentModel.meshes.filter((mesh) => mesh !== selectedMesh && mesh.visible)
+      enableCloth(selectedMesh, others, { preset: fabricPreset })
+    } else {
+      disableCloth(selectedMesh.uuid)
+      setClothPlaying(false)
+    }
+    bumpCloth()
+  }
+
+  function onBakeCloth() {
+    if (!selectedMesh) return
+    bakeCloth(selectedMesh.uuid)
+    bumpCloth()
+  }
+
+  function onFabricPreset(name) {
+    setFabricPreset(name)
+    if (selectedMesh && clothOn) applyFabricPreset(selectedMesh.uuid, name)
+  }
+
+  function onPinTool(tool) {
+    setPinToolState(tool)
+    setPinTool(tool)
+  }
+
+  function onBrushSize(n) {
+    setBrushSizeState(n)
+    setBrushSize(n)
+  }
+
+  function onBakeToAnimation() {
+    if (!selectedMesh) return
+    setBakeStatus('Baking… this may take a moment')
+    // Runs synchronously (it's a physics loop, not I/O), so give the status
+    // text a tick to actually paint before the tab locks up briefly.
+    setTimeout(() => {
+      const result = bakeClothAnimation(selectedMesh.uuid, bakeFps)
+      setBakeStatus(result.ok ? `Baked ${result.frameCount} frames — cloth will now follow the animation.` : result.reason)
+      bumpCloth()
+    }, 30)
+  }
+
+  function onClearBakedAnimation() {
+    if (!selectedMesh) return
+    clearBakedTimeline(selectedMesh.uuid)
+    setBakeStatus('')
+    bumpCloth()
   }
 
   function onKeyPart() {
@@ -255,6 +341,157 @@ export default function MeshPanel() {
               Key part{keyCount ? ` (${keyCount})` : ''}
             </button>
           </div>
+        </div>
+      )}
+
+      {selectedMesh && (
+        <div className="joint-controls" style={{ marginTop: 10 }}>
+          <div className="joint-header">
+            <span className="joint-name">Cloth</span>
+            <span className="joint-parent">{selectedMesh.name}</span>
+          </div>
+          <label
+            className="morph-label"
+            style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}
+            title="Drape this mesh (a cape, skirt, sash…) against the rest of the character using its current pose. Re-pose, then toggle off/on to redrape against the new pose."
+          >
+            <input type="checkbox" checked={clothOn} onChange={(e) => onToggleCloth(e.target.checked)} />
+            Enable cloth simulation
+          </label>
+
+          {clothOn && (
+            <>
+              <label className="field">
+                <span>Fabric</span>
+                <select value={fabricPreset} onChange={(e) => onFabricPreset(e.target.value)}>
+                  {Object.keys(FABRIC_PRESETS).map((name) => (
+                    <option key={name} value={name}>
+                      {name[0].toUpperCase() + name.slice(1)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <div className="kf-actions" style={{ marginTop: 4 }}>
+                <button
+                  className="btn"
+                  onClick={() => {
+                    setClothPlaying(!isClothPlaying())
+                    bumpCloth()
+                  }}
+                >
+                  {isClothPlaying() ? '❚❚ Pause' : '▶ Drape'}
+                </button>
+                <button className="btn secondary" onClick={() => stepClothOnce()}>
+                  ⤼ Step
+                </button>
+                <button
+                  className="btn secondary"
+                  onClick={() => {
+                    resetCloth(selectedMesh.uuid)
+                    bumpCloth()
+                  }}
+                >
+                  ↺ Reset
+                </button>
+              </div>
+
+              <div className="pose-hint" style={{ marginTop: 6 }}>
+                Pins hold cloth in place (e.g. a collar or waistband) — starts pinned
+                along the top edge; use the brush to add/remove pins by hand, like a
+                vertex group.
+              </div>
+              <div className="kf-actions" style={{ marginTop: 4 }}>
+                <button
+                  className={'btn secondary' + (pinTool === 'add' ? ' active' : '')}
+                  onClick={() => onPinTool('add')}
+                >
+                  📌 Pin
+                </button>
+                <button
+                  className={'btn secondary' + (pinTool === 'del' ? ' active' : '')}
+                  onClick={() => onPinTool('del')}
+                >
+                  ✂ Unpin
+                </button>
+                <button
+                  className={'btn secondary' + (pinTool === null ? ' active' : '')}
+                  onClick={() => onPinTool(null)}
+                >
+                  ✋ Off
+                </button>
+              </div>
+              <label className="slider-row">
+                <span className="slider-label">Brush size</span>
+                <input
+                  type="range"
+                  min={1}
+                  max={12}
+                  step={1}
+                  value={brushSize}
+                  onChange={(e) => onBrushSize(Number(e.target.value))}
+                />
+                <span>{brushSize}</span>
+              </label>
+              <button
+                className="btn secondary"
+                onClick={() => {
+                  clearPins(selectedMesh.uuid)
+                  bumpCloth()
+                }}
+              >
+                Clear all pins
+              </button>
+
+              <div className="kf-actions" style={{ marginTop: 8 }}>
+                <button
+                  className="btn"
+                  onClick={onBakeCloth}
+                  title="Write the current drape into this mesh's own geometry and turn cloth off — it becomes a normal static part again"
+                >
+                  ✓ Bake drape
+                </button>
+              </div>
+
+              <div className="joint-header" style={{ marginTop: 10 }}>
+                <span className="joint-name">Physics during animation</span>
+              </div>
+              <div className="pose-hint">
+                Runs the drape once across the whole clip — re-posing and
+                re-colliding at each sampled frame — then caches the result so
+                it plays back at animation speed. Re-bake after changing the
+                pose, timing, or fabric.
+              </div>
+              <label className="slider-row">
+                <span className="slider-label">Sample rate</span>
+                <input
+                  type="range"
+                  min={8}
+                  max={60}
+                  step={1}
+                  value={bakeFps}
+                  onChange={(e) => setBakeFps(Number(e.target.value))}
+                />
+                <span>{bakeFps} fps</span>
+              </label>
+              <div className="kf-actions" style={{ marginTop: 4 }}>
+                <button
+                  className="btn"
+                  onClick={onBakeToAnimation}
+                  disabled={!getClipDuration()}
+                  title={getClipDuration() ? 'Bake cloth physics across the current clip' : 'Load or select an animation clip first'}
+                >
+                  🎬 Bake to animation
+                </button>
+                {selectedMesh && hasBakedTimeline(selectedMesh.uuid) && (
+                  <button className="btn secondary" onClick={onClearBakedAnimation}>
+                    Clear baked animation
+                  </button>
+                )}
+              </div>
+              {bakeStatus && <div className="status" style={{ marginTop: 4 }}>{bakeStatus}</div>}
+            </>
+          )}
         </div>
       )}
 

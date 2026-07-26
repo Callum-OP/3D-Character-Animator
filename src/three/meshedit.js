@@ -8,26 +8,33 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 // and move / rotate / scale it with a TransformControls gizmo. Parts are picked
 // by raycasting the character's meshes directly, so you click the thing you see.
 //
-// Skinned parts need special handling: a SkinnedMesh's vertices are driven
-// entirely by the skeleton, and in three.js the mesh node's own transform is
-// cancelled out (attached bind mode recomputes bindMatrixInverse from the
-// node's matrixWorld every frame). Setting position/rotation/scale on such a
-// node is invisible. So while the gizmo still drags the node, we bake the
-// node's offset-from-rest into the mesh's bindMatrix — the vertices shift in
-// bind space BEFORE skinning, which means the part moves where you dragged it
-// and still follows the skeleton (an offset eye keeps tracking the head).
-//
 // The gizmo does NOT attach to the mesh node directly. Exporters routinely bake
 // a part's geometry in world space and leave its node at the origin, so the
 // node pivot sits at the character's feet — rotating or resizing "the hair"
-// around that would swing it across the scene. Instead the gizmo drives an
-// invisible PROXY parked at the part's bounding-box centre (with the mesh's
-// rest orientation), and every proxy movement is mapped back onto the mesh
-// node as a delta around that pivot. Parts therefore rotate and resize about
-// themselves, like in full animation packages.
+// around that would swing it across the scene. Instead, at load time, every
+// mesh gets a dedicated invisible pivot Group inserted as its new parent
+// (original parent → pivot Group → mesh), placed at the part's bounding-box
+// centre with the mesh's rest orientation. The mesh's own local transform
+// (relative to that pivot) is fixed once, at wrap time, and never touched
+// again — everything the user does (drag the gizmo, type a value, undo,
+// keyframe) edits the PIVOT GROUP's transform instead.
 //
-// Edits are stored on the mesh nodes themselves and captured relative to the
-// rest transform recorded at load, so reset and save/load are exact.
+// This matters a lot for SKINNED parts: skinning is computed entirely in the
+// mesh's own local space and only THEN composed with its ancestor transforms
+// like any other mesh, so adding an ordinary ancestor (the pivot group) moves
+// the already-posed shape rigidly, with zero special-casing. An earlier
+// version of this file instead tried to bake the move into the SkinnedMesh's
+// bindMatrix/bindMatrixInverse — but GLTFLoader binds every skinned mesh with
+// an explicit IDENTITY bind matrix (this pipeline's meshes are always GLTF),
+// so that approach was inserting an arbitrary matrix into the middle of the
+// bone-skinning chain (between the bone matrices and the vertex) rather than
+// applying a clean rigid offset — which is exactly why moved/skinned parts
+// would warp, teleport, or vanish. The pivot-group approach never touches
+// bindMatrix at all, so it can't hit that bug regardless of how a mesh was
+// bound.
+//
+// Edits are stored on the pivot groups, captured relative to their own rest
+// transform, so reset and save/load are exact.
 // ---------------------------------------------------------------------------
 
 const UNDO_LIMIT = 100
@@ -50,27 +57,22 @@ const m = {
   model: null,
   meshes: [], // the character's Mesh/SkinnedMesh nodes
   meshByUuid: new Map(),
-  rest: new Map(), // Mesh -> rest transform captured at load (see setMeshEditModel)
+  rest: new Map(), // Mesh -> { pivot, position, quaternion, scale } (see setMeshEditModel)
 
   selected: null, // selected Mesh (or null)
-  proxy: null, // invisible pivot Object3D the gizmo actually drives
   box: null, // THREE.BoxHelper highlight around the selection
   enabled: false, // true only while the app is in Mesh mode
   suspended: false, // true while animation playback drives the parts
   undoStack: [],
   redoStack: [],
-  dragBefore: null, // selected mesh's TRS at gizmo-drag start
+  dragBefore: null, // selected part's pivot TRS at gizmo-drag start
   pointerDown: null, // { x, y, axis } for click-vs-drag discrimination
   raycaster: new THREE.Raycaster(),
 }
 
 const _ndc = new THREE.Vector2()
-const _delta = new THREE.Matrix4()
-const _m1 = new THREE.Matrix4()
-const _m2 = new THREE.Matrix4()
 const _pos = new THREE.Vector3()
 const _quat = new THREE.Quaternion()
-const _scl = new THREE.Vector3()
 
 export function initMeshEdit(refs) {
   m.scene = refs.scene
@@ -85,16 +87,17 @@ export function initMeshEdit(refs) {
   transform.setMode('translate')
   transform.setSize(0.9)
   transform.addEventListener('dragging-changed', (e) => {
-    // Don't orbit while dragging; stay locked if a camera view has orbit off.
     m.controls.enabled = !e.value && !m.controls.locked
   })
   transform.addEventListener('objectChange', () => {
-    if (m.selected) applyProxyToMesh(m.selected)
     notifyChange()
     m.requestRender()
   })
   transform.addEventListener('mouseDown', () => {
-    if (m.selected) m.dragBefore = snapshot(m.selected)
+    if (m.selected) {
+      const rest = m.rest.get(m.selected)
+      if (rest) m.dragBefore = snapshot(rest.pivot)
+    }
   })
   transform.addEventListener('mouseUp', () => {
     commitDragUndo()
@@ -114,43 +117,45 @@ export function initMeshEdit(refs) {
   dom.addEventListener('pointerup', m._onPointerUp)
 }
 
-// Bind mesh editing to a freshly loaded model: record every part's rest
-// transform (and, for skinned parts, the rest bind matrix the offsets bake into).
+// Bind mesh editing to a freshly loaded model: give every part a dedicated
+// pivot Group (see header comment) and record its rest transform.
 export function setMeshEditModel(model) {
   clearMeshEditModel()
   m.model = model
   m.meshes = model.meshes || []
   for (const mesh of m.meshes) {
     m.meshByUuid.set(mesh.uuid, mesh)
+    const parent = mesh.parent
     mesh.updateMatrix()
-    // The edit pivot: the geometry's bounding-box centre carried into the
-    // mesh's parent space, with the mesh's rest orientation (so the gizmo's
-    // local axes line up with the part).
     if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox()
-    const pivot = mesh.geometry.boundingBox.getCenter(new THREE.Vector3())
-    pivot.applyMatrix4(mesh.matrix)
-    const pivotMatrix = new THREE.Matrix4().compose(
-      pivot,
-      mesh.quaternion,
+
+    const pivotPos = mesh.geometry.boundingBox.getCenter(new THREE.Vector3())
+    pivotPos.applyMatrix4(mesh.matrix)
+    const pivotLocalMatrix = new THREE.Matrix4().compose(
+      pivotPos,
+      mesh.quaternion.clone(),
       new THREE.Vector3(1, 1, 1),
     )
+    const pivotLocalMatrixInverse = pivotLocalMatrix.clone().invert()
+    const newMeshLocal = new THREE.Matrix4().multiplyMatrices(pivotLocalMatrixInverse, mesh.matrix)
+
+    const pivot = new THREE.Object3D()
+    pivot.name = (mesh.name || 'part') + ' (pivot)'
+    pivotLocalMatrix.decompose(pivot.position, pivot.quaternion, pivot.scale)
+    parent.add(pivot)
+    pivot.add(mesh)
+    newMeshLocal.decompose(mesh.position, mesh.quaternion, mesh.scale)
+    mesh.updateMatrix()
+
     m.rest.set(mesh, {
-      position: mesh.position.clone(),
-      quaternion: mesh.quaternion.clone(),
-      scale: mesh.scale.clone(),
-      matrix: mesh.matrix.clone(),
-      matrixInverse: mesh.matrix.clone().invert(),
-      pivotMatrix,
-      pivotMatrixInverse: pivotMatrix.clone().invert(),
-      bindMatrix: mesh.isSkinnedMesh ? mesh.bindMatrix.clone() : null,
+      pivot,
+      position: pivot.position.clone(),
+      quaternion: pivot.quaternion.clone(),
+      scale: pivot.scale.clone(),
     })
   }
 }
 
-// How many bounding-radii apart two parts can be and still count as "close
-// enough" to link shape keys — generous, since a face's teeth/eyes/eyebrows
-// meshes are often modelled with their own small bounding box near, but not
-// overlapping, the head mesh's.
 const MORPH_LINK_PROXIMITY_FACTOR = 3
 
 function getWorldBoundingSphere(mesh) {
@@ -163,11 +168,6 @@ function getWorldBoundingSphere(mesh) {
   return { center, radius }
 }
 
-// Find other meshes on the current character that expose a morph target of
-// the same name and sit close by in world space. Used to mirror a shape-key
-// slider across meshes that are really "one face" split into parts (teeth,
-// eyes, eyebrows…) by the exporter, without touching unrelated meshes that
-// happen to reuse the same shape-key name (e.g. a second character later).
 export function getLinkedMorphTargets(sourceMesh, morphName) {
   if (!sourceMesh || !m.meshes.length) return []
   const src = getWorldBoundingSphere(sourceMesh)
@@ -185,15 +185,16 @@ export function getLinkedMorphTargets(sourceMesh, morphName) {
   return results
 }
 
-// Stable index of a mesh within the current character's mesh list — the same
-// order every time the same file is (re)loaded, unlike mesh.uuid which is
-// regenerated on every parse. Used to key morph (shape-key) keyframes so they
-// survive a save → reload round-trip.
 export function getMeshIndex(mesh) {
   return m.meshes.indexOf(mesh)
 }
 
-// Detach the gizmo and drop all references (called on model unload).
+// Also used by clothmod.js so it can find a mesh's pivot group directly.
+export function getMeshPivot(mesh) {
+  const rest = m.rest.get(mesh)
+  return rest ? rest.pivot : null
+}
+
 export function clearMeshEditModel() {
   if (m.transform) m.transform.detach()
   m.selected = null
@@ -201,10 +202,6 @@ export function clearMeshEditModel() {
   m.suspended = false
   m.undoStack = []
   m.redoStack = []
-  if (m.proxy) {
-    if (m.proxy.parent) m.proxy.parent.remove(m.proxy)
-    m.proxy = null
-  }
   if (m.box) {
     m.scene.remove(m.box)
     m.box.geometry.dispose()
@@ -217,8 +214,6 @@ export function clearMeshEditModel() {
   m.rest = new Map()
 }
 
-// Enable/disable the whole interaction (Mesh mode on/off). The selection is
-// remembered across mode switches; only the gizmo, picking and highlight gate.
 export function setMeshEditEnabled(enabled) {
   m.enabled = enabled
   if (m.transform) {
@@ -229,8 +224,6 @@ export function setMeshEditEnabled(enabled) {
   m.requestRender()
 }
 
-// Select a mesh by uuid (or null to deselect). Idempotent: safe to call from
-// both the panel and the viewport pick path.
 export function selectMesh(uuid) {
   const mesh = uuid ? m.meshByUuid.get(uuid) || null : null
   m.selected = mesh
@@ -242,8 +235,6 @@ export function selectMesh(uuid) {
   m.requestRender()
 }
 
-// Suspend interactive editing while animation playback drives the parts:
-// detach the gizmo and ignore picks. resume() re-attaches the selection.
 export function suspendMeshEdit() {
   m.suspended = true
   if (m.transform) m.transform.detach()
@@ -256,146 +247,104 @@ export function resumeMeshEdit() {
   m.requestRender()
 }
 
-// Park the pivot proxy on the selected part and hang the gizmo off it.
 function attachToSelected() {
-  const mesh = m.selected
-  if (!m.proxy) m.proxy = new THREE.Object3D()
-  if (m.proxy.parent !== mesh.parent) mesh.parent.add(m.proxy)
-  syncProxyFromMesh(mesh)
-  m.transform.attach(m.proxy)
-}
-
-// Place the proxy where the mesh's current edit puts the pivot:
-// proxyLocal = (local · restLocal⁻¹) · pivotRest.
-function syncProxyFromMesh(mesh) {
-  if (!m.proxy || m.selected !== mesh) return
-  const rest = m.rest.get(mesh)
-  mesh.updateMatrix()
-  _m1.multiplyMatrices(mesh.matrix, rest.matrixInverse)
-  _m2.multiplyMatrices(_m1, rest.pivotMatrix)
-  _m2.decompose(m.proxy.position, m.proxy.quaternion, m.proxy.scale)
-  m.proxy.updateMatrix()
-}
-
-// Map a gizmo edit on the proxy back onto the mesh node:
-// local = (proxyLocal · pivotRest⁻¹) · restLocal — the proxy's departure from
-// its rest becomes the mesh's delta, applied around the pivot.
-function applyProxyToMesh(mesh) {
-  const rest = m.rest.get(mesh)
-  m.proxy.updateMatrix()
-  _m1.multiplyMatrices(m.proxy.matrix, rest.pivotMatrixInverse)
-  _m2.multiplyMatrices(_m1, rest.matrix)
-  _m2.decompose(mesh.position, mesh.quaternion, mesh.scale)
-  applyEdit(mesh)
+  const rest = m.rest.get(m.selected)
+  if (rest) m.transform.attach(rest.pivot)
 }
 
 export function setMeshGizmoMode(mode) {
   if (!m.transform) return
-  m.transform.setMode(mode) // 'translate' | 'rotate' | 'scale'
+  m.transform.setMode(mode)
   m.requestRender()
 }
 
-// Keep the highlight box hugging its mesh (called each render, like the bone dots).
 export function updateMeshEditHelpers() {
   if (m.box && m.box.visible) m.box.update()
 }
 
-// A part's current transform RELATIVE TO ITS REST, in friendly units:
-// offset in model units, rotation in degrees, scale as a multiplier — so
-// (0,0,0) / (0,0,0) / (1,1,1) always means "untouched". Expressed in the
-// pivot frame, matching what dragging the gizmo does.
 export function getMeshDelta(uuid) {
   const mesh = m.meshByUuid.get(uuid)
   const rest = mesh && m.rest.get(mesh)
   if (!mesh || !rest) return null
-  // Dl = pivotRest⁻¹ · (local · restLocal⁻¹) · pivotRest
-  mesh.updateMatrix()
-  _m1.multiplyMatrices(mesh.matrix, rest.matrixInverse)
-  _m2.multiplyMatrices(rest.pivotMatrixInverse, _m1).multiply(rest.pivotMatrix)
-  _m2.decompose(_pos, _quat, _scl)
-  const e = new THREE.Euler().setFromQuaternion(_quat, 'XYZ')
+  const pivot = rest.pivot
+  const invRestQuat = _quat.copy(rest.quaternion).invert()
+  const offset = _pos.copy(pivot.position).sub(rest.position).applyQuaternion(invRestQuat)
+  const relQuat = invRestQuat.clone().multiply(pivot.quaternion)
+  const e = new THREE.Euler().setFromQuaternion(relQuat, 'XYZ')
   return {
-    offset: [_pos.x, _pos.y, _pos.z],
+    offset: [offset.x, offset.y, offset.z],
     rotation: [
       THREE.MathUtils.radToDeg(e.x),
       THREE.MathUtils.radToDeg(e.y),
       THREE.MathUtils.radToDeg(e.z),
     ],
-    scale: [_scl.x, _scl.y, _scl.z],
+    scale: [
+      pivot.scale.x / rest.scale.x,
+      pivot.scale.y / rest.scale.y,
+      pivot.scale.z / rest.scale.z,
+    ],
   }
 }
 
-// Set a part's transform from rest-relative values (the panel's typed fields).
-// Pass any subset of { offset, rotation, scale }; each is a full [x,y,z].
 export function setMeshDelta(uuid, delta) {
   const mesh = m.meshByUuid.get(uuid)
   const rest = mesh && m.rest.get(mesh)
   if (!mesh || !rest) return
-  const before = snapshot(mesh)
+  const pivot = rest.pivot
+  const before = snapshot(pivot)
   const cur = { ...getMeshDelta(uuid), ...delta }
-  // local = pivotRest · Dl · pivotRest⁻¹ · restLocal
-  _m1.compose(
-    _pos.set(cur.offset[0], cur.offset[1], cur.offset[2]),
-    _quat.setFromEuler(
-      new THREE.Euler(
-        THREE.MathUtils.degToRad(cur.rotation[0]),
-        THREE.MathUtils.degToRad(cur.rotation[1]),
-        THREE.MathUtils.degToRad(cur.rotation[2]),
-        'XYZ',
-      ),
+
+  const offset = _pos.set(cur.offset[0], cur.offset[1], cur.offset[2]).applyQuaternion(rest.quaternion)
+  pivot.position.copy(rest.position).add(offset)
+
+  const rotQuat = _quat.setFromEuler(
+    new THREE.Euler(
+      THREE.MathUtils.degToRad(cur.rotation[0]),
+      THREE.MathUtils.degToRad(cur.rotation[1]),
+      THREE.MathUtils.degToRad(cur.rotation[2]),
+      'XYZ',
     ),
-    _scl.set(cur.scale[0], cur.scale[1], cur.scale[2]),
   )
-  _m2.multiplyMatrices(rest.pivotMatrix, _m1)
-    .multiply(rest.pivotMatrixInverse)
-    .multiply(rest.matrix)
-  _m2.decompose(mesh.position, mesh.quaternion, mesh.scale)
-  applyEdit(mesh)
-  syncProxyFromMesh(mesh)
-  pushUndoIfChanged(mesh, before)
+  pivot.quaternion.copy(rest.quaternion).multiply(rotQuat)
+  pivot.scale.set(
+    rest.scale.x * cur.scale[0],
+    rest.scale.y * cur.scale[1],
+    rest.scale.z * cur.scale[2],
+  )
+
+  pushUndoIfChanged(pivot, before)
   notifyChange()
   m.requestRender()
 }
 
-// Restore one part to its rest transform (undoable).
 export function resetMesh(uuid) {
   const mesh = m.meshByUuid.get(uuid)
   const rest = mesh && m.rest.get(mesh)
   if (!mesh || !rest) return
-  const before = snapshot(mesh)
-  mesh.position.copy(rest.position)
-  mesh.quaternion.copy(rest.quaternion)
-  mesh.scale.copy(rest.scale)
-  applyEdit(mesh)
-  syncProxyFromMesh(mesh)
-  pushUndoIfChanged(mesh, before)
+  const before = snapshot(rest.pivot)
+  applySnapshot(rest.pivot, rest)
+  pushUndoIfChanged(rest.pivot, before)
   notifyChange()
   m.requestRender()
 }
 
-// Restore every part as one undoable batch.
 export function resetAllMeshes() {
   const batch = []
   for (const mesh of m.meshes) {
     const rest = m.rest.get(mesh)
-    if (!rest || isAtRest(mesh, rest)) continue
-    batch.push({ mesh, before: snapshot(mesh), after: restSnapshot(rest) })
-    mesh.position.copy(rest.position)
-    mesh.quaternion.copy(rest.quaternion)
-    mesh.scale.copy(rest.scale)
-    applyEdit(mesh)
-    syncProxyFromMesh(mesh)
+    if (!rest || isAtRest(rest.pivot, rest)) continue
+    batch.push({ obj: rest.pivot, before: snapshot(rest.pivot), after: restSnapshot(rest) })
+    applySnapshot(rest.pivot, rest)
   }
   if (batch.length) pushUndo(batch)
   notifyChange()
   m.requestRender()
 }
 
-// True if any part has been moved away from its rest transform.
 export function hasMeshEdits() {
   for (const mesh of m.meshes) {
     const rest = m.rest.get(mesh)
-    if (rest && !isAtRest(mesh, rest)) return true
+    if (rest && !isAtRest(rest.pivot, rest)) return true
   }
   return false
 }
@@ -403,7 +352,7 @@ export function hasMeshEdits() {
 export function undo() {
   const batch = m.undoStack.pop()
   if (!batch) return
-  for (const { mesh, before } of batch) applySnapshot(mesh, before)
+  for (const { obj, before } of batch) applySnapshot(obj, before)
   m.redoStack.push(batch)
   notifyChange()
   m.requestRender()
@@ -412,57 +361,51 @@ export function undo() {
 export function redo() {
   const batch = m.redoStack.pop()
   if (!batch) return
-  for (const { mesh, after } of batch) applySnapshot(mesh, after)
+  for (const { obj, after } of batch) applySnapshot(obj, after)
   m.undoStack.push(batch)
   notifyChange()
   m.requestRender()
 }
 
-// --- Keyframing / playback -----------------------------------------------------
-
-// The selected part's current local transform, in keyframe form.
 export function getMeshKeyValue(uuid) {
   const mesh = m.meshByUuid.get(uuid)
-  if (!mesh) return null
+  const rest = mesh && m.rest.get(mesh)
+  if (!rest) return null
   return {
-    pos: mesh.position.toArray(),
-    quat: mesh.quaternion.toArray(),
-    scale: mesh.scale.toArray(),
+    pos: rest.pivot.position.toArray(),
+    quat: rest.pivot.quaternion.toArray(),
+    scale: rest.pivot.scale.toArray(),
   }
 }
 
-// Snapshot every part's placement before playback drives them, so Stop puts
-// the user's static edits back.
 export function getMeshPlaybackSnapshot() {
-  return m.meshes.map((mesh) => ({ mesh, ...snapshot(mesh) }))
+  return m.meshes.map((mesh) => {
+    const rest = m.rest.get(mesh)
+    return { obj: rest.pivot, ...snapshot(rest.pivot) }
+  })
 }
 
 export function applyMeshPlaybackSnapshot(snap) {
   if (!snap) return
-  for (const s of snap) applySnapshot(s.mesh, s)
+  for (const s of snap) applySnapshot(s.obj, s)
 }
 
-// Drive the parts from keyframe tracks at time t (called from the animation
-// engine each frame). tracks: { [meshIndex]: [{time,pos,quat,scale}] }, each
-// sorted by time. Re-bakes the skinned bind matrices so driven skinned parts
-// actually move.
 export function sampleMeshTracks(tracks, t) {
-  if (!tracks) return
   for (const [index, keys] of Object.entries(tracks)) {
     const mesh = m.meshes[Number(index)]
-    if (!mesh || !keys || keys.length === 0) continue
-    sampleMeshKeys(keys, t, mesh)
-    applyEdit(mesh)
+    const rest = mesh && m.rest.get(mesh)
+    if (!rest || !keys || keys.length === 0) continue
+    sampleMeshKeys(keys, t, rest.pivot)
   }
 }
 
 const _kq0 = new THREE.Quaternion()
 const _kq1 = new THREE.Quaternion()
 
-function sampleMeshKeys(keys, t, mesh) {
-  if (t <= keys[0].time) return applyMeshKey(mesh, keys[0])
+function sampleMeshKeys(keys, t, pivot) {
+  if (t <= keys[0].time) return applyMeshKey(pivot, keys[0])
   const last = keys[keys.length - 1]
-  if (t >= last.time) return applyMeshKey(mesh, last)
+  if (t >= last.time) return applyMeshKey(pivot, last)
   let i = 0
   while (i < keys.length - 1 && keys[i + 1].time < t) i++
   const k0 = keys[i]
@@ -471,58 +414,48 @@ function sampleMeshKeys(keys, t, mesh) {
   const f = span > 0 ? (t - k0.time) / span : 0
   const lerp3 = (out, v0, v1) =>
     out.set(v0[0] + (v1[0] - v0[0]) * f, v0[1] + (v1[1] - v0[1]) * f, v0[2] + (v1[2] - v0[2]) * f)
-  lerp3(mesh.position, k0.pos, k1.pos)
-  lerp3(mesh.scale, k0.scale, k1.scale)
+  lerp3(pivot.position, k0.pos, k1.pos)
+  lerp3(pivot.scale, k0.scale, k1.scale)
   _kq0.fromArray(k0.quat)
   _kq1.fromArray(k1.quat)
-  mesh.quaternion.slerpQuaternions(_kq0, _kq1, f)
+  pivot.quaternion.slerpQuaternions(_kq0, _kq1, f)
 }
 
-function applyMeshKey(mesh, k) {
-  mesh.position.fromArray(k.pos)
-  mesh.quaternion.fromArray(k.quat)
-  mesh.scale.fromArray(k.scale)
+function applyMeshKey(pivot, k) {
+  pivot.position.fromArray(k.pos)
+  pivot.quaternion.fromArray(k.quat)
+  pivot.scale.fromArray(k.scale)
 }
 
-// --- Save / load --------------------------------------------------------------
-
-// Edited parts as { index, position, quaternion, scale } (absolute local TRS).
-// Keyed by mesh INDEX, not uuid — uuids regenerate on every reload of the same
-// file, index order is stable (same remap the mesh-override save uses).
 export function getMeshEditsData() {
   const out = []
   m.meshes.forEach((mesh, index) => {
     const rest = m.rest.get(mesh)
-    if (!rest || isAtRest(mesh, rest)) return
+    if (!rest || isAtRest(rest.pivot, rest)) return
     out.push({
       index,
-      position: mesh.position.toArray(),
-      quaternion: mesh.quaternion.toArray(),
-      scale: mesh.scale.toArray(),
+      position: rest.pivot.position.toArray(),
+      quaternion: rest.pivot.quaternion.toArray(),
+      scale: rest.pivot.scale.toArray(),
     })
   })
   return out
 }
 
-// Apply saved part transforms to the currently loaded model (not undoable —
-// it's a restore, and the load path clears the stacks anyway).
 export function applyMeshEditsData(list) {
   if (!Array.isArray(list)) return
   for (const item of list) {
     const mesh = m.meshes[item.index]
-    if (!mesh) continue
-    if (item.position) mesh.position.fromArray(item.position)
-    if (item.quaternion) mesh.quaternion.fromArray(item.quaternion)
-    if (item.scale) mesh.scale.fromArray(item.scale)
-    applyEdit(mesh)
-    syncProxyFromMesh(mesh)
+    const rest = mesh && m.rest.get(mesh)
+    if (!rest) continue
+    if (item.position) rest.pivot.position.fromArray(item.position)
+    if (item.quaternion) rest.pivot.quaternion.fromArray(item.quaternion)
+    if (item.scale) rest.pivot.scale.fromArray(item.scale)
   }
   notifyChange()
   m.requestRender()
 }
 
-// Swap the camera the picking raycaster and gizmo work against (used when the
-// viewport looks through a placed camera).
 export function setViewCamera(camera) {
   m.camera = camera
   if (m.transform) m.transform.camera = camera
@@ -549,24 +482,11 @@ export function disposeMeshEdit() {
   m.controls = null
 }
 
-// --- internals ---------------------------------------------------------------
-
-// Make a node-transform edit actually show up. For plain meshes the node
-// transform IS the edit; for skinned meshes bake the offset-from-rest into the
-// bind matrix (see the header comment): bind' = bindRest * (restLocal⁻¹ · local).
-function applyEdit(mesh) {
-  mesh.updateMatrix()
-  const rest = m.rest.get(mesh)
-  if (!rest || !rest.bindMatrix) return
-  _delta.multiplyMatrices(rest.matrixInverse, mesh.matrix)
-  mesh.bindMatrix.multiplyMatrices(rest.bindMatrix, _delta)
-}
-
-function snapshot(mesh) {
+function snapshot(obj) {
   return {
-    position: mesh.position.clone(),
-    quaternion: mesh.quaternion.clone(),
-    scale: mesh.scale.clone(),
+    position: obj.position.clone(),
+    quaternion: obj.quaternion.clone(),
+    scale: obj.scale.clone(),
   }
 }
 
@@ -578,44 +498,39 @@ function restSnapshot(rest) {
   }
 }
 
-function applySnapshot(mesh, snap) {
-  mesh.position.copy(snap.position)
-  mesh.quaternion.copy(snap.quaternion)
-  mesh.scale.copy(snap.scale)
-  applyEdit(mesh)
-  syncProxyFromMesh(mesh)
+function applySnapshot(obj, snap) {
+  obj.position.copy(snap.position)
+  obj.quaternion.copy(snap.quaternion)
+  obj.scale.copy(snap.scale)
 }
 
-function isAtRest(mesh, rest) {
+function isAtRest(obj, rest) {
   return (
-    mesh.position.equals(rest.position) &&
-    mesh.quaternion.equals(rest.quaternion) &&
-    mesh.scale.equals(rest.scale)
+    obj.position.equals(rest.position) &&
+    obj.quaternion.equals(rest.quaternion) &&
+    obj.scale.equals(rest.scale)
   )
 }
 
 function sameSnapshot(a, b) {
-  return (
-    a.position.equals(b.position) &&
-    a.quaternion.equals(b.quaternion) &&
-    a.scale.equals(b.scale)
-  )
+  return a.position.equals(b.position) && a.quaternion.equals(b.quaternion) && a.scale.equals(b.scale)
 }
 
 function pushUndo(batch) {
   m.undoStack.push(batch)
-  m.redoStack = [] // a fresh edit invalidates the redo history
+  m.redoStack = []
   if (m.undoStack.length > UNDO_LIMIT) m.undoStack.shift()
 }
 
-function pushUndoIfChanged(mesh, before) {
-  const after = snapshot(mesh)
-  if (!sameSnapshot(before, after)) pushUndo([{ mesh, before, after }])
+function pushUndoIfChanged(obj, before) {
+  const after = snapshot(obj)
+  if (!sameSnapshot(before, after)) pushUndo([{ obj, before, after }])
 }
 
 function commitDragUndo() {
   if (!m.selected || !m.dragBefore) return
-  pushUndoIfChanged(m.selected, m.dragBefore)
+  const rest = m.rest.get(m.selected)
+  if (rest) pushUndoIfChanged(rest.pivot, m.dragBefore)
   m.dragBefore = null
 }
 
@@ -641,17 +556,15 @@ function updateSelectionBox() {
 }
 
 function onPointerDown(e) {
-  // Record where the press started and whether it landed on a gizmo axis, so
-  // pointerup can tell a mesh-pick from a gizmo-drag or an orbit-drag.
   m.pointerDown = { x: e.clientX, y: e.clientY, axis: m.transform ? m.transform.axis : null }
 }
 
 function onPointerUp(e) {
   const down = m.pointerDown
   m.pointerDown = null
-  if (m.suspended) return // no picking while animation plays
+  if (m.suspended) return
   if (!m.enabled || !down || e.button !== 0 || m.meshes.length === 0) return
-  if (down.axis !== null) return // was dragging the gizmo
+  if (down.axis !== null) return
   if (Math.abs(e.clientX - down.x) + Math.abs(e.clientY - down.y) > DRAG_SLOP_PX) return
 
   const rect = m.renderer.domElement.getBoundingClientRect()
@@ -660,16 +573,13 @@ function onPointerUp(e) {
     -((e.clientY - rect.top) / rect.height) * 2 + 1,
   )
   m.raycaster.setFromCamera(_ndc, m.camera)
-  // Raycast the visible parts only; SkinnedMesh raycasting follows the current
-  // pose, so you pick the part where it's drawn. Nearest hit wins.
   const hits = m.raycaster.intersectObjects(
     m.meshes.filter((mesh) => mesh.visible),
     false,
   )
-  m.onSelect(hits.length ? hits[0].object.uuid : null) // null on empty-space click
+  m.onSelect(hits.length ? hits[0].object.uuid : null)
 }
 
-// Stamp every material in a subtree so the OutlineEffect skips it.
 function excludeFromOutline(obj3d) {
   obj3d.traverse((obj) => {
     if (!obj.material) return

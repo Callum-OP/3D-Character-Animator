@@ -203,10 +203,9 @@ export default function Viewport() {
   }, [viewCameraId])
 
   // Keyboard: 1/2/3 switch mode, W/E/R pick the Mesh-mode gizmo tool, Esc
-  // deselects, Ctrl/Cmd+Z undoes an edit — a prop/image/character move or
-  // resize if one's selected, otherwise the active mode's edit (mesh or
-  // bone). Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y redoes it. Ignored while typing
-  // in an input.
+  // deselects, Ctrl/Cmd+Z undoes an edit — Mesh/Bone mode always undo their
+  // own edits; otherwise a selected prop/image/character's move/resize.
+  // Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y redoes it. Ignored while typing in an input.
   useEffect(() => {
     function onKeyDown(e) {
       const tag = e.target.tagName
@@ -236,13 +235,15 @@ export default function Viewport() {
         (e.key === 'y' || e.key === 'Y' || ((e.key === 'z' || e.key === 'Z') && e.shiftKey))
       ) {
         e.preventDefault()
-        if (s.selectedObjectId != null) redoObject()
-        else if (s.mode === 'mesh') redoMeshEdit()
+        if (s.mode === 'mesh') redoMeshEdit()
+        else if (s.mode === 'bone') redo()
+        else if (s.selectedObjectId != null) redoObject()
         else redo()
       } else if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
         e.preventDefault()
-        if (s.selectedObjectId != null) undoObject()
-        else if (s.mode === 'mesh') undoMeshEdit()
+        if (s.mode === 'mesh') undoMeshEdit()
+        else if (s.mode === 'bone') undo()
+        else if (s.selectedObjectId != null) undoObject()
         else undo()
       }
     }

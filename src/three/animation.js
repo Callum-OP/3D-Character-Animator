@@ -444,6 +444,17 @@ export function setSpeed(speed) {
 }
 
 // Jump to an absolute time and apply that single frame (works paused or stopped).
+// Current clip's length in seconds (0 if nothing's loaded) — used by the cloth
+// modifier to know how far to bake a physics timeline across.
+export function getClipDuration() {
+  return a.clip ? a.clip.duration : 0
+}
+
+// Current playhead time in seconds.
+export function getCurrentTime() {
+  return a.action ? a.action.time : 0
+}
+
 export function scrub(t) {
   if (!a.action || !a.clip) return
   a.action.time = Math.max(0, Math.min(t, a.clip.duration))

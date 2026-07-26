@@ -50,10 +50,22 @@ import {
   setViewCamera as setLightsViewCamera,
 } from './lights.js'
 import {
+  initClothMod,
+  disposeClothMod,
+  clearAllCloth,
+  bakeClothToTimeline,
+  syncClothToTime,
+  hasBakedTimeline,
+  clearBakedTimeline,
+} from './clothmod.js'
+import {
   initAnimation,
   setAnimationModel,
   clearAnimationModel,
   updateAnimation,
+  scrub,
+  getClipDuration,
+  getCurrentTime,
 } from './animation.js'
 import {
   initMeshEdit,
@@ -278,6 +290,9 @@ export function initScene(container) {
     getSceneScale: () => state.modelRadius,
   })
 
+  // --- Cloth modifier (drape a selected mesh against the rest of the character) ---
+  initClothMod({ scene, camera, renderer, controls, requestRender })
+
   // --- Lights (only affect Toon/Standard modes; harmless in Unlit) ---
   const dirLight = new THREE.DirectionalLight(0xffffff, 2.0)
   dirLight.position.set(2, 4, 3)
@@ -394,6 +409,7 @@ export function setContinuousRender(on) {
       // Smoothed FPS for the stats readout (only meaningful while playing).
       if (delta > 0) state.fps = state.fps * 0.9 + (1 / delta) * 0.1
       updateAnimation(delta) // advance the mixer before drawing
+      syncClothToTime(getCurrentTime()) // play back any baked cloth timelines
       renderOnce()
     }
     state.animId = requestAnimationFrame(tick)
@@ -403,6 +419,26 @@ export function setContinuousRender(on) {
     requestRender()
   }
 }
+
+// Move the playhead AND update anything driven by it that lives outside the
+// animation module (currently: baked cloth timelines).
+export function scrubTimeline(t) {
+  scrub(t)
+  syncClothToTime(getCurrentTime())
+}
+
+// Bake cloth on `mesh` across the whole current clip, sampled at `fps`, using
+// every other visible character mesh as the (per-sample, re-posed) collider.
+export function bakeClothAnimation(uuid, fps = 24) {
+  const mesh = state.currentModel?.meshes?.find((mm) => mm.uuid === uuid)
+  if (!mesh || !state.currentModel) return { ok: false, reason: 'No character loaded.' }
+  const others = state.currentModel.meshes.filter((mm) => mm !== mesh && mm.visible)
+  // Bake uses a plain scrub (not scrubTimeline) — syncing cloth mid-bake would
+  // just make each sample overwrite the cache it's still building.
+  return bakeClothToTimeline(uuid, others, { scrub, getClipDuration, fps })
+}
+
+export { hasBakedTimeline, clearBakedTimeline }
 
 function handleResize() {
   const { container, renderer, camera } = state
@@ -878,6 +914,7 @@ export function disposeCurrentModel() {
   clearAnimationModel() // dispose the mixer
   clearPoseModel() // detach gizmo + remove bone overlay before the graph goes away
   clearMeshEditModel() // detach the part gizmo + drop mesh references
+  clearAllCloth() // drop any cloth previews (their source meshes are about to be freed)
   // Put the real materials back so the deep-dispose walk frees them (and their
   // textures) rather than a generated shell that only borrows those textures...
   restoreOriginalMaterials(model)
@@ -1114,6 +1151,7 @@ export function disposeScene() {
   disposeObjects()
   disposeCameras()
   disposeLights()
+  disposeClothMod()
   disposePosing()
   disposeMeshEdit()
   disposeOutline()

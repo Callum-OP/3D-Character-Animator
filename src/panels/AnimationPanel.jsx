@@ -7,7 +7,6 @@ import {
   play,
   pause,
   stop,
-  scrub,
   setLoop as engineSetLoop,
   setSpeed as engineSetSpeed,
   beginBVHImport,
@@ -18,7 +17,7 @@ import {
   addGeneratedClip,
 } from '../three/animation.js'
 import { getBoneQuaternion, getPosedBones, applyPose } from '../three/posing.js'
-import { getCharacterRootTransform, getCurrentModel, getGroundY } from '../three/scene.js'
+import { getCharacterRootTransform, getCurrentModel, getGroundY, scrubTimeline } from '../three/scene.js'
 import * as THREE from 'three'
 import { simulateRagdollClip } from '../three/ragdoll.js'
 import { getObjectRoots } from '../three/objects.js'
@@ -247,7 +246,7 @@ export default function AnimationPanel() {
       pause()
       st().setPlayback('paused')
     }
-    scrub(t)
+    scrubTimeline(t)
     st().setCurrentTime(t)
   }
 
