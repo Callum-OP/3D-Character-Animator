@@ -28,6 +28,7 @@ import {
   setPinTool,
   setBrushSize,
   clearPins,
+  saveVertexGroup,
   setClothPlaying,
   isClothPlaying,
   stepClothOnce,
@@ -397,9 +398,9 @@ export default function MeshPanel() {
               </div>
 
               <div className="pose-hint" style={{ marginTop: 6 }}>
-                Pins hold cloth in place (e.g. a collar or waistband) — starts pinned
-                along the top edge; use the brush to add/remove pins by hand, like a
-                vertex group.
+                Pins hold cloth to the body (e.g. a collar or waistband) and
+                move with it once saved — starts pinned along the top edge;
+                use the brush to add/remove pins, then save the group.
               </div>
               <div className="kf-actions" style={{ marginTop: 4 }}>
                 <button
@@ -415,10 +416,14 @@ export default function MeshPanel() {
                   ✂ Unpin
                 </button>
                 <button
-                  className={'btn secondary' + (pinTool === null ? ' active' : '')}
-                  onClick={() => onPinTool(null)}
+                  className="btn secondary"
+                  onClick={() => {
+                    saveVertexGroup(selectedMesh.uuid)
+                    setPinToolState(null)
+                    bumpCloth()
+                  }}
                 >
-                  ✋ Off
+                  💾 Save Vertex Group
                 </button>
               </div>
               <label className="slider-row">

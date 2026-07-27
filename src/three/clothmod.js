@@ -323,6 +323,7 @@ function buildSpecFromGeometry(geom, pinTopFrac) {
 
   const map = new Map()
   const weldOf = new Int32Array(srcCount)
+  const weldRep = [] // weld index -> one original (pre-weld) vertex index, for skin-position lookups
   const P = [], UV = []
   for (let i = 0; i < srcCount; i++) {
     const x = posAttr.getX(i), y = posAttr.getY(i), z = posAttr.getZ(i)
@@ -332,6 +333,7 @@ function buildSpecFromGeometry(geom, pinTopFrac) {
       ni = P.length / 3; map.set(key, ni)
       P.push(x, y, z)
       if (uvAttr) UV.push(uvAttr.getX(i), uvAttr.getY(i))
+      weldRep.push(i)
     }
     weldOf[i] = ni
   }
@@ -389,23 +391,30 @@ function buildSpecFromGeometry(geom, pinTopFrac) {
     indices: Uint32Array.from(tri), pinned,
     ei: Int32Array.from(ei), ej: Int32Array.from(ej),
     rest: Float32Array.from(rest), egroup: Uint8Array.from(egroup),
-    weldOf,
+    weldOf, weldRep: Int32Array.from(weldRep),
   }
 }
 
 // --- Glue: selection, drape playback, pin brush, bake -----------------------
 
 const cm = {
-  scene: null, camera: null, renderer: null, controls: null, requestRender: null,
-  entries: new Map(), // meshUuid -> { mesh, proxy, sim, spec, avgEdge, pinDots }
+  scene: null, camera: null, renderer: null, controls: null, requestRender: null, setContinuousRender: null,
+  entries: new Map(), // meshUuid -> { mesh, proxy, sim, spec, avgEdge, pinDots, otherMeshes, colliderAge }
   pinTool: 'add', // 'add' | 'del' | null
   brush: 3,
   playing: false,
-  rafId: null,
-  clock: new THREE.Clock(),
+  colliderTick: 0, // frame counter used to throttle collider rebuilds (see COLLIDER_REFRESH_EVERY)
   raycaster: new THREE.Raycaster(),
   pointerDown: false,
 }
+
+// Rebuilding a collider (see BodyCollider) re-hashes every triangle into a
+// spatial grid from scratch — cheap once, not something you want to redo 60
+// times a second per cloth mesh. The body it collides against (bones/skin)
+// can't move fast enough for the cloth to feel laggy if we only refresh this
+// every few frames instead of every frame, so we throttle it here to keep
+// live cloth cheap on CPU/GC even with several garments enabled at once.
+const COLLIDER_REFRESH_EVERY = 3
 
 export function initClothMod(refs) {
   cm.scene = refs.scene
@@ -413,6 +422,7 @@ export function initClothMod(refs) {
   cm.renderer = refs.renderer
   cm.controls = refs.controls
   cm.requestRender = refs.requestRender
+  cm.setContinuousRender = refs.setContinuousRender || null
   const dom = cm.renderer.domElement
   cm._onDown = onPointerDown
   cm._onMove = onPointerMove
@@ -528,7 +538,24 @@ export function enableCloth(mesh, otherMeshes, { pinTop = 0.12, preset = 'cotton
   proxyGeom.computeVertexNormals()
 
   const srcMat = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material
-  const proxy = new THREE.Mesh(proxyGeom, srcMat)
+  const proxyMat = srcMat.clone() // don't share one material instance between the hidden skinned mesh and this plain one
+  // Cloth is a thin open sheet, not closed body geometry — it constantly
+  // flips to show its "back" as it drapes and folds. A single-sided material
+  // culls that side entirely, and the anime-outline effect always draws a
+  // solid black backface shell regardless of the material's own side setting
+  // — so wherever you were looking at the back of the sheet, that black
+  // shell was the only thing left visible. Force double-sided so the real
+  // material actually renders there too.
+  proxyMat.side = THREE.DoubleSide
+  // The proxy geometry carries no per-vertex color data, but the cloned
+  // material may have vertexColors=true (materials.js copies that flag onto
+  // every toon/unlit variant it generates). An enabled-but-unbound `color`
+  // attribute reads as (0,0,0) in the shader and multiplies the whole
+  // surface to black — which is exactly what was happening. The proxy has
+  // nothing to contribute there, so switch it off.
+  proxyMat.vertexColors = false
+  proxyMat.needsUpdate = true
+  const proxy = new THREE.Mesh(proxyGeom, proxyMat)
   proxy.frustumCulled = false
   proxy.name = (mesh.name || 'mesh') + ' (cloth preview)'
   cm.scene.add(proxy)
@@ -538,9 +565,10 @@ export function enableCloth(mesh, otherMeshes, { pinTop = 0.12, preset = 'cotton
     new THREE.BufferGeometry(),
     new THREE.PointsMaterial({ color: 0xffd23f, size: 0.015, sizeAttenuation: true, depthTest: false }),
   )
+  pinDots.visible = cm.pinTool != null // 'off' tool starts hidden, not just non-interactive
   cm.scene.add(pinDots)
 
-  cm.entries.set(mesh.uuid, { mesh, proxy, sim, spec, avgEdge: meanStructuralEdge(spec), pinDots })
+  cm.entries.set(mesh.uuid, { mesh, proxy, sim, spec, avgEdge: meanStructuralEdge(spec), pinDots, otherMeshes })
   refreshPinMarkers(cm.entries.get(mesh.uuid))
   cm.requestRender()
   return true
@@ -551,6 +579,7 @@ export function disableCloth(uuid, { restoreVisible = true } = {}) {
   if (!entry) return
   cm.scene.remove(entry.proxy)
   entry.proxy.geometry.dispose()
+  entry.proxy.material.dispose()
   cm.scene.remove(entry.pinDots)
   entry.pinDots.geometry.dispose()
   entry.pinDots.material.dispose()
@@ -594,8 +623,6 @@ export function bakeCloth(uuid) {
     // longer bends with the skeleton.
     mesh.isSkinnedMesh = false
     mesh.getVertexPosition = THREE.Mesh.prototype.getVertexPosition.bind(mesh)
-    mesh.computeBoundingBox = THREE.Mesh.prototype.computeBoundingBox.bind(mesh)
-    mesh.computeBoundingSphere = THREE.Mesh.prototype.computeBoundingSphere.bind(mesh)
     mesh.raycast = THREE.Mesh.prototype.raycast.bind(mesh)
     mesh.skeleton = null
   }
@@ -629,27 +656,77 @@ export function applyFabricPreset(uuid, presetName) {
 
 // --- Drape playback ----------------------------------------------------------
 
+// Pinned particles used to be frozen at whatever world-space point they were
+// at the moment you pinned them — so a collar or waistband stayed hanging in
+// mid-air the instant the character moved or the pose changed, since nothing
+// ever told a pin where the body underneath it went. The source mesh is
+// still a fully weighted SkinnedMesh (it's just hidden, not stripped down),
+// so instead of reinventing weighting we just read ITS existing bone weights
+// each frame: `mesh.getVertexPosition` already applies the mesh's own skin
+// weights ("auto weights") for a given vertex under the current pose. We
+// reuse that per pinned particle so pins ride along with the body exactly
+// like the original mesh would have.
+const _skinTmp = new THREE.Vector3()
+function updatePinsFromSkin(entry) {
+  const { mesh, sim, spec } = entry
+  if (!mesh.isSkinnedMesh || !spec.weldRep) return
+  mesh.updateMatrixWorld()
+  const pinPos = sim.pinPos
+  for (let i = 0; i < sim.n; i++) {
+    if (!sim.pinned[i]) continue
+    const srcVert = spec.weldRep[i]
+    mesh.getVertexPosition(srcVert, _skinTmp).applyMatrix4(mesh.matrixWorld)
+    pinPos[3 * i] = _skinTmp.x
+    pinPos[3 * i + 1] = _skinTmp.y
+    pinPos[3 * i + 2] = _skinTmp.z
+  }
+}
+
+// Re-pose an entry's collider from where its `otherMeshes` are RIGHT NOW —
+// called periodically (throttled, see COLLIDER_REFRESH_EVERY) while playing
+// so the cloth follows a running animation instead of draping against a pose
+// frozen at enable-time, without re-hashing the collider grid every frame.
+function refreshLiveCollider(entry) {
+  if (!entry.otherMeshes || !entry.otherMeshes.length) return
+  const colliderGeom = mergeWorldGeometry(entry.otherMeshes)
+  if (colliderGeom) entry.sim.setCollider(new BodyCollider(colliderGeom, 0.015))
+}
+
+// Turn live cloth simulation on/off. Stepping itself happens once per frame
+// from the scene's shared render tick (stepClothLive below) rather than a
+// separate requestAnimationFrame loop — one clock driving both animation and
+// cloth keeps them in lockstep and means cloth can't keep looping after the
+// viewport itself has stopped rendering.
 export function setClothPlaying(on) {
   if (on === cm.playing) return
   cm.playing = on
-  if (on) {
-    cm.clock.getDelta()
-    const loop = () => {
-      if (!cm.playing) return
-      cm.rafId = requestAnimationFrame(loop)
-      const dt = Math.min(cm.clock.getDelta(), 1 / 30)
-      for (const entry of cm.entries.values()) { entry.sim.step(dt); syncProxy(entry) }
-      cm.requestRender()
-    }
-    cm.rafId = requestAnimationFrame(loop)
-  } else if (cm.rafId) {
-    cancelAnimationFrame(cm.rafId)
-    cm.rafId = null
-  }
+  if (cm.setContinuousRender) cm.setContinuousRender(on)
+  if (on) cm.colliderTick = 0
+  else cm.requestRender()
 }
 export function isClothPlaying() { return cm.playing }
 
+// Called every frame from the scene tick while cm.playing is true. Steps
+// every LIVE (non-baked) cloth entry against its current collider, and
+// refreshes that collider on a throttle so a running animation is followed
+// without rebuilding the collision grid on every single frame.
+export function stepClothLive(dt) {
+  if (!cm.playing || !cm.entries.size) return
+  const refreshCollider = cm.colliderTick % COLLIDER_REFRESH_EVERY === 0
+  cm.colliderTick++
+  const clampedDt = Math.min(dt || 1 / 60, 1 / 30)
+  for (const entry of cm.entries.values()) {
+    if (entry.bakedCache) continue // baked timelines are played back separately, not live-stepped
+    if (refreshCollider) refreshLiveCollider(entry)
+    updatePinsFromSkin(entry)
+    entry.sim.step(clampedDt)
+    syncProxy(entry)
+  }
+  cm.requestRender()
+}
+
 export function stepClothOnce(substeps = 4) {
+  for (const entry of cm.entries.values()) { refreshLiveCollider(entry); updatePinsFromSkin(entry) }
   for (let s = 0; s < substeps; s++) for (const entry of cm.entries.values()) entry.sim.step(1 / 60)
   for (const entry of cm.entries.values()) syncProxy(entry)
   cm.requestRender()
@@ -735,7 +812,27 @@ export function syncClothToTime(t) {
 
 
 
-export function setPinTool(tool) { cm.pinTool = tool } // 'add' | 'del' | null
+export function setPinTool(tool) {
+  cm.pinTool = tool // 'add' | 'del' — brush-editing the vertex group. null while not editing.
+  for (const entry of cm.entries.values()) if (!entry.groupSaved) entry.pinDots.visible = tool != null
+  cm.requestRender()
+}
+
+// Locks in the current pin selection as the mesh's "vertex group" and hides
+// the marker overlay for good — replaces the old add/del/OFF three-way
+// toggle, where "off" only stopped further clicks but left the dots on
+// screen forever. Also snaps pin tracking on immediately (instead of waiting
+// for the next play/step) so the result is visible right away.
+export function saveVertexGroup(uuid) {
+  const entry = cm.entries.get(uuid)
+  if (!entry) return
+  entry.groupSaved = true
+  entry.pinDots.visible = false
+  cm.pinTool = null
+  updatePinsFromSkin(entry)
+  syncProxy(entry)
+  cm.requestRender()
+}
 export function setBrushSize(n) { cm.brush = n }
 
 export function clearPins(uuid) {

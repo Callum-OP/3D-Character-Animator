@@ -55,6 +55,7 @@ import {
   clearAllCloth,
   bakeClothToTimeline,
   syncClothToTime,
+  stepClothLive,
   hasBakedTimeline,
   clearBakedTimeline,
 } from './clothmod.js'
@@ -138,6 +139,7 @@ const state = {
 
   renderScheduled: false,
   continuous: false, // when true, render every frame (for animation playback)
+  continuousReasons: new Set(), // who's asking for a continuous loop right now ('anim', 'cloth', …)
   animId: 0,
   clock: null, // THREE.Clock for per-frame deltas while playing
   fps: 0, // smoothed frames-per-second while playing (for the stats readout)
@@ -291,7 +293,18 @@ export function initScene(container) {
   })
 
   // --- Cloth modifier (drape a selected mesh against the rest of the character) ---
-  initClothMod({ scene, camera, renderer, controls, requestRender })
+  initClothMod({
+    scene,
+    camera,
+    renderer,
+    controls,
+    requestRender,
+    // Cloth playback shares the same continuous loop as animation playback
+    // (see setContinuousRender's reason-counting below) instead of running
+    // its own separate requestAnimationFrame — one loop, one clock, no risk
+    // of the two stepping out of sync or fighting over on/off state.
+    setContinuousRender: (on) => setContinuousRender(on, 'cloth'),
+  })
 
   // --- Lights (only affect Toon/Standard modes; harmless in Unlit) ---
   const dirLight = new THREE.DirectionalLight(0xffffff, 2.0)
@@ -397,10 +410,16 @@ function renderOnce() {
 }
 
 // Continuous render loop, used later for animation playback. Off by default.
-export function setContinuousRender(on) {
-  if (on === state.continuous) return
-  state.continuous = on
-  if (on) {
+// `reason` lets more than one system (animation playback, live cloth) ask for
+// the loop without turning it off under each other's feet — the loop only
+// actually stops once nobody has an active reason left.
+export function setContinuousRender(on, reason = 'anim') {
+  if (on) state.continuousReasons.add(reason)
+  else state.continuousReasons.delete(reason)
+  const shouldRun = state.continuousReasons.size > 0
+  if (shouldRun === state.continuous) return
+  state.continuous = shouldRun
+  if (shouldRun) {
     if (state.clock) state.clock.getDelta() // reset delta so the first frame isn't a big jump
     const tick = () => {
       if (!state.continuous) return
@@ -408,9 +427,20 @@ export function setContinuousRender(on) {
       const delta = state.clock ? state.clock.getDelta() : 0
       // Smoothed FPS for the stats readout (only meaningful while playing).
       if (delta > 0) state.fps = state.fps * 0.9 + (1 / delta) * 0.1
-      updateAnimation(delta) // advance the mixer before drawing
-      syncClothToTime(getCurrentTime()) // play back any baked cloth timelines
-      renderOnce()
+      // Guarded: a thrown error in any one step (mixer, cloth playback, the
+      // render call itself…) used to silently kill this frame's draw call —
+      // since the next rAF was already scheduled above, playback LOOKED like
+      // it was still running (time kept advancing) while the screen just
+      // never updated again. Catch here so one bad frame logs a warning and
+      // gets skipped instead of freezing everything after it.
+      try {
+        updateAnimation(delta) // advance the mixer before drawing
+        syncClothToTime(getCurrentTime()) // play back any baked cloth timelines
+        stepClothLive(delta) // step any LIVE (non-baked) cloth sims, following the current pose
+        renderOnce()
+      } catch (err) {
+        console.error('Render tick failed, skipping this frame:', err)
+      }
     }
     state.animId = requestAnimationFrame(tick)
   } else {
