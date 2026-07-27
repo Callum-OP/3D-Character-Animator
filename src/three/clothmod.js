@@ -408,13 +408,17 @@ const cm = {
   pointerDown: false,
 }
 
-// Rebuilding a collider (see BodyCollider) re-hashes every triangle into a
-// spatial grid from scratch — cheap once, not something you want to redo 60
-// times a second per cloth mesh. The body it collides against (bones/skin)
-// can't move fast enough for the cloth to feel laggy if we only refresh this
-// every few frames instead of every frame, so we throttle it here to keep
-// live cloth cheap on CPU/GC even with several garments enabled at once.
-const COLLIDER_REFRESH_EVERY = 3
+// Refreshing this every single frame costs a full collider rebuild (re-hashes
+// every triangle into a spatial grid) per cloth mesh per frame. That was
+// throttled down to every 3rd frame to save CPU, but the saving wasn't worth
+// it: cloth interpenetrates the STALE collider for the in-between frames,
+// then the sim snaps it out all at once the instant a fresh collider arrives
+// — visibly a "sits still, then teleports" stutter in sync with the throttle
+// interval. Refresh every frame instead so collision tracks the body
+// smoothly; if this turns out too expensive on very high-poly bodies, prefer
+// simplifying the collider mesh (fewer otherMeshes / a decimated proxy) over
+// re-introducing this kind of temporal gap.
+const COLLIDER_REFRESH_EVERY = 1
 
 export function initClothMod(refs) {
   cm.scene = refs.scene
@@ -508,6 +512,15 @@ function meanStructuralEdge(spec) {
   return cnt ? sum / cnt : 0.05
 }
 
+// Collider push-out margin, scaled off the garment's own average edge length
+// instead of one fixed absolute number — a fixed margin only looks right at
+// the particular character scale it was tuned against; on a different-scale
+// asset it can be too tight (thin cloth clips through) or too loose (cloth
+// visibly floats off the body).
+function collisionMargin(avgEdge) {
+  return Math.max(0.01, avgEdge * 0.35)
+}
+
 // Enable cloth on `mesh`, colliding against `otherMeshes` (typically every
 // other visible mesh of the same character, snapshotted at the current pose).
 export function enableCloth(mesh, otherMeshes, { pinTop = 0.12, preset = 'cotton' } = {}) {
@@ -528,8 +541,15 @@ export function enableCloth(mesh, otherMeshes, { pinTop = 0.12, preset = 'cotton
   sim.setStiffness({ stretch: p.stretch, shear: 0.6, bend: p.bend })
   sim.setParam('friction', p.friction)
 
+  const avgEdge = meanStructuralEdge(spec)
+  // A fixed 0.015-unit margin assumes a particular character scale. On a
+  // bigger/smaller asset it can be too tight, letting thin cloth (a t-shirt)
+  // clip through the body and leaving looser garments (shorts) resting
+  // inside it instead of just outside — scale it off the garment's own
+  // average edge length instead so it's proportional to this mesh.
+  const margin = collisionMargin(avgEdge)
   const colliderGeom = mergeWorldGeometry(otherMeshes)
-  if (colliderGeom) sim.setCollider(new BodyCollider(colliderGeom, 0.015))
+  if (colliderGeom) sim.setCollider(new BodyCollider(colliderGeom, margin))
 
   const proxyGeom = new THREE.BufferGeometry()
   proxyGeom.setAttribute('position', new THREE.BufferAttribute(sim.pos, 3))
@@ -568,7 +588,7 @@ export function enableCloth(mesh, otherMeshes, { pinTop = 0.12, preset = 'cotton
   pinDots.visible = cm.pinTool != null // 'off' tool starts hidden, not just non-interactive
   cm.scene.add(pinDots)
 
-  cm.entries.set(mesh.uuid, { mesh, proxy, sim, spec, avgEdge: meanStructuralEdge(spec), pinDots, otherMeshes })
+  cm.entries.set(mesh.uuid, { mesh, proxy, sim, spec, avgEdge, pinDots, otherMeshes })
   refreshPinMarkers(cm.entries.get(mesh.uuid))
   cm.requestRender()
   return true
@@ -689,7 +709,7 @@ function updatePinsFromSkin(entry) {
 function refreshLiveCollider(entry) {
   if (!entry.otherMeshes || !entry.otherMeshes.length) return
   const colliderGeom = mergeWorldGeometry(entry.otherMeshes)
-  if (colliderGeom) entry.sim.setCollider(new BodyCollider(colliderGeom, 0.015))
+  if (colliderGeom) entry.sim.setCollider(new BodyCollider(colliderGeom, collisionMargin(entry.avgEdge)))
 }
 
 // Turn live cloth simulation on/off. Stepping itself happens once per frame
@@ -773,7 +793,7 @@ export function bakeClothToTimeline(uuid, otherMeshes, { scrub, getClipDuration,
   while (t <= duration && steps < MAX_STEPS) {
     scrub(t) // pose bones, mesh pivots, morphs at this exact time
     const colliderGeom = mergeWorldGeometry(otherMeshes)
-    if (colliderGeom) entry.sim.setCollider(new BodyCollider(colliderGeom, 0.015))
+    if (colliderGeom) entry.sim.setCollider(new BodyCollider(colliderGeom, collisionMargin(entry.avgEdge)))
     entry.sim.step(dt)
     frames.push(entry.sim.pos.slice())
     t += dt

@@ -56,6 +56,7 @@ import {
   bakeClothToTimeline,
   syncClothToTime,
   stepClothLive,
+  isClothEnabled,
   hasBakedTimeline,
   clearBakedTimeline,
 } from './clothmod.js'
@@ -1141,6 +1142,15 @@ export function applyModelMaterials() {
     soften,
     overrides: s.meshOverrides,
   })
+  // applyMaterials sets mesh.visible from the stored per-mesh override for
+  // every mesh, with no idea that cloth has its own hidden real-mesh +
+  // visible-proxy setup going on. Toggling visibility off/on for a cloth mesh
+  // re-ran this and stomped the real mesh back to visible=true — leaving it
+  // stacked right on top of its own still-visible draped proxy, which reads
+  // as the mesh having been duplicated. Re-assert the hide here.
+  for (const mesh of state.currentModel.meshes) {
+    if (isClothEnabled(mesh.uuid)) mesh.visible = false
+  }
   // Materials may have been swapped; re-stamp outline params onto the live ones.
   applyOutlineParams(state.currentModel, s.outlineWidth, soften, s.meshOverrides)
   requestRender()
