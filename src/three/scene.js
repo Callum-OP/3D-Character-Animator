@@ -59,6 +59,7 @@ import {
   isClothEnabled,
   hasBakedTimeline,
   clearBakedTimeline,
+  refreshClothForStyleChange,
 } from './clothmod.js'
 import {
   initAnimation,
@@ -1142,6 +1143,10 @@ export function applyModelMaterials() {
     soften,
     overrides: s.meshOverrides,
   })
+  // Cloth proxies live outside the model's own scene graph (see clothmod.js),
+  // so applyMaterials' traversal never touches them — just rebuild any
+  // active drapes so their proxy material picks up the new style.
+  refreshClothForStyleChange()
   // applyMaterials sets mesh.visible from the stored per-mesh override for
   // every mesh, with no idea that cloth has its own hidden real-mesh +
   // visible-proxy setup going on. Toggling visibility off/on for a cloth mesh

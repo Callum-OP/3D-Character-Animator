@@ -575,6 +575,24 @@ export function enableCloth(mesh, otherMeshes, { pinTop = 0.12, preset = 'cotton
   // nothing to contribute there, so switch it off.
   proxyMat.vertexColors = false
   proxyMat.needsUpdate = true
+
+  // Mark cloth material so style system can update it
+  proxyMat.userData.isCloth = true
+
+  // Copy shader variant (toon/unlit/etc.)
+  if (srcMat.userData?.variant) {
+    proxyMat.userData.variant = srcMat.userData.variant
+  }
+
+  // Ensure cloth participates in outline effect
+  proxyMat.userData.outlineParameters = {
+    thickness: srcMat.userData?.outlineParameters?.thickness ?? 0.003,
+    color: [0, 0, 0],
+    alpha: 1,
+    visible: true,
+    keepAlive: false,
+  }
+
   const proxy = new THREE.Mesh(proxyGeom, proxyMat)
   proxy.frustumCulled = false
   proxy.name = (mesh.name || 'mesh') + ' (cloth preview)'
@@ -588,7 +606,7 @@ export function enableCloth(mesh, otherMeshes, { pinTop = 0.12, preset = 'cotton
   pinDots.visible = cm.pinTool != null // 'off' tool starts hidden, not just non-interactive
   cm.scene.add(pinDots)
 
-  cm.entries.set(mesh.uuid, { mesh, proxy, sim, spec, avgEdge, pinDots, otherMeshes })
+  cm.entries.set(mesh.uuid, { mesh, proxy, sim, spec, avgEdge, pinDots, otherMeshes, preset, pinTop })
   refreshPinMarkers(cm.entries.get(mesh.uuid))
   cm.requestRender()
   return true
@@ -761,6 +779,42 @@ function syncProxy(entry) {
   entry.proxy.geometry.attributes.position.needsUpdate = true
   entry.proxy.geometry.computeVertexNormals()
   entry.proxy.geometry.computeBoundingSphere()
+
+  // Recompute normals every frame so lighting reacts properly
+  entry.proxy.geometry.computeVertexNormals()
+  if (entry.proxy.geometry.attributes.normal) {
+    entry.proxy.geometry.attributes.normal.needsUpdate = true
+  }
+}
+
+// Cloth proxies are plain meshes living directly in the top-level scene
+// (cm.scene), not under the loaded model's own root — enableCloth() hides
+// the real SkinnedMesh and adds this proxy as a sibling of the whole
+// character, not a child of it. That means a style/lighting change run
+// through applyMaterials() (which only walks model.meshes) never touches
+// draped proxies. Simplest fix: just disable and re-enable cloth for every
+// active entry — enableCloth() clones the mesh's freshly-restyled material
+// fresh each time, so the new proxy is automatically in sync. Rebuilding the
+// spec from the same mesh geometry welds vertices in the same order every
+// time, so particle indices line up between the old and new sim — pinned
+// indices (including any set by the pin brush, not just the pinTop default)
+// are captured before disabling and re-applied after, so a style change
+// doesn't undo the user's pinning work. The drape itself still resets to
+// bind-pose, which is an acceptable trade for "style changed".
+export function refreshClothForStyleChange() {
+  for (const [uuid, entry] of Array.from(cm.entries)) {
+    const { mesh, otherMeshes, preset, pinTop } = entry
+    const pinnedIndices = []
+    for (let i = 0; i < entry.sim.n; i++) if (entry.sim.pinned[i]) pinnedIndices.push(i)
+
+    disableCloth(uuid, { restoreVisible: false })
+    enableCloth(mesh, otherMeshes, { preset, pinTop })
+
+    const newEntry = cm.entries.get(uuid)
+    if (!newEntry) continue
+    for (const i of pinnedIndices) if (i < newEntry.sim.n) newEntry.sim.setPinned(i, true)
+    refreshPinMarkers(newEntry)
+  }
 }
 
 // --- Baked animation timeline ------------------------------------------------

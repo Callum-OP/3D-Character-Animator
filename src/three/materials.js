@@ -42,7 +42,7 @@ const gradientCache = new Map()
 // shader samples this at (N·L * 0.5 + 0.5) and reads the red channel, so a small
 // N-wide NearestFilter texture quantises the diffuse term into N hard bands.
 // `floor` (0..1) lifts the darkest band toward white to soften/flatten shadows.
-function getGradientMap(steps, floor) {
+export function getGradientMap(steps, floor) {
   const fq = Math.round(floor * 20) / 20 // quantise to 0.05 to bound the cache
   const key = steps + ':' + fq
   if (gradientCache.has(key)) return gradientCache.get(key)
