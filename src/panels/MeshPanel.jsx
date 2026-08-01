@@ -33,6 +33,8 @@ import {
   isClothPlaying,
   stepClothOnce,
   applyFabricPreset,
+  setClothShrinkwrap,
+  isClothShrinkwrap,
 } from '../three/clothmod.js'
 import { getClipDuration } from '../three/animation.js'
 import EditableValue from './EditableValue.jsx'
@@ -71,6 +73,7 @@ export default function MeshPanel() {
   const [pinTool, setPinToolState] = useState('add')
   const [brushSize, setBrushSizeState] = useState(3)
   const [fabricPreset, setFabricPreset] = useState('cotton')
+  const [shrinkwrap, setShrinkwrapState] = useState(false)
   const [bakeFps, setBakeFps] = useState(24)
   const [bakeStatus, setBakeStatus] = useState('')
 
@@ -99,7 +102,7 @@ export default function MeshPanel() {
     if (!selectedMesh || !currentModel) return
     if (on) {
       const others = currentModel.meshes.filter((mesh) => mesh !== selectedMesh && mesh.visible)
-      enableCloth(selectedMesh, others, { preset: fabricPreset })
+      enableCloth(selectedMesh, others, { preset: fabricPreset, shrinkwrap })
     } else {
       disableCloth(selectedMesh.uuid)
       setClothPlaying(false)
@@ -116,6 +119,11 @@ export default function MeshPanel() {
   function onFabricPreset(name) {
     setFabricPreset(name)
     if (selectedMesh && clothOn) applyFabricPreset(selectedMesh.uuid, name)
+  }
+
+  function onShrinkwrap(on) {
+    setShrinkwrapState(on)
+    if (selectedMesh && clothOn) setClothShrinkwrap(selectedMesh.uuid, on)
   }
 
   function onPinTool(tool) {
@@ -371,6 +379,19 @@ export default function MeshPanel() {
                     </option>
                   ))}
                 </select>
+              </label>
+
+              <label
+                className="morph-label"
+                style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, marginBottom: 4 }}
+                title="Pull the cloth tight against the body instead of hanging loose — good for t-shirts, gloves, anything skin-tight rather than a cape or skirt."
+              >
+                <input
+                  type="checkbox"
+                  checked={clothOn ? isClothShrinkwrap(selectedMesh.uuid) : shrinkwrap}
+                  onChange={(e) => onShrinkwrap(e.target.checked)}
+                />
+                Shrinkwrap to body
               </label>
 
               <div className="kf-actions" style={{ marginTop: 4 }}>

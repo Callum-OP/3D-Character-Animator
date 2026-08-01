@@ -66,7 +66,7 @@ class ClothSim {
     this.params = {
       gravity: -9.8, damping: 1.2, friction: 0.55, thickness: 0.02,
       substeps: 12, wind: 0, comp: [stretchComp(0.95), shearComp(0.7), bendComp(0.35)],
-      floor: null, cling: 0.3, clingBand: 0.06, slack: 0,
+      floor: null, cling: 0.3, clingBand: 0.06, slack: 0, shrinkwrap: false,
     }
     this._wind = new THREE.Vector3()
   }
@@ -176,8 +176,33 @@ class ClothSim {
     if (!this.collider) return
     const q = this.collider.query(pos[ix], pos[ix + 1], pos[ix + 2])
     if (!q) return
-    const tx = q.x + q.nx * th, ty = q.y + q.ny * th, tz = q.z + q.nz * th
     const cling = this.params.cling
+
+    if (this.params.shrinkwrap) {
+      // nx/ny/nz above point from the surface toward wherever the particle
+      // CURRENTLY is — so if it's already tunnelled through to the inside,
+      // that "normal" points inward too, and the old logic below would just
+      // snap it back against the inside of the body instead of pushing it
+      // back out. fnx/fny/fnz is the triangle's true outward normal instead,
+      // fixed by winding order, so it stays correct no matter which side the
+      // particle ends up on. Signed distance along that fixed normal (rather
+      // than the always-positive Euclidean q.dist) is what actually tells us
+      // "outside" from "inside".
+      const sd = (pos[ix] - q.x) * q.fnx + (pos[ix + 1] - q.y) * q.fny + (pos[ix + 2] - q.z) * q.fnz
+      const outX = q.x + q.fnx * th, outY = q.y + q.fny * th, outZ = q.z + q.fnz * th
+      if (sd < th) {
+        pos[ix] = outX; pos[ix + 1] = outY; pos[ix + 2] = outZ
+        this._friction(ix, { nx: q.fnx, ny: q.fny, nz: q.fnz }, f)
+      } else if (cling > 0 && sd < th + this.params.clingBand) {
+        pos[ix] += (outX - pos[ix]) * cling
+        pos[ix + 1] += (outY - pos[ix + 1]) * cling
+        pos[ix + 2] += (outZ - pos[ix + 2]) * cling
+        this._friction(ix, { nx: q.fnx, ny: q.fny, nz: q.fnz }, f * 0.5)
+      }
+      return
+    }
+
+    const tx = q.x + q.nx * th, ty = q.y + q.ny * th, tz = q.z + q.nz * th
     if (q.dist < th) {
       pos[ix] = tx; pos[ix + 1] = ty; pos[ix + 2] = tz
       this._friction(ix, q, f)
@@ -215,6 +240,28 @@ class BodyCollider {
     this.tris = g.getAttribute('position').array
     this.T = this.tris.length / 9
     this.pad = pad
+
+    // True per-triangle outward normal (from winding order), independent of
+    // which side a query point currently sits on. Used by shrinkwrap so it
+    // can tell "outside" from "inside" even after a particle has tunnelled
+    // through the body, instead of just pointing away-from-closest-point
+    // (which flips sign the moment a particle crosses to the wrong side).
+    this.faceNormals = new Float32Array(this.T * 3)
+    const t0 = this.tris
+    for (let f = 0; f < this.T; f++) {
+      const o = f * 9
+      _a.set(t0[o], t0[o + 1], t0[o + 2])
+      _b.set(t0[o + 3], t0[o + 4], t0[o + 5])
+      _c.set(t0[o + 6], t0[o + 7], t0[o + 8])
+      _d.subVectors(_b, _a)
+      _e.subVectors(_c, _a)
+      _d.cross(_e)
+      const len = _d.length()
+      if (len > 1e-9) _d.multiplyScalar(1 / len)
+      this.faceNormals[f * 3] = _d.x
+      this.faceNormals[f * 3 + 1] = _d.y
+      this.faceNormals[f * 3 + 2] = _d.z
+    }
 
     const bb = new THREE.Box3().setFromBufferAttribute(g.getAttribute('position'))
     this.min = bb.min.clone()
@@ -255,24 +302,29 @@ class BodyCollider {
     const key = this._ci(px) + this.nx * (this._cj(py) + this.ny * this._ck(pz))
     const arr = this.grid.get(key); if (!arr) return null
     const t = this.tris
-    let best = Infinity, bx = 0, by = 0, bz = 0
+    let best = Infinity, bx = 0, by = 0, bz = 0, bestFace = -1
     _a.set(px, py, pz)
     for (let n = 0; n < arr.length; n++) {
-      const o = arr[n] * 9
+      const f = arr[n]
+      const o = f * 9
       _b.set(t[o], t[o + 1], t[o + 2])
       _c.set(t[o + 3], t[o + 4], t[o + 5])
       _d.set(t[o + 6], t[o + 7], t[o + 8])
       closestOnTri(_a, _b, _c, _d, _e)
       const dx = px - _e.x, dy = py - _e.y, dz = pz - _e.z
       const d2 = dx * dx + dy * dy + dz * dz
-      if (d2 < best) { best = d2; bx = _e.x; by = _e.y; bz = _e.z }
+      if (d2 < best) { best = d2; bx = _e.x; by = _e.y; bz = _e.z; bestFace = f }
     }
     if (best === Infinity) return null
     const dist = Math.sqrt(best)
     let nx, ny, nz
     if (dist > 1e-6) { nx = (px - bx) / dist; ny = (py - by) / dist; nz = (pz - bz) / dist }
     else { nx = 0; ny = 1; nz = 0 }
-    return { dist, x: bx, y: by, z: bz, nx, ny, nz }
+    // True face normal, fixed regardless of which side the query point is
+    // currently on — a tunnelled-through particle still gets the correct
+    // "outside" direction here, unlike nx/ny/nz above.
+    const fnx = this.faceNormals[bestFace * 3], fny = this.faceNormals[bestFace * 3 + 1], fnz = this.faceNormals[bestFace * 3 + 2]
+    return { dist, x: bx, y: by, z: bz, nx, ny, nz, fnx, fny, fnz }
   }
 }
 
@@ -523,7 +575,7 @@ function collisionMargin(avgEdge) {
 
 // Enable cloth on `mesh`, colliding against `otherMeshes` (typically every
 // other visible mesh of the same character, snapshotted at the current pose).
-export function enableCloth(mesh, otherMeshes, { pinTop = 0.12, preset = 'cotton' } = {}) {
+export function enableCloth(mesh, otherMeshes, { pinTop = 0.12, preset = 'cotton', shrinkwrap = false } = {}) {
   if (!mesh || cm.entries.has(mesh.uuid)) return false
   const worldGeom = worldSpaceGeometry(mesh)
   let spec
@@ -540,6 +592,18 @@ export function enableCloth(mesh, otherMeshes, { pinTop = 0.12, preset = 'cotton
   const sim = new ClothSim(spec, { mass: p.mass })
   sim.setStiffness({ stretch: p.stretch, shear: 0.6, bend: p.bend })
   sim.setParam('friction', p.friction)
+
+  // Shrinkwrap: hugs the collider tight and over a much wider band than
+  // normal cling, using the collider's fixed per-triangle outward normal
+  // (not the point-to-particle direction) so it forces the cloth to stay
+  // OUTSIDE the body even if a fast-moving vertex has tunnelled through —
+  // a soft physical analog of Blender's Shrinkwrap modifier, good for
+  // skin-tight garments (t-shirts, gloves) rather than free-hanging cloth.
+  if (shrinkwrap) {
+    sim.setParam('shrinkwrap', true)
+    sim.setParam('cling', 0.9)
+    sim.setParam('clingBand', 0.15)
+  }
 
   const avgEdge = meanStructuralEdge(spec)
   // A fixed 0.015-unit margin assumes a particular character scale. On a
@@ -606,7 +670,7 @@ export function enableCloth(mesh, otherMeshes, { pinTop = 0.12, preset = 'cotton
   pinDots.visible = cm.pinTool != null // 'off' tool starts hidden, not just non-interactive
   cm.scene.add(pinDots)
 
-  cm.entries.set(mesh.uuid, { mesh, proxy, sim, spec, avgEdge, pinDots, otherMeshes, preset, pinTop })
+  cm.entries.set(mesh.uuid, { mesh, proxy, sim, spec, avgEdge, pinDots, otherMeshes, preset, pinTop, shrinkwrap })
   refreshPinMarkers(cm.entries.get(mesh.uuid))
   cm.requestRender()
   return true
@@ -690,6 +754,24 @@ export function setFabricParams(uuid, { stretch, bend, mass, friction, gravity, 
 export function applyFabricPreset(uuid, presetName) {
   const p = FABRIC_PRESETS[presetName]
   if (p) setFabricParams(uuid, p)
+}
+
+// Toggle shrinkwrap live on an already-draped mesh — dials the same
+// shrinkwrap/cling/clingBand params enableCloth sets at creation time, and
+// remembers the flag on the entry so it survives refreshClothForStyleChange
+// rebuilds.
+export function setClothShrinkwrap(uuid, on) {
+  const entry = cm.entries.get(uuid)
+  if (!entry) return
+  entry.shrinkwrap = on
+  entry.sim.setParam('shrinkwrap', on)
+  entry.sim.setParam('cling', on ? 0.9 : 0.3)
+  entry.sim.setParam('clingBand', on ? 0.15 : 0.06)
+  cm.requestRender()
+}
+export function isClothShrinkwrap(uuid) {
+  const entry = cm.entries.get(uuid)
+  return entry ? !!entry.shrinkwrap : false
 }
 
 // --- Drape playback ----------------------------------------------------------
@@ -803,12 +885,12 @@ function syncProxy(entry) {
 // bind-pose, which is an acceptable trade for "style changed".
 export function refreshClothForStyleChange() {
   for (const [uuid, entry] of Array.from(cm.entries)) {
-    const { mesh, otherMeshes, preset, pinTop } = entry
+    const { mesh, otherMeshes, preset, pinTop, shrinkwrap } = entry
     const pinnedIndices = []
     for (let i = 0; i < entry.sim.n; i++) if (entry.sim.pinned[i]) pinnedIndices.push(i)
 
     disableCloth(uuid, { restoreVisible: false })
-    enableCloth(mesh, otherMeshes, { preset, pinTop })
+    enableCloth(mesh, otherMeshes, { preset, pinTop, shrinkwrap })
 
     const newEntry = cm.entries.get(uuid)
     if (!newEntry) continue
