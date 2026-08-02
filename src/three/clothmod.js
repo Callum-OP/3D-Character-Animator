@@ -3,23 +3,23 @@ import * as THREE from 'three'
 // ---------------------------------------------------------------------------
 // Cloth modifier
 //
-// Ported from the standalone Cloth Studio tool (same XPBD solver + body
-// collider, unchanged) and wired up to work on a single selected mesh of the
-// character — a cape, skirt, sash, whatever — instead of a whole garment file.
+// An XPBD (position-based dynamics) cloth solver plus a body collider, wired
+// up to work on a single selected mesh of the character — a cape, skirt,
+// sash, whatever — rather than a whole separate garment file.
 //
-// This is a POSE-TIME drape, not a per-frame dynamic sim: enabling cloth on a
-// mesh snapshots the character's CURRENT pose (every other visible mesh) as
-// the collision body, and drapes against that fixed shape. Re-pose, then
-// re-enable (or hit Redrape) to update the collider. This is the same
-// trade-off Cloth Studio itself makes — it doesn't move the body while
-// draping either.
+// This is a POSE-TIME drape, not a per-frame dynamic sim by default: enabling
+// cloth on a mesh snapshots the character's CURRENT pose (every other visible
+// mesh) as the collision body, and drapes against that fixed shape. Re-pose,
+// then re-enable (or hit Redrape) to update the collider. "Bake to animation"
+// (further down) is what turns this into real per-frame motion across a
+// whole clip.
 //
 // "Vertex group" equivalent: there's no vertex-group import here (three.js/
 // glTF don't carry Blender vertex groups), so pins start as the mesh's top
-// band (like a cape's collar) and you refine them with the same add/remove
-// pin brush Cloth Studio uses. Once a drape looks right, Bake writes the
-// result into the mesh's own geometry and turns cloth off — after that it's
-// just a normal static mesh again (posable, exportable, undo-able elsewhere).
+// band (like a cape's collar) and you refine them with an add/remove pin
+// brush. Once a drape looks right, Bake writes the result into the mesh's
+// own geometry and turns cloth off — after that it's just a normal static
+// mesh again (posable, exportable, undo-able elsewhere).
 // ---------------------------------------------------------------------------
 
 const clamp01 = (x) => Math.max(0, Math.min(1, x))
@@ -35,8 +35,8 @@ export const FABRIC_PRESETS = {
   wool: { stretch: 0.94, bend: 0.45, mass: 0.45, friction: 0.6 },
 }
 
-// --- Solver: trimmed port of Cloth Studio's ClothSim/BodyCollider -----------
-// (unchanged from clothsim.js — self-contained, no DOM dependencies)
+// --- Solver: XPBD ClothSim + BodyCollider -----------------------------------
+// (self-contained, no DOM dependencies)
 
 class ClothSim {
   constructor(spec, opts = {}) {
@@ -824,7 +824,8 @@ function updatePinsFromSkin(entry) {
 export function followIdleClothPose() {
   if (!cm.entries.size) return
   for (const entry of cm.entries.values()) {
-    if (cm.playing || entry.bakedCache) continue // those paths already drive the proxy themselves
+    const isBaked = !!entry.bakedCache
+    if (cm.playing || isBaked) continue // those paths already drive the proxy themselves
     const { mesh, sim, spec, proxy } = entry
     if (!spec.weldRep) continue
     if (mesh.isSkinnedMesh) mesh.skeleton.update()
@@ -1046,9 +1047,17 @@ export function syncClothToTime(t) {
     const cache = entry.bakedCache
     if (!cache || !cache.frames.length) continue
     const idx = Math.max(0, Math.min(cache.frames.length - 1, Math.round((t / cache.duration) * (cache.frames.length - 1))))
+    // Mutate the existing attribute's array in place — do NOT replace the
+    // BufferAttribute object. entry.sim.pos and this geometry's position
+    // array are THE SAME underlying Float32Array on purpose (see
+    // enableCloth: `new THREE.BufferAttribute(sim.pos, 3)`) — that's what
+    // lets live physics (stepClothLive, Step, Drape) update the proxy for
+    // free via syncProxy(), which only flags needsUpdate rather than copying
+    // data itself. Replacing the attribute here breaks that shared reference.
     entry.proxy.geometry.attributes.position.array.set(cache.frames[idx])
     entry.proxy.geometry.attributes.position.needsUpdate = true
     entry.proxy.geometry.computeVertexNormals()
+    entry.proxy.geometry.computeBoundingSphere()
   }
 }
 
