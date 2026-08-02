@@ -36,7 +36,6 @@ import {
   setClothShrinkwrap,
   isClothShrinkwrap,
 } from '../three/clothmod.js'
-import { getClipDuration } from '../three/animation.js'
 import EditableValue from './EditableValue.jsx'
 
 // Side-panel section for Mesh mode: pick a part of the character (eyes, hair,
@@ -75,6 +74,7 @@ export default function MeshPanel() {
   const [fabricPreset, setFabricPreset] = useState('cotton')
   const [shrinkwrap, setShrinkwrapState] = useState(false)
   const [bakeFps, setBakeFps] = useState(24)
+  const [settleSeconds, setSettleSeconds] = useState(1.5)
   const [bakeStatus, setBakeStatus] = useState('')
 
   const currentModel = getCurrentModel()
@@ -142,8 +142,13 @@ export default function MeshPanel() {
     // Runs synchronously (it's a physics loop, not I/O), so give the status
     // text a tick to actually paint before the tab locks up briefly.
     setTimeout(() => {
-      const result = bakeClothAnimation(selectedMesh.uuid, bakeFps)
-      setBakeStatus(result.ok ? `Baked ${result.frameCount} frames — cloth will now follow the animation.` : result.reason)
+      try {
+        const result = bakeClothAnimation(selectedMesh.uuid, bakeFps, settleSeconds)
+        setBakeStatus(result.ok ? `Baked ${result.frameCount} frames — cloth will now follow the animation.` : result.reason)
+      } catch (err) {
+        console.error('Bake to animation failed:', err)
+        setBakeStatus(`Bake failed: ${err?.message || err}`)
+      }
       bumpCloth()
     }, 30)
   }
@@ -483,8 +488,9 @@ export default function MeshPanel() {
                 <span className="joint-name">Physics during animation</span>
               </div>
               <div className="pose-hint">
-                Runs the drape once across the whole clip — re-posing and
-                re-colliding at each sampled frame — then caches the result so
+                Settles the cloth at the clip's starting pose first, then runs
+                the drape once across the whole clip — re-posing and
+                re-colliding at each sampled frame — and caches the result so
                 it plays back at animation speed. Re-bake after changing the
                 pose, timing, or fabric.
               </div>
@@ -500,12 +506,23 @@ export default function MeshPanel() {
                 />
                 <span>{bakeFps} fps</span>
               </label>
+              <label className="slider-row" title="How long to let the cloth settle into a natural drape at the clip's starting pose before baking through the timeline — stops early if it settles sooner.">
+                <span className="slider-label">Settle time</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={5}
+                  step={0.1}
+                  value={settleSeconds}
+                  onChange={(e) => setSettleSeconds(Number(e.target.value))}
+                />
+                <span>{settleSeconds.toFixed(1)}s</span>
+              </label>
               <div className="kf-actions" style={{ marginTop: 4 }}>
                 <button
                   className="btn"
                   onClick={onBakeToAnimation}
-                  disabled={!getClipDuration()}
-                  title={getClipDuration() ? 'Bake cloth physics across the current clip' : 'Load or select an animation clip first'}
+                  title="Bake cloth physics across the current clip"
                 >
                   🎬 Bake to animation
                 </button>

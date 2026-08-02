@@ -60,6 +60,7 @@ import {
   hasBakedTimeline,
   clearBakedTimeline,
   refreshClothForStyleChange,
+  followIdleClothPose,
 } from './clothmod.js'
 import {
   initAnimation,
@@ -401,6 +402,7 @@ export function requestRender() {
 
 function renderOnce() {
   if (!state.renderer) return
+  followIdleClothPose() // keep enabled-but-not-draping cloth tracking the body/gizmo, not frozen
   updateBoneHelpers() // park bone dots on their (possibly just-moved) bones
   updateMeshEditHelpers() // keep the part-selection box hugging its mesh
   const camera = state.viewCamera || state.camera
@@ -461,13 +463,24 @@ export function scrubTimeline(t) {
 
 // Bake cloth on `mesh` across the whole current clip, sampled at `fps`, using
 // every other visible character mesh as the (per-sample, re-posed) collider.
-export function bakeClothAnimation(uuid, fps = 24) {
+// `settleSeconds` lets the garment settle into a natural drape at the clip's
+// starting pose before the timeline itself starts advancing.
+export function bakeClothAnimation(uuid, fps = 24, settleSeconds = 1.5) {
   const mesh = state.currentModel?.meshes?.find((mm) => mm.uuid === uuid)
   if (!mesh || !state.currentModel) return { ok: false, reason: 'No character loaded.' }
   const others = state.currentModel.meshes.filter((mm) => mm !== mesh && mm.visible)
   // Bake uses a plain scrub (not scrubTimeline) — syncing cloth mid-bake would
   // just make each sample overwrite the cache it's still building.
-  return bakeClothToTimeline(uuid, others, { scrub, getClipDuration, fps })
+  try {
+    return bakeClothToTimeline(uuid, others, { scrub, getClipDuration, fps, settleSeconds })
+  } catch (err) {
+    // Don't let this die silently — a thrown error here previously left the
+    // UI stuck on "Baking…" forever with nothing in the console the user
+    // would necessarily notice. Log it AND hand the message back so the
+    // status line actually shows something diagnosable.
+    console.error('bakeClothAnimation failed:', err)
+    return { ok: false, reason: `Bake failed: ${err?.message || err}` }
+  }
 }
 
 export { hasBakedTimeline, clearBakedTimeline }
