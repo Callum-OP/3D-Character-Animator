@@ -11,7 +11,27 @@ import {
   getLinkedMorphTargets,
   getMeshIndex,
 } from '../three/meshedit.js'
-import { getCurrentModel, requestRender } from '../three/scene.js'
+import {
+  getCurrentModel,
+  requestRender,
+} from '../three/scene.js'
+import {
+  FABRIC_PRESETS,
+  isClothEnabled,
+  enableCloth,
+  disableCloth,
+  resetCloth,
+  setPinTool,
+  setBrushSize,
+  clearPins,
+  saveVertexGroup,
+  setClothPlaying,
+  isClothPlaying,
+  stepClothOnce,
+  applyFabricPreset,
+  setClothShrinkwrap,
+  isClothShrinkwrap,
+} from '../three/clothmod.js'
 import EditableValue from './EditableValue.jsx'
 
 // Side-panel section for Mesh mode: pick a part of the character (eyes, hair,
@@ -44,6 +64,11 @@ export default function MeshPanel() {
   const [, setMorphVersion] = useState(0)
   const [morphEntries, setMorphEntries] = useState([])
   const [morphValues, setMorphValues] = useState({})
+  const [clothVersion, setClothVersion] = useState(0)
+  const [pinTool, setPinToolState] = useState('add')
+  const [brushSize, setBrushSizeState] = useState(3)
+  const [fabricPreset, setFabricPreset] = useState('cotton')
+  const [shrinkwrap, setShrinkwrapState] = useState(false)
 
   const currentModel = getCurrentModel()
   const meshes = modelInfo?.meshes || []
@@ -58,6 +83,44 @@ export default function MeshPanel() {
 
   function forceRerender() {
     setMorphVersion((v) => v + 1)
+  }
+
+  const clothOn = selectedMesh ? isClothEnabled(selectedMesh.uuid) : false
+
+  function bumpCloth() {
+    setClothVersion((v) => v + 1)
+  }
+
+  function onToggleCloth(on) {
+    if (!selectedMesh || !currentModel) return
+    if (on) {
+      const others = currentModel.meshes.filter((mesh) => mesh !== selectedMesh && mesh.visible)
+      enableCloth(selectedMesh, others, { preset: fabricPreset, shrinkwrap })
+    } else {
+      disableCloth(selectedMesh.uuid)
+      setClothPlaying(false)
+    }
+    bumpCloth()
+  }
+
+  function onFabricPreset(name) {
+    setFabricPreset(name)
+    if (selectedMesh && clothOn) applyFabricPreset(selectedMesh.uuid, name)
+  }
+
+  function onShrinkwrap(on) {
+    setShrinkwrapState(on)
+    if (selectedMesh && clothOn) setClothShrinkwrap(selectedMesh.uuid, on)
+  }
+
+  function onPinTool(tool) {
+    setPinToolState(tool)
+    setPinTool(tool)
+  }
+
+  function onBrushSize(n) {
+    setBrushSizeState(n)
+    setBrushSize(n)
   }
 
   function onKeyPart() {
@@ -255,6 +318,126 @@ export default function MeshPanel() {
               Key part{keyCount ? ` (${keyCount})` : ''}
             </button>
           </div>
+        </div>
+      )}
+
+      {selectedMesh && (
+        <div className="joint-controls" style={{ marginTop: 10 }}>
+          <div className="joint-header">
+            <span className="joint-name">Cloth</span>
+            <span className="joint-parent">{selectedMesh.name}</span>
+          </div>
+          <label
+            className="morph-label"
+            style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}
+            title="Drape this mesh (a cape, skirt, sash…) against the rest of the character using its current pose. Re-pose, then toggle off/on to redrape against the new pose."
+          >
+            <input type="checkbox" checked={clothOn} onChange={(e) => onToggleCloth(e.target.checked)} />
+            Enable cloth simulation
+          </label>
+
+          {clothOn && (
+            <>
+              <label className="field">
+                <span>Fabric</span>
+                <select value={fabricPreset} onChange={(e) => onFabricPreset(e.target.value)}>
+                  {Object.keys(FABRIC_PRESETS).map((name) => (
+                    <option key={name} value={name}>
+                      {name[0].toUpperCase() + name.slice(1)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label
+                className="morph-label"
+                style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, marginBottom: 4 }}
+                title="Pull the cloth tight against the body instead of hanging loose — good for t-shirts, gloves, anything skin-tight rather than a cape or skirt."
+              >
+                <input
+                  type="checkbox"
+                  checked={clothOn ? isClothShrinkwrap(selectedMesh.uuid) : shrinkwrap}
+                  onChange={(e) => onShrinkwrap(e.target.checked)}
+                />
+                Shrinkwrap to body
+              </label>
+
+              <div className="kf-actions" style={{ marginTop: 4 }}>
+                <button
+                  className="btn"
+                  onClick={() => {
+                    setClothPlaying(!isClothPlaying())
+                    bumpCloth()
+                  }}
+                >
+                  {isClothPlaying() ? '❚❚ Pause' : '▶ Drape'}
+                </button>
+                <button className="btn secondary" onClick={() => stepClothOnce()}>
+                  ⤼ Step
+                </button>
+                <button
+                  className="btn secondary"
+                  onClick={() => {
+                    resetCloth(selectedMesh.uuid)
+                    bumpCloth()
+                  }}
+                >
+                  ↺ Reset
+                </button>
+              </div>
+
+              <div className="pose-hint" style={{ marginTop: 6 }}>
+                Pins hold cloth to the body (e.g. a collar or waistband) and
+                move with it once saved — starts pinned along the top edge;
+                use the brush to add/remove pins, then save the group.
+              </div>
+              <div className="kf-actions" style={{ marginTop: 4 }}>
+                <button
+                  className={'btn secondary' + (pinTool === 'add' ? ' active' : '')}
+                  onClick={() => onPinTool('add')}
+                >
+                  📌 Pin
+                </button>
+                <button
+                  className={'btn secondary' + (pinTool === 'del' ? ' active' : '')}
+                  onClick={() => onPinTool('del')}
+                >
+                  ✂ Unpin
+                </button>
+                <button
+                  className="btn secondary"
+                  onClick={() => {
+                    saveVertexGroup(selectedMesh.uuid)
+                    setPinToolState(null)
+                    bumpCloth()
+                  }}
+                >
+                  💾 Save Vertex Group
+                </button>
+              </div>
+              <label className="slider-row">
+                <span className="slider-label">Brush size</span>
+                <input
+                  type="range"
+                  min={1}
+                  max={12}
+                  step={1}
+                  value={brushSize}
+                  onChange={(e) => onBrushSize(Number(e.target.value))}
+                />
+                <span>{brushSize}</span>
+              </label>
+              <button
+                className="btn secondary"
+                onClick={() => {
+                  clearPins(selectedMesh.uuid)
+                  bumpCloth()
+                }}
+              >
+                Clear all pins
+              </button>
+            </>
+          )}
         </div>
       )}
 
