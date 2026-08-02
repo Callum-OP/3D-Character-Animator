@@ -53,12 +53,8 @@ import {
   initClothMod,
   disposeClothMod,
   clearAllCloth,
-  bakeClothToTimeline,
-  syncClothToTime,
   stepClothLive,
   isClothEnabled,
-  hasBakedTimeline,
-  clearBakedTimeline,
   refreshClothForStyleChange,
   followIdleClothPose,
 } from './clothmod.js'
@@ -68,8 +64,6 @@ import {
   clearAnimationModel,
   updateAnimation,
   scrub,
-  getClipDuration,
-  getCurrentTime,
 } from './animation.js'
 import {
   initMeshEdit,
@@ -439,8 +433,7 @@ export function setContinuousRender(on, reason = 'anim') {
       // gets skipped instead of freezing everything after it.
       try {
         updateAnimation(delta) // advance the mixer before drawing
-        syncClothToTime(getCurrentTime()) // play back any baked cloth timelines
-        stepClothLive(delta) // step any LIVE (non-baked) cloth sims, following the current pose
+        stepClothLive(delta) // step any LIVE cloth sims, following the current pose
         renderOnce()
       } catch (err) {
         console.error('Render tick failed, skipping this frame:', err)
@@ -454,36 +447,10 @@ export function setContinuousRender(on, reason = 'anim') {
   }
 }
 
-// Move the playhead AND update anything driven by it that lives outside the
-// animation module (currently: baked cloth timelines).
+// Move the playhead.
 export function scrubTimeline(t) {
   scrub(t)
-  syncClothToTime(getCurrentTime())
 }
-
-// Bake cloth on `mesh` across the whole current clip, sampled at `fps`, using
-// every other visible character mesh as the (per-sample, re-posed) collider.
-// `settleSeconds` lets the garment settle into a natural drape at the clip's
-// starting pose before the timeline itself starts advancing.
-export function bakeClothAnimation(uuid, fps = 24, settleSeconds = 1.5) {
-  const mesh = state.currentModel?.meshes?.find((mm) => mm.uuid === uuid)
-  if (!mesh || !state.currentModel) return { ok: false, reason: 'No character loaded.' }
-  const others = state.currentModel.meshes.filter((mm) => mm !== mesh && mm.visible)
-  // Bake uses a plain scrub (not scrubTimeline) — syncing cloth mid-bake would
-  // just make each sample overwrite the cache it's still building.
-  try {
-    return bakeClothToTimeline(uuid, others, { scrub, getClipDuration, fps, settleSeconds })
-  } catch (err) {
-    // Don't let this die silently — a thrown error here previously left the
-    // UI stuck on "Baking…" forever with nothing in the console the user
-    // would necessarily notice. Log it AND hand the message back so the
-    // status line actually shows something diagnosable.
-    console.error('bakeClothAnimation failed:', err)
-    return { ok: false, reason: `Bake failed: ${err?.message || err}` }
-  }
-}
-
-export { hasBakedTimeline, clearBakedTimeline }
 
 function handleResize() {
   const { container, renderer, camera } = state

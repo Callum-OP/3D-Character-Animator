@@ -14,16 +14,12 @@ import {
 import {
   getCurrentModel,
   requestRender,
-  bakeClothAnimation,
-  hasBakedTimeline,
-  clearBakedTimeline,
 } from '../three/scene.js'
 import {
   FABRIC_PRESETS,
   isClothEnabled,
   enableCloth,
   disableCloth,
-  bakeCloth,
   resetCloth,
   setPinTool,
   setBrushSize,
@@ -73,9 +69,6 @@ export default function MeshPanel() {
   const [brushSize, setBrushSizeState] = useState(3)
   const [fabricPreset, setFabricPreset] = useState('cotton')
   const [shrinkwrap, setShrinkwrapState] = useState(false)
-  const [bakeFps, setBakeFps] = useState(24)
-  const [settleSeconds, setSettleSeconds] = useState(1.5)
-  const [bakeStatus, setBakeStatus] = useState('')
 
   const currentModel = getCurrentModel()
   const meshes = modelInfo?.meshes || []
@@ -110,12 +103,6 @@ export default function MeshPanel() {
     bumpCloth()
   }
 
-  function onBakeCloth() {
-    if (!selectedMesh) return
-    bakeCloth(selectedMesh.uuid)
-    bumpCloth()
-  }
-
   function onFabricPreset(name) {
     setFabricPreset(name)
     if (selectedMesh && clothOn) applyFabricPreset(selectedMesh.uuid, name)
@@ -134,30 +121,6 @@ export default function MeshPanel() {
   function onBrushSize(n) {
     setBrushSizeState(n)
     setBrushSize(n)
-  }
-
-  function onBakeToAnimation() {
-    if (!selectedMesh) return
-    setBakeStatus('Baking… this may take a moment')
-    // Runs synchronously (it's a physics loop, not I/O), so give the status
-    // text a tick to actually paint before the tab locks up briefly.
-    setTimeout(() => {
-      try {
-        const result = bakeClothAnimation(selectedMesh.uuid, bakeFps, settleSeconds)
-        setBakeStatus(result.ok ? `Baked ${result.frameCount} frames — cloth will now follow the animation.` : result.reason)
-      } catch (err) {
-        console.error('Bake to animation failed:', err)
-        setBakeStatus(`Bake failed: ${err?.message || err}`)
-      }
-      bumpCloth()
-    }, 30)
-  }
-
-  function onClearBakedAnimation() {
-    if (!selectedMesh) return
-    clearBakedTimeline(selectedMesh.uuid)
-    setBakeStatus('')
-    bumpCloth()
   }
 
   function onKeyPart() {
@@ -473,66 +436,6 @@ export default function MeshPanel() {
               >
                 Clear all pins
               </button>
-
-              <div className="kf-actions" style={{ marginTop: 8 }}>
-                <button
-                  className="btn"
-                  onClick={onBakeCloth}
-                  title="Write the current drape into this mesh's own geometry and turn cloth off — it becomes a normal static part again"
-                >
-                  ✓ Bake drape
-                </button>
-              </div>
-
-              <div className="joint-header" style={{ marginTop: 10 }}>
-                <span className="joint-name">Physics during animation</span>
-              </div>
-              <div className="pose-hint">
-                Settles the cloth at the clip's starting pose first, then runs
-                the drape once across the whole clip — re-posing and
-                re-colliding at each sampled frame — and caches the result so
-                it plays back at animation speed. Re-bake after changing the
-                pose, timing, or fabric.
-              </div>
-              <label className="slider-row">
-                <span className="slider-label">Sample rate</span>
-                <input
-                  type="range"
-                  min={8}
-                  max={60}
-                  step={1}
-                  value={bakeFps}
-                  onChange={(e) => setBakeFps(Number(e.target.value))}
-                />
-                <span>{bakeFps} fps</span>
-              </label>
-              <label className="slider-row" title="How long to let the cloth settle into a natural drape at the clip's starting pose before baking through the timeline — stops early if it settles sooner.">
-                <span className="slider-label">Settle time</span>
-                <input
-                  type="range"
-                  min={0}
-                  max={5}
-                  step={0.1}
-                  value={settleSeconds}
-                  onChange={(e) => setSettleSeconds(Number(e.target.value))}
-                />
-                <span>{settleSeconds.toFixed(1)}s</span>
-              </label>
-              <div className="kf-actions" style={{ marginTop: 4 }}>
-                <button
-                  className="btn"
-                  onClick={onBakeToAnimation}
-                  title="Bake cloth physics across the current clip"
-                >
-                  🎬 Bake to animation
-                </button>
-                {selectedMesh && hasBakedTimeline(selectedMesh.uuid) && (
-                  <button className="btn secondary" onClick={onClearBakedAnimation}>
-                    Clear baked animation
-                  </button>
-                )}
-              </div>
-              {bakeStatus && <div className="status" style={{ marginTop: 4 }}>{bakeStatus}</div>}
             </>
           )}
         </div>

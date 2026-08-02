@@ -362,7 +362,7 @@ function closestOnTri(p, a, b, c, out) {
 // edge, one bend constraint per interior edge (opposite vertices of its two
 // triangles), and pin the top `pinTopFrac` band as a starting "vertex group".
 // Returns `weldOf`: for each ORIGINAL vertex, which welded particle it became
-// — bakeCloth uses this to write the drape back into every original vertex,
+// — used to map welded particle data back to every original vertex,
 // including ones duplicated across a UV seam.
 function buildSpecFromGeometry(geom, pinTopFrac) {
   const posAttr = geom.getAttribute('position')
@@ -690,48 +690,7 @@ export function disableCloth(uuid, { restoreVisible = true } = {}) {
   cm.requestRender()
 }
 
-// Write the settled drape back into the mesh's own local-space geometry (every
-// original vertex, via its welded particle) and turn cloth off. If the mesh
-// was skinned, it's detached from the skeleton afterward (see below) — baking
-// is meant to freeze the current drape as a static shape, not leave it half
-// cloth-simulated, half bone-driven.
-export function bakeCloth(uuid) {
-  const entry = cm.entries.get(uuid)
-  if (!entry) return
-  const { mesh, sim, spec } = entry
-  mesh.updateWorldMatrix(true, false)
-  const inv = new THREE.Matrix4().copy(mesh.matrixWorld).invert()
-  const posAttr = mesh.geometry.getAttribute('position')
-  const v = new THREE.Vector3()
-  for (let i = 0; i < posAttr.count; i++) {
-    const ni = spec.weldOf[i]
-    v.set(sim.pos[3 * ni], sim.pos[3 * ni + 1], sim.pos[3 * ni + 2]).applyMatrix4(inv)
-    posAttr.setXYZ(i, v.x, v.y, v.z)
-  }
-  posAttr.needsUpdate = true
-  mesh.geometry.computeVertexNormals()
-  mesh.geometry.computeBoundingSphere()
-
-  if (mesh.isSkinnedMesh) {
-    // The baked positions above are the FINAL (already-posed) shape — if the
-    // mesh stayed skinned, the GPU would deform them through the skeleton all
-    // over again on top of that, corrupting (often to the point of vanishing
-    // off-screen) whatever was just baked. Detach it from skinning entirely:
-    // flip the flag the renderer checks, and shadow the SkinnedMesh-specific
-    // prototype methods (bounding volume, raycasting) with the plain-Mesh
-    // versions so nothing else re-applies bone deformation either. This mesh
-    // is now a normal static part — mesh.position/quaternion/scale (its pivot
-    // group, from Mesh mode) still move it rigidly as usual, it just no
-    // longer bends with the skeleton.
-    mesh.isSkinnedMesh = false
-    mesh.getVertexPosition = THREE.Mesh.prototype.getVertexPosition.bind(mesh)
-    mesh.raycast = THREE.Mesh.prototype.raycast.bind(mesh)
-    mesh.skeleton = null
-  }
-
-  disableCloth(uuid)
-}
-
+// Reset an entry's cloth simulation back to its bind/rest pose.
 export function resetCloth(uuid) {
   const entry = cm.entries.get(uuid)
   if (!entry) return
@@ -807,25 +766,21 @@ function updatePinsFromSkin(entry) {
   }
 }
 
-// Cloth that's ENABLED but not actively being driven — Drape (cm.playing) is
-// off, and there's no bakedCache — was previously a completely frozen
-// snapshot: the proxy is only ever touched by stepClothLive, syncClothToTime,
-// or the bake loop, so with none of those running, NOTHING moved the proxy
-// at all — not the character's animation, not a manual gizmo drag on the
-// underlying mesh. Turning Drape on or disabling cloth "fixed" it only
-// because those are the only two paths that ever sync the proxy. This is a
-// cheap, physics-free kinematic follow — every particle just directly
-// mirrors the underlying mesh's CURRENT vertex position under its current
-// pose/transform (same getVertexPosition + matrixWorld trick as
-// updatePinsFromSkin, just applied to every particle instead of only pinned
-// ones) — so idle cloth always visually tracks the body, exactly like any
-// other rigid part would, right up until you hit Drape and it takes over
-// with real simulation.
+// Cloth that's ENABLED but not actively draping (Drape/cm.playing is off)
+// was previously a completely frozen snapshot — the proxy is only ever
+// touched by stepClothLive or by turning Drape on, so with neither running,
+// NOTHING moved the proxy at all — not the character's animation, not a
+// manual gizmo drag on the underlying mesh. This is a cheap, physics-free
+// kinematic follow: every particle just directly mirrors the underlying
+// mesh's CURRENT vertex position under its current pose/transform (same
+// getVertexPosition + matrixWorld trick as updatePinsFromSkin, just applied
+// to every particle instead of only pinned ones) — so idle cloth always
+// visually tracks the body, exactly like any other rigid part would, right
+// up until you hit Drape and it takes over with real simulation.
 export function followIdleClothPose() {
   if (!cm.entries.size) return
   for (const entry of cm.entries.values()) {
-    const isBaked = !!entry.bakedCache
-    if (cm.playing || isBaked) continue // those paths already drive the proxy themselves
+    if (cm.playing) continue // Drape already drives the proxy itself
     const { mesh, sim, spec, proxy } = entry
     if (!spec.weldRep) continue
     if (mesh.isSkinnedMesh) mesh.skeleton.update()
@@ -877,7 +832,6 @@ export function stepClothLive(dt) {
   cm.colliderTick++
   const clampedDt = Math.min(dt || 1 / 60, 1 / 30)
   for (const entry of cm.entries.values()) {
-    if (entry.bakedCache) continue // baked timelines are played back separately, not live-stepped
     if (refreshCollider) refreshLiveCollider(entry)
     updatePinsFromSkin(entry)
     entry.sim.step(clampedDt)
@@ -926,21 +880,6 @@ function syncProxy(entry) {
 // bind-pose, which is an acceptable trade for "style changed".
 export function refreshClothForStyleChange() {
   for (const [uuid, entry] of Array.from(cm.entries)) {
-    // A baked entry isn't being live-simulated or re-draped any more — it's
-    // just played back frame-by-frame from entry.bakedCache (see
-    // syncClothToTime). Disabling/re-enabling cloth here used to silently
-    // throw that whole cache away (enableCloth() builds a brand-new entry
-    // object with no bakedCache field at all), and since baking also leaves
-    // cm.playing = false, nothing was left to drive the proxy afterward —
-    // it just sat frozen on whatever frame it was last on, forever, with no
-    // error anywhere. This function runs on every material/style change (see
-    // Viewport.jsx's effect), which made it trivially easy to trigger by
-    // total accident after baking. Baked cloth doesn't need a material
-    // refresh via full rebuild anyway — its proxy material was already
-    // cloned from the correctly-styled source mesh back when it was
-    // enabled — so just leave it alone entirely.
-    if (entry.bakedCache) continue
-
     const { mesh, otherMeshes, preset, pinTop, shrinkwrap } = entry
     const pinnedIndices = []
     for (let i = 0; i < entry.sim.n; i++) if (entry.sim.pinned[i]) pinnedIndices.push(i)
@@ -954,114 +893,6 @@ export function refreshClothForStyleChange() {
     refreshPinMarkers(newEntry)
   }
 }
-
-// --- Baked animation timeline ------------------------------------------------
-//
-// Runs the cloth sim once across the WHOLE clip (scrubbing pose-by-pose, so
-// the collider is rebuilt from the character's ACTUAL pose at each sample —
-// not resimulated independently per frame, which would just replay the same
-// settle every time; it's one continuous simulation walked forward through
-// the timeline) and caches the result as a plain sequence of vertex-position
-// snapshots. Playback then just looks up/interpolates the nearest cached
-// frame — cheap, deterministic, and scrubbable, same trade-off a baked vertex
-// cache makes in any DCC tool.
-//
-// Before walking the timeline, the sim is first left to settle at the clip's
-// STARTING pose for a bit (gravity + collision, same as dragging the live
-// "Drape" toggle and waiting) — otherwise the garment starts the bake
-// perfectly flat/just-enabled and spends the whole first stretch of the clip
-// visibly still catching up to the body, which reads as "frozen in place
-// while the character moves on". Settling stops early once the cloth's
-// kinetic energy drops below a small threshold, so a garment that settles
-// fast doesn't waste time waiting out the full cap.
-//
-// `scrub(t)` and `getClipDuration()` are passed in (from animation.js, via
-// scene.js) rather than imported directly, so this module doesn't need to
-// know anything about the animation system.
-export function bakeClothToTimeline(uuid, otherMeshes, { scrub, getClipDuration, fps = 24, settleSeconds = 1.5 } = {}) {
-  const entry = cm.entries.get(uuid)
-  if (!entry) return { ok: false, reason: 'Enable cloth on this mesh first.' }
-  const duration = getClipDuration()
-  if (!duration) return { ok: false, reason: 'No animation clip is loaded.' }
-
-  setClothPlaying(false)
-  entry.sim.reset()
-  const dt = 1 / Math.max(1, fps)
-
-  // Settle at the starting pose (t=0) before baking begins.
-  scrub(0)
-  const settleCollider = mergeWorldGeometry(otherMeshes)
-  if (settleCollider) entry.sim.setCollider(new BodyCollider(settleCollider, collisionMargin(entry.avgEdge)))
-  updatePinsFromSkin(entry)
-  const settleDt = 1 / 60
-  const settleSteps = Math.round(Math.max(0, settleSeconds) / settleDt)
-  const ENERGY_REST = 0.0005
-  for (let s = 0; s < settleSteps; s++) {
-    entry.sim.step(settleDt)
-    if (entry.sim.energy() < ENERGY_REST) break // already at rest, no point waiting out the full cap
-  }
-
-  const frames = []
-  let t = 0
-  let steps = 0
-  const MAX_STEPS = 20000 // guard rail against a runaway loop
-  while (t <= duration && steps < MAX_STEPS) {
-    scrub(t) // pose bones, mesh pivots, morphs at this exact time
-    const colliderGeom = mergeWorldGeometry(otherMeshes)
-    if (colliderGeom) entry.sim.setCollider(new BodyCollider(colliderGeom, collisionMargin(entry.avgEdge)))
-    // Pinned particles (the vertex group attaching this garment to the body —
-    // a waistband, collar, shoulder strap…) are only ever moved by reading
-    // the source mesh's own skin weights at the CURRENT pose. Live playback
-    // does this every step (see stepClothLive); the bake loop wasn't doing
-    // it at all, so every pin stayed frozen wherever it was at t=0 for the
-    // entire bake — the garment just hung off a static point in space while
-    // the body (and any root motion) moved on without it.
-    updatePinsFromSkin(entry)
-    entry.sim.step(dt)
-    frames.push(entry.sim.pos.slice())
-    t += dt
-    steps++
-  }
-  scrub(0) // leave the playhead where the user found it
-
-  entry.bakedCache = { fps, duration, frames }
-  syncProxy(entry)
-  cm.requestRender()
-  return { ok: true, frameCount: frames.length }
-}
-
-export function hasBakedTimeline(uuid) {
-  const entry = cm.entries.get(uuid)
-  return !!(entry && entry.bakedCache)
-}
-
-export function clearBakedTimeline(uuid) {
-  const entry = cm.entries.get(uuid)
-  if (entry) entry.bakedCache = null
-}
-
-// Called every animation frame (from scene.js's tick, alongside the mixer/pose
-// update) to play back any baked cloth caches at the current playhead time.
-export function syncClothToTime(t) {
-  for (const entry of cm.entries.values()) {
-    const cache = entry.bakedCache
-    if (!cache || !cache.frames.length) continue
-    const idx = Math.max(0, Math.min(cache.frames.length - 1, Math.round((t / cache.duration) * (cache.frames.length - 1))))
-    // Mutate the existing attribute's array in place — do NOT replace the
-    // BufferAttribute object. entry.sim.pos and this geometry's position
-    // array are THE SAME underlying Float32Array on purpose (see
-    // enableCloth: `new THREE.BufferAttribute(sim.pos, 3)`) — that's what
-    // lets live physics (stepClothLive, Step, Drape) update the proxy for
-    // free via syncProxy(), which only flags needsUpdate rather than copying
-    // data itself. Replacing the attribute here breaks that shared reference.
-    entry.proxy.geometry.attributes.position.array.set(cache.frames[idx])
-    entry.proxy.geometry.attributes.position.needsUpdate = true
-    entry.proxy.geometry.computeVertexNormals()
-    entry.proxy.geometry.computeBoundingSphere()
-  }
-}
-
-
 
 export function setPinTool(tool) {
   cm.pinTool = tool // 'add' | 'del' — brush-editing the vertex group. null while not editing.
