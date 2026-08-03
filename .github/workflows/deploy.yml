@@ -28,8 +28,19 @@ jobs:
           node-version: 20
           cache: npm
 
-      - run: npm ci
-      - run: npm run build
+      - name: Install dependencies
+        run: npm ci
+
+      # Run Vitest
+      - name: Run tests
+        continue-on-error: false
+        env:
+          CI: true
+        run: npm test
+
+      # Only runs if tests pass
+      - name: Build
+        run: npm run build
 
       - uses: actions/upload-pages-artifact@v3
         with:
