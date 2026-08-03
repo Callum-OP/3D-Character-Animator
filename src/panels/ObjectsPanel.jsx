@@ -11,6 +11,13 @@ import {
   getSceneData,
   applySceneData,
 } from '../three/scene.js'
+import {
+  getSelectedUniformScale,
+  setSelectedUniformScale,
+  snapshotObject,
+  commitUniformScale,
+} from '../three/objects.js'
+import RadialScale from './RadialScale.jsx'
 
 // Side-panel section: add props / backgrounds around the character, then move,
 // rotate or resize the selected one. Objects are independent of the character —
@@ -31,7 +38,9 @@ export default function ObjectsPanel() {
   const fileRef = useRef(null)
   const imageRef = useRef(null)
   const sceneRef = useRef(null)
+  const dragBeforeRef = useRef(null)
   const [msg, setMsg] = useState(null)
+  const [scaleVal, setScaleVal] = useState(1)
 
   function onPick(e) {
     const file = e.target.files && e.target.files[0]
@@ -154,6 +163,27 @@ export default function ObjectsPanel() {
               </button>
             ))}
           </div>
+
+          {objectMode === 'scale' && selectedObjectId && (
+            <div style={{ marginTop: 10 }}>
+              <RadialScale
+                value={scaleVal || getSelectedUniformScale(selectedObjectId)}
+                label="Uniform resize"
+                onDragStart={() => {
+                  dragBeforeRef.current = snapshotObject(selectedObjectId)
+                  setScaleVal(getSelectedUniformScale(selectedObjectId))
+                }}
+                onChange={(v) => {
+                  setScaleVal(v)
+                  setSelectedUniformScale(selectedObjectId, v)
+                }}
+                onCommit={() => {
+                  commitUniformScale(selectedObjectId, dragBeforeRef.current)
+                  dragBeforeRef.current = null
+                }}
+              />
+            </div>
+          )}
 
           <div className="obj-cycle">
             <button className="btn secondary" onClick={() => cycle(-1)} title="Previous object">

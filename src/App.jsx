@@ -1,5 +1,4 @@
 import Viewport from './three/Viewport.jsx'
-import ModelPanel from './panels/ModelPanel.jsx'
 import MaterialPanel from './panels/MaterialPanel.jsx'
 import BonePanel from './panels/BonePanel.jsx'
 import MeshPanel from './panels/MeshPanel.jsx'
@@ -11,14 +10,26 @@ import ProjectPanel from './panels/ProjectPanel.jsx'
 import ExportPanel from './panels/ExportPanel.jsx'
 import ViewPanel from './panels/ViewPanel.jsx'
 import HelpOverlay from './panels/HelpOverlay.jsx'
+import Accordion from './panels/Accordion.jsx'
+import TabGroup from './panels/TabGroup.jsx'
 import { useStore } from './store.js'
 
 // Top-level layout: 3D viewport on the left, control sidebar on the right.
-// The Pose/Mesh panels are contextual — only the active mode's panel shows,
-// like tool-specific panels in full animation apps. Everything else is fixed.
+//
+// The sidebar is organised as a short list of Blender-style collapsible
+// categories rather than one long stack of always-open panels — the goal is
+// that a newcomer sees "Character", "Pose", "Animate", "Scene", "Look",
+// "Export" and can ignore everything except the one they're in. Only
+// "Character" and the contextual pose/mesh panel are open by default; the
+// rest expand on demand and remember their open/closed state for the
+// session.
 export default function App() {
   const toggleHelp = useStore((s) => s.toggleHelp)
   const mode = useStore((s) => s.mode)
+  const sceneObjects = useStore((s) => s.sceneObjects)
+  const sceneCameras = useStore((s) => s.sceneCameras)
+  const sceneLights = useStore((s) => s.sceneLights)
+
   return (
     <div className="app">
       <Viewport />
@@ -32,17 +43,56 @@ export default function App() {
             ?
           </button>
         </div>
-        <ModelPanel />
-        <ProjectPanel />
-        {mode === 'bone' && <BonePanel />}
-        {mode === 'mesh' && <MeshPanel />}
-        <AnimationPanel />
-        <ObjectsPanel />
-        <CamerasPanel />
-        <LightsPanel />
-        <MaterialPanel />
-        <ViewPanel />
-        <ExportPanel />
+
+        <Accordion id="character" icon="🧍" title="Character" subtitle="Load or save a project" defaultOpen>
+          <ProjectPanel />
+        </Accordion>
+
+        {mode === 'bone' && (
+          <Accordion id="pose" icon="🦴" title="Pose" subtitle="Move bones, save poses" defaultOpen>
+            <BonePanel />
+          </Accordion>
+        )}
+        {mode === 'mesh' && (
+          <Accordion id="mesh" icon="🔺" title="Mesh" subtitle="Edit vertices & parts" defaultOpen>
+            <MeshPanel />
+          </Accordion>
+        )}
+
+        <Accordion id="animate" icon="🎬" title="Animate" subtitle="Keyframes & playback">
+          <AnimationPanel />
+        </Accordion>
+
+        <Accordion
+          id="scene"
+          icon="🗂️"
+          title="Scene"
+          subtitle="Props, cameras & lights"
+          badge={(sceneObjects.length + sceneCameras.length + sceneLights.length) || null}
+        >
+          <TabGroup
+            defaultTab="objects"
+            tabs={[
+              { key: 'objects', label: 'Objects', icon: '📦', render: () => <ObjectsPanel /> },
+              { key: 'cameras', label: 'Cameras', icon: '🎥', render: () => <CamerasPanel /> },
+              { key: 'lights', label: 'Lights', icon: '💡', render: () => <LightsPanel /> },
+            ]}
+          />
+        </Accordion>
+
+        <Accordion id="look" icon="🎨" title="Look" subtitle="Shading & viewport">
+          <TabGroup
+            defaultTab="material"
+            tabs={[
+              { key: 'material', label: 'Material', icon: '🎨', render: () => <MaterialPanel /> },
+              { key: 'view', label: 'View', icon: '🖥️', render: () => <ViewPanel /> },
+            ]}
+          />
+        </Accordion>
+
+        <Accordion id="export" icon="⬇️" title="Export" subtitle="Save images & clips">
+          <ExportPanel />
+        </Accordion>
       </aside>
       <HelpOverlay />
     </div>

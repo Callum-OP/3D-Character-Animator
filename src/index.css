@@ -1318,3 +1318,342 @@ input.xform-value {
 .kf-del:hover {
   color: #ff6b6b;
 }
+
+/* ================= Accordion (Blender-style collapsible categories) ================= */
+.acc {
+  background: var(--panel-bg-2);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+
+.acc-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+
+.acc-head:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.acc-chevron {
+  flex: 0 0 auto;
+  display: inline-block;
+  font-size: 10px;
+  color: var(--text-dim);
+  transition: transform 0.12s ease;
+}
+
+.acc.open .acc-chevron {
+  transform: rotate(90deg);
+  color: var(--accent);
+}
+
+.acc-icon {
+  flex: 0 0 auto;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.acc-titles {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.acc-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.acc-subtitle {
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+
+.acc-badge {
+  flex: 0 0 auto;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  color: var(--text-dim);
+  font-size: 10.5px;
+  padding: 1px 7px;
+  border-radius: 999px;
+}
+
+.acc-body {
+  padding: 0 12px 12px;
+  border-top: 1px solid var(--panel-border);
+  padding-top: 10px;
+}
+
+/* Panels nested inside an accordion or a tab already have a category
+   heading, so hide the panel's own duplicate <h2>. */
+.acc-body > .panel:first-child,
+.acc-body .panel {
+  border: none;
+  background: transparent;
+  padding: 0;
+  margin-bottom: 14px;
+}
+
+.acc-body .panel:last-child {
+  margin-bottom: 0;
+}
+
+.acc-body .panel h2 {
+  display: none;
+}
+
+/* ================= Tab groups (Objects / Cameras / Lights, etc.) ================= */
+.tabgroup-bar {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 10px;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 7px;
+  padding: 3px;
+}
+
+.tabgroup-btn {
+  flex: 1 1 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 7px 4px;
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.tabgroup-btn.active {
+  background: var(--panel-bg-2);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--panel-border);
+}
+
+.tabgroup-icon {
+  font-size: 12px;
+}
+
+/* ================= Combined Character (model + projects) panel ================= */
+.panel-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.subpanel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.subpanel-title {
+  font-size: 11.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+
+.subpanel-count {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+
+.load-cta {
+  font-weight: 600;
+}
+
+.model-card {
+  margin-top: 10px;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 7px;
+  padding: 10px;
+}
+
+.model-card-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 6px;
+}
+
+.chip {
+  font-size: 10px;
+  color: var(--text-dim);
+  background: var(--panel-bg-2);
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.proj-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.proj-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 7px;
+  padding: 7px 8px;
+}
+
+.proj-card-thumb {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel-bg-2);
+  border-radius: 6px;
+  font-size: 15px;
+}
+
+.proj-card-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.proj-card-name {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.proj-card-date {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.proj-card-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.proj-card-actions .btn {
+  width: auto;
+  padding: 5px 10px;
+}
+
+/* ================= Radial (Blender/CSP-style) uniform-scale handle ================= */
+.radial-scale {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+}
+
+.radial-scale-dial {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--panel-bg-2);
+  border: 1px solid var(--panel-border);
+  cursor: grab;
+  touch-action: none;
+}
+
+.radial-scale-dial:active {
+  cursor: grabbing;
+}
+
+.radial-scale-dial:hover {
+  border-color: var(--accent);
+}
+
+.radial-scale-ring {
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.radial-scale-handle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 10px;
+  height: 10px;
+  margin: -5px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--panel-bg-2);
+  pointer-events: none;
+}
+
+.radial-scale-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  color: var(--text-dim);
+  pointer-events: none;
+}
+
+.radial-scale-info {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.radial-scale-value {
+  font-size: 16px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.radial-scale-label {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  margin-top: 2px;
+}

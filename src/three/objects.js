@@ -264,6 +264,38 @@ export function resetObject(id) {
   o.requestRender()
 }
 
+// Read the selected object's current uniform scale (average of the three
+// axes, so it still shows something sane if a prop was scaled unevenly).
+export function getSelectedUniformScale(id) {
+  const root = rootFor(id)
+  if (!root) return 1
+  return (root.scale.x + root.scale.y + root.scale.z) / 3
+}
+
+// Set the selected object's scale uniformly on all three axes at once —
+// backs the circular resize dial (Blender/Clip Studio style: drag around the
+// ring, every side grows or shrinks together instead of one axis at a time).
+export function setSelectedUniformScale(id, value) {
+  const root = rootFor(id)
+  if (!root) return
+  const v = Math.max(0.01, value)
+  root.scale.set(v, v, v)
+  o.requestRender()
+}
+
+// Called once at the end of a drag on the radial dial, so the whole gesture
+// is a single undo step rather than one per pixel of movement.
+export function commitUniformScale(id, before) {
+  const root = rootFor(id)
+  if (!root || !before) return
+  pushUndoIfChanged(root, before)
+}
+
+export function snapshotObject(id) {
+  const root = rootFor(id)
+  return root ? snapshot(root) : null
+}
+
 // Set an object's full transform at once (used when restoring a saved project).
 export function setObjectTransform(id, t) {
   const root = rootFor(id)
