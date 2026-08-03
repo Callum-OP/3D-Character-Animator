@@ -1,15 +1,12 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-// Minimal Vite config. No backend — this is a pure static/client-side app.
-//
-// `base` only matters for production builds deployed to GitHub Pages, which
-// serves this project site from the /<repo>/ subpath. Local dev/preview stays at
-// '/' so opening http://localhost:5173/ works normally.
-export default defineConfig(({ command }) => ({
-  base: command === 'build' ? '/3D-Character-Animator/' : '/',
+// Same plugin set as vite.config.js, plus test config. Kept separate so
+// `vite build` never picks up test-only settings.
+export default defineConfig({
   plugins: [react()],
-  server: {
-    open: true,
+  test: {
+    environment: 'jsdom',
+    globals: true,
   },
-}))
+})

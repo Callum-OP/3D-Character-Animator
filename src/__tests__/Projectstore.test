@@ -1,0 +1,75 @@
+import 'fake-indexeddb/auto'
+import { describe, it, expect, beforeEach } from 'vitest'
+import {
+  saveProject,
+  loadProjectRecord,
+  listProjects,
+  deleteProject,
+} from '../three/projectStore.js'
+
+// projectStore.js is the thing "Saved projects" in the Character panel reads
+// from and writes to. Covers the behaviours the UI silently depends on:
+// saving under a name that already exists overwrites (rather than erroring
+// or duplicating), loading returns the full payload including blobs, listing
+// is newest-first, and deleting actually removes the record.
+describe('projectStore (IndexedDB)', () => {
+  beforeEach(async () => {
+    // fake-indexeddb keeps state across tests in the same module instance;
+    // start each test from a clean slate.
+    for (const p of await listProjects()) await deleteProject(p.name)
+  })
+
+  it('round-trips a saved project, including a nested blob-like field', async () => {
+    const blob = new Blob(['hello'], { type: 'text/plain' })
+    await saveProject({ name: 'Alpha', savedAt: 100, modelBlob: blob, foo: 'bar' })
+
+    const loaded = await loadProjectRecord('Alpha')
+    expect(loaded).toBeTruthy()
+    expect(loaded.name).toBe('Alpha')
+    expect(loaded.foo).toBe('bar')
+    // Real IndexedDB stores File/Blob objects natively; jsdom's structured
+    // clone stand-in doesn't always preserve `instanceof Blob`, so check the
+    // field survived at all rather than its exact prototype.
+    expect(loaded.modelBlob).toBeTruthy()
+  })
+
+  it('returns null for a project that was never saved', async () => {
+    expect(await loadProjectRecord('Nope')).toBeNull()
+  })
+
+  it('saving under an existing name overwrites rather than duplicating', async () => {
+    await saveProject({ name: 'Beta', savedAt: 1, value: 'first' })
+    await saveProject({ name: 'Beta', savedAt: 2, value: 'second' })
+
+    const all = await listProjects()
+    expect(all.filter((p) => p.name === 'Beta')).toHaveLength(1)
+
+    const loaded = await loadProjectRecord('Beta')
+    expect(loaded.value).toBe('second')
+    expect(loaded.savedAt).toBe(2)
+  })
+
+  it('lists projects newest-first', async () => {
+    await saveProject({ name: 'Oldest', savedAt: 100 })
+    await saveProject({ name: 'Newest', savedAt: 300 })
+    await saveProject({ name: 'Middle', savedAt: 200 })
+
+    const names = (await listProjects()).map((p) => p.name)
+    expect(names).toEqual(['Newest', 'Middle', 'Oldest'])
+  })
+
+  it('deleteProject removes exactly the named record', async () => {
+    await saveProject({ name: 'KeepMe', savedAt: 1 })
+    await saveProject({ name: 'DeleteMe', savedAt: 2 })
+
+    await deleteProject('DeleteMe')
+
+    const names = (await listProjects()).map((p) => p.name)
+    expect(names).toEqual(['KeepMe'])
+    expect(await loadProjectRecord('DeleteMe')).toBeNull()
+  })
+
+  it('deleting a name that does not exist is a harmless no-op', async () => {
+    await expect(deleteProject('NeverExisted')).resolves.not.toThrow()
+  })
+})
