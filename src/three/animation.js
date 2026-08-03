@@ -186,6 +186,22 @@ export function addGeneratedClip(clip) {
   return name
 }
 
+// Serialize a clip (baked or imported) to a plain JSON object, for downloading
+// or stashing in the persistent clip library. Returns null if not found.
+export function exportClipJSON(name) {
+  const clip = findClip(name)
+  if (!clip) return null
+  return clip.toJSON()
+}
+
+// Parse a previously-exported clip and register it as playable, same as any
+// other imported clip. Returns the final (deduped) name, or null with no model.
+export function importClipJSON(json) {
+  if (!a.model) return null
+  const clip = THREE.AnimationClip.parse(json)
+  return addGeneratedClip(clip)
+}
+
 // Sample a clip at one time into a pose map { boneName: [x,y,z,w] } (for "apply
 // frame as pose"). Leaves the rig at rest afterwards.
 export function sampleClipToPose(name, time) {

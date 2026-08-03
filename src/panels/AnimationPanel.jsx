@@ -15,7 +15,15 @@ import {
   sampleClipToPose,
   bakeClipToTracks,
   addGeneratedClip,
+  exportClipJSON,
+  importClipJSON,
 } from '../three/animation.js'
+import {
+  listSavedClips,
+  saveClipToLibrary,
+  loadClipFromLibrary,
+  deleteSavedClip,
+} from '../three/clipLibrary.js'
 import { getBoneQuaternion, getPosedBones, applyPose } from '../three/posing.js'
 import { getCharacterRootTransform, getCurrentModel, getGroundY, scrubTimeline } from '../three/scene.js'
 import * as THREE from 'three'
@@ -118,7 +126,9 @@ export default function AnimationPanel() {
   const st = useStore.getState // for imperative setters inside handlers
   const fileRef = useRef(null)
   const bvhRef = useRef(null)
+  const clipFileRef = useRef(null)
   const [bvhMsg, setBvhMsg] = useState(null)
+  const [savedClips, setSavedClips] = useState(() => listSavedClips())
   const [bvhBusy, setBvhBusy] = useState(false)
   const [kfMsg, setKfMsg] = useState(null) // feedback after adding a keyframe
   const [ragdollMsg, setRagdollMsg] = useState(null) // feedback after a ragdoll bake
@@ -455,6 +465,77 @@ export default function AnimationPanel() {
     setBvhMsg(`Baked ${Object.keys(res.tracks).length} moving track(s) to keyframes.`)
   }
 
+  // --- clip library (save-permanently / export / import) -------------------
+
+  // Bring a freshly-registered clip (from import or the library) straight into
+  // the transport, paused on frame 0 — mirrors what BVH retarget/ragdoll do.
+  function armClip(name) {
+    st().addImportedClipName(name)
+    st().setPlaybackSource('clip')
+    st().setActiveClipName(name)
+    const d = selectClip(name, { loop, speed })
+    st().setDuration(d)
+    st().setCurrentTime(0)
+    st().setPlayback('paused')
+  }
+
+  function onSaveToLibrary() {
+    if (!activeClipName) return
+    const json = exportClipJSON(activeClipName)
+    if (!json) return
+    const ok = saveClipToLibrary(activeClipName, json)
+    setSavedClips(listSavedClips())
+    setBvhMsg(
+      ok
+        ? `Saved “${activeClipName}” to your library — it'll still be here next time you open the app.`
+        : `Couldn't save “${activeClipName}” — your browser's storage may be full.`,
+    )
+  }
+
+  function onExportClip() {
+    if (!activeClipName) return
+    const json = exportClipJSON(activeClipName)
+    if (!json) return
+    const blob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${activeClipName}.clip.json`
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
+  function onImportClipFile(e) {
+    const file = e.target.files && e.target.files[0]
+    e.target.value = ''
+    if (!file) return
+    file.text().then((text) => {
+      try {
+        const json = JSON.parse(text)
+        const name = importClipJSON(json)
+        if (!name) throw new Error('Load a model first.')
+        armClip(name)
+        setBvhMsg(`Imported “${name}”.`)
+      } catch (err) {
+        setBvhMsg(err.message || String(err))
+      }
+    })
+  }
+
+  function onLoadFromLibrary(name) {
+    const json = loadClipFromLibrary(name)
+    if (!json) return
+    const finalName = importClipJSON(json)
+    if (!finalName) return
+    armClip(finalName)
+    setBvhMsg(`Loaded “${finalName}” from your library.`)
+  }
+
+  function onDeleteFromLibrary(name) {
+    deleteSavedClip(name)
+    setSavedClips(listSavedClips())
+  }
+
   const playing = playback === 'playing'
 
   return (
@@ -555,6 +636,74 @@ export default function AnimationPanel() {
                 Edit keyframes
               </button>
             </div>
+          )}
+
+          {activeClipName && (
+            <div className="kf-actions" style={{ marginTop: 6 }}>
+              <button
+                className="btn secondary"
+                onClick={onSaveToLibrary}
+                title="Keep this clip in your browser so it's here next time, even after reloading or switching models"
+              >
+                💾 Save clip
+              </button>
+              <button
+                className="btn secondary"
+                onClick={onExportClip}
+                title="Download this clip as a file to share or back up"
+              >
+                ⬇ Export clip
+              </button>
+            </div>
+          )}
+
+          <div className="kf-actions" style={{ marginTop: 6 }}>
+            <button
+              className="btn secondary"
+              onClick={() => clipFileRef.current?.click()}
+              title="Load a clip file exported from here (or by someone else)"
+            >
+              ⬆ Import clip file
+            </button>
+            <input
+              ref={clipFileRef}
+              type="file"
+              accept=".json,application/json"
+              style={{ display: 'none' }}
+              onChange={onImportClipFile}
+            />
+          </div>
+
+          {savedClips.length > 0 && (
+            <>
+              <div className="field-label" style={{ marginTop: 10 }}>
+                Saved clips ({savedClips.length})
+              </div>
+              <div className="kf-list">
+                {savedClips.map((s) => (
+                  <div key={s.name} className="kf-list-row" title="Load into the clip list">
+                    <span
+                      className="kf-time"
+                      style={{ cursor: 'pointer' }}
+                      onClick={() => onLoadFromLibrary(s.name)}
+                    >
+                      {s.name}
+                    </span>
+                    <span className="kf-what" />
+                    <button
+                      className="kf-del"
+                      title="Remove from your saved library"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onDeleteFromLibrary(s.name)
+                      }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </>
           )}
 
           {bvhMsg && <div className="pose-msg">{bvhMsg}</div>}
