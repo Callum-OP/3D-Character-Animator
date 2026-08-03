@@ -39,7 +39,7 @@ export default function LightsPanel() {
   function onIntensity(intensity) {
     if (!selected) return
     setLightIntensity(selected.id, intensity)
-    st().setLightIntensity(selected.id, intensity)
+    st().setSceneLightIntensity(selected.id, intensity)
   }
 
   function onCastShadow(castShadow) {

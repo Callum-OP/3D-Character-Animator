@@ -71,12 +71,33 @@ export function getGradientMap(steps, floor) {
 export function recordOriginalMaterials(model) {
   const originals = new Map()
   for (const mesh of model.meshes) {
+    normalizeTransparency(mesh.material)
     originals.set(mesh, mesh.material)
   }
   model.materials = {
     originals, // mesh -> Material | Material[]  (never mutated)
     unlit: new Map(), // mesh -> generated MeshBasicMaterial(s)
     toon: new Map(), // mesh -> generated MeshToonMaterial(s)
+  }
+}
+
+// A material can end up with opacity < 1 (or an alpha-carrying texture) while
+// its `transparent` flag is still false — three.js silently renders that as
+// fully opaque, since blending only kicks in once `transparent` is true. This
+// happens whenever an exporter writes partial alpha without also flagging the
+// material for alpha blending (e.g. a Blender material built from a
+// Transparent/Mix Shader whose Blend Mode was left on "Opaque"). Force the
+// flag on in that case so what looks translucent in Blender looks
+// translucent here too.
+export function normalizeTransparency(material) {
+  const mats = Array.isArray(material) ? material : [material]
+  for (const m of mats) {
+    if (!m) continue
+    const hasAlpha = (m.opacity != null && m.opacity < 1) || !!m.alphaMap
+    if (hasAlpha && !m.transparent) {
+      m.transparent = true
+      m.needsUpdate = true
+    }
   }
 }
 

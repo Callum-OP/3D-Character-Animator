@@ -34,6 +34,7 @@ import {
 } from './meshedit.js'
 import { setLimitsEnabled } from './limits.js'
 import { selectObject, setObjectMode, undo as undoObject, redo as redoObject } from './objects.js'
+import { resolveUndoTarget } from './undoPriority.js'
 import { selectCamera, setCameraGizmoMode } from './cameras.js'
 import StatsOverlay from '../panels/StatsOverlay.jsx'
 
@@ -203,8 +204,9 @@ export default function Viewport() {
   }, [viewCameraId])
 
   // Keyboard: 1/2/3 switch mode, W/E/R pick the Mesh-mode gizmo tool, Esc
-  // deselects, Ctrl/Cmd+Z undoes an edit — Mesh/Bone mode always undo their
-  // own edits; otherwise a selected prop/image/character's move/resize.
+  // deselects, Ctrl/Cmd+Z undoes an edit — a selected prop/image/camera/light
+  // always undoes its own move/rotate/resize first (it's independent of
+  // mode), otherwise Mesh/Bone mode undo their own edit.
   // Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y redoes it. Ignored while typing in an input.
   useEffect(() => {
     function onKeyDown(e) {
@@ -235,15 +237,15 @@ export default function Viewport() {
         (e.key === 'y' || e.key === 'Y' || ((e.key === 'z' || e.key === 'Z') && e.shiftKey))
       ) {
         e.preventDefault()
-        if (s.mode === 'mesh') redoMeshEdit()
-        else if (s.mode === 'bone') redo()
-        else if (s.selectedObjectId != null) redoObject()
+        const redoTarget = resolveUndoTarget(s)
+        if (redoTarget === 'object') redoObject()
+        else if (redoTarget === 'mesh') redoMeshEdit()
         else redo()
       } else if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
         e.preventDefault()
-        if (s.mode === 'mesh') undoMeshEdit()
-        else if (s.mode === 'bone') undo()
-        else if (s.selectedObjectId != null) undoObject()
+        const undoTarget = resolveUndoTarget(s)
+        if (undoTarget === 'object') undoObject()
+        else if (undoTarget === 'mesh') undoMeshEdit()
         else undo()
       }
     }
