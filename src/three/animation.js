@@ -186,6 +186,74 @@ export function addGeneratedClip(clip) {
   return name
 }
 
+// Rename an imported/generated clip (combined, trimmed, imported, ragdoll,
+// etc). Clips baked into the model file itself can't be renamed — returns
+// null in that case. Returns the final, deduped name on success.
+export function renameClip(name, newName) {
+  const clip = a.importedClips.find((c) => c.name === name)
+  if (!clip) return null
+  const base = (newName || '').trim() || 'Clip'
+  if (base === name) return name
+  let final = base
+  for (let n = 2; findClip(final); n++) final = `${base} ${n}`
+  clip.name = final
+  return final
+}
+
+// Serialize a clip (baked or imported) to a plain JSON object, for downloading
+// or stashing in the persistent clip library. Returns null if not found.
+export function exportClipJSON(name) {
+  const clip = findClip(name)
+  if (!clip) return null
+  return clip.toJSON()
+}
+
+// Parse a previously-exported clip and register it as playable, same as any
+// other imported clip. Returns the final (deduped) name, or null with no model.
+export function importClipJSON(json) {
+  if (!a.model) return null
+  const clip = THREE.AnimationClip.parse(json)
+  return addGeneratedClip(clip)
+}
+
+// Concatenate several clips end-to-end into one new playable clip (e.g. "walk"
+// then "wave"), sampled at `fps`. Order follows `names`. Returns the new
+// clip's name, or null.
+export function combineClips(names, fps) {
+  if (!a.model || names.length < 2) return null
+  const tracks = {}
+  for (const b of a.model.bones) tracks[b.name] = []
+  let offset = 0
+  let any = false
+  for (const name of names) {
+    const clip = findClip(name)
+    if (!clip) continue
+    const res = sampleClipRange(clip, fps, 0, clip.duration, false)
+    if (!res) continue
+    any = true
+    for (const boneName of Object.keys(tracks)) {
+      const keys = res.tracks[boneName]
+      if (!keys || !keys.length) continue
+      for (const k of keys) tracks[boneName].push({ time: k.time + offset, quat: k.quat })
+    }
+    offset += res.duration
+  }
+  if (!any) return null
+  for (const boneName of Object.keys(tracks)) {
+    const keys = tracks[boneName]
+    if (!keys.length) {
+      delete tracks[boneName]
+      continue
+    }
+    const first = keys[0].quat
+    const moves = keys.some((k) => !quatClose(k.quat, first))
+    if (!moves) delete tracks[boneName]
+  }
+  const combined = buildEditClip(tracks, offset, {})
+  combined.name = names.join(' + ')
+  return addGeneratedClip(combined)
+}
+
 // Sample a clip at one time into a pose map { boneName: [x,y,z,w] } (for "apply
 // frame as pose"). Leaves the rig at rest afterwards.
 export function sampleClipToPose(name, time) {
@@ -214,8 +282,43 @@ export function sampleClipToPose(name, time) {
 export function bakeClipToTracks(name, fps, duration) {
   const clip = findClip(name)
   if (!clip || !a.model) return null
-  const dur = duration || clip.duration
-  const frames = Math.max(2, Math.round(dur * fps) + 1)
+  return sampleClipRange(clip, fps, 0, duration || clip.duration)
+}
+
+// Cut a clip down to [startTime, endTime] (seconds, clamped to the clip's
+// length) and register the result as a brand-new playable clip — the
+// original is left untouched. Returns the new clip's name, or null.
+export function trimClip(name, fps, startTime, endTime) {
+  const clip = findClip(name)
+  if (!clip || !a.model) return null
+  const res = sampleClipRange(clip, fps, startTime, endTime)
+  if (!res) return null
+  const trimmed = buildEditClip(res.tracks, res.duration, {})
+  trimmed.name = `${name} (trimmed)`
+  return addGeneratedClip(trimmed)
+}
+
+// Turn the current in-app keyframe tracks (bone rotations only — root
+// motion, props, cameras, and morphs aren't part of a mixer clip and stay
+// keyframe-only) into a new playable clip. This is what lets a "Make your
+// own" creation show up anywhere clips do: the clip list, Save/Export, Trim,
+// Combine. Returns the final clip name, or null.
+export function clipFromTracks(tracks, duration, name) {
+  if (!a.model) return null
+  const clip = buildEditClip(tracks, duration, {})
+  clip.name = name || 'My clip'
+  return addGeneratedClip(clip)
+}
+
+// Shared sampler behind bakeClipToTracks/trimClip: plays `clip` on a scratch
+// mixer and records each bone's rotation every frame across [start, end],
+// re-timed so the result starts at 0. Static bones are pruned.
+function sampleClipRange(clip, fps, startTime, endTime, prune = true) {
+  const dur = clip.duration
+  const start = Math.max(0, Math.min(startTime, dur))
+  const end = Math.max(start, Math.min(endTime, dur))
+  const span = end - start
+  const frames = Math.max(2, Math.round(span * fps) + 1)
   const mixer = new THREE.AnimationMixer(a.model.root)
   const act = mixer.clipAction(clip)
   act.loop = THREE.LoopOnce
@@ -225,11 +328,11 @@ export function bakeClipToTracks(name, fps, duration) {
   const tracks = {}
   for (const b of a.model.bones) tracks[b.name] = []
   for (let f = 0; f < frames; f++) {
-    const t = (f / (frames - 1)) * dur
+    const t = start + (span > 0 ? (f / (frames - 1)) * span : 0)
     mixer.setTime(t)
     for (const b of a.model.bones) {
       const q = b.quaternion
-      tracks[b.name].push({ time: t, quat: [q.x, q.y, q.z, q.w] })
+      tracks[b.name].push({ time: t - start, quat: [q.x, q.y, q.z, q.w] })
     }
   }
   mixer.stopAllAction()
@@ -238,13 +341,19 @@ export function bakeClipToTracks(name, fps, duration) {
   a.refs.requestRender()
 
   // Drop tracks whose rotation never changes (keeps the keyframe data small).
-  for (const boneName of Object.keys(tracks)) {
-    const keys = tracks[boneName]
-    const first = keys[0].quat
-    const moves = keys.some((k) => !quatClose(k.quat, first))
-    if (!moves) delete tracks[boneName]
+  // Skipped when this segment will be concatenated with others (prune=false):
+  // a bone that's static here but posed in a later segment must still hold a
+  // key through this whole span, or the combined clip snaps to the other
+  // segment's pose retroactively.
+  if (prune) {
+    for (const boneName of Object.keys(tracks)) {
+      const keys = tracks[boneName]
+      const first = keys[0].quat
+      const moves = keys.some((k) => !quatClose(k.quat, first))
+      if (!moves) delete tracks[boneName]
+    }
   }
-  return { tracks, duration: dur }
+  return { tracks, duration: span }
 }
 
 // Build the in-app clip from the full keyframe data (bone tracks + root motion
