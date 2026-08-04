@@ -14,6 +14,7 @@ import {
   cancelBVHImport,
   sampleClipToPose,
   bakeClipToTracks,
+  trimClip,
   addGeneratedClip,
   exportClipJSON,
   importClipJSON,
@@ -129,6 +130,8 @@ export default function AnimationPanel() {
   const clipFileRef = useRef(null)
   const [bvhMsg, setBvhMsg] = useState(null)
   const [savedClips, setSavedClips] = useState(() => listSavedClips())
+  const [trimOpen, setTrimOpen] = useState(false)
+  const [trimRange, setTrimRange] = useState([0, 0]) // [start, end] seconds
   const [bvhBusy, setBvhBusy] = useState(false)
   const [kfMsg, setKfMsg] = useState(null) // feedback after adding a keyframe
   const [ragdollMsg, setRagdollMsg] = useState(null) // feedback after a ragdoll bake
@@ -536,6 +539,27 @@ export default function AnimationPanel() {
     setSavedClips(listSavedClips())
   }
 
+  // --- trim ------------------------------------------------------------------
+
+  function onOpenTrim() {
+    setTrimRange([0, duration || 0])
+    setTrimOpen(true)
+  }
+
+  function onConfirmTrim() {
+    if (!activeClipName) return
+    const [start, end] = trimRange
+    if (end <= start) {
+      setBvhMsg('The trim end has to be after the start.')
+      return
+    }
+    const newName = trimClip(activeClipName, animFps, start, end)
+    if (!newName) return
+    setTrimOpen(false)
+    armClip(newName)
+    setBvhMsg(`Created “${newName}” from ${start.toFixed(2)}s–${end.toFixed(2)}s. The original clip is untouched.`)
+  }
+
   const playing = playback === 'playing'
 
   return (
@@ -654,6 +678,75 @@ export default function AnimationPanel() {
               >
                 ⬇ Export clip
               </button>
+              <button
+                className="btn secondary"
+                onClick={() => (trimOpen ? setTrimOpen(false) : onOpenTrim())}
+                title="Cut this clip down to a shorter range, saved as a new clip"
+              >
+                ✂ Trim
+              </button>
+            </div>
+          )}
+
+          {trimOpen && activeClipName && (
+            <div className="map-editor">
+              <div className="field-label" style={{ marginTop: 4 }}>
+                Trim “{activeClipName}”
+              </div>
+              <div className="map-hint">
+                Pick the range to keep — the rest is dropped. Saved as a new clip
+                named “{activeClipName} (trimmed)”; the original is untouched.
+              </div>
+              <label className="slider-row">
+                <span className="slider-label">Start</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={duration || 0}
+                  step={1 / animFps}
+                  value={trimRange[0]}
+                  onChange={(e) =>
+                    setTrimRange(([, end]) => [Math.min(Number(e.target.value), end), end])
+                  }
+                />
+                <EditableValue
+                  value={trimRange[0]}
+                  min={0}
+                  max={duration || 0}
+                  onChange={(v) => setTrimRange(([, end]) => [Math.min(v, end), end])}
+                  format={(v) => v.toFixed(2) + 's'}
+                  label="Trim start (seconds)"
+                />
+              </label>
+              <label className="slider-row">
+                <span className="slider-label">End</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={duration || 0}
+                  step={1 / animFps}
+                  value={trimRange[1]}
+                  onChange={(e) =>
+                    setTrimRange(([start]) => [start, Math.max(Number(e.target.value), start)])
+                  }
+                />
+                <EditableValue
+                  value={trimRange[1]}
+                  min={0}
+                  max={duration || 0}
+                  onChange={(v) => setTrimRange(([start]) => [start, Math.max(v, start)])}
+                  format={(v) => v.toFixed(2) + 's'}
+                  label="Trim end (seconds)"
+                />
+              </label>
+              <div className="kf-actions" style={{ marginTop: 8 }}>
+                <button className="btn" onClick={onConfirmTrim}>
+                  Create trimmed clip
+                </button>
+                <button className="btn secondary" onClick={() => setTrimOpen(false)}>
+                  Cancel
+                </button>
+              </div>
             </div>
           )}
 

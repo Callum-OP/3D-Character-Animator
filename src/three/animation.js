@@ -230,8 +230,31 @@ export function sampleClipToPose(name, time) {
 export function bakeClipToTracks(name, fps, duration) {
   const clip = findClip(name)
   if (!clip || !a.model) return null
-  const dur = duration || clip.duration
-  const frames = Math.max(2, Math.round(dur * fps) + 1)
+  return sampleClipRange(clip, fps, 0, duration || clip.duration)
+}
+
+// Cut a clip down to [startTime, endTime] (seconds, clamped to the clip's
+// length) and register the result as a brand-new playable clip — the
+// original is left untouched. Returns the new clip's name, or null.
+export function trimClip(name, fps, startTime, endTime) {
+  const clip = findClip(name)
+  if (!clip || !a.model) return null
+  const res = sampleClipRange(clip, fps, startTime, endTime)
+  if (!res) return null
+  const trimmed = buildEditClip(res.tracks, res.duration, {})
+  trimmed.name = `${name} (trimmed)`
+  return addGeneratedClip(trimmed)
+}
+
+// Shared sampler behind bakeClipToTracks/trimClip: plays `clip` on a scratch
+// mixer and records each bone's rotation every frame across [start, end],
+// re-timed so the result starts at 0. Static bones are pruned.
+function sampleClipRange(clip, fps, startTime, endTime) {
+  const dur = clip.duration
+  const start = Math.max(0, Math.min(startTime, dur))
+  const end = Math.max(start, Math.min(endTime, dur))
+  const span = end - start
+  const frames = Math.max(2, Math.round(span * fps) + 1)
   const mixer = new THREE.AnimationMixer(a.model.root)
   const act = mixer.clipAction(clip)
   act.loop = THREE.LoopOnce
@@ -241,11 +264,11 @@ export function bakeClipToTracks(name, fps, duration) {
   const tracks = {}
   for (const b of a.model.bones) tracks[b.name] = []
   for (let f = 0; f < frames; f++) {
-    const t = (f / (frames - 1)) * dur
+    const t = start + (span > 0 ? (f / (frames - 1)) * span : 0)
     mixer.setTime(t)
     for (const b of a.model.bones) {
       const q = b.quaternion
-      tracks[b.name].push({ time: t, quat: [q.x, q.y, q.z, q.w] })
+      tracks[b.name].push({ time: t - start, quat: [q.x, q.y, q.z, q.w] })
     }
   }
   mixer.stopAllAction()
@@ -260,7 +283,7 @@ export function bakeClipToTracks(name, fps, duration) {
     const moves = keys.some((k) => !quatClose(k.quat, first))
     if (!moves) delete tracks[boneName]
   }
-  return { tracks, duration: dur }
+  return { tracks, duration: span }
 }
 
 // Build the in-app clip from the full keyframe data (bone tracks + root motion
