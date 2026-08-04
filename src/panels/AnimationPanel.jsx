@@ -16,9 +16,11 @@ import {
   bakeClipToTracks,
   trimClip,
   combineClips,
+  clipFromTracks,
   addGeneratedClip,
   exportClipJSON,
   importClipJSON,
+  renameClip,
 } from '../three/animation.js'
 import {
   listSavedClips,
@@ -138,6 +140,8 @@ export default function AnimationPanel() {
   const [bvhBusy, setBvhBusy] = useState(false)
   const [kfMsg, setKfMsg] = useState(null) // feedback after adding a keyframe
   const [ragdollMsg, setRagdollMsg] = useState(null) // feedback after a ragdoll bake
+  const [renameOpen, setRenameOpen] = useState(false)
+  const [renameText, setRenameText] = useState('')
   // When a BVH is parsed, this holds the mapping editor state until the user
   // confirms (Retarget) or cancels: { name, sourceBones, targetBones, slots }.
   const [mapping, setMapping] = useState(null)
@@ -471,6 +475,37 @@ export default function AnimationPanel() {
     setBvhMsg(`Baked ${Object.keys(res.tracks).length} moving track(s) to keyframes.`)
   }
 
+  // Bridge back the other way: turn what you've keyframed in "Make your own"
+  // into a real clip, so it immediately has the same Save/Export/Trim/Combine
+  // tools as anything under "Play a clip".
+  function onSaveAsClip() {
+    const nameGuess = activeClipName ? `${activeClipName} (edited)` : 'My clip'
+    const name = clipFromTracks(animData.tracks, animDuration, nameGuess)
+    if (!name) return
+    stop()
+    armClip(name)
+    setKfMsg(`Saved as the clip “${name}” — find it under Play a clip, with the same tools.`)
+  }
+
+  function onOpenRename() {
+    setRenameText(activeClipName || '')
+    setRenameOpen(true)
+  }
+
+  function onConfirmRename() {
+    if (!activeClipName) return
+    const finalName = renameClip(activeClipName, renameText)
+    if (!finalName) {
+      setBvhMsg("Clips built into the model file itself can't be renamed.")
+      setRenameOpen(false)
+      return
+    }
+    st().renameImportedClipName(activeClipName, finalName)
+    st().setActiveClipName(finalName)
+    setRenameOpen(false)
+    setBvhMsg(finalName === activeClipName ? null : `Renamed to “${finalName}”.`)
+  }
+
   // --- clip library (save-permanently / export / import) -------------------
 
   // Bring a freshly-registered clip (from import or the library) straight into
@@ -642,6 +677,39 @@ export default function AnimationPanel() {
                 </option>
               ))}
             </select>
+          )}
+
+          {activeClipName && importedClipNames.includes(activeClipName) && !renameOpen && (
+            <button
+              className="btn secondary"
+              style={{ marginTop: 6 }}
+              onClick={onOpenRename}
+              title="Rename this clip"
+            >
+              ✏️ Rename
+            </button>
+          )}
+
+          {renameOpen && (
+            <div className="kf-actions" style={{ marginTop: 6 }}>
+              <input
+                className="select"
+                style={{ flex: 1 }}
+                value={renameText}
+                autoFocus
+                onChange={(e) => setRenameText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') onConfirmRename()
+                  if (e.key === 'Escape') setRenameOpen(false)
+                }}
+              />
+              <button className="btn" onClick={onConfirmRename}>
+                Save
+              </button>
+              <button className="btn secondary" onClick={() => setRenameOpen(false)}>
+                Cancel
+              </button>
+            </div>
           )}
 
           {activeClipName && hasBones && (
@@ -1163,6 +1231,13 @@ export default function AnimationPanel() {
           )}
 
           <div className="kf-actions" style={{ marginTop: 8 }}>
+            <button
+              className="btn secondary"
+              onClick={onSaveAsClip}
+              title="Turn what you've keyframed into a playable clip, usable anywhere clips are — Play a clip, Save, Export, Trim, Combine"
+            >
+              🎬 Save as clip
+            </button>
             <button className="btn secondary" onClick={onSaveAnim}>
               Save
             </button>

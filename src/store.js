@@ -304,11 +304,7 @@ export const useStore = create((set) => ({
     set((s) => ({
       sceneLights: s.sceneLights.map((lt) => (lt.id === id ? { ...lt, color } : lt)),
     })),
-  // NOTE: named setSceneLightIntensity (not setLightIntensity) — the key
-  // light above already owns that name; a duplicate key on this same store
-  // object silently shadowed the key light's setter, which is why the
-  // Brightness slider in the Look panel used to appear stuck.
-  setSceneLightIntensity: (id, intensity) =>
+  setLightIntensity: (id, intensity) =>
     set((s) => ({
       sceneLights: s.sceneLights.map((lt) => (lt.id === id ? { ...lt, intensity } : lt)),
     })),
@@ -332,6 +328,10 @@ export const useStore = create((set) => ({
   setActiveClipName: (activeClipName) => set({ activeClipName }),
   addImportedClipName: (name) =>
     set((s) => ({ importedClipNames: [...s.importedClipNames, name] })),
+  renameImportedClipName: (oldName, newName) =>
+    set((s) => ({
+      importedClipNames: s.importedClipNames.map((n) => (n === oldName ? newName : n)),
+    })),
   setLoop: (loop) => set({ loop }),
   setSpeed: (speed) => set({ speed }),
   setDuration: (duration) => set({ duration }),

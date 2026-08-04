@@ -186,6 +186,20 @@ export function addGeneratedClip(clip) {
   return name
 }
 
+// Rename an imported/generated clip (combined, trimmed, imported, ragdoll,
+// etc). Clips baked into the model file itself can't be renamed — returns
+// null in that case. Returns the final, deduped name on success.
+export function renameClip(name, newName) {
+  const clip = a.importedClips.find((c) => c.name === name)
+  if (!clip) return null
+  const base = (newName || '').trim() || 'Clip'
+  if (base === name) return name
+  let final = base
+  for (let n = 2; findClip(final); n++) final = `${base} ${n}`
+  clip.name = final
+  return final
+}
+
 // Serialize a clip (baked or imported) to a plain JSON object, for downloading
 // or stashing in the persistent clip library. Returns null if not found.
 export function exportClipJSON(name) {
@@ -282,6 +296,18 @@ export function trimClip(name, fps, startTime, endTime) {
   const trimmed = buildEditClip(res.tracks, res.duration, {})
   trimmed.name = `${name} (trimmed)`
   return addGeneratedClip(trimmed)
+}
+
+// Turn the current in-app keyframe tracks (bone rotations only — root
+// motion, props, cameras, and morphs aren't part of a mixer clip and stay
+// keyframe-only) into a new playable clip. This is what lets a "Make your
+// own" creation show up anywhere clips do: the clip list, Save/Export, Trim,
+// Combine. Returns the final clip name, or null.
+export function clipFromTracks(tracks, duration, name) {
+  if (!a.model) return null
+  const clip = buildEditClip(tracks, duration, {})
+  clip.name = name || 'My clip'
+  return addGeneratedClip(clip)
 }
 
 // Shared sampler behind bakeClipToTracks/trimClip: plays `clip` on a scratch
