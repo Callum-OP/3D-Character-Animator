@@ -15,6 +15,7 @@ import {
   sampleClipToPose,
   bakeClipToTracks,
   trimClip,
+  combineClips,
   addGeneratedClip,
   exportClipJSON,
   importClipJSON,
@@ -132,6 +133,8 @@ export default function AnimationPanel() {
   const [savedClips, setSavedClips] = useState(() => listSavedClips())
   const [trimOpen, setTrimOpen] = useState(false)
   const [trimRange, setTrimRange] = useState([0, 0]) // [start, end] seconds
+  const [toolsOpen, setToolsOpen] = useState(false) // collapses the less-common clip tools
+  const [combineSel, setCombineSel] = useState([]) // clip names picked for Combine, in order
   const [bvhBusy, setBvhBusy] = useState(false)
   const [kfMsg, setKfMsg] = useState(null) // feedback after adding a keyframe
   const [ragdollMsg, setRagdollMsg] = useState(null) // feedback after a ragdoll bake
@@ -557,7 +560,24 @@ export default function AnimationPanel() {
     if (!newName) return
     setTrimOpen(false)
     armClip(newName)
-    setBvhMsg(`Created “${newName}” from ${start.toFixed(2)}s–${end.toFixed(2)}s. The original clip is untouched.`)
+    setBvhMsg(
+      `Created “${newName}” from ${start.toFixed(2)}s–${end.toFixed(2)}s. The original clip is untouched.`,
+    )
+  }
+
+  // --- combine -----------------------------------------------------------
+
+  function toggleCombineSel(name) {
+    setCombineSel((sel) => (sel.includes(name) ? sel.filter((n) => n !== name) : [...sel, name]))
+  }
+
+  function onConfirmCombine() {
+    if (combineSel.length < 2) return
+    const newName = combineClips(combineSel, animFps)
+    if (!newName) return
+    setCombineSel([])
+    armClip(newName)
+    setBvhMsg(`Combined ${combineSel.length} clips into “${newName}”, in the order you picked them.`)
   }
 
   const playing = playback === 'playing'
@@ -624,25 +644,6 @@ export default function AnimationPanel() {
             </select>
           )}
 
-          {hasBones && (
-            <div className="kf-actions" style={{ marginTop: 8 }}>
-              <button
-                className="btn secondary"
-                onClick={() => bvhRef.current?.click()}
-                disabled={bvhBusy}
-              >
-                {bvhBusy ? 'Parsing…' : 'Import motion (.bvh)'}
-              </button>
-              <input
-                ref={bvhRef}
-                type="file"
-                accept=".bvh"
-                style={{ display: 'none' }}
-                onChange={onPickBVH}
-              />
-            </div>
-          )}
-
           {activeClipName && hasBones && (
             <div className="kf-actions" style={{ marginTop: 6 }}>
               <button
@@ -662,141 +663,215 @@ export default function AnimationPanel() {
             </div>
           )}
 
-          {activeClipName && (
-            <div className="kf-actions" style={{ marginTop: 6 }}>
-              <button
-                className="btn secondary"
-                onClick={onSaveToLibrary}
-                title="Keep this clip in your browser so it's here next time, even after reloading or switching models"
-              >
-                💾 Save clip
-              </button>
-              <button
-                className="btn secondary"
-                onClick={onExportClip}
-                title="Download this clip as a file to share or back up"
-              >
-                ⬇ Export clip
-              </button>
-              <button
-                className="btn secondary"
-                onClick={() => (trimOpen ? setTrimOpen(false) : onOpenTrim())}
-                title="Cut this clip down to a shorter range, saved as a new clip"
-              >
-                ✂ Trim
-              </button>
-            </div>
-          )}
+          <button
+            className="btn secondary"
+            style={{ marginTop: 8, width: '100%' }}
+            onClick={() => setToolsOpen((v) => !v)}
+          >
+            🛠 Clip tools {toolsOpen ? '▲' : '▼'}
+          </button>
 
-          {trimOpen && activeClipName && (
-            <div className="map-editor">
-              <div className="field-label" style={{ marginTop: 4 }}>
-                Trim “{activeClipName}”
-              </div>
-              <div className="map-hint">
-                Pick the range to keep — the rest is dropped. Saved as a new clip
-                named “{activeClipName} (trimmed)”; the original is untouched.
-              </div>
-              <label className="slider-row">
-                <span className="slider-label">Start</span>
-                <input
-                  type="range"
-                  min={0}
-                  max={duration || 0}
-                  step={1 / animFps}
-                  value={trimRange[0]}
-                  onChange={(e) =>
-                    setTrimRange(([, end]) => [Math.min(Number(e.target.value), end), end])
-                  }
-                />
-                <EditableValue
-                  value={trimRange[0]}
-                  min={0}
-                  max={duration || 0}
-                  onChange={(v) => setTrimRange(([, end]) => [Math.min(v, end), end])}
-                  format={(v) => v.toFixed(2) + 's'}
-                  label="Trim start (seconds)"
-                />
-              </label>
-              <label className="slider-row">
-                <span className="slider-label">End</span>
-                <input
-                  type="range"
-                  min={0}
-                  max={duration || 0}
-                  step={1 / animFps}
-                  value={trimRange[1]}
-                  onChange={(e) =>
-                    setTrimRange(([start]) => [start, Math.max(Number(e.target.value), start)])
-                  }
-                />
-                <EditableValue
-                  value={trimRange[1]}
-                  min={0}
-                  max={duration || 0}
-                  onChange={(v) => setTrimRange(([start]) => [start, Math.max(v, start)])}
-                  format={(v) => v.toFixed(2) + 's'}
-                  label="Trim end (seconds)"
-                />
-              </label>
-              <div className="kf-actions" style={{ marginTop: 8 }}>
-                <button className="btn" onClick={onConfirmTrim}>
-                  Create trimmed clip
-                </button>
-                <button className="btn secondary" onClick={() => setTrimOpen(false)}>
-                  Cancel
-                </button>
-              </div>
-            </div>
-          )}
+          {toolsOpen && (
+            <div style={{ marginTop: 4 }}>
+              {hasBones && (
+                <div className="kf-actions" style={{ marginTop: 8 }}>
+                  <button
+                    className="btn secondary"
+                    onClick={() => bvhRef.current?.click()}
+                    disabled={bvhBusy}
+                  >
+                    {bvhBusy ? 'Parsing…' : 'Import motion (.bvh)'}
+                  </button>
+                  <input
+                    ref={bvhRef}
+                    type="file"
+                    accept=".bvh"
+                    style={{ display: 'none' }}
+                    onChange={onPickBVH}
+                  />
+                </div>
+              )}
 
-          <div className="kf-actions" style={{ marginTop: 6 }}>
-            <button
-              className="btn secondary"
-              onClick={() => clipFileRef.current?.click()}
-              title="Load a clip file exported from here (or by someone else)"
-            >
-              ⬆ Import clip file
-            </button>
-            <input
-              ref={clipFileRef}
-              type="file"
-              accept=".json,application/json"
-              style={{ display: 'none' }}
-              onChange={onImportClipFile}
-            />
-          </div>
+              {activeClipName && (
+                <div className="kf-actions" style={{ marginTop: 6 }}>
+                  <button
+                    className="btn secondary"
+                    onClick={onSaveToLibrary}
+                    title="Keep this clip in your browser so it's here next time, even after reloading or switching models"
+                  >
+                    💾 Save clip
+                  </button>
+                  <button
+                    className="btn secondary"
+                    onClick={onExportClip}
+                    title="Download this clip as a file to share or back up"
+                  >
+                    ⬇ Export clip
+                  </button>
+                  <button
+                    className="btn secondary"
+                    onClick={() => (trimOpen ? setTrimOpen(false) : onOpenTrim())}
+                    title="Cut this clip down to a shorter range, saved as a new clip"
+                  >
+                    ✂ Trim
+                  </button>
+                </div>
+              )}
 
-          {savedClips.length > 0 && (
-            <>
-              <div className="field-label" style={{ marginTop: 10 }}>
-                Saved clips ({savedClips.length})
-              </div>
-              <div className="kf-list">
-                {savedClips.map((s) => (
-                  <div key={s.name} className="kf-list-row" title="Load into the clip list">
-                    <span
-                      className="kf-time"
-                      style={{ cursor: 'pointer' }}
-                      onClick={() => onLoadFromLibrary(s.name)}
-                    >
-                      {s.name}
-                    </span>
-                    <span className="kf-what" />
-                    <button
-                      className="kf-del"
-                      title="Remove from your saved library"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        onDeleteFromLibrary(s.name)
-                      }}
-                    >
-                      ×
+              {trimOpen && activeClipName && (
+                <div className="map-editor">
+                  <div className="field-label" style={{ marginTop: 4 }}>
+                    Trim “{activeClipName}”
+                  </div>
+                  <div className="map-hint">
+                    Pick the range to keep — the rest is dropped. Saved as a new clip
+                    named “{activeClipName} (trimmed)”; the original is untouched.
+                  </div>
+                  <label className="slider-row">
+                    <span className="slider-label">Start</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={duration || 0}
+                      step={1 / animFps}
+                      value={trimRange[0]}
+                      onChange={(e) =>
+                        setTrimRange(([, end]) => [Math.min(Number(e.target.value), end), end])
+                      }
+                    />
+                    <EditableValue
+                      value={trimRange[0]}
+                      min={0}
+                      max={duration || 0}
+                      onChange={(v) => setTrimRange(([, end]) => [Math.min(v, end), end])}
+                      format={(v) => v.toFixed(2) + 's'}
+                      label="Trim start (seconds)"
+                    />
+                  </label>
+                  <label className="slider-row">
+                    <span className="slider-label">End</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={duration || 0}
+                      step={1 / animFps}
+                      value={trimRange[1]}
+                      onChange={(e) =>
+                        setTrimRange(([start]) => [start, Math.max(Number(e.target.value), start)])
+                      }
+                    />
+                    <EditableValue
+                      value={trimRange[1]}
+                      min={0}
+                      max={duration || 0}
+                      onChange={(v) => setTrimRange(([start]) => [start, Math.max(v, start)])}
+                      format={(v) => v.toFixed(2) + 's'}
+                      label="Trim end (seconds)"
+                    />
+                  </label>
+                  <div className="kf-actions" style={{ marginTop: 8 }}>
+                    <button className="btn" onClick={onConfirmTrim}>
+                      Create trimmed clip
+                    </button>
+                    <button className="btn secondary" onClick={() => setTrimOpen(false)}>
+                      Cancel
                     </button>
                   </div>
-                ))}
+                </div>
+              )}
+
+              <div className="kf-actions" style={{ marginTop: 6 }}>
+                <button
+                  className="btn secondary"
+                  onClick={() => clipFileRef.current?.click()}
+                  title="Load a clip file exported from here (or by someone else)"
+                >
+                  ⬆ Import clip file
+                </button>
+                <input
+                  ref={clipFileRef}
+                  type="file"
+                  accept=".json,application/json"
+                  style={{ display: 'none' }}
+                  onChange={onImportClipFile}
+                />
               </div>
-            </>
+
+              {clipNames.length > 1 && (
+                <>
+                  <div className="field-label" style={{ marginTop: 10 }}>
+                    Combine clips
+                  </div>
+                  <div className="kf-help">
+                    Tick two or more, in the order you want them to play — they'll
+                    be stitched into one new clip, back to back.
+                  </div>
+                  <div className="kf-list">
+                    {clipNames.map((name, i) => {
+                      const pos = combineSel.indexOf(name)
+                      return (
+                        <label key={i} className="kf-list-row" style={{ cursor: 'pointer' }}>
+                          <input
+                            type="checkbox"
+                            checked={pos !== -1}
+                            onChange={() => toggleCombineSel(name)}
+                            style={{ marginRight: 8 }}
+                          />
+                          <span className="kf-what">{name || `(clip ${i + 1})`}</span>
+                          {pos !== -1 && <span className="kf-tag">{pos + 1}</span>}
+                        </label>
+                      )
+                    })}
+                  </div>
+                  <div className="kf-actions" style={{ marginTop: 6 }}>
+                    <button
+                      className="btn secondary"
+                      onClick={onConfirmCombine}
+                      disabled={combineSel.length < 2}
+                    >
+                      Combine {combineSel.length > 1 ? `(${combineSel.length})` : ''}
+                    </button>
+                    {combineSel.length > 0 && (
+                      <button className="btn secondary" onClick={() => setCombineSel([])}>
+                        Clear selection
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+
+              {savedClips.length > 0 && (
+                <>
+                  <div className="field-label" style={{ marginTop: 10 }}>
+                    Saved clips ({savedClips.length})
+                  </div>
+                  <div className="kf-list">
+                    {savedClips.map((s) => (
+                      <div key={s.name} className="kf-list-row" title="Load into the clip list">
+                        <span
+                          className="kf-time"
+                          style={{ cursor: 'pointer' }}
+                          onClick={() => onLoadFromLibrary(s.name)}
+                        >
+                          {s.name}
+                        </span>
+                        <span className="kf-what" />
+                        <button
+                          className="kf-del"
+                          title="Remove from your saved library"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            onDeleteFromLibrary(s.name)
+                          }}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
           )}
 
           {bvhMsg && <div className="pose-msg">{bvhMsg}</div>}

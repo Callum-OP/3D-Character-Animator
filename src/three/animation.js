@@ -202,6 +202,44 @@ export function importClipJSON(json) {
   return addGeneratedClip(clip)
 }
 
+// Concatenate several clips end-to-end into one new playable clip (e.g. "walk"
+// then "wave"), sampled at `fps`. Order follows `names`. Returns the new
+// clip's name, or null.
+export function combineClips(names, fps) {
+  if (!a.model || names.length < 2) return null
+  const tracks = {}
+  for (const b of a.model.bones) tracks[b.name] = []
+  let offset = 0
+  let any = false
+  for (const name of names) {
+    const clip = findClip(name)
+    if (!clip) continue
+    const res = sampleClipRange(clip, fps, 0, clip.duration, false)
+    if (!res) continue
+    any = true
+    for (const boneName of Object.keys(tracks)) {
+      const keys = res.tracks[boneName]
+      if (!keys || !keys.length) continue
+      for (const k of keys) tracks[boneName].push({ time: k.time + offset, quat: k.quat })
+    }
+    offset += res.duration
+  }
+  if (!any) return null
+  for (const boneName of Object.keys(tracks)) {
+    const keys = tracks[boneName]
+    if (!keys.length) {
+      delete tracks[boneName]
+      continue
+    }
+    const first = keys[0].quat
+    const moves = keys.some((k) => !quatClose(k.quat, first))
+    if (!moves) delete tracks[boneName]
+  }
+  const combined = buildEditClip(tracks, offset, {})
+  combined.name = names.join(' + ')
+  return addGeneratedClip(combined)
+}
+
 // Sample a clip at one time into a pose map { boneName: [x,y,z,w] } (for "apply
 // frame as pose"). Leaves the rig at rest afterwards.
 export function sampleClipToPose(name, time) {
@@ -249,7 +287,7 @@ export function trimClip(name, fps, startTime, endTime) {
 // Shared sampler behind bakeClipToTracks/trimClip: plays `clip` on a scratch
 // mixer and records each bone's rotation every frame across [start, end],
 // re-timed so the result starts at 0. Static bones are pruned.
-function sampleClipRange(clip, fps, startTime, endTime) {
+function sampleClipRange(clip, fps, startTime, endTime, prune = true) {
   const dur = clip.duration
   const start = Math.max(0, Math.min(startTime, dur))
   const end = Math.max(start, Math.min(endTime, dur))
@@ -277,11 +315,17 @@ function sampleClipRange(clip, fps, startTime, endTime) {
   a.refs.requestRender()
 
   // Drop tracks whose rotation never changes (keeps the keyframe data small).
-  for (const boneName of Object.keys(tracks)) {
-    const keys = tracks[boneName]
-    const first = keys[0].quat
-    const moves = keys.some((k) => !quatClose(k.quat, first))
-    if (!moves) delete tracks[boneName]
+  // Skipped when this segment will be concatenated with others (prune=false):
+  // a bone that's static here but posed in a later segment must still hold a
+  // key through this whole span, or the combined clip snaps to the other
+  // segment's pose retroactively.
+  if (prune) {
+    for (const boneName of Object.keys(tracks)) {
+      const keys = tracks[boneName]
+      const first = keys[0].quat
+      const moves = keys.some((k) => !quatClose(k.quat, first))
+      if (!moves) delete tracks[boneName]
+    }
   }
   return { tracks, duration: span }
 }
