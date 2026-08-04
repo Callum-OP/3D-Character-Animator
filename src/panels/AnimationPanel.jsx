@@ -691,24 +691,27 @@ export default function AnimationPanel() {
           )}
 
           {renameOpen && (
-            <div className="kf-actions" style={{ marginTop: 6 }}>
+            <div style={{ marginTop: 6 }}>
               <input
                 className="select"
-                style={{ flex: 1 }}
+                style={{ width: '100%', fontSize: 13, padding: '8px 10px' }}
                 value={renameText}
                 autoFocus
+                onFocus={(e) => e.target.select()}
                 onChange={(e) => setRenameText(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') onConfirmRename()
                   if (e.key === 'Escape') setRenameOpen(false)
                 }}
               />
-              <button className="btn" onClick={onConfirmRename}>
-                Save
-              </button>
-              <button className="btn secondary" onClick={() => setRenameOpen(false)}>
-                Cancel
-              </button>
+              <div className="kf-actions" style={{ marginTop: 6 }}>
+                <button className="btn" onClick={onConfirmRename}>
+                  Save
+                </button>
+                <button className="btn secondary" onClick={() => setRenameOpen(false)}>
+                  Cancel
+                </button>
+              </div>
             </div>
           )}
 
