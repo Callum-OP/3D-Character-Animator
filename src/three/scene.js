@@ -847,9 +847,11 @@ export function applySceneData(json) {
 // ---------------------------------------------------------------------------
 
 // The style settings we persist (a subset of the store that isn't derivable).
+// Deliberately excludes anything per-character (mesh overrides, pose, anim) —
+// those live inside each entry of the `characters` array instead.
 function collectSettings() {
   const s = useStore.getState()
-  const settings = {
+  return {
     materialMode: s.materialMode,
     toonSteps: s.toonSteps,
     lightIntensity: s.lightIntensity,
@@ -869,59 +871,90 @@ function collectSettings() {
     animFps: s.animFps,
     animDuration: s.animDuration,
   }
-  // Per-mesh overrides are keyed by mesh uuid, but uuids are regenerated every
-  // time the same file is reloaded. Remap to the mesh's INDEX so it survives a
-  // save→reload round-trip (index order is stable for the same file).
-  const meshes = (state.currentModel && state.currentModel.info.meshes) || []
-  const uuidToIndex = new Map(meshes.map((m, i) => [m.uuid, i]))
+}
+
+// Per-mesh overrides are keyed by mesh uuid, but uuids are regenerated every
+// time the same file is reloaded. Remap to the mesh's INDEX so it survives a
+// save→reload round-trip (index order is stable for the same file).
+function meshOverridesByIndexFor(model, overridesByUuid) {
+  const meshes = (model && model.info.meshes) || []
+  const uuidToIndex = new Map(meshes.map((mesh, i) => [mesh.uuid, i]))
   const byIndex = {}
-  for (const [uuid, ov] of Object.entries(s.meshOverrides)) {
+  for (const [uuid, ov] of Object.entries(overridesByUuid || {})) {
     const idx = uuidToIndex.get(uuid)
     if (idx != null) byIndex[idx] = ov
   }
-  settings.meshOverridesByIndex = byIndex
-  return settings
+  return byIndex
 }
 
-// Build a complete, serializable-to-IndexedDB project record.
+function meshOverridesFromIndex(model, byIndex) {
+  const meshes = (model && model.info.meshes) || []
+  const out = {}
+  for (const [idx, ov] of Object.entries(byIndex || {})) {
+    const mesh = meshes[Number(idx)]
+    if (mesh) out[mesh.uuid] = ov
+  }
+  return out
+}
+
+// Build a complete, serializable-to-IndexedDB project record. Captures EVERY
+// loaded character (not just the active one) — for whichever one isn't
+// currently active, we briefly make it active to read its pose/mesh-edit/
+// animation state through the normal capture path, then switch back. That
+// happens synchronously within this function, so nothing visibly changes.
 export function getProjectData() {
   const s = useStore.getState()
-  let character = null
-  if (state.currentModel && state.currentModel.file) {
-    const root = state.currentModel.root
-    character = {
-      fileName: state.currentModel.file.name,
-      blob: state.currentModel.file,
+  const originalActiveId = state.activeCharacterId
+  const characters = []
+
+  for (const id of s.characterOrder) {
+    const model = state.characters.get(id)
+    if (!model || !model.file) continue
+
+    if (id !== state.activeCharacterId) setActiveCharacter(id)
+    const live = useStore.getState()
+
+    characters.push({
+      id,
+      fileName: model.file.name,
+      blob: model.file,
       transform: {
-        position: root.position.toArray(),
-        quaternion: root.quaternion.toArray(),
-        scale: root.scale.toArray(),
+        position: model.root.position.toArray(),
+        quaternion: model.root.quaternion.toArray(),
+        scale: model.root.scale.toArray(),
       },
       pose: getPose(),
       meshEdits: getMeshEditsData(),
-    }
+      meshOverridesByIndex: meshOverridesByIndexFor(model, live.meshOverrides),
+      animData: live.animData,
+      isActive: id === originalActiveId,
+    })
   }
+
+  if (originalActiveId && originalActiveId !== state.activeCharacterId) {
+    setActiveCharacter(originalActiveId)
+  }
+
   return {
-    format: 'project-v1',
+    format: 'project-v2',
     settings: collectSettings(),
-    character,
+    characters,
     objects: getObjectsForSave(),
     cameras: getCamerasData(),
     lights: getLightsData(),
-    animData: s.animData,
   }
 }
 
-// Restore a project record: tear down the current session, then rebuild the
+// Restore a project record: tear down the current session, then rebuild every
 // character, props/images, style settings and pose sequence from the saved
 // blobs. Async — models are re-parsed from their blobs.
 export async function applyProjectData(record) {
-  if (!record || record.format !== 'project-v1') {
+  if (!record || (record.format !== 'project-v1' && record.format !== 'project-v2')) {
     throw new Error('Not a valid saved project.')
   }
   const store = useStore.getState()
 
-  // 1. Clear the current props/images, cameras and the character.
+  // 1. Clear the current props/images, cameras and every character.
   for (const id of store.sceneObjects.filter((o) => !o.isCharacter).map((o) => o.id)) {
     removeObjectById(id)
   }
@@ -932,15 +965,26 @@ export async function applyProjectData(record) {
   useStore.setState({ sceneLights: [], selectedLightId: null })
   disposeCurrentModel()
 
-  // 2. Load the character (this resets much of the store via setModelInfo).
-  if (record.character && record.character.blob) {
-    const c = record.character
-    await loadModelFile(new File([c.blob], c.fileName))
-    const root = state.currentModel.root
+  // 2. Load every saved character. Older (project-v1) saves have a single
+  // `record.character` instead of a `record.characters` array — normalise.
+  const characterRecords = record.format === 'project-v1'
+    ? (record.character ? [record.character] : [])
+    : record.characters || []
+
+  let activeIdToRestore = null
+  for (let i = 0; i < characterRecords.length; i++) {
+    const c = characterRecords[i]
+    if (!c.blob) continue
+    // The first character replaces the (already-empty) active slot; every
+    // subsequent one is added alongside it as its own character.
+    await loadModelFile(new File([c.blob], c.fileName), { addNew: i > 0 })
+    const id = state.activeCharacterId // whatever we just loaded is now active
+    const model = state.characters.get(id)
+
     if (c.transform) {
-      root.position.fromArray(c.transform.position)
-      root.quaternion.fromArray(c.transform.quaternion)
-      root.scale.fromArray(c.transform.scale)
+      model.root.position.fromArray(c.transform.position)
+      model.root.quaternion.fromArray(c.transform.quaternion)
+      model.root.scale.fromArray(c.transform.scale)
     }
     if (c.pose) {
       try {
@@ -950,17 +994,25 @@ export async function applyProjectData(record) {
       }
     }
     applyMeshEditsData(c.meshEdits)
+    if (c.meshOverridesByIndex) {
+      useStore.setState({ meshOverrides: meshOverridesFromIndex(model, c.meshOverridesByIndex) })
+    }
+    if (c.animData) useStore.setState({ animData: c.animData })
+    if (c.isActive || (record.format === 'project-v1' && i === 0)) activeIdToRestore = id
   }
+  if (activeIdToRestore) setActiveCharacter(activeIdToRestore)
 
-  // 3. Apply saved settings (AFTER the load, which would otherwise reset them).
+  // 3. Apply saved settings (AFTER the loads, which would otherwise reset them).
   const st = record.settings || {}
-  const meshes = (state.currentModel && state.currentModel.info.meshes) || []
-  const meshOverrides = {}
-  for (const [idx, ov] of Object.entries(st.meshOverridesByIndex || {})) {
-    const m = meshes[Number(idx)]
-    if (m) meshOverrides[m.uuid] = ov
+  // Legacy project-v1 saves kept mesh overrides at the top level of settings —
+  // they already landed on the single character above via c.meshOverridesByIndex
+  // in the branch above only for v2; handle the v1 shape here too.
+  if (record.format === 'project-v1' && st.meshOverridesByIndex && state.currentModel) {
+    useStore.setState({
+      meshOverrides: meshOverridesFromIndex(state.currentModel, st.meshOverridesByIndex),
+    })
   }
-  const patch = { meshOverrides }
+  const patch = {}
   for (const k of [
     'materialMode', 'toonSteps', 'lightIntensity', 'lightAzimuth', 'lightElevation',
     'outlineEnabled', 'outlineWidth', 'softenEnabled', 'softenAmount',
