@@ -27,7 +27,7 @@ const o = {
   transform: null, // TransformControls (move/rotate/scale)
   helper: null,
   objects: [], // { id, name, format, root } — props only
-  characterRoot: null, // the character model root (id 'character'); owned elsewhere
+  characterRoots: new Map(), // id -> { root, name } — every LOADED character (owned elsewhere), keyed by character id
   selected: null, // selected root (or null)
   undoStack: [],
   redoStack: [],
@@ -66,17 +66,25 @@ export function initObjects(refs) {
   o.helper = helper
 }
 
-// Register the character model root so it can be selected/moved like an object
-// (id 'character'). Its geometry is owned by the model system, not here.
-export function setCharacterObject(root, name) {
-  o.characterRoot = root
-  o.characterName = name
+// Register a character model root so it can be selected/moved like an object,
+// keyed by character id. Its geometry is owned by the model system, not here.
+export function setCharacterObject(id, root, name) {
+  o.characterRoots.set(id, { root, name })
 }
 
-export function clearCharacterObject() {
-  if (o.selected === o.characterRoot && o.transform) o.transform.detach()
-  if (o.selected === o.characterRoot) o.selected = null
-  o.characterRoot = null
+// Unregister one character (when its model is disposed / removed).
+export function clearCharacterObject(id) {
+  const entry = o.characterRoots.get(id)
+  if (entry) {
+    if (o.selected === entry.root && o.transform) o.transform.detach()
+    if (o.selected === entry.root) o.selected = null
+    o.characterRoots.delete(id)
+  }
+}
+
+// Unregister ALL characters (full scene teardown).
+export function clearAllCharacterObjects() {
+  for (const id of [...o.characterRoots.keys()]) clearCharacterObject(id)
 }
 
 // Add a loaded model as a scene object. Returns lightweight metadata for the UI.
@@ -151,7 +159,7 @@ export function setObjectVisible(id, visible) {
 }
 
 export function removeObject(id) {
-  if (id === 'character') return // the character can't be removed here
+  if (o.characterRoots.has(id)) return // characters are removed via removeCharacter(), not this
   const idx = o.objects.findIndex((e) => e.id === id)
   if (idx < 0) return
   const entry = o.objects[idx]
@@ -222,10 +230,11 @@ function disposeUnattachedPropMaterials(entry) {
   }
 }
 
-// Resolve an id (numeric prop id or 'character') to its root object.
+// Resolve an id (numeric prop id or a character id) to its root object.
 function rootFor(id) {
   if (id == null) return null
-  if (id === 'character') return o.characterRoot
+  const charEntry = o.characterRoots.get(id)
+  if (charEntry) return charEntry.root
   const entry = o.objects.find((e) => e.id === id)
   return entry ? entry.root : null
 }
@@ -430,7 +439,7 @@ export function disposeObjects() {
   o.undoStack = []
   o.redoStack = []
   o.dragBefore = null
-  o.characterRoot = null // owned by the model system; not disposed here
+  o.characterRoots.clear() // owned by the model system; not disposed here
   if (o.helper && o.scene) o.scene.remove(o.helper)
   if (o.transform) {
     o.transform.dispose()
