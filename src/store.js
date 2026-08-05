@@ -304,7 +304,11 @@ export const useStore = create((set) => ({
     set((s) => ({
       sceneLights: s.sceneLights.map((lt) => (lt.id === id ? { ...lt, color } : lt)),
     })),
-  setLightIntensity: (id, intensity) =>
+  // Renamed from setLightIntensity: that name collided with the key-light
+  // intensity setter above (single arg, global) and was silently shadowing
+  // it, so the key-light slider in MaterialPanel was calling this per-prop
+  // setter instead — wrong signature, no effect.
+  setPropLightIntensity: (id, intensity) =>
     set((s) => ({
       sceneLights: s.sceneLights.map((lt) => (lt.id === id ? { ...lt, intensity } : lt)),
     })),
