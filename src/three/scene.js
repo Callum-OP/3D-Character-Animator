@@ -53,6 +53,7 @@ import {
   initClothMod,
   disposeClothMod,
   clearAllCloth,
+  clearClothForMeshes,
   stepClothLive,
   isClothEnabled,
   refreshClothForStyleChange,
@@ -540,7 +541,9 @@ export function setActiveCharacter(id, parsedArg, { frame = false } = {}) {
     clearPoseModel()
     clearMeshEditModel()
     clearAnimationModel()
-    clearAllCloth()
+    // NOTE: cloth is intentionally left running — it's keyed per-mesh, not
+    // per active-character, so switching focus shouldn't disturb any other
+    // character's drape/simulation.
   }
   state.currentModel = parsed
   state.activeCharacterId = id
@@ -577,8 +580,8 @@ function disposeCharacter(id) {
     clearPoseModel()
     clearMeshEditModel()
     clearAnimationModel()
-    clearAllCloth()
   }
+  clearClothForMeshes(model.meshes) // only THIS character's cloth, others keep simulating
   clearCharacterObject(id)
   restoreOriginalMaterials(model)
   disposeGeneratedMaterials(model)

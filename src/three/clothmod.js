@@ -503,10 +503,23 @@ export function isClothEnabled(uuid) { return cm.entries.has(uuid) }
 export function getClothEntry(uuid) { return cm.entries.get(uuid) || null }
 
 // Disable cloth on everything, without trying to restore visibility on meshes
-// that are about to be disposed anyway (called when the character unloads).
+// that are about to be disposed anyway (called on full scene teardown).
 export function clearAllCloth() {
   setClothPlaying(false)
   for (const uuid of [...cm.entries.keys()]) disableCloth(uuid, { restoreVisible: false })
+}
+
+// Disable cloth only on meshes belonging to ONE character (called when that
+// character is disposed/removed). Every other character's cloth is left
+// running untouched — cloth is keyed per-mesh, not tied to "the" character,
+// so there's nothing else to do to support several characters' cloth
+// simulating at once.
+export function clearClothForMeshes(meshes) {
+  if (!meshes || !meshes.length) return
+  const targets = new Set(meshes)
+  for (const [uuid, entry] of cm.entries) {
+    if (targets.has(entry.mesh)) disableCloth(uuid, { restoreVisible: false })
+  }
 }
 
 // World-space copy of a mesh's geometry — POSED, not bind pose. Plain
