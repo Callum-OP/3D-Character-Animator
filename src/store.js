@@ -83,6 +83,8 @@ export const useStore = create((set) => ({
       if (s.activeCharacterId) characters[s.activeCharacterId] = snapshotCharacterFields(s)
       const fields = defaultCharacterFields(modelInfo)
       return {
+        loading: false,
+        loadError: null,
         characters,
         characterOrder: [...s.characterOrder, id],
         activeCharacterId: id,
