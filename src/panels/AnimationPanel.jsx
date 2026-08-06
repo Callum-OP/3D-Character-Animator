@@ -140,6 +140,7 @@ export default function AnimationPanel() {
   const [combineSel, setCombineSel] = useState([]) // clip names picked for Combine, in order
   const [bvhBusy, setBvhBusy] = useState(false)
   const [kfMsg, setKfMsg] = useState(null) // feedback after adding a keyframe
+  const [blankFrames, setBlankFrames] = useState(4) // how many frames to insert
   const [ragdollMsg, setRagdollMsg] = useState(null) // feedback after a ragdoll bake
   const [renameOpen, setRenameOpen] = useState(false)
   const [renameText, setRenameText] = useState('')
@@ -321,6 +322,19 @@ export default function AnimationPanel() {
     const t = snap(insertTime)
     st().addKeyframesAtTime(posed, t)
     setKfMsg(`Saved ${posed.length} posed joint(s) at ${t.toFixed(2)}s.`)
+  }
+
+  // Insert N blank/hold frames at the insert time: every keyframe at or after
+  // that point shifts later, opening a gap (a pause/hold) in the timeline
+  // without disturbing the poses already either side of it.
+  function onInsertBlank() {
+    const n = Math.round(blankFrames)
+    if (!n || n <= 0) return
+    const t = snap(insertTime)
+    st().insertBlankFrames(t, n)
+    setKfMsg(
+      `Inserted ${n} blank frame${n === 1 ? '' : 's'} (${(n / animFps).toFixed(2)}s) at ${t.toFixed(2)}s — everything after that time shifted later.`,
+    )
   }
 
   // Keyframe the character's world placement (for root motion — walking toward a
@@ -1166,6 +1180,26 @@ export default function AnimationPanel() {
             fps={animFps}
             onChange={(t) => st().setInsertTime(t)}
           />
+
+          <div className="kf-actions" style={{ alignItems: 'center' }}>
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={blankFrames}
+              onChange={(e) => setBlankFrames(Math.max(1, Math.round(Number(e.target.value))))}
+              className="text-input"
+              style={{ width: 60 }}
+              title="How many blank frames to insert"
+            />
+            <button
+              className="btn secondary"
+              onClick={onInsertBlank}
+              title="Push every keyframe at or after the insert time later by this many frames, opening a hold/gap"
+            >
+              Insert blank frames
+            </button>
+          </div>
 
           <div className="kf-actions">
             <button

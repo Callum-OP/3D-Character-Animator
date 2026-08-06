@@ -625,6 +625,54 @@ export const useStore = create((set) => ({
       return { animData: { ...s.animData, morphs: existingMorphs } }
     }),
 
+  // Insert N blank frames at `atTime`: every keyframe (joints, root, parts,
+  // cameras, cuts, morphs) at or after that time is pushed later by
+  // frames/fps seconds, leaving a hold/gap in the timeline. animDuration is
+  // extended if the shift pushes past the current end. Operates on the
+  // active character's animData only (each character has its own timeline).
+  insertBlankFrames: (atTime, frames) =>
+    set((s) => {
+      const delta = frames / (s.animFps || 24)
+      if (!(delta > 0)) return {}
+      const cutoff = atTime - 1e-6
+      const shift = (k) => (k.time > cutoff ? { ...k, time: k.time + delta } : k)
+
+      const tracks = {}
+      for (const [name, keys] of Object.entries(s.animData.tracks || {})) {
+        tracks[name] = keys.map(shift)
+      }
+      const root = (s.animData.root || []).map(shift)
+      const meshes = {}
+      for (const [idx, keys] of Object.entries(s.animData.meshes || {})) {
+        meshes[idx] = keys.map(shift)
+      }
+      const cameras = {}
+      for (const [name, keys] of Object.entries(s.animData.cameras || {})) {
+        cameras[name] = keys.map(shift)
+      }
+      const cuts = (s.animData.cuts || []).map(shift)
+      const morphs = {}
+      for (const [meshIndex, byName] of Object.entries(s.animData.morphs || {})) {
+        const next = {}
+        for (const [morphName, keys] of Object.entries(byName || {})) {
+          next[morphName] = keys.map(shift)
+        }
+        morphs[meshIndex] = next
+      }
+
+      let maxTime = s.animDuration
+      for (const keys of Object.values(tracks)) for (const k of keys) maxTime = Math.max(maxTime, k.time)
+      for (const k of root) maxTime = Math.max(maxTime, k.time)
+      for (const keys of Object.values(meshes)) for (const k of keys) maxTime = Math.max(maxTime, k.time)
+      for (const keys of Object.values(cameras)) for (const k of keys) maxTime = Math.max(maxTime, k.time)
+      for (const k of cuts) maxTime = Math.max(maxTime, k.time)
+
+      return {
+        animData: { tracks, root, meshes, cameras, cuts, morphs },
+        animDuration: Math.max(s.animDuration, maxTime),
+      }
+    }),
+
   deleteMorphKeyframe: (meshIndex, morphName, time) =>
     set((s) => {
       const existingMorphs = { ...(s.animData.morphs || {}) }
