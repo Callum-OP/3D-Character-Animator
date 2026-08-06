@@ -67,6 +67,10 @@ import {
   isAnyPlaying,
   updateAnimation,
   scrub,
+  selectClip,
+  selectEdit,
+  play,
+  stop,
 } from './animation.js'
 import {
   initMeshEdit,
@@ -564,7 +568,59 @@ export function setActiveCharacter(id, parsedArg, { frame = false, isNewLoad = f
   requestRender()
 }
 
-// Remove one character from the scene entirely (dispose its Three.js graph
+// Start every loaded character playing whatever clip/edit-source IT currently
+// has selected (each character remembers its own activeClipName/playbackSource/
+// animData — see the store's per-character fields). Characters with nothing
+// selected are left alone. `loop`/`speed` default to the shared transport
+// settings but can be overridden (e.g. a recorded shot always plays once,
+// regardless of the loop toggle). Returns { started, maxDuration } —
+// maxDuration is the longest of the clips just armed (seconds), 0 if none.
+export function playAllCharacters({ loop, speed } = {}) {
+  const store = useStore.getState()
+  const opts = { loop: loop ?? store.loop, speed: speed ?? store.speed }
+  const uiActiveId = state.activeCharacterId
+  let started = 0
+  let maxDuration = 0
+  for (const id of store.characterOrder) {
+    if (!state.characters.has(id)) continue
+    const c = id === uiActiveId ? store : store.characters[id]
+    if (!c) continue
+    setActiveAnimationCharacter(id) // point the animation module's `a` proxy at this character
+    let durSec = 0
+    if (c.playbackSource === 'edit') {
+      durSec = selectEdit(c.animData, store.animDuration, opts)
+    } else if (c.activeClipName) {
+      durSec = selectClip(c.activeClipName, opts)
+    }
+    if (durSec > 0) {
+      play()
+      started++
+      maxDuration = Math.max(maxDuration, durSec)
+    }
+  }
+  setActiveAnimationCharacter(uiActiveId) // restore whichever character the UI is focused on
+  if (started > 0) {
+    useStore.setState({ playback: 'playing' })
+    requestRender()
+  }
+  return { started, maxDuration }
+}
+
+// Stop every loaded character's playback (used by the Stop-all button and
+// before a preview/recording pass, so a shot always starts from a clean rest).
+export function stopAllCharacters() {
+  const store = useStore.getState()
+  const uiActiveId = state.activeCharacterId
+  for (const id of store.characterOrder) {
+    if (!state.characters.has(id)) continue
+    setActiveAnimationCharacter(id)
+    stop()
+  }
+  setActiveAnimationCharacter(uiActiveId)
+  useStore.setState({ playback: 'stopped', currentTime: 0 })
+}
+
+
 // and drop it from the registry). If it was the active one, another loaded
 // character (if any) becomes active.
 export function removeCharacter(id) {
