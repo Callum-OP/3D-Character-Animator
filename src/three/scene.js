@@ -62,7 +62,9 @@ import {
 import {
   initAnimation,
   setAnimationModel,
+  setActiveAnimationCharacter,
   clearAnimationModel,
+  isAnyPlaying,
   updateAnimation,
   scrub,
 } from './animation.js'
@@ -520,7 +522,7 @@ export async function loadModelFile(file, { addNew = false } = {}) {
     } else {
       useStore.getState().setModelInfo(parsed.info)
     }
-    setActiveCharacter(id, parsed, { frame: true })
+    setActiveCharacter(id, parsed, { frame: true, isNewLoad: true })
 
     requestRender()
     return parsed
@@ -530,26 +532,33 @@ export async function loadModelFile(file, { addNew = false } = {}) {
   }
 }
 
-// Make `id` the character that posing / mesh-edit / animation / the transform
-// gizmo operate on. Every OTHER loaded character stays in the scene exactly
-// as posed, just not being actively edited until reselected.
-export function setActiveCharacter(id, parsedArg, { frame = false } = {}) {
+// Make `id` the character that posing / mesh-edit / the transform gizmo
+// operate on. Every OTHER loaded character stays in the scene exactly as
+// posed AND KEEPS PLAYING its own animation/cloth in the background — only
+// posing/mesh-edit are single-character-at-a-time by nature (there's one
+// gizmo). `isNewLoad` is set by loadModelFile for a character's very first
+// activation, which is when a fresh animation mixer needs to be created.
+export function setActiveCharacter(id, parsedArg, { frame = false, isNewLoad = false } = {}) {
   const parsed = parsedArg || state.characters.get(id)
   if (!parsed) return
   if (state.activeCharacterId && state.activeCharacterId !== id) {
-    setContinuousRender(false) // stop playback before swapping the edited rig
     clearPoseModel()
     clearMeshEditModel()
-    clearAnimationModel()
-    // NOTE: cloth is intentionally left running — it's keyed per-mesh, not
-    // per active-character, so switching focus shouldn't disturb any other
-    // character's drape/simulation.
+    // NOTE: animation and cloth are intentionally left running. Animation's
+    // mixer keeps advancing every loaded character each frame regardless of
+    // which one is active (see animation.js's updateAnimation), and cloth is
+    // keyed per-mesh — so switching who you're EDITING doesn't interrupt
+    // anyone else's playback or drape.
   }
   state.currentModel = parsed
   state.activeCharacterId = id
   setPoseModel(parsed) // capture rest pose + build the bone-dot overlay
   setMeshEditModel(parsed) // capture part rest transforms for Mesh mode
-  setAnimationModel(parsed) // new mixer + baked clips
+  if (isNewLoad) {
+    setAnimationModel(parsed, id) // brand-new character: fresh mixer + baked clips
+  } else {
+    setActiveAnimationCharacter(id) // already loaded: just refocus editing, keep playing
+  }
   useStore.getState().setActiveCharacterId(id)
   if (frame) frameCameraToObject(parsed.root)
   requestRender()
@@ -576,11 +585,11 @@ function disposeCharacter(id) {
   const model = state.characters.get(id)
   if (!model) return
   if (state.activeCharacterId === id) {
-    setContinuousRender(false)
     clearPoseModel()
     clearMeshEditModel()
-    clearAnimationModel()
   }
+  clearAnimationModel(id) // only THIS character's mixer/action
+  if (!isAnyPlaying()) setContinuousRender(false)
   clearClothForMeshes(model.meshes) // only THIS character's cloth, others keep simulating
   clearCharacterObject(id)
   restoreOriginalMaterials(model)
