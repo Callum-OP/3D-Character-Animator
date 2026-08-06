@@ -29,7 +29,7 @@ import {
   deleteSavedClip,
 } from '../three/clipLibrary.js'
 import { getBoneQuaternion, getPosedBones, applyPose } from '../three/posing.js'
-import { getCharacterRootTransform, getCurrentModel, getGroundY, scrubTimeline } from '../three/scene.js'
+import { getCharacterRootTransform, getCurrentModel, getGroundY, scrubTimeline, playAllCharacters, stopAllCharacters } from '../three/scene.js'
 import * as THREE from 'three'
 import { simulateRagdollClip } from '../three/ragdoll.js'
 import { getObjectRoots } from '../three/objects.js'
@@ -126,6 +126,7 @@ export default function AnimationPanel() {
   const animData = useStore((s) => s.animData)
 
   const importedClipNames = useStore((s) => s.importedClipNames)
+  const characterOrder = useStore((s) => s.characterOrder)
 
   const st = useStore.getState // for imperative setters inside handlers
   const fileRef = useRef(null)
@@ -250,6 +251,24 @@ export default function AnimationPanel() {
     stop()
     st().setPlayback('stopped')
     st().setCurrentTime(0)
+  }
+
+  // Start every loaded character playing whatever it currently has selected
+  // (this one's included) — lets several characters perform their own clips
+  // at the same time.
+  function onPlayAll() {
+    const { started: n } = playAllCharacters()
+    setKfMsg(
+      n > 1
+        ? `Playing ${n} characters.`
+        : n === 1
+          ? 'Only this character has a clip/animation selected — the others have nothing to play yet.'
+          : 'Nothing to play — pick a clip or make an animation on at least one character first.',
+    )
+  }
+
+  function onStopAll() {
+    stopAllCharacters()
   }
 
   function onScrub(t) {
@@ -1014,6 +1033,21 @@ export default function AnimationPanel() {
           ■ Stop
         </button>
       </div>
+
+      {characterOrder.length > 1 && (
+        <div className="transport" style={{ marginTop: 6 }}>
+          <button
+            className="btn secondary"
+            onClick={onPlayAll}
+            title="Play every loaded character's own selected clip/animation at the same time"
+          >
+            ▶ Play all ({characterOrder.length})
+          </button>
+          <button className="btn secondary" onClick={onStopAll}>
+            ■ Stop all
+          </button>
+        </div>
+      )}
 
       <div className="scrub-row">
         <input

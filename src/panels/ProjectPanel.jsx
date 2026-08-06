@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store.js'
-import { loadModelFile, disposeCurrentModel, getProjectData, applyProjectData } from '../three/scene.js'
+import {
+  loadModelFile,
+  disposeCurrentModel,
+  setActiveCharacter,
+  removeCharacter,
+  getProjectData,
+  applyProjectData,
+} from '../three/scene.js'
 import {
   saveProject,
   listProjects,
@@ -10,15 +17,27 @@ import {
 
 // Combined side-panel section: everything to do with "where does my character
 // come from" lives here. Two clear, always-visible sources to load from:
-//   1. A model file straight off disk (.glb/.gltf/.fbx)
+//   1. A model file straight off disk (.glb/.gltf/.fbx) — any number of
+//      characters can be loaded at once and switched between.
 //   2. A previously saved project (whole session — model, props, poses, style)
 // Previously these were two separate panels; merging them means there's one
 // obvious place to look when you want to get a character on screen.
 export default function ProjectPanel() {
   const fileInputRef = useRef(null)
+  const addFileInputRef = useRef(null)
   const modelInfo = useStore((s) => s.modelInfo)
   const loading = useStore((s) => s.loading)
   const loadError = useStore((s) => s.loadError)
+  const characters = useStore((s) => s.characters)
+  const characterOrder = useStore((s) => s.characterOrder)
+  const activeCharacterId = useStore((s) => s.activeCharacterId)
+
+  // Merge the active character's live (flattened) fields with the cached
+  // snapshots of every inactive one, so the roster can show a name for each.
+  const roster = characterOrder.map((id) => ({
+    id,
+    info: id === activeCharacterId ? modelInfo : characters[id]?.modelInfo,
+  }))
 
   const [name, setName] = useState('')
   const [projects, setProjects] = useState([])
@@ -40,6 +59,12 @@ export default function ProjectPanel() {
     const file = e.target.files && e.target.files[0]
     e.target.value = ''
     if (file) loadModelFile(file).catch(() => {})
+  }
+
+  function onPickAddModel(e) {
+    const file = e.target.files && e.target.files[0]
+    e.target.value = ''
+    if (file) loadModelFile(file, { addNew: true }).catch(() => {})
   }
 
   async function onSave() {
@@ -108,7 +133,7 @@ export default function ProjectPanel() {
           onClick={() => fileInputRef.current?.click()}
           disabled={loading}
         >
-          {loading ? 'Loading…' : modelInfo ? 'Replace character (.glb / .gltf / .fbx)' : '＋ Load character (.glb / .gltf / .fbx)'}
+          {loading ? 'Loading…' : modelInfo ? 'Replace active character (.glb / .gltf / .fbx)' : '＋ Load character (.glb / .gltf / .fbx)'}
         </button>
         <input
           ref={fileInputRef}
@@ -118,10 +143,58 @@ export default function ProjectPanel() {
           onChange={onPickModel}
         />
 
+        {modelInfo && (
+          <>
+            <button
+              className="btn"
+              style={{ marginTop: 8 }}
+              onClick={() => addFileInputRef.current?.click()}
+              disabled={loading}
+            >
+              {loading ? 'Loading…' : '＋ Add another character'}
+            </button>
+            <input
+              ref={addFileInputRef}
+              type="file"
+              accept=".glb,.gltf,.fbx,model/gltf-binary,model/gltf+json"
+              style={{ display: 'none' }}
+              onChange={onPickAddModel}
+            />
+          </>
+        )}
+
         {!modelInfo && !loadError && (
           <div className="dropzone">…or drag a file straight onto the viewport</div>
         )}
         {loadError && <div className="error">{loadError}</div>}
+
+        {roster.length > 1 && (
+          <div className="obj-list" style={{ marginTop: 10 }}>
+            {roster.map(({ id, info }) => (
+              <div
+                key={id}
+                className="obj-row"
+                style={{ fontWeight: id === activeCharacterId ? 600 : 400, cursor: 'pointer' }}
+                onClick={() => setActiveCharacter(id)}
+              >
+                <span className="obj-name">
+                  {id === activeCharacterId ? '● ' : '○ '}
+                  {info?.name || id}
+                </span>
+                <button
+                  className="obj-del"
+                  title="Remove this character"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    removeCharacter(id)
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
 
         {modelInfo && (
           <div className="model-card">
@@ -135,8 +208,14 @@ export default function ProjectPanel() {
               <span className="chip">{modelInfo.boneCount} bones</span>
               <span className="chip">{modelInfo.clipNames.length} clips</span>
             </div>
-            <button className="btn secondary btn-tiny" style={{ marginTop: 8 }} onClick={() => disposeCurrentModel()}>
-              Unload
+            <button
+              className="btn secondary btn-tiny"
+              style={{ marginTop: 8 }}
+              onClick={() =>
+                characterOrder.length > 1 ? removeCharacter(activeCharacterId) : disposeCurrentModel()
+              }
+            >
+              {characterOrder.length > 1 ? 'Remove active character' : 'Unload'}
             </button>
           </div>
         )}

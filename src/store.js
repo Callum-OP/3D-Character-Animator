@@ -5,7 +5,140 @@ import { create } from 'zustand'
 // OUT of the store — they live in the scene manager (src/three/scene.js) and
 // are referenced by mutable module state, not React state. Putting live GPU
 // objects in a reactive store would cause needless re-renders and retain memory.
+// ---------------------------------------------------------------------------
+// Multi-character support
+//
+// Only these fields are per-character. Everything else in the store (view
+// toggles, material mode, scene objects/cameras/lights, etc.) is shared
+// across the whole scene. The ACTIVE character's fields are kept "flattened"
+// at the top level of the store (unchanged shape from before), so existing
+// panels/scene code that reads e.g. store.modelInfo or store.selectedBoneName
+// keep working untouched — they transparently read/write the active
+// character. Switching the active character snapshots the flat fields into
+// `characters[id]` and loads the newly-active character's fields back out.
+// ---------------------------------------------------------------------------
+const CHARACTER_FIELDS = [
+  'modelInfo',
+  'meshOverrides',
+  'selectedBoneName',
+  'selectedMeshUuid',
+  'boneFilter',
+  'deformOnly',
+  'playback',
+  'playbackSource',
+  'activeClipName',
+  'importedClipNames',
+  'duration',
+  'currentTime',
+  'animData',
+  'insertTime',
+  'poseClipboard',
+]
+
+function snapshotCharacterFields(s) {
+  const snap = {}
+  for (const k of CHARACTER_FIELDS) snap[k] = s[k]
+  return snap
+}
+
+function defaultCharacterFields(modelInfo) {
+  return {
+    modelInfo,
+    meshOverrides: {},
+    selectedBoneName: null,
+    selectedMeshUuid: null,
+    boneFilter: '',
+    deformOnly: !!(
+      modelInfo &&
+      modelInfo.bones &&
+      modelInfo.bones.some((b) => b.deform) &&
+      modelInfo.bones.some((b) => !b.deform)
+    ),
+    playback: 'stopped',
+    playbackSource: modelInfo && modelInfo.clipNames && modelInfo.clipNames.length ? 'clip' : 'edit',
+    activeClipName: null,
+    importedClipNames: [],
+    duration: 0,
+    currentTime: 0,
+    animData: { tracks: {}, root: [], meshes: {}, cameras: {}, cuts: [], morphs: {} },
+    insertTime: 0,
+    poseClipboard: null,
+  }
+}
+
 export const useStore = create((set) => ({
+  // ---- Multi-character registry ----
+  // characters: { [id]: { ...CHARACTER_FIELDS } } — snapshot for every
+  // character that ISN'T currently active. The active one's copy of these
+  // fields lives at the top level (see CHARACTER_FIELDS above).
+  characters: {},
+  characterOrder: [], // display order of character ids
+  activeCharacterId: null,
+
+  // Register a newly-loaded model as a brand-new character. Does not touch
+  // any existing character. Becomes the active character.
+  addCharacter: (id, modelInfo) =>
+    set((s) => {
+      const characters = { ...s.characters }
+      if (s.activeCharacterId) characters[s.activeCharacterId] = snapshotCharacterFields(s)
+      const fields = defaultCharacterFields(modelInfo)
+      return {
+        loading: false,
+        loadError: null,
+        characters,
+        characterOrder: [...s.characterOrder, id],
+        activeCharacterId: id,
+        ...fields,
+        sceneObjects: [
+          { id, name: modelInfo.name, isCharacter: true, characterId: id, visible: true },
+          ...s.sceneObjects,
+        ],
+      }
+    }),
+
+  // Switch which character's pose/anim/mesh-edit state is "live" at the top
+  // level. Scene code should follow this up by re-pointing the posing/
+  // animation/mesh-edit engines at that character's Three.js objects.
+  setActiveCharacterId: (id) =>
+    set((s) => {
+      if (id === s.activeCharacterId) return {}
+      const characters = { ...s.characters }
+      if (s.activeCharacterId) characters[s.activeCharacterId] = snapshotCharacterFields(s)
+      const next = id != null ? characters[id] || defaultCharacterFields(null) : defaultCharacterFields(null)
+      return {
+        characters,
+        activeCharacterId: id,
+        ...next,
+        selectedObjectId: null,
+        selectedCameraId: null,
+        selectedLightId: null,
+      }
+    }),
+
+  // Remove a character entirely (call after disposing its Three.js objects).
+  removeCharacter: (id) =>
+    set((s) => {
+      const characters = { ...s.characters }
+      delete characters[id]
+      const characterOrder = s.characterOrder.filter((cid) => cid !== id)
+      const wasActive = s.activeCharacterId === id
+      const nextActiveId = wasActive ? characterOrder[0] || null : s.activeCharacterId
+      const nextFields = wasActive
+        ? nextActiveId
+          ? characters[nextActiveId] || defaultCharacterFields(null)
+          : defaultCharacterFields(null)
+        : {}
+      return {
+        characters,
+        characterOrder,
+        activeCharacterId: nextActiveId,
+        sceneObjects: s.sceneObjects.filter((o) => o.id !== id),
+        selectedObjectId: s.selectedObjectId === id ? null : s.selectedObjectId,
+        ...nextFields,
+      }
+    }),
+
+
   // ---- Interaction mode ----
   // 'view'  — navigate only: no gizmos, no picking.
   // 'bone'  — pose the skeleton (bone dots + rotate gizmo).
@@ -22,53 +155,45 @@ export const useStore = create((set) => ({
 
   setLoading: (loading) => set({ loading, loadError: null }),
   setLoadError: (loadError) => set({ loadError, loading: false }),
+  // Replaces the ACTIVE character's data in place (legacy single-character
+  // load path, still used when re-loading over the currently active
+  // character rather than adding a new one alongside it).
   setModelInfo: (modelInfo) =>
-    set((s) => ({
-      modelInfo,
-      loading: false,
-      loadError: null,
-      meshOverrides: {},
-      selectedBoneName: null,
-      selectedMeshUuid: null,
-      boneFilter: '',
-      // Default the helper-bone filter ON when the rig has both primary and
-      // helper bones (Rigify DEF- rigs, Mixamo _end tails, game-rig correctives).
-      deformOnly: !!(
-        modelInfo.bones &&
-        modelInfo.bones.some((b) => b.deform) &&
-        modelInfo.bones.some((b) => !b.deform)
-      ),
-      // Reset animation state for the new rig.
-      playback: 'stopped',
-      playbackSource: modelInfo.clipNames && modelInfo.clipNames.length ? 'clip' : 'edit',
-      activeClipName: null,
-      importedClipNames: [],
-      duration: 0,
-      currentTime: 0,
-      animData: { tracks: {}, root: [], meshes: {}, cameras: {}, cuts: [], morphs: {} },
-      insertTime: 0,
-      // The character is a movable entry (kept first) in the objects list.
-      sceneObjects: [
-        { id: 'character', name: modelInfo.name, isCharacter: true, visible: true },
-        ...s.sceneObjects.filter((o) => o.id !== 'character'),
-      ],
-    })),
+    set((s) => {
+      const id = s.activeCharacterId || 'character'
+      const fields = defaultCharacterFields(modelInfo)
+      return {
+        loading: false,
+        loadError: null,
+        ...fields,
+        characters: { ...s.characters, [id]: fields },
+        characterOrder: s.characterOrder.includes(id) ? s.characterOrder : [...s.characterOrder, id],
+        activeCharacterId: id,
+        // The character is a movable entry (kept first) in the objects list.
+        sceneObjects: [
+          { id, name: modelInfo.name, isCharacter: true, characterId: id, visible: true },
+          ...s.sceneObjects.filter((o) => o.id !== id),
+        ],
+      }
+    }),
   clearModel: () =>
-    set((s) => ({
-      modelInfo: null,
-      loadError: null,
-      meshOverrides: {},
-      selectedBoneName: null,
-      selectedMeshUuid: null,
-      boneFilter: '',
-      playback: 'stopped',
-      activeClipName: null,
-      importedClipNames: [],
-      currentTime: 0,
-      animData: { tracks: {}, root: [], meshes: {}, cameras: {}, cuts: [], morphs: {} },
-      sceneObjects: s.sceneObjects.filter((o) => o.id !== 'character'),
-      selectedObjectId: s.selectedObjectId === 'character' ? null : s.selectedObjectId,
-    })),
+    set((s) => {
+      const id = s.activeCharacterId || 'character'
+      const characters = { ...s.characters }
+      delete characters[id]
+      const characterOrder = s.characterOrder.filter((cid) => cid !== id)
+      const nextActiveId = characterOrder[0] || null
+      const nextFields = nextActiveId ? characters[nextActiveId] || defaultCharacterFields(null) : defaultCharacterFields(null)
+      return {
+        loadError: null,
+        ...nextFields,
+        characters,
+        characterOrder,
+        activeCharacterId: nextActiveId,
+        sceneObjects: s.sceneObjects.filter((o) => o.id !== id),
+        selectedObjectId: s.selectedObjectId === id ? null : s.selectedObjectId,
+      }
+    }),
 
   // ---- Viewport display toggles ----
   showGrid: true,

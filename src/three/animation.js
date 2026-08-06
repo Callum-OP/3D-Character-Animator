@@ -27,98 +27,160 @@ import {
 // initAnimation() to avoid an import cycle.
 // ---------------------------------------------------------------------------
 
-const a = {
-  refs: null, // { requestRender, setContinuousRender, suspendPosing, resumePosing, onTime, onEnded }
-  mixer: null,
-  model: null,
-  bakedClips: [], // AnimationClip[] from the file
-  importedClips: [], // AnimationClip[] retargeted from imported BVH mocap
-  pendingBVH: null, // parsed BVH awaiting a confirmed bone mapping
-  restQuats: null, // Map<Bone, Quaternion> captured at load
-  action: null, // current AnimationAction
-  clip: null, // current clip (baked or built)
-  editClip: null, // built in-app clip, disposed/rebuilt on demand
-  editRoot: null, // character root-motion keyframes [{time,pos,quat}] (edit source only)
-  editMeshes: null, // part-motion tracks { [meshIndex]: [{time,pos,quat,scale}] } (edit source only)
-  editCameras: null, // camera-motion tracks { [name]: [{time,pos,quat}] } (edit source only)
-  editCuts: null, // camera cuts [{time, camera: name}] (edit source only, sorted)
-  editMorphs: null, // morph-key tracks { [meshIndex]: { [morphName]: [{time,value}] } } (edit source only)
-  rootRest: null, // character root transform at playback start (restored on stop)
-  meshRest: null, // part placements at playback start (restored on stop)
-  morphRest: null, // morph target values at playback start (restored on stop)
-  camerasRest: null, // camera placements at playback start (restored on stop)
-  viewRest: null, // viewCameraId before cuts took over (restored on stop)
-  hasViewRest: false,
-  lastCut: undefined, // camera name of the cut currently applied (dedupes store writes)
+// ---------------------------------------------------------------------------
+// Multi-character playback
+//
+// Each loaded character gets its OWN entry (mixer, current action/clip, edit-
+// source tracks, rest snapshots, …) in `perChar`, keyed by character id. Only
+// ONE character is "active" at a time for EDITING purposes (scrubbing,
+// selecting a clip, importing BVH, baking, …) — that's `activeId`, and it's
+// what AnimationPanel.jsx's controls operate on. But playback is NOT limited
+// to the active character: updateAnimation() advances every loaded
+// character's mixer each frame, so several characters can each play their own
+// clip at once. The `a` object below is a thin Proxy so the ~700 lines of
+// existing clip/BVH/baking logic further down (which all read/write `a.xxx`)
+// don't need touching — they transparently see "whichever character is
+// currently active", exactly as before.
+// ---------------------------------------------------------------------------
+function newEntry(model) {
+  return {
+    model,
+    mixer: null,
+    bakedClips: model.clips || [],
+    importedClips: [],
+    pendingBVH: null,
+    restQuats: null,
+    restPos: null,
+    action: null,
+    clip: null,
+    editClip: null,
+    editRoot: null,
+    editMeshes: null,
+    editCameras: null,
+    editCuts: null,
+    editMorphs: null,
+    rootRest: null,
+    meshRest: null,
+    morphRest: null,
+    camerasRest: null,
+    viewRest: null,
+    hasViewRest: false,
+    lastCut: undefined,
+  }
 }
+
+const perChar = new Map() // id -> entry (same shape the old singleton `a` had)
+let activeId = null // which character AnimationPanel.jsx is currently editing
+let globalRefs = null // shared across all characters — renderer/store callbacks don't change per-character
+
+const a = new Proxy(
+  {},
+  {
+    get(_, prop) {
+      if (prop === 'refs') return globalRefs
+      const entry = perChar.get(activeId)
+      return entry ? entry[prop] : undefined
+    },
+    set(_, prop, value) {
+      if (prop === 'refs') {
+        globalRefs = value
+        return true
+      }
+      const entry = perChar.get(activeId)
+      if (entry) entry[prop] = value
+      return true
+    },
+  },
+)
 
 const _qa = new THREE.Quaternion()
 const _qb = new THREE.Quaternion()
 
 export function initAnimation(refs) {
-  a.refs = refs
+  globalRefs = refs
 }
 
-// Bind to a freshly loaded model: new mixer, capture baked clips + rest pose.
-export function setAnimationModel(model) {
-  clearAnimationModel()
-  a.model = model
-  a.bakedClips = model.clips || []
-  a.importedClips = []
-  a.mixer = new THREE.AnimationMixer(model.root)
-  a.restQuats = new Map()
-  a.restPos = new Map()
+// Bind a freshly loaded model to `id`: new entry, new mixer, capture baked
+// clips + rest pose. Becomes the active (edited) character.
+export function setAnimationModel(model, id) {
+  disposeEntry(id) // in case this id already had one (e.g. reloading in place)
+  const entry = newEntry(model)
+  entry.mixer = new THREE.AnimationMixer(model.root)
+  entry.restQuats = new Map()
+  entry.restPos = new Map()
   for (const b of model.bones || []) {
-    a.restQuats.set(b, b.quaternion.clone())
-    a.restPos.set(b, b.position.clone()) // retargeted clips animate the hip's position
+    entry.restQuats.set(b, b.quaternion.clone())
+    entry.restPos.set(b, b.position.clone()) // retargeted clips animate the hip's position
   }
   // A LoopOnce clip reaching its end fires 'finished' → report a soft pause.
-  a.mixer.addEventListener('finished', onFinished)
+  entry.mixer.addEventListener('finished', () => onFinished(id))
+  perChar.set(id, entry)
+  activeId = id
 }
 
-export function clearAnimationModel() {
-  if (a.mixer) {
-    a.mixer.removeEventListener('finished', onFinished)
-    a.mixer.stopAllAction()
-    a.mixer.uncacheRoot(a.mixer.getRoot())
-    a.mixer = null
+// Switch which ALREADY-loaded character AnimationPanel.jsx edits/scrubs.
+// Does not touch that character's (or anyone else's) mixer/action — whatever
+// is playing keeps playing exactly as it was.
+export function setActiveAnimationCharacter(id) {
+  activeId = id
+}
+
+function disposeEntry(id) {
+  const entry = perChar.get(id)
+  if (!entry) return
+  if (entry.mixer) {
+    entry.mixer.stopAllAction()
+    entry.mixer.uncacheRoot(entry.mixer.getRoot())
   }
-  a.action = null
-  a.clip = null
-  a.editClip = null
-  a.editRoot = null
-  a.editMeshes = null
-  a.editCameras = null
-  a.editCuts = null
-  a.editMorphs = null
-  a.rootRest = null
-  a.meshRest = null
-  a.morphRest = null
-  a.camerasRest = null
-  a.viewRest = null
-  a.hasViewRest = false
-  a.lastCut = undefined
-  a.model = null
-  a.bakedClips = []
-  a.importedClips = []
-  a.pendingBVH = null
-  a.restQuats = null
-  a.restPos = null
+  perChar.delete(id)
+  if (activeId === id) activeId = null
 }
 
-// Advance the mixer (called from the scene's continuous loop) and report time.
+function anyPlaying() {
+  for (const entry of perChar.values()) {
+    if (entry.action && !entry.action.paused) return true
+  }
+  return false
+}
+
+// Dispose one character's animation state (called when that character is
+// removed/replaced). Defaults to the active character so existing call sites
+// that pass no id keep working.
+export function clearAnimationModel(id = activeId) {
+  disposeEntry(id)
+}
+
+// Whether ANY loaded character (active or backgrounded) currently has a
+// playing action — lets scene.js know it's safe to stop the render loop.
+export function isAnyPlaying() {
+  return anyPlaying()
+}
+
+// Advance every loaded character's mixer (called from the scene's continuous
+// loop) so several characters can each play their own clip simultaneously.
+// Mesh-part tracks, camera tracks/cuts, and the UI time readout are scoped to
+// whichever character is ACTIVE — those depend on other modules' own
+// active-character-only state (meshedit's part gizmo, the shared viewport
+// camera), so only one character's clip can drive them at a time.
 export function updateAnimation(delta) {
-  if (!a.mixer) return
-  a.mixer.update(delta)
-  if (a.action) {
-    const t = a.action.time
-    sampleRoot(t) // drive character world motion (edit source only)
-    if (a.editMeshes) sampleMeshTracks(a.editMeshes, t) // part motion
-    if (a.editMorphs) sampleMorphTracks(a.editMorphs, t) // shape-key motion
-    if (a.editCameras) sampleCameraTracks(a.editCameras, t) // camera motion
-    sampleCuts(t) // hard-switch the view to the cut camera
-    a.refs.onTime(t)
+  const uiActiveId = activeId
+  for (const [id, entry] of perChar) {
+    if (!entry.mixer) continue
+    activeId = id // let the helpers below (which read through the `a` proxy) see this entry
+    entry.mixer.update(delta)
+    if (entry.action) {
+      const t = entry.action.time
+      sampleRoot(t) // per-model root motion — safe for every character
+      if (entry.editMorphs) sampleMorphTracks(entry.editMorphs, t) // per-model morphs — safe for every character
+      if (id === uiActiveId) {
+        if (entry.editMeshes) sampleMeshTracks(entry.editMeshes, t)
+        if (entry.editCameras) sampleCameraTracks(entry.editCameras, t)
+        sampleCuts(t)
+        globalRefs.onTime(t)
+      }
+    }
   }
+  activeId = uiActiveId
 }
 
 // --- Source selection --------------------------------------------------------
@@ -512,7 +574,7 @@ export function play() {
 export function pause() {
   if (!a.action) return
   a.action.paused = true
-  a.refs.setContinuousRender(false)
+  if (!anyPlaying()) a.refs.setContinuousRender(false)
   a.refs.requestRender()
 }
 
@@ -522,7 +584,7 @@ export function stop() {
   if (a.mixer) a.mixer.stopAllAction()
   a.action = null
   a.clip = null
-  a.refs.setContinuousRender(false)
+  if (!anyPlaying()) a.refs.setContinuousRender(false)
   restoreRest()
   restoreRootRest()
   applyMeshPlaybackSnapshot(a.meshRest)
@@ -804,9 +866,13 @@ function restoreRest() {
   if (a.restPos) for (const [bone, p] of a.restPos) bone.position.copy(p)
 }
 
-function onFinished() {
-  if (a.action) a.action.paused = true
-  a.refs.setContinuousRender(false)
-  a.refs.onEnded()
-  a.refs.requestRender()
+function onFinished(id) {
+  const entry = perChar.get(id)
+  if (!entry) return
+  if (entry.action) entry.action.paused = true
+  if (id === activeId) globalRefs.onEnded() // only the edited character's UI needs telling
+  if (!anyPlaying()) {
+    globalRefs.setContinuousRender(false)
+    globalRefs.requestRender()
+  }
 }

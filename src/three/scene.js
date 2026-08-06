@@ -53,6 +53,7 @@ import {
   initClothMod,
   disposeClothMod,
   clearAllCloth,
+  clearClothForMeshes,
   stepClothLive,
   isClothEnabled,
   refreshClothForStyleChange,
@@ -61,9 +62,15 @@ import {
 import {
   initAnimation,
   setAnimationModel,
+  setActiveAnimationCharacter,
   clearAnimationModel,
+  isAnyPlaying,
   updateAnimation,
   scrub,
+  selectClip,
+  selectEdit,
+  play,
+  stop,
 } from './animation.js'
 import {
   initMeshEdit,
@@ -131,7 +138,9 @@ const state = {
   modelCenter: new THREE.Vector3(0, 1, 0),
   modelRadius: 1, // ~max model dimension, for light distance + shadow camera
 
-  currentModel: null, // parsed result from loadGLB (or null)
+  currentModel: null, // parsed result for the ACTIVE character (or null) — same object as characters.get(activeCharacterId)
+  characters: new Map(), // id -> parsed model result, for every loaded character (active + inactive)
+  activeCharacterId: null,
   viewCamera: null, // placed camera the viewport looks through (null = free view)
 
   renderScheduled: false,
@@ -471,14 +480,32 @@ function handleResize() {
 // Model loading / disposal
 // ---------------------------------------------------------------------------
 
-export async function loadModelFile(file) {
+let characterIdCounter = 0
+
+// Load a model file as the ACTIVE character.
+//   addNew=false (default): replaces the active character in place (legacy
+//     single-character behaviour — used by "load a different character").
+//   addNew=true: keeps every existing character in the scene and adds this
+//     one alongside them as a new, separately-posable character.
+export async function loadModelFile(file, { addNew = false } = {}) {
   const store = useStore.getState()
   store.setLoading(true)
   try {
     const parsed = await loadModel(file)
-    disposeCurrentModel() // free the previous model FIRST (memory hygiene)
     parsed.file = file // retain the source blob so the model can be saved to a project
-    state.currentModel = parsed
+
+    let id
+    if (addNew && state.currentModel) {
+      id = `char_${++characterIdCounter}`
+      // Space new arrivals out along X so they don't spawn stacked on top of
+      // one another; the user can reposition freely afterwards.
+      parsed.root.position.x += state.characters.size * 1.5
+    } else {
+      // Replacing the active character (or this is the very first load).
+      id = state.activeCharacterId || 'character'
+      disposeCharacter(id) // free the previous occupant of this slot FIRST
+    }
+
     state.scene.add(parsed.root)
     parsed.root.traverse((o) => {
       if (o.isMesh) {
@@ -486,18 +513,21 @@ export async function loadModelFile(file) {
         o.receiveShadow = true
       }
     })
-    setCharacterObject(parsed.root, parsed.info.name) // make the character movable
+    state.characters.set(id, parsed)
+    setCharacterObject(id, parsed.root, parsed.info.name) // make the character movable
 
     // Record the as-loaded (Standard/PBR) materials, then apply the active mode
     // + shading/outline settings. Non-destructive — originals are kept.
     recordOriginalMaterials(parsed)
     applyModelMaterials()
-    setPoseModel(parsed) // capture rest pose + build the bone-dot overlay
-    setMeshEditModel(parsed) // capture part rest transforms for Mesh mode
-    setAnimationModel(parsed) // new mixer + baked clips
 
-    frameCameraToObject(parsed.root)
-    store.setModelInfo(parsed.info)
+    if (addNew && state.currentModel) {
+      useStore.getState().addCharacter(id, parsed.info)
+    } else {
+      useStore.getState().setModelInfo(parsed.info)
+    }
+    setActiveCharacter(id, parsed, { frame: true, isNewLoad: true })
+
     requestRender()
     return parsed
   } catch (err) {
@@ -505,6 +535,128 @@ export async function loadModelFile(file) {
     throw err
   }
 }
+
+// Make `id` the character that posing / mesh-edit / the transform gizmo
+// operate on. Every OTHER loaded character stays in the scene exactly as
+// posed AND KEEPS PLAYING its own animation/cloth in the background — only
+// posing/mesh-edit are single-character-at-a-time by nature (there's one
+// gizmo). `isNewLoad` is set by loadModelFile for a character's very first
+// activation, which is when a fresh animation mixer needs to be created.
+export function setActiveCharacter(id, parsedArg, { frame = false, isNewLoad = false } = {}) {
+  const parsed = parsedArg || state.characters.get(id)
+  if (!parsed) return
+  if (state.activeCharacterId && state.activeCharacterId !== id) {
+    clearPoseModel()
+    clearMeshEditModel()
+    // NOTE: animation and cloth are intentionally left running. Animation's
+    // mixer keeps advancing every loaded character each frame regardless of
+    // which one is active (see animation.js's updateAnimation), and cloth is
+    // keyed per-mesh — so switching who you're EDITING doesn't interrupt
+    // anyone else's playback or drape.
+  }
+  state.currentModel = parsed
+  state.activeCharacterId = id
+  setPoseModel(parsed) // capture rest pose + build the bone-dot overlay
+  setMeshEditModel(parsed) // capture part rest transforms for Mesh mode
+  if (isNewLoad) {
+    setAnimationModel(parsed, id) // brand-new character: fresh mixer + baked clips
+  } else {
+    setActiveAnimationCharacter(id) // already loaded: just refocus editing, keep playing
+  }
+  useStore.getState().setActiveCharacterId(id)
+  if (frame) frameCameraToObject(parsed.root)
+  requestRender()
+}
+
+// Start every loaded character playing whatever clip/edit-source IT currently
+// has selected (each character remembers its own activeClipName/playbackSource/
+// animData — see the store's per-character fields). Characters with nothing
+// selected are left alone. `loop`/`speed` default to the shared transport
+// settings but can be overridden (e.g. a recorded shot always plays once,
+// regardless of the loop toggle). Returns { started, maxDuration } —
+// maxDuration is the longest of the clips just armed (seconds), 0 if none.
+export function playAllCharacters({ loop, speed } = {}) {
+  const store = useStore.getState()
+  const opts = { loop: loop ?? store.loop, speed: speed ?? store.speed }
+  const uiActiveId = state.activeCharacterId
+  let started = 0
+  let maxDuration = 0
+  for (const id of store.characterOrder) {
+    if (!state.characters.has(id)) continue
+    const c = id === uiActiveId ? store : store.characters[id]
+    if (!c) continue
+    setActiveAnimationCharacter(id) // point the animation module's `a` proxy at this character
+    let durSec = 0
+    if (c.playbackSource === 'edit') {
+      durSec = selectEdit(c.animData, store.animDuration, opts)
+    } else if (c.activeClipName) {
+      durSec = selectClip(c.activeClipName, opts)
+    }
+    if (durSec > 0) {
+      play()
+      started++
+      maxDuration = Math.max(maxDuration, durSec)
+    }
+  }
+  setActiveAnimationCharacter(uiActiveId) // restore whichever character the UI is focused on
+  if (started > 0) {
+    useStore.setState({ playback: 'playing' })
+    requestRender()
+  }
+  return { started, maxDuration }
+}
+
+// Stop every loaded character's playback (used by the Stop-all button and
+// before a preview/recording pass, so a shot always starts from a clean rest).
+export function stopAllCharacters() {
+  const store = useStore.getState()
+  const uiActiveId = state.activeCharacterId
+  for (const id of store.characterOrder) {
+    if (!state.characters.has(id)) continue
+    setActiveAnimationCharacter(id)
+    stop()
+  }
+  setActiveAnimationCharacter(uiActiveId)
+  useStore.setState({ playback: 'stopped', currentTime: 0 })
+}
+
+
+// and drop it from the registry). If it was the active one, another loaded
+// character (if any) becomes active.
+export function removeCharacter(id) {
+  disposeCharacter(id)
+  useStore.getState().removeCharacter(id)
+  const remaining = [...state.characters.keys()]
+  if (state.activeCharacterId === id) {
+    state.activeCharacterId = null
+    state.currentModel = null
+    if (remaining.length) setActiveCharacter(remaining[0])
+  }
+  requestRender()
+}
+
+// Free one character's Three.js graph without touching any other loaded
+// character. Internal helper for both replace-in-place loads and removeCharacter.
+function disposeCharacter(id) {
+  const model = state.characters.get(id)
+  if (!model) return
+  if (state.activeCharacterId === id) {
+    clearPoseModel()
+    clearMeshEditModel()
+  }
+  clearAnimationModel(id) // only THIS character's mixer/action
+  if (!isAnyPlaying()) setContinuousRender(false)
+  clearClothForMeshes(model.meshes) // only THIS character's cloth, others keep simulating
+  clearCharacterObject(id)
+  restoreOriginalMaterials(model)
+  disposeGeneratedMaterials(model)
+  state.scene.remove(model.root)
+  disposeObject(model.root)
+  state.characters.delete(id)
+  if (state.currentModel === model) state.currentModel = null
+}
+
+
 
 // ---------------------------------------------------------------------------
 // Scene objects (props / backgrounds) — independent of the character model
@@ -763,9 +915,11 @@ export function applySceneData(json) {
 // ---------------------------------------------------------------------------
 
 // The style settings we persist (a subset of the store that isn't derivable).
+// Deliberately excludes anything per-character (mesh overrides, pose, anim) —
+// those live inside each entry of the `characters` array instead.
 function collectSettings() {
   const s = useStore.getState()
-  const settings = {
+  return {
     materialMode: s.materialMode,
     toonSteps: s.toonSteps,
     lightIntensity: s.lightIntensity,
@@ -785,59 +939,90 @@ function collectSettings() {
     animFps: s.animFps,
     animDuration: s.animDuration,
   }
-  // Per-mesh overrides are keyed by mesh uuid, but uuids are regenerated every
-  // time the same file is reloaded. Remap to the mesh's INDEX so it survives a
-  // save→reload round-trip (index order is stable for the same file).
-  const meshes = (state.currentModel && state.currentModel.info.meshes) || []
-  const uuidToIndex = new Map(meshes.map((m, i) => [m.uuid, i]))
+}
+
+// Per-mesh overrides are keyed by mesh uuid, but uuids are regenerated every
+// time the same file is reloaded. Remap to the mesh's INDEX so it survives a
+// save→reload round-trip (index order is stable for the same file).
+function meshOverridesByIndexFor(model, overridesByUuid) {
+  const meshes = (model && model.info.meshes) || []
+  const uuidToIndex = new Map(meshes.map((mesh, i) => [mesh.uuid, i]))
   const byIndex = {}
-  for (const [uuid, ov] of Object.entries(s.meshOverrides)) {
+  for (const [uuid, ov] of Object.entries(overridesByUuid || {})) {
     const idx = uuidToIndex.get(uuid)
     if (idx != null) byIndex[idx] = ov
   }
-  settings.meshOverridesByIndex = byIndex
-  return settings
+  return byIndex
 }
 
-// Build a complete, serializable-to-IndexedDB project record.
+function meshOverridesFromIndex(model, byIndex) {
+  const meshes = (model && model.info.meshes) || []
+  const out = {}
+  for (const [idx, ov] of Object.entries(byIndex || {})) {
+    const mesh = meshes[Number(idx)]
+    if (mesh) out[mesh.uuid] = ov
+  }
+  return out
+}
+
+// Build a complete, serializable-to-IndexedDB project record. Captures EVERY
+// loaded character (not just the active one) — for whichever one isn't
+// currently active, we briefly make it active to read its pose/mesh-edit/
+// animation state through the normal capture path, then switch back. That
+// happens synchronously within this function, so nothing visibly changes.
 export function getProjectData() {
   const s = useStore.getState()
-  let character = null
-  if (state.currentModel && state.currentModel.file) {
-    const root = state.currentModel.root
-    character = {
-      fileName: state.currentModel.file.name,
-      blob: state.currentModel.file,
+  const originalActiveId = state.activeCharacterId
+  const characters = []
+
+  for (const id of s.characterOrder) {
+    const model = state.characters.get(id)
+    if (!model || !model.file) continue
+
+    if (id !== state.activeCharacterId) setActiveCharacter(id)
+    const live = useStore.getState()
+
+    characters.push({
+      id,
+      fileName: model.file.name,
+      blob: model.file,
       transform: {
-        position: root.position.toArray(),
-        quaternion: root.quaternion.toArray(),
-        scale: root.scale.toArray(),
+        position: model.root.position.toArray(),
+        quaternion: model.root.quaternion.toArray(),
+        scale: model.root.scale.toArray(),
       },
       pose: getPose(),
       meshEdits: getMeshEditsData(),
-    }
+      meshOverridesByIndex: meshOverridesByIndexFor(model, live.meshOverrides),
+      animData: live.animData,
+      isActive: id === originalActiveId,
+    })
   }
+
+  if (originalActiveId && originalActiveId !== state.activeCharacterId) {
+    setActiveCharacter(originalActiveId)
+  }
+
   return {
-    format: 'project-v1',
+    format: 'project-v2',
     settings: collectSettings(),
-    character,
+    characters,
     objects: getObjectsForSave(),
     cameras: getCamerasData(),
     lights: getLightsData(),
-    animData: s.animData,
   }
 }
 
-// Restore a project record: tear down the current session, then rebuild the
+// Restore a project record: tear down the current session, then rebuild every
 // character, props/images, style settings and pose sequence from the saved
 // blobs. Async — models are re-parsed from their blobs.
 export async function applyProjectData(record) {
-  if (!record || record.format !== 'project-v1') {
+  if (!record || (record.format !== 'project-v1' && record.format !== 'project-v2')) {
     throw new Error('Not a valid saved project.')
   }
   const store = useStore.getState()
 
-  // 1. Clear the current props/images, cameras and the character.
+  // 1. Clear the current props/images, cameras and every character.
   for (const id of store.sceneObjects.filter((o) => !o.isCharacter).map((o) => o.id)) {
     removeObjectById(id)
   }
@@ -848,15 +1033,26 @@ export async function applyProjectData(record) {
   useStore.setState({ sceneLights: [], selectedLightId: null })
   disposeCurrentModel()
 
-  // 2. Load the character (this resets much of the store via setModelInfo).
-  if (record.character && record.character.blob) {
-    const c = record.character
-    await loadModelFile(new File([c.blob], c.fileName))
-    const root = state.currentModel.root
+  // 2. Load every saved character. Older (project-v1) saves have a single
+  // `record.character` instead of a `record.characters` array — normalise.
+  const characterRecords = record.format === 'project-v1'
+    ? (record.character ? [record.character] : [])
+    : record.characters || []
+
+  let activeIdToRestore = null
+  for (let i = 0; i < characterRecords.length; i++) {
+    const c = characterRecords[i]
+    if (!c.blob) continue
+    // The first character replaces the (already-empty) active slot; every
+    // subsequent one is added alongside it as its own character.
+    await loadModelFile(new File([c.blob], c.fileName), { addNew: i > 0 })
+    const id = state.activeCharacterId // whatever we just loaded is now active
+    const model = state.characters.get(id)
+
     if (c.transform) {
-      root.position.fromArray(c.transform.position)
-      root.quaternion.fromArray(c.transform.quaternion)
-      root.scale.fromArray(c.transform.scale)
+      model.root.position.fromArray(c.transform.position)
+      model.root.quaternion.fromArray(c.transform.quaternion)
+      model.root.scale.fromArray(c.transform.scale)
     }
     if (c.pose) {
       try {
@@ -866,17 +1062,25 @@ export async function applyProjectData(record) {
       }
     }
     applyMeshEditsData(c.meshEdits)
+    if (c.meshOverridesByIndex) {
+      useStore.setState({ meshOverrides: meshOverridesFromIndex(model, c.meshOverridesByIndex) })
+    }
+    if (c.animData) useStore.setState({ animData: c.animData })
+    if (c.isActive || (record.format === 'project-v1' && i === 0)) activeIdToRestore = id
   }
+  if (activeIdToRestore) setActiveCharacter(activeIdToRestore)
 
-  // 3. Apply saved settings (AFTER the load, which would otherwise reset them).
+  // 3. Apply saved settings (AFTER the loads, which would otherwise reset them).
   const st = record.settings || {}
-  const meshes = (state.currentModel && state.currentModel.info.meshes) || []
-  const meshOverrides = {}
-  for (const [idx, ov] of Object.entries(st.meshOverridesByIndex || {})) {
-    const m = meshes[Number(idx)]
-    if (m) meshOverrides[m.uuid] = ov
+  // Legacy project-v1 saves kept mesh overrides at the top level of settings —
+  // they already landed on the single character above via c.meshOverridesByIndex
+  // in the branch above only for v2; handle the v1 shape here too.
+  if (record.format === 'project-v1' && st.meshOverridesByIndex && state.currentModel) {
+    useStore.setState({
+      meshOverrides: meshOverridesFromIndex(state.currentModel, st.meshOverridesByIndex),
+    })
   }
-  const patch = { meshOverrides }
+  const patch = {}
   for (const k of [
     'materialMode', 'toonSteps', 'lightIntensity', 'lightAzimuth', 'lightElevation',
     'outlineEnabled', 'outlineWidth', 'softenEnabled', 'softenAmount',
@@ -918,23 +1122,13 @@ export async function applyProjectData(record) {
   requestRender()
 }
 
+// Dispose EVERY loaded character (full reset — used by the "clear" button and
+// full scene teardown). To remove a single character instead, use removeCharacter().
 export function disposeCurrentModel() {
-  if (!state.currentModel) return
-  const model = state.currentModel
-  setContinuousRender(false) // stop any playback before tearing the model down
-  clearCharacterObject() // unregister the movable-character entry
-  clearAnimationModel() // dispose the mixer
-  clearPoseModel() // detach gizmo + remove bone overlay before the graph goes away
-  clearMeshEditModel() // detach the part gizmo + drop mesh references
-  clearAllCloth() // drop any cloth previews (their source meshes are about to be freed)
-  // Put the real materials back so the deep-dispose walk frees them (and their
-  // textures) rather than a generated shell that only borrows those textures...
-  restoreOriginalMaterials(model)
-  disposeGeneratedMaterials(model) // ...then free the generated Basic/Toon shells.
-  state.scene.remove(model.root)
-  disposeObject(model.root) // geometries, materials, textures
-  state.currentModel = null
+  for (const id of [...state.characters.keys()]) disposeCharacter(id)
+  state.activeCharacterId = null
   useStore.getState().clearModel()
+  useStore.setState({ characters: {}, characterOrder: [], activeCharacterId: null })
 }
 
 // Frame the camera so the whole model fits comfortably in view, and point the

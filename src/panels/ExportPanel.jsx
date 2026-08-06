@@ -7,8 +7,10 @@ import {
   startRecording,
   stopRecordingAndDownload,
   setViewCameraById,
+  playAllCharacters,
+  stopAllCharacters,
 } from '../three/scene.js'
-import { selectEdit, selectClip, play, stop, exportAnimationBVH } from '../three/animation.js'
+import { exportAnimationBVH } from '../three/animation.js'
 
 // Side-panel section: get your work out of the app — transparent PNG, a video of
 // the animation, or the in-app animation as a .bvh, plus a fullscreen view for
@@ -100,41 +102,36 @@ export default function ExportPanel() {
     return () => {}
   }
 
-  // Play the animation once from the start — recording it to a file, or just
-  // previewing exactly what a recording would show. One code path so the
-  // preview can never lie about the video.
+  // Play every loaded character's own selected clip/animation once from the
+  // start — recording it to a file, or just previewing exactly what a
+  // recording would show. One code path so the preview can never lie about
+  // the video.
   function runShot(record) {
     if (busy) return
-    stop() // clear any armed playback first (also restores cut-driven views)
+    stopAllCharacters() // clear any armed playback first (also restores cut-driven views)
     const s = st()
     const view = resolveShotView(s)
     const restoreView = armShotView(view)
-    let durSec
-    if (s.playbackSource === 'edit') {
-      durSec = selectEdit(s.animData, s.animDuration, { loop: false, speed: s.speed })
-    } else if (s.activeClipName) {
-      durSec = selectClip(s.activeClipName, { loop: false, speed: s.speed })
-    } else {
+    const { started, maxDuration: durSec } = playAllCharacters({ loop: false, speed: s.speed })
+    if (started === 0) {
       restoreView()
       setMsg(`Nothing to ${record ? 'record' : 'preview'} — pick a clip or make an animation first.`)
       return
     }
     if (record && !startRecording(30)) {
       restoreView()
+      stopAllCharacters()
       setMsg('Video recording isn’t supported in this browser — use Fullscreen and screen-record instead.')
       return
     }
     if (record) st().setRecording(true)
     else setPreviewing(true)
-    st().setPlayback('playing')
-    st().setCurrentTime(0)
-    play()
-    setMsg(`${record ? 'Recording' : 'Previewing'} ${view.label}…`)
+    setMsg(
+      `${record ? 'Recording' : 'Previewing'} ${view.label}${started > 1 ? ` (${started} characters)` : ''}…`,
+    )
     const ms = (durSec / (s.speed || 1)) * 1000 + (record ? 400 : 100)
     window.setTimeout(() => {
-      stop()
-      st().setPlayback('stopped')
-      st().setCurrentTime(0)
+      stopAllCharacters()
       if (record) {
         stopRecordingAndDownload(name)
         st().setRecording(false)
