@@ -444,6 +444,12 @@ export const useStore = create((set) => ({
 
   // ---- Animation ----
   playback: 'stopped', // 'stopped' | 'playing' | 'paused'
+  // Camera cuts/keys move the VIEW itself, which is disorienting while you're
+  // mid-edit on a normal Play. Off by default — Export's Preview/Record
+  // buttons apply them regardless of this toggle, since that's the point of
+  // a recorded shot.
+  followCameraCuts: false,
+  setFollowCameraCuts: (followCameraCuts) => set({ followCameraCuts }),
   playbackSource: 'edit', // 'clip' (baked) | 'edit' (in-app keyframes)
   activeClipName: null, // selected clip (baked or imported)
   importedClipNames: [], // names of retargeted BVH mocap clips

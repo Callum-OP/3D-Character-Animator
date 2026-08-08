@@ -71,6 +71,8 @@ import {
   selectEdit,
   play,
   stop,
+  getImportedClipsData,
+  restoreImportedClips,
 } from './animation.js'
 import {
   initMeshEdit,
@@ -142,6 +144,8 @@ const state = {
   characters: new Map(), // id -> parsed model result, for every loaded character (active + inactive)
   activeCharacterId: null,
   viewCamera: null, // placed camera the viewport looks through (null = free view)
+  transitionCamera: null, // scratch PerspectiveCamera used while gliding between views
+  camTransition: null, // { elapsed, duration, fromPos, fromQuat, fromFov, toPos, toQuat, toFov, finalId } while gliding
 
   renderScheduled: false,
   continuous: false, // when true, render every frame (for animation playback)
@@ -262,17 +266,18 @@ export function initScene(container) {
     },
     onTime: (t) => useStore.getState().setCurrentTime(t),
     onEnded: () => useStore.getState().setPlayback('paused'),
-    // Camera cuts: switch the view to the cut camera (by name); a null cut
-    // means "before the first cut" → show the pre-play view again. A cut
+    // Camera cuts: glide the view to the cut camera (by name); a null cut
+    // means "before the first cut" → glide back to the pre-play view. A cut
     // naming a deleted camera is ignored (the view just stays put).
     onCameraCut: (name, restViewId) => {
-      const store = useStore.getState()
-      if (name == null) return store.setViewCameraId(restViewId ?? null)
-      const id = getCameraIdByName(name)
-      if (id != null) store.setViewCameraId(id)
+      const targetId = name == null ? restViewId ?? null : getCameraIdByName(name)
+      if (name != null && targetId == null) return // cut names a deleted camera — ignore
+      transitionViewCameraTo(targetId)
     },
+    getFollowCameraCuts: () => useStore.getState().followCameraCuts,
     getViewCameraId: () => useStore.getState().viewCameraId,
     setViewCameraId: (id) => useStore.getState().setViewCameraId(id),
+    transitionViewCameraId: (id) => transitionViewCameraTo(id),
   })
 
   // --- Scene objects (props / backgrounds with a move/rotate/scale gizmo) ---
@@ -443,6 +448,7 @@ export function setContinuousRender(on, reason = 'anim') {
       try {
         updateAnimation(delta) // advance the mixer before drawing
         stepClothLive(delta) // step any LIVE cloth sims, following the current pose
+        updateCamTransition(delta) // glide any in-progress camera cut
         renderOnce()
       } catch (err) {
         console.error('Render tick failed, skipping this frame:', err)
@@ -590,7 +596,7 @@ export function playAllCharacters({ loop, speed } = {}) {
     if (c.playbackSource === 'edit') {
       durSec = selectEdit(c.animData, store.animDuration, opts)
     } else if (c.activeClipName) {
-      durSec = selectClip(c.activeClipName, opts)
+      durSec = selectClip(c.activeClipName, opts, c.animData)
     }
     if (durSec > 0) {
       play()
@@ -761,6 +767,116 @@ export function setViewCameraById(id) {
   setCamerasViewCamera(active)
   setLightsViewCamera(active)
   requestRender()
+}
+
+// Glide the viewport from whatever it's currently looking through to camera
+// `id` (or null = free view) over `duration` seconds, instead of hard-cutting.
+// Drives a scratch camera each frame (see updateCamTransition) and swaps in
+// the real target camera once the glide finishes.
+const _wPos = new THREE.Vector3()
+const _wQuat = new THREE.Quaternion()
+
+// A placed camera (from getCameraById) is a child of its rig Group — the rig
+// carries the actual position/rotation (including any "Key camera" motion),
+// while the camera itself sits at local identity. Reading .position/
+// .quaternion straight off it is always ~origin/identity, regardless of
+// where it visually is — that's what was sending the glide to the floor.
+// This always resolves the true WORLD transform, for a rig-parented camera
+// or a parentless one (the free camera) alike.
+function worldTransformOf(cam) {
+  cam.getWorldPosition(_wPos)
+  cam.getWorldQuaternion(_wQuat)
+  return { pos: _wPos.clone(), quat: _wQuat.clone() }
+}
+
+export function transitionViewCameraTo(id, duration = 0.6) {
+  const targetCam = id != null ? getCameraById(id) : state.camera
+  if (!targetCam) return setViewCameraById(id)
+  const fromCam = state.viewCamera || state.camera
+  if (fromCam === targetCam) return // already there
+
+  const from = worldTransformOf(fromCam)
+  const to = worldTransformOf(targetCam)
+
+  if (!state.transitionCamera) state.transitionCamera = state.camera.clone()
+  const tc = state.transitionCamera
+  tc.position.copy(from.pos)
+  tc.quaternion.copy(from.quat)
+  tc.fov = fromCam.fov
+  tc.near = targetCam.near
+  tc.far = targetCam.far
+  tc.aspect = (state.container?.clientWidth || 1) / (state.container?.clientHeight || 1)
+  tc.updateProjectionMatrix()
+
+  state.viewCamera = tc
+  setActiveCameraBody(null) // hide every camera body while gliding between shots
+  if (state.controls) {
+    state.controls.locked = true
+    state.controls.enabled = false
+  }
+  const active = tc
+  setPosingViewCamera(active)
+  setMeshEditViewCamera(active)
+  setObjectsViewCamera(active)
+  setCamerasViewCamera(active)
+  setLightsViewCamera(active)
+
+  state.camTransition = {
+    elapsed: 0,
+    duration: Math.max(0.05, duration),
+    fromPos: from.pos,
+    fromQuat: from.quat,
+    fromFov: fromCam.fov,
+    toPos: to.pos,
+    toQuat: to.quat,
+    toFov: targetCam.fov,
+    finalId: id,
+  }
+  requestRender()
+}
+
+const _tPos = new THREE.Vector3()
+const _tQuat = new THREE.Quaternion()
+
+// Advance an in-progress camera glide by `delta` seconds. Called every frame
+// from the continuous render loop; a no-op when nothing is transitioning.
+// Re-samples the target's WORLD transform every frame (not just at the
+// start) — if the target is itself mid-keyframe-motion (a "Key camera" rig
+// still animating, or another cut's rig that's driven by a track), gliding
+// toward a moving target instead of a stale snapshot keeps this correct.
+function updateCamTransition(delta) {
+  const tr = state.camTransition
+  if (!tr) return
+  tr.elapsed += delta
+  const f = Math.min(1, tr.elapsed / tr.duration)
+  const eased = f < 0.5 ? 2 * f * f : 1 - Math.pow(-2 * f + 2, 2) / 2 // ease-in-out
+  const targetCam = tr.finalId != null ? getCameraById(tr.finalId) : state.camera
+  if (targetCam) {
+    const to = worldTransformOf(targetCam)
+    tr.toPos.copy(to.pos)
+    tr.toQuat.copy(to.quat)
+    tr.toFov = targetCam.fov
+  }
+  _tPos.lerpVectors(tr.fromPos, tr.toPos, eased)
+  _tQuat.slerpQuaternions(tr.fromQuat, tr.toQuat, eased)
+  const tc = state.transitionCamera
+  tc.position.copy(_tPos)
+  tc.quaternion.copy(_tQuat)
+  tc.fov = tr.fromFov + (tr.toFov - tr.fromFov) * eased
+  tc.updateProjectionMatrix()
+  if (f >= 1) {
+    state.camTransition = null
+    if (state.controls) {
+      state.controls.locked = state.viewCamera != null && state.viewCamera !== tc
+      state.controls.enabled = state.viewCamera == null
+    }
+    // Land on the real camera object (not the scratch clone) exactly on
+    // target, and sync the store so the Cameras panel's "current view"
+    // indicator matches — going through the store here (rather than calling
+    // setViewCameraById directly) means Viewport's viewCameraId effect does
+    // the swap, so there's exactly one place that ever hard-sets the camera.
+    useStore.getState().setViewCameraId(tr.finalId)
+  }
 }
 
 // Current character root transform (for "keyframe position" root motion).
@@ -995,6 +1111,12 @@ export function getProjectData() {
       meshEdits: getMeshEditsData(),
       meshOverridesByIndex: meshOverridesByIndexFor(model, live.meshOverrides),
       animData: live.animData,
+      // BVH imports, ragdoll bakes, combined/trimmed clips — anything NOT
+      // baked into the model file itself, so it isn't lost on reload.
+      importedClips: getImportedClipsData(id),
+      importedClipNames: live.importedClipNames,
+      activeClipName: live.activeClipName,
+      playbackSource: live.playbackSource,
       isActive: id === originalActiveId,
     })
   }
@@ -1066,6 +1188,16 @@ export async function applyProjectData(record) {
       useStore.setState({ meshOverrides: meshOverridesFromIndex(model, c.meshOverridesByIndex) })
     }
     if (c.animData) useStore.setState({ animData: c.animData })
+    // Restore any imported/generated clips (BVH, ragdoll bakes, combined/
+    // trimmed) — these live on the model's mixer entry, not in animData, so
+    // they need their own restore step — then bring back which clip/tab was
+    // selected so the panel looks exactly like it did when saved.
+    restoreImportedClips(id, c.importedClips)
+    useStore.setState({
+      importedClipNames: c.importedClipNames || (c.importedClips || []).map((j) => j.name),
+      activeClipName: c.activeClipName ?? null,
+      playbackSource: c.playbackSource || 'edit',
+    })
     if (c.isActive || (record.format === 'project-v1' && i === 0)) activeIdToRestore = id
   }
   if (activeIdToRestore) setActiveCharacter(activeIdToRestore)

@@ -72,6 +72,15 @@ function newEntry(model) {
 const perChar = new Map() // id -> entry (same shape the old singleton `a` had)
 let activeId = null // which character AnimationPanel.jsx is currently editing
 let globalRefs = null // shared across all characters — renderer/store callbacks don't change per-character
+// Normal Play in the Animate panel only follows camera cuts/keys when the
+// user opts in (see store.followCameraCuts) — otherwise a work-in-progress
+// clip wouldn't keep yanking the view around while posing. Recording/
+// previewing a shot in Export always wants the cuts, though, so it forces
+// them on for the duration of that playback regardless of the toggle.
+let forceCameraCuts = false
+export function setForceCameraCuts(on) {
+  forceCameraCuts = !!on
+}
 
 const a = new Proxy(
   {},
@@ -187,13 +196,17 @@ export function updateAnimation(delta) {
 
 // Load a clip by name (baked or imported mocap) as the active action, paused at
 // t=0. Returns its duration (0 if not found).
-export function selectClip(name, opts = {}) {
+// `animData` is optional — pass it (as scene.js's playAllCharacters does) to
+// keep this character's camera cuts/keys live while a baked/generated clip
+// (ragdoll bake, BVH import, …) drives its body. Callers that don't pass it
+// (e.g. a quick clip preview in the Animate panel) get the old behaviour —
+// no camera cuts firing off the back of a one-off preview.
+export function selectClip(name, opts = {}, animData = null) {
   const clip = findClip(name)
   if (!clip) return 0
   a.editRoot = null // baked/mocap clips are in-place (no root motion)
-  a.editMeshes = null // …and don't drive parts, cameras or cuts
-  a.editCameras = null
-  a.editCuts = null
+  a.editMeshes = null // …and don't drive parts
+  setupCameraTimeline(animData)
   activate(clip, opts)
   return clip.duration
 }
@@ -268,6 +281,30 @@ export function exportClipJSON(name) {
   const clip = findClip(name)
   if (!clip) return null
   return clip.toJSON()
+}
+
+// Every IMPORTED/GENERATED clip (BVH imports, ragdoll bakes, combined/trimmed
+// clips, …) for character `id`, serialized to plain JSON. Baked-in clips
+// aren't included — they're re-extracted from the model file itself on load.
+// Used by scene.js's getProjectData so this work survives a project save.
+export function getImportedClipsData(id) {
+  const entry = perChar.get(id)
+  if (!entry || !entry.importedClips.length) return []
+  return entry.importedClips.map((c) => c.toJSON())
+}
+
+// Restore previously-exported imported clips onto character `id` (call after
+// setAnimationModel has created its entry, i.e. after the model has loaded).
+export function restoreImportedClips(id, clipsJSON) {
+  const entry = perChar.get(id)
+  if (!entry || !clipsJSON || !clipsJSON.length) return
+  for (const json of clipsJSON) {
+    try {
+      entry.importedClips.push(THREE.AnimationClip.parse(json))
+    } catch {
+      /* a clip that fails to parse is skipped rather than aborting the load */
+    }
+  }
 }
 
 // Parse a previously-exported clip and register it as playable, same as any
@@ -422,6 +459,25 @@ function sampleClipRange(clip, fps, startTime, endTime, prune = true) {
 // + part motion + camera motion), and make it the active action. Bone tracks go
 // through the mixer; the rest are sampled manually each frame. Returns the
 // duration.
+// Set up the camera keyframe/cut timeline from `animData`, regardless of
+// whether the CHARACTER's own motion is driven by the in-app edit clip or a
+// baked/generated one — camera cuts are a viewport concern, not a body one,
+// so they shouldn't be tied to the character's playback source. Shared by
+// selectEdit and selectClip.
+function setupCameraTimeline(animData) {
+  a.editCameras = animData && hasKeys(animData.cameras) ? sortTracks(animData.cameras) : null
+  const cuts = animData && animData.cuts
+  a.editCuts = cuts && cuts.length ? [...cuts].sort((x, y) => x.time - y.time) : null
+  a.camerasRest = a.editCameras ? getCamerasPlaybackSnapshot() : null
+  // Remember which camera (if any) the user was looking through before the
+  // cuts take over, so Stop returns to their view.
+  if (a.editCuts && !a.hasViewRest) {
+    a.viewRest = a.refs.getViewCameraId ? a.refs.getViewCameraId() : null
+    a.hasViewRest = true
+    a.lastCut = undefined
+  }
+}
+
 export function selectEdit(animData, duration, opts = {}) {
   // Drop the previous in-app clip's cached action so rebuilds don't accumulate.
   if (a.editClip && a.mixer) a.mixer.uncacheClip(a.editClip)
@@ -431,29 +487,23 @@ export function selectEdit(animData, duration, opts = {}) {
   a.editRoot = rootKeys && rootKeys.length ? [...rootKeys].sort((x, y) => x.time - y.time) : null
   a.editMeshes = hasKeys(animData.meshes) ? sortTracks(animData.meshes) : null
   a.editMorphs = hasMorphKeys(animData.morphs) ? sortMorphTracks(animData.morphs) : null
-  a.editCameras = hasKeys(animData.cameras) ? sortTracks(animData.cameras) : null
-  const cuts = animData.cuts
-  a.editCuts = cuts && cuts.length ? [...cuts].sort((x, y) => x.time - y.time) : null
-  // Remember where the driven parts/cameras sit now, so Stop puts them back.
+  setupCameraTimeline(animData)
+  // Remember where the driven parts sit now, so Stop puts them back.
   a.meshRest = a.editMeshes ? getMeshPlaybackSnapshot() : null
   a.morphRest = a.editMorphs ? getMorphPlaybackSnapshot(a.editMorphs) : null
-  a.camerasRest = a.editCameras ? getCamerasPlaybackSnapshot() : null
-  // Remember which camera (if any) the user was looking through before the
-  // cuts take over, so Stop returns to their view.
-  if (a.editCuts && !a.hasViewRest) {
-    a.viewRest = a.refs.getViewCameraId ? a.refs.getViewCameraId() : null
-    a.hasViewRest = true
-    a.lastCut = undefined
-  }
   activate(clip, opts)
   return clip.duration
 }
 
 // Apply the camera cut in effect at time t: the view switches to the camera of
 // the latest cut at or before t; before the first cut it shows the pre-play
-// view. Only pushes a change when the target actually differs.
+// view. Only pushes a change when the target actually differs. Skipped during
+// normal Play unless the user has opted in (store.followCameraCuts) or the
+// Export panel has forced cuts on for a recording/preview.
 function sampleCuts(t) {
   if (!a.editCuts || !a.refs.onCameraCut) return
+  const follow = forceCameraCuts || !a.refs.getFollowCameraCuts || a.refs.getFollowCameraCuts()
+  if (!follow) return
   let cut = null
   for (const k of a.editCuts) {
     if (k.time <= t + 1e-6) cut = k
@@ -594,7 +644,11 @@ export function stop() {
   applyCamerasPlaybackSnapshot(a.camerasRest)
   a.camerasRest = null
   if (a.hasViewRest) {
-    if (a.refs.setViewCameraId) a.refs.setViewCameraId(a.viewRest)
+    // Glide back to the pre-play view instead of snapping — cuts got here
+    // smoothly, so leaving them the same way keeps Stop from looking like a
+    // jump-cut of its own.
+    if (a.refs.transitionViewCameraId) a.refs.transitionViewCameraId(a.viewRest)
+    else if (a.refs.setViewCameraId) a.refs.setViewCameraId(a.viewRest)
     a.viewRest = null
     a.hasViewRest = false
     a.lastCut = undefined

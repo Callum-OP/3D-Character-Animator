@@ -28,6 +28,8 @@ export default function CamerasPanel() {
   const animData = useStore((s) => s.animData)
   const animFps = useStore((s) => s.animFps)
   const insertTime = useStore((s) => s.insertTime)
+  const followCameraCuts = useStore((s) => s.followCameraCuts)
+  const setFollowCameraCuts = useStore((s) => s.setFollowCameraCuts)
   const st = useStore.getState
 
   const selected = sceneCameras.find((cam) => cam.id === selectedCameraId) || null
@@ -60,7 +62,7 @@ export default function CamerasPanel() {
   }
 
   // Insert a camera cut: during playback the view switches to this camera from
-  // the insert time until the next cut.
+  // the insert time until the next cut, gliding into place rather than jumping.
   function onCutHere() {
     if (!selected) return
     const t = Math.round(insertTime * animFps) / animFps
@@ -183,14 +185,14 @@ export default function CamerasPanel() {
                 <button
                   className="btn secondary"
                   onClick={onKeyCamera}
-                  title="Save this camera's position at the Animate panel's insert time — key it at two times and it glides between them"
+                  title="Save this camera's position at the Animate panel's insert time — key it at two times and IT glides between them while it's the active view"
                 >
                   Key camera{keyCount ? ` (${keyCount})` : ''}
                 </button>
                 <button
                   className="btn secondary"
                   onClick={onCutHere}
-                  title="Switch the view to this camera from the insert time on (until the next cut) — like cutting between shots"
+                  title="Switch the view to this camera from the insert time on (until the next cut) — the view glides across, like cutting between shots"
                 >
                   Cut here{cutCount ? ` (${cutCount})` : ''}
                 </button>
@@ -198,12 +200,30 @@ export default function CamerasPanel() {
             </div>
           )}
 
+          <label
+            className="slider-row"
+            style={{ marginTop: 8 }}
+            title="Camera cuts/keys are always used for Preview and Record in Export. This only controls the ordinary Play button in Animate, which ignores them by default so posing/editing isn't interrupted by the view jumping around."
+          >
+            <input
+              type="checkbox"
+              checked={followCameraCuts}
+              onChange={(e) => setFollowCameraCuts(e.target.checked)}
+            />
+            <span className="slider-label">Follow camera cuts/keys on Play</span>
+          </label>
+
           <div className="pose-hint">
             📷 looks through a camera (0 toggles, Esc exits) — exports and
-            recordings use whatever the view shows. <b>Key camera</b> at two
-            times makes one camera glide between them; <b>Cut here</b> hard-
-            switches to a camera at a time, so several cameras can share one
-            animation like film shots.
+            recordings always use whatever the view shows. <b>Key camera</b>{' '}
+            animates that ONE camera's own position over time (a dolly/pan
+            shot) — key it at two times and it glides between them whenever
+            it's the active view. <b>Cut here</b> switches the free view to a
+            DIFFERENT camera at a point in time, gliding across — use it to
+            hop between several fixed shots like film cuts. Both only move
+            the free view during Export's Preview/Record by default; flip{' '}
+            <b>Follow camera cuts/keys on Play</b> above if you also want
+            ordinary Play to follow them.
           </div>
         </>
       )}

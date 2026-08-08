@@ -7,10 +7,11 @@ import {
   startRecording,
   stopRecordingAndDownload,
   setViewCameraById,
+  transitionViewCameraTo,
   playAllCharacters,
   stopAllCharacters,
 } from '../three/scene.js'
-import { exportAnimationBVH } from '../three/animation.js'
+import { exportAnimationBVH, setForceCameraCuts } from '../three/animation.js'
 
 // Side-panel section: get your work out of the app — transparent PNG, a video of
 // the animation, or the in-app animation as a .bvh, plus a fullscreen view for
@@ -86,20 +87,24 @@ export default function ExportPanel() {
     setMsg('Animation exported as .bvh.')
   }
 
-  // Switch the viewport into the shot's camera (returns a restore function).
+  // Switch the viewport into the shot's camera (returns a restore function
+  // that glides back to whatever the view was before, rather than snapping).
   // Applied both through the store (so the banner/UI reflect it) and directly
-  // (so the very first recorded frame is already the camera view).
+  // (so the very first recorded frame is already the camera view) — the arm
+  // itself stays instant on purpose, so a recording never opens with a glide
+  // from the editor's free view into the shot.
   function armShotView(view) {
     const prev = st().viewCameraId
     if (view.id != null && view.id !== prev) {
       st().setViewCameraId(view.id)
       setViewCameraById(view.id)
-      return () => {
-        st().setViewCameraId(prev)
-        setViewCameraById(prev)
-      }
+      return () => transitionViewCameraTo(prev)
     }
-    return () => {}
+    // 'cuts' and 'free' shots don't need arming — cuts glide themselves in
+    // via sampleCuts once playback starts (forced on below), and 'free'
+    // never leaves the current view in the first place. Still restore
+    // afterwards in case cuts left the view somewhere else.
+    return () => transitionViewCameraTo(prev)
   }
 
   // Play every loaded character's own selected clip/animation once from the
@@ -112,13 +117,19 @@ export default function ExportPanel() {
     const s = st()
     const view = resolveShotView(s)
     const restoreView = armShotView(view)
+    // Preview/Record always honour camera cuts/keys, regardless of the
+    // Cameras panel's "follow on Play" toggle — that's the whole point of a
+    // recorded shot.
+    setForceCameraCuts(true)
     const { started, maxDuration: durSec } = playAllCharacters({ loop: false, speed: s.speed })
     if (started === 0) {
+      setForceCameraCuts(false)
       restoreView()
       setMsg(`Nothing to ${record ? 'record' : 'preview'} — pick a clip or make an animation first.`)
       return
     }
     if (record && !startRecording(30)) {
+      setForceCameraCuts(false)
       restoreView()
       stopAllCharacters()
       setMsg('Video recording isn’t supported in this browser — use Fullscreen and screen-record instead.')
@@ -132,6 +143,7 @@ export default function ExportPanel() {
     const ms = (durSec / (s.speed || 1)) * 1000 + (record ? 400 : 100)
     window.setTimeout(() => {
       stopAllCharacters()
+      setForceCameraCuts(false)
       if (record) {
         stopRecordingAndDownload(name)
         st().setRecording(false)
