@@ -1187,7 +1187,15 @@ export async function applyProjectData(record) {
     if (c.meshOverridesByIndex) {
       useStore.setState({ meshOverrides: meshOverridesFromIndex(model, c.meshOverridesByIndex) })
     }
+    // project-v1 saves (from before multi-character support) may have kept
+    // the keyframe data at the top level (record.animData) instead of on
+    // the character record itself — fall back to that so genuinely old save
+    // files don't lose their animation, without touching the normal (v2,
+    // per-character) path above.
     if (c.animData) useStore.setState({ animData: c.animData })
+    else if (record.format === 'project-v1' && record.animData) {
+      useStore.setState({ animData: record.animData })
+    }
     // Restore any imported/generated clips (BVH, ragdoll bakes, combined/
     // trimmed) — these live on the model's mixer entry, not in animData, so
     // they need their own restore step — then bring back which clip/tab was
@@ -1248,8 +1256,8 @@ export async function applyProjectData(record) {
     useStore.setState({ sceneLights: metas, selectedLightId: null })
   }
 
-  // 5. Restore the pose / keyframe sequence.
-  useStore.getState().setAnimData(record.animData || { tracks: {}, root: [] })
+  // 5. (animData is already restored per-character inside the load loop
+  // above — see step 2 — so there's nothing left to do here.)
 
   requestRender()
 }

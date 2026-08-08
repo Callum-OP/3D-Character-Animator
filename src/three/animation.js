@@ -196,17 +196,16 @@ export function updateAnimation(delta) {
 
 // Load a clip by name (baked or imported mocap) as the active action, paused at
 // t=0. Returns its duration (0 if not found).
-// `animData` is optional — pass it (as scene.js's playAllCharacters does) to
-// keep this character's camera cuts/keys live while a baked/generated clip
-// (ragdoll bake, BVH import, …) drives its body. Callers that don't pass it
-// (e.g. a quick clip preview in the Animate panel) get the old behaviour —
-// no camera cuts firing off the back of a one-off preview.
+// `animData` is optional — pass it (as scene.js's playAllCharacters and this
+// panel's playback buttons do) to keep this character's root-motion
+// keyframes, driven parts/morphs, and camera cuts/keys live ON TOP OF a
+// baked/generated clip (ragdoll bake, BVH import, …) driving its joints.
+// Callers that don't pass it (rare — a couple of internal previews) fall
+// back to the clip alone, in-place, with no overlay tracks.
 export function selectClip(name, opts = {}, animData = null) {
   const clip = findClip(name)
   if (!clip) return 0
-  a.editRoot = null // baked/mocap clips are in-place (no root motion)
-  a.editMeshes = null // …and don't drive parts
-  setupCameraTimeline(animData)
+  setupOverlayTracks(animData)
   activate(clip, opts)
   return clip.duration
 }
@@ -459,15 +458,27 @@ function sampleClipRange(clip, fps, startTime, endTime, prune = true) {
 // + part motion + camera motion), and make it the active action. Bone tracks go
 // through the mixer; the rest are sampled manually each frame. Returns the
 // duration.
-// Set up the camera keyframe/cut timeline from `animData`, regardless of
-// whether the CHARACTER's own motion is driven by the in-app edit clip or a
-// baked/generated one — camera cuts are a viewport concern, not a body one,
-// so they shouldn't be tied to the character's playback source. Shared by
-// selectEdit and selectClip.
-function setupCameraTimeline(animData) {
+// Set up the "overlay" timelines from `animData` — root motion (character
+// position), driven parts/props (meshes), morph targets, and the camera
+// keyframe/cut timeline — regardless of whether the CHARACTER's own JOINT
+// motion is driven by the in-app edit clip or a baked/generated one (ragdoll
+// bake, BVH import, …). These sit on top of the body animation rather than
+// being tied to its playback source, so e.g. a ragdoll fall can still walk
+// into frame first via a root-motion keyframe, or be filmed through keyed/
+// cut cameras. Shared by selectEdit and selectClip.
+function setupOverlayTracks(animData) {
+  const rootKeys = animData && animData.root
+  a.editRoot = rootKeys && rootKeys.length ? [...rootKeys].sort((x, y) => x.time - y.time) : null
+  a.editMeshes = animData && hasKeys(animData.meshes) ? sortTracks(animData.meshes) : null
+  a.editMorphs = animData && hasMorphKeys(animData.morphs) ? sortMorphTracks(animData.morphs) : null
   a.editCameras = animData && hasKeys(animData.cameras) ? sortTracks(animData.cameras) : null
   const cuts = animData && animData.cuts
   a.editCuts = cuts && cuts.length ? [...cuts].sort((x, y) => x.time - y.time) : null
+
+  // Remember where the driven parts/morphs/cameras sit now, so Stop puts
+  // them back.
+  a.meshRest = a.editMeshes ? getMeshPlaybackSnapshot() : null
+  a.morphRest = a.editMorphs ? getMorphPlaybackSnapshot(a.editMorphs) : null
   a.camerasRest = a.editCameras ? getCamerasPlaybackSnapshot() : null
   // Remember which camera (if any) the user was looking through before the
   // cuts take over, so Stop returns to their view.
@@ -483,14 +494,7 @@ export function selectEdit(animData, duration, opts = {}) {
   if (a.editClip && a.mixer) a.mixer.uncacheClip(a.editClip)
   const clip = buildEditClip(animData.tracks || {}, duration, animData.morphs || {})
   a.editClip = clip
-  const rootKeys = animData.root
-  a.editRoot = rootKeys && rootKeys.length ? [...rootKeys].sort((x, y) => x.time - y.time) : null
-  a.editMeshes = hasKeys(animData.meshes) ? sortTracks(animData.meshes) : null
-  a.editMorphs = hasMorphKeys(animData.morphs) ? sortMorphTracks(animData.morphs) : null
-  setupCameraTimeline(animData)
-  // Remember where the driven parts sit now, so Stop puts them back.
-  a.meshRest = a.editMeshes ? getMeshPlaybackSnapshot() : null
-  a.morphRest = a.editMorphs ? getMorphPlaybackSnapshot(a.editMorphs) : null
+  setupOverlayTracks(animData)
   activate(clip, opts)
   return clip.duration
 }

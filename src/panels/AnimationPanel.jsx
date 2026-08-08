@@ -205,7 +205,7 @@ export default function AnimationPanel() {
     st().setCurrentTime(0)
     st().setPlaybackSource(next)
     if (next === 'clip' && activeClipName) {
-      const d = selectClip(activeClipName, { loop, speed })
+      const d = selectClip(activeClipName, { loop, speed }, animData)
       st().setDuration(d)
       st().setPlayback('paused')
     } else if (next === 'edit') {
@@ -221,7 +221,7 @@ export default function AnimationPanel() {
       st().setDuration(0)
       return
     }
-    const d = selectClip(name, { loop, speed })
+    const d = selectClip(name, { loop, speed }, animData)
     st().setDuration(d)
     st().setCurrentTime(0)
     st().setPlayback('paused')
@@ -232,7 +232,7 @@ export default function AnimationPanel() {
       const d = selectEdit(animData, animDuration, { loop, speed })
       st().setDuration(d)
     } else if (playback === 'stopped' && activeClipName) {
-      const d = selectClip(activeClipName, { loop, speed })
+      const d = selectClip(activeClipName, { loop, speed }, animData)
       st().setDuration(d)
     }
     play()
@@ -279,7 +279,7 @@ export default function AnimationPanel() {
         const d = selectEdit(animData, animDuration, { loop, speed })
         st().setDuration(d)
       } else if (activeClipName) {
-        selectClip(activeClipName, { loop, speed })
+        selectClip(activeClipName, { loop, speed }, animData)
       }
       st().setPlayback('paused')
     } else if (playback === 'playing') {
@@ -431,7 +431,7 @@ export default function AnimationPanel() {
       st().addImportedClipName(name)
       st().setPlaybackSource('clip')
       st().setActiveClipName(name)
-      const d = selectClip(name, { loop, speed })
+      const d = selectClip(name, { loop, speed }, animData)
       st().setDuration(d)
       st().setCurrentTime(0)
       st().setPlayback('paused')
@@ -490,7 +490,7 @@ export default function AnimationPanel() {
     st().addImportedClipName(name)
     st().setPlaybackSource('clip')
     st().setActiveClipName(name)
-    const d = selectClip(name, { loop, speed })
+    const d = selectClip(name, { loop, speed }, animData)
     st().setDuration(d)
     st().setCurrentTime(0)
     play()
@@ -502,7 +502,10 @@ export default function AnimationPanel() {
     if (!activeClipName) return
     const res = bakeClipToTracks(activeClipName, animFps, duration || undefined)
     if (!res) return
-    st().setAnimData({ tracks: res.tracks })
+    // Only replace the bone tracks — setAnimData does a full replace, so
+    // passing just { tracks } would silently wipe root motion, mesh/morph
+    // keys, and any camera keys/cuts already set up on this timeline.
+    st().setAnimData({ ...animData, tracks: res.tracks })
     st().setAnimDuration(res.duration)
     onSourceChange('edit')
     setBvhMsg(`Baked ${Object.keys(res.tracks).length} moving track(s) to keyframes.`)
@@ -547,7 +550,7 @@ export default function AnimationPanel() {
     st().addImportedClipName(name)
     st().setPlaybackSource('clip')
     st().setActiveClipName(name)
-    const d = selectClip(name, { loop, speed })
+    const d = selectClip(name, { loop, speed }, animData)
     st().setDuration(d)
     st().setCurrentTime(0)
     st().setPlayback('paused')
