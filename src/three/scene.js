@@ -751,7 +751,7 @@ export function resetObjectById(id) {
 export function setViewCameraById(id) {
   const cam = id != null ? getCameraById(id) : null
   state.viewCamera = cam
-  setActiveCameraBody(cam ? id : null) // hide the body of the camera we're inside
+  setActiveCameraBody(!!cam) // hide every camera body while looking through one
   if (cam && state.container) {
     cam.aspect = (state.container.clientWidth || 1) / (state.container.clientHeight || 1)
     cam.updateProjectionMatrix()
@@ -809,7 +809,7 @@ export function transitionViewCameraTo(id, duration = 0.6) {
   tc.updateProjectionMatrix()
 
   state.viewCamera = tc
-  setActiveCameraBody(null) // hide every camera body while gliding between shots
+  setActiveCameraBody(true) // hide every camera body while gliding between shots
   if (state.controls) {
     state.controls.locked = true
     state.controls.enabled = false

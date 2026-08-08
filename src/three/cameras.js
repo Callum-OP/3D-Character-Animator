@@ -139,10 +139,12 @@ export function getCameraIdByName(name) {
   return entry ? entry.id : null
 }
 
-// Hide the body visual of the camera being looked through (it would fill the
-// frame); show everyone else's.
-export function setActiveCameraBody(id) {
-  for (const entry of c.cameras) entry.body.visible = entry.id !== id
+// Whenever the viewport is looking through (or gliding toward) any camera,
+// hide every camera body — not just the one you're inside — so no OTHER
+// camera rig that happens to be in frame shows up in the shot either.
+// Bodies only reappear in the free view, where they're an editing aid.
+export function setActiveCameraBody(insideCamera) {
+  for (const entry of c.cameras) entry.body.visible = !insideCamera
   c.requestRender()
 }
 
