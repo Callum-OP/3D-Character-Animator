@@ -1,5 +1,27 @@
 import { create } from 'zustand'
 
+// Linear-interpolate a character root-motion track's position at time `t`,
+// as it stood BEFORE the edit being applied — used by addRootKeyframe's
+// ripple mode to work out how far the character actually moved so it can
+// carry that same delta onto every later keyframe. Returns null when there's
+// nothing to interpolate against yet.
+function sampleRootPosAt(keys, t) {
+  if (!keys || !keys.length) return null
+  const sorted = [...keys].sort((a, b) => a.time - b.time)
+  if (t <= sorted[0].time) return sorted[0].pos
+  const last = sorted[sorted.length - 1]
+  if (t >= last.time) return last.pos
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const a = sorted[i]
+    const b = sorted[i + 1]
+    if (t >= a.time && t <= b.time) {
+      const f = (b.time - a.time) > 0 ? (t - a.time) / (b.time - a.time) : 0
+      return [0, 1, 2].map((i) => a.pos[i] + (b.pos[i] - a.pos[i]) * f)
+    }
+  }
+  return last.pos
+}
+
 // Central app state. Only serializable / UI-facing data lives here.
 // The heavy Three.js objects (scene, meshes, skeleton) are deliberately kept
 // OUT of the store — they live in the scene manager (src/three/scene.js) and
@@ -455,6 +477,15 @@ export const useStore = create((set) => ({
   importedClipNames: [], // names of retargeted BVH mocap clips
   loop: true,
   speed: 1,
+  // When true, editing a root (character world-placement) keyframe shifts
+  // every LATER keyframe by the same delta — so nudging where a walk clip
+  // is at frame 20 carries every step after it along, instead of leaving
+  // them planted where they were.
+  rippleRootEdit: false,
+  // When true, dragging the character with the move gizmo while building a
+  // "Make your own" clip automatically records a root keyframe at the
+  // playhead — no need to remember to press "Keyframe position" afterwards.
+  autoKeyMovement: false,
   duration: 0, // current source duration (seconds)
   currentTime: 0, // playhead (updated during playback)
 
@@ -469,6 +500,8 @@ export const useStore = create((set) => ({
     })),
   setLoop: (loop) => set({ loop }),
   setSpeed: (speed) => set({ speed }),
+  setRippleRootEdit: (rippleRootEdit) => set({ rippleRootEdit }),
+  setAutoKeyMovement: (autoKeyMovement) => set({ autoKeyMovement }),
   setDuration: (duration) => set({ duration }),
   setCurrentTime: (currentTime) => set({ currentTime }),
 
@@ -539,9 +572,30 @@ export const useStore = create((set) => ({
     }),
 
   // Insert/replace a character root-motion keyframe (world position + rotation).
-  addRootKeyframe: (time, pos, quat) =>
+  // When `rippleAfter` is true (the "ripple edit" toggle), every existing
+  // keyframe strictly after `time` is shifted by the same position delta as
+  // this edit — e.g. dragging the character further along mid-clip carries
+  // every later step forward with it instead of leaving them behind, so the
+  // rest of the walk still lines up with the new position.
+  addRootKeyframe: (time, pos, quat, rippleAfter = false) =>
     set((s) => {
-      const root = (s.animData.root || []).filter((k) => k.time !== time)
+      const existing = s.animData.root || []
+      let root = existing.filter((k) => k.time !== time)
+      if (rippleAfter) {
+        const before = sampleRootPosAt(existing, time)
+        if (before) {
+          const dx = pos[0] - before[0]
+          const dy = pos[1] - before[1]
+          const dz = pos[2] - before[2]
+          if (dx || dy || dz) {
+            root = root.map((k) =>
+              k.time > time
+                ? { ...k, pos: [k.pos[0] + dx, k.pos[1] + dy, k.pos[2] + dz] }
+                : k,
+            )
+          }
+        }
+      }
       root.push({ time, pos, quat })
       root.sort((a, b) => a.time - b.time)
       return { animData: { ...s.animData, root } }

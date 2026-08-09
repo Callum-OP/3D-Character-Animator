@@ -377,10 +377,48 @@ export function sampleClipToPose(name, time) {
 
 // Bake a clip into editable in-app keyframe tracks at the given fps. Static bones
 // (unchanged across the clip) are pruned. Returns { tracks, duration }.
-export function bakeClipToTracks(name, fps, duration) {
+// `preserveMotion` (the "Keep original movement" toggle in Make your own):
+// when true, the skeleton root/hip's world-space travel over the clip is
+// captured alongside the bone rotations and returned as `root` keys, so a
+// walk clip baked to editable tracks still carries the character forward
+// instead of walking on the spot (bone tracks alone only ever held rotation).
+export function bakeClipToTracks(name, fps, duration, preserveMotion = false) {
   const clip = findClip(name)
   if (!clip || !a.model) return null
-  return sampleClipRange(clip, fps, 0, duration || clip.duration)
+  return sampleClipRange(clip, fps, 0, duration || clip.duration, true, { preserveMotion })
+}
+
+// Find the bone that actually CARRIES root motion in this clip: the one with
+// a `<name>.position` track. This is the authoritative signal — far more
+// reliable than guessing from skeleton hierarchy, since some rigs nest the
+// moving hip under an extra Armature/Root wrapper bone, or the "obvious" top
+// bone in the hierarchy simply isn't the one the exporter chose to animate.
+// Falls back to the old hierarchy heuristic (topmost bone) if no track has a
+// position channel, so it degrades gracefully rather than finding nothing.
+function findMovingRootBone(clip, bones) {
+  if (!bones || !bones.length) return null
+  const byName = new Map(bones.map((b) => [b.name, b]))
+  if (clip) {
+    for (const tr of clip.tracks) {
+      if (!/\.position(\[|$)/.test(tr.name)) continue
+      const parsed = THREE.PropertyBinding.parseTrackName(tr.name)
+      const b = byName.get(parsed.nodeName)
+      if (b) return b
+    }
+  }
+  return findSkeletonRootBone(bones)
+}
+
+// Find the skeleton's root bone: the one whose parent isn't itself a bone in
+// this skeleton. Same heuristic used for BVH export's ROOT joint. Used as a
+// fallback when the clip has no explicit position track to go by.
+function findSkeletonRootBone(bones) {
+  if (!bones || !bones.length) return null
+  const boneSet = new Set(bones)
+  for (const b of bones) {
+    if (!b.parent || !boneSet.has(b.parent)) return b
+  }
+  return bones[0]
 }
 
 // Cut a clip down to [startTime, endTime] (seconds, clamped to the clip's
@@ -411,7 +449,16 @@ export function clipFromTracks(tracks, duration, name) {
 // Shared sampler behind bakeClipToTracks/trimClip: plays `clip` on a scratch
 // mixer and records each bone's rotation every frame across [start, end],
 // re-timed so the result starts at 0. Static bones are pruned.
-function sampleClipRange(clip, fps, startTime, endTime, prune = true) {
+//
+// opts.preserveMotion additionally tracks the skeleton root/hip's WORLD
+// travel across the span and returns it as `root` — character-placement
+// keyframes in the same shape as animData.root — expressed as a delta from
+// frame 0 added on top of wherever the character is currently placed. That
+// way the captured movement layers on top of the character's existing
+// position rather than snapping it to the hip's raw world coordinates, and
+// (since bone tracks here never carry position, only rotation) nothing ends
+// up double-applying the motion.
+function sampleClipRange(clip, fps, startTime, endTime, prune = true, opts = {}) {
   const dur = clip.duration
   const start = Math.max(0, Math.min(startTime, dur))
   const end = Math.max(start, Math.min(endTime, dur))
@@ -423,6 +470,12 @@ function sampleClipRange(clip, fps, startTime, endTime, prune = true) {
   act.clampWhenFinished = true
   act.play()
 
+  const rootBone = opts.preserveMotion ? findMovingRootBone(clip, a.model.bones) : null
+  const basePos = a.model.root.position.clone()
+  const baseQuat = a.model.root.quaternion.clone()
+  let startWorld = null
+  const rootKeys = rootBone ? [] : null
+
   const tracks = {}
   for (const b of a.model.bones) tracks[b.name] = []
   for (let f = 0; f < frames; f++) {
@@ -431,6 +484,20 @@ function sampleClipRange(clip, fps, startTime, endTime, prune = true) {
     for (const b of a.model.bones) {
       const q = b.quaternion
       tracks[b.name].push({ time: t - start, quat: [q.x, q.y, q.z, q.w] })
+    }
+    if (rootBone) {
+      a.model.root.updateWorldMatrix(true, true)
+      rootBone.getWorldPosition(_wp)
+      if (!startWorld) startWorld = _wp.clone()
+      rootKeys.push({
+        time: t - start,
+        pos: [
+          basePos.x + (_wp.x - startWorld.x),
+          basePos.y + (_wp.y - startWorld.y),
+          basePos.z + (_wp.z - startWorld.z),
+        ],
+        quat: [baseQuat.x, baseQuat.y, baseQuat.z, baseQuat.w],
+      })
     }
   }
   mixer.stopAllAction()
@@ -451,7 +518,7 @@ function sampleClipRange(clip, fps, startTime, endTime, prune = true) {
       if (!moves) delete tracks[boneName]
     }
   }
-  return { tracks, duration: span }
+  return { tracks, duration: span, root: rootKeys }
 }
 
 // Build the in-app clip from the full keyframe data (bone tracks + root motion

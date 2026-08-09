@@ -32,6 +32,14 @@ const o = {
   undoStack: [],
   redoStack: [],
   dragBefore: null, // selected root's TRS at gizmo-drag start
+  onMoveCommit: null, // (root) => void — fired after a gizmo drag actually changes a root's TRS
+}
+
+// Register a callback fired whenever a move/rotate/scale drag finishes having
+// actually changed something. Used for "auto-key movement" — automatically
+// saving a root-motion keyframe when the character is dragged mid-clip.
+export function setOnObjectMoveCommit(fn) {
+  o.onMoveCommit = fn || null
 }
 
 const UNDO_LIMIT = 100
@@ -363,8 +371,11 @@ function pushUndoIfChanged(root, before) {
 
 function commitDragUndo() {
   if (!o.selected || !o.dragBefore) return
-  pushUndoIfChanged(o.selected, o.dragBefore)
+  const before = o.dragBefore
+  const root = o.selected
+  pushUndoIfChanged(root, before)
   o.dragBefore = null
+  if (o.onMoveCommit && !sameSnapshot(before, snapshot(root))) o.onMoveCommit(root)
 }
 
 // --- Full project save (props + images WITH their source file blobs) ---------

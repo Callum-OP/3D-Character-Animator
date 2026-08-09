@@ -36,6 +36,20 @@ import { getObjectRoots } from '../three/objects.js'
 
 // Collect every keyframe time across joints, the character position, parts and
 // cameras, with a count of what's keyed at each — for the overview/manage list.
+// True if a captured root-motion track actually goes anywhere (beyond float
+// noise) — used to tell "this clip really does walk" apart from "there was
+// nothing to preserve".
+function rootTravels(keys) {
+  if (!keys || keys.length < 2) return false
+  const first = keys[0].pos
+  let maxDist = 0
+  for (const k of keys) {
+    const d = Math.hypot(k.pos[0] - first[0], k.pos[1] - first[1], k.pos[2] - first[2])
+    if (d > maxDist) maxDist = d
+  }
+  return maxDist > 0.01
+}
+
 function collectKeyframes(animData) {
   const map = new Map()
   const entry = (t) => {
@@ -117,6 +131,8 @@ export default function AnimationPanel() {
   const activeClipName = useStore((s) => s.activeClipName)
   const loop = useStore((s) => s.loop)
   const speed = useStore((s) => s.speed)
+  const rippleRootEdit = useStore((s) => s.rippleRootEdit)
+  const autoKeyMovement = useStore((s) => s.autoKeyMovement)
   const duration = useStore((s) => s.duration)
   const currentTime = useStore((s) => s.currentTime)
 
@@ -144,6 +160,10 @@ export default function AnimationPanel() {
   const [ragdollMsg, setRagdollMsg] = useState(null) // feedback after a ragdoll bake
   const [renameOpen, setRenameOpen] = useState(false)
   const [renameText, setRenameText] = useState('')
+  // "Keep original movement" — when baking a clip (e.g. mocap) to editable
+  // keyframes, also carry over the root/hip's world travel so a walk clip
+  // doesn't end up walking on the spot once it's editable.
+  const [preserveMotion, setPreserveMotion] = useState(true)
   // When a BVH is parsed, this holds the mapping editor state until the user
   // confirms (Retarget) or cancels: { name, sourceBones, targetBones, slots }.
   const [mapping, setMapping] = useState(null)
@@ -343,10 +363,12 @@ export default function AnimationPanel() {
     const tr = getCharacterRootTransform()
     if (!tr) return
     const t = snap(insertTime)
-    st().addRootKeyframe(t, tr.pos, tr.quat)
+    st().addRootKeyframe(t, tr.pos, tr.quat, rippleRootEdit)
     const n = (animData.root ? animData.root.filter((k) => k.time !== t).length : 0) + 1
     setKfMsg(
-      `Saved the character's position at ${t.toFixed(2)}s (${n} total). Move the character in Objects at a different time and save again — it'll glide between them on Play.`,
+      rippleRootEdit
+        ? `Saved the character's position at ${t.toFixed(2)}s (${n} total) and carried that same shift onto every later position key.`
+        : `Saved the character's position at ${t.toFixed(2)}s (${n} total). Move the character in Objects at a different time and save again — it'll glide between them on Play.`,
     )
   }
 
@@ -500,15 +522,27 @@ export default function AnimationPanel() {
 
   function onBake() {
     if (!activeClipName) return
-    const res = bakeClipToTracks(activeClipName, animFps, duration || undefined)
+    const res = bakeClipToTracks(activeClipName, animFps, duration || undefined, preserveMotion)
     if (!res) return
-    // Only replace the bone tracks — setAnimData does a full replace, so
-    // passing just { tracks } would silently wipe root motion, mesh/morph
-    // keys, and any camera keys/cuts already set up on this timeline.
-    st().setAnimData({ ...animData, tracks: res.tracks })
+    // Guard against a capture that found no real travel (e.g. a clip with no
+    // position data to preserve) silently wiping out root keys the user
+    // already set up by hand — only treat the bake as "kept the movement"
+    // when it actually moved by a meaningful amount.
+    const gotRoot = preserveMotion && res.root && res.root.length > 1 && rootTravels(res.root)
+    // Only replace the bone tracks (and, if captured, root motion) —
+    // setAnimData does a full replace, so passing just { tracks } would
+    // silently wipe mesh/morph keys and any camera keys/cuts already set up
+    // on this timeline.
+    st().setAnimData({ ...animData, tracks: res.tracks, root: gotRoot ? res.root : animData.root })
     st().setAnimDuration(res.duration)
     onSourceChange('edit')
-    setBvhMsg(`Baked ${Object.keys(res.tracks).length} moving track(s) to keyframes.`)
+    setBvhMsg(
+      gotRoot
+        ? `Baked ${Object.keys(res.tracks).length} moving track(s) to keyframes, plus its original movement (${res.root.length} root key(s)) — it'll still walk forward.`
+        : preserveMotion
+          ? `Baked ${Object.keys(res.tracks).length} moving track(s) to keyframes. No root/hip travel was found in this clip to carry over.`
+          : `Baked ${Object.keys(res.tracks).length} moving track(s) to keyframes.`,
+    )
   }
 
   // Bridge back the other way: turn what you've keyframed in "Make your own"
@@ -768,6 +802,19 @@ export default function AnimationPanel() {
                 Edit keyframes
               </button>
             </div>
+          )}
+          {activeClipName && hasBones && (
+            <label
+              style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, fontSize: 12 }}
+              title="Also carry over the clip's original forward/side movement (e.g. a walk's steps) as root-motion keyframes, so it doesn't walk on the spot once it's editable. Turn off to bake rotation only, in place."
+            >
+              <input
+                type="checkbox"
+                checked={preserveMotion}
+                onChange={(e) => setPreserveMotion(e.target.checked)}
+              />
+              Keep original movement when editing
+            </label>
           )}
 
           <button
@@ -1230,6 +1277,30 @@ export default function AnimationPanel() {
           >
             Keyframe position {animData.root && animData.root.length ? `(${animData.root.length})` : ''}
           </button>
+
+          <label
+            style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, fontSize: 12 }}
+            title="When saving a position keyframe, shift every LATER position key by the same amount — so moving the character mid-clip carries the rest of the movement along with it instead of leaving it behind."
+          >
+            <input
+              type="checkbox"
+              checked={rippleRootEdit}
+              onChange={(e) => st().setRippleRootEdit(e.target.checked)}
+            />
+            Carry this move onto later frames
+          </label>
+
+          <label
+            style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, fontSize: 12 }}
+            title="Automatically save a position keyframe whenever you drag the character with the move gizmo, at whatever time the playhead is on — makes the clip's movement your own without needing to press Keyframe position every time."
+          >
+            <input
+              type="checkbox"
+              checked={autoKeyMovement}
+              onChange={(e) => st().setAutoKeyMovement(e.target.checked)}
+            />
+            Auto-save movement when I move the character
+          </label>
 
           {kfMsg && <div className="pose-msg">{kfMsg}</div>}
 

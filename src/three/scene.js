@@ -98,6 +98,7 @@ import {
   resetObject,
   disposeObjects,
   setCharacterObject,
+  setOnObjectMoveCommit,
   clearCharacterObject,
   getObjectsData,
   applyObjectsData,
@@ -282,6 +283,18 @@ export function initScene(container) {
 
   // --- Scene objects (props / backgrounds with a move/rotate/scale gizmo) ---
   initObjects({ scene, camera, renderer, controls, requestRender })
+  // "Auto-save movement": when the toggle is on and the object being dragged
+  // is the active character, drop a root-motion keyframe at the playhead —
+  // makes a mocap/borrowed clip "your own" without a separate manual step.
+  setOnObjectMoveCommit((root) => {
+    const st = useStore.getState()
+    if (!st.autoKeyMovement) return
+    if (!state.currentModel || root !== state.currentModel.root) return
+    const fps = st.animFps || 24
+    const raw = st.currentTime || 0
+    const t = Math.round(raw * fps) / fps
+    st.addRootKeyframe(t, root.position.toArray(), root.quaternion.toArray(), st.rippleRootEdit)
+  })
 
   // --- Placeable cameras (frame shots, look through them, keyframe them) ---
   initCameras({
