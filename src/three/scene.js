@@ -1071,6 +1071,8 @@ function collectSettings() {
     lightIntensity: s.lightIntensity,
     lightAzimuth: s.lightAzimuth,
     lightElevation: s.lightElevation,
+    envLightingEnabled: s.envLightingEnabled,
+    envLightingIntensity: s.envLightingIntensity,
     outlineEnabled: s.outlineEnabled,
     outlineWidth: s.outlineWidth,
     softenEnabled: s.softenEnabled,
@@ -1253,6 +1255,7 @@ export async function applyProjectData(record) {
   const patch = {}
   for (const k of [
     'materialMode', 'toonSteps', 'lightIntensity', 'lightAzimuth', 'lightElevation',
+    'envLightingEnabled', 'envLightingIntensity',
     'outlineEnabled', 'outlineWidth', 'softenEnabled', 'softenAmount',
     'showGrid', 'showGround', 'limbLimits', 'solidBackground', 'backgroundColor', 'showShadow', 'shadowMapping',
     'animFps', 'animDuration',
