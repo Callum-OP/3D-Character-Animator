@@ -33,6 +33,8 @@ export default function MaterialPanel() {
   const lightIntensity = useStore((s) => s.lightIntensity)
   const lightAzimuth = useStore((s) => s.lightAzimuth)
   const lightElevation = useStore((s) => s.lightElevation)
+  const envLightingEnabled = useStore((s) => s.envLightingEnabled)
+  const envLightingIntensity = useStore((s) => s.envLightingIntensity)
 
   const outlineEnabled = useStore((s) => s.outlineEnabled)
   const outlineWidth = useStore((s) => s.outlineWidth)
@@ -45,6 +47,8 @@ export default function MaterialPanel() {
   const setLightIntensity = useStore((s) => s.setLightIntensity)
   const setLightAzimuth = useStore((s) => s.setLightAzimuth)
   const setLightElevation = useStore((s) => s.setLightElevation)
+  const setEnvLightingEnabled = useStore((s) => s.setEnvLightingEnabled)
+  const setEnvLightingIntensity = useStore((s) => s.setEnvLightingIntensity)
   const setOutlineEnabled = useStore((s) => s.setOutlineEnabled)
   const setOutlineWidth = useStore((s) => s.setOutlineWidth)
   const setSoftenEnabled = useStore((s) => s.setSoftenEnabled)
@@ -146,6 +150,34 @@ export default function MaterialPanel() {
           onChange={setLightElevation}
           format={(v) => v + '°'}
         />
+      </div>
+
+      <div className={'light-controls' + (materialMode === 'standard' ? '' : ' disabled')}>
+        <label className="toggle-row" style={{ padding: 0 }}>
+          <input
+            type="checkbox"
+            checked={envLightingEnabled}
+            disabled={materialMode !== 'standard'}
+            onChange={(e) => setEnvLightingEnabled(e.target.checked)}
+          />
+          Studio environment lighting
+        </label>
+
+        <Slider
+          label="Strength"
+          min={0}
+          max={2}
+          step={0.05}
+          value={envLightingIntensity}
+          disabled={materialMode !== 'standard' || !envLightingEnabled}
+          onChange={setEnvLightingIntensity}
+          format={(v) => v.toFixed(2)}
+        />
+        <div className="radio-hint" style={{ marginTop: 2 }}>
+          {materialMode === 'standard'
+            ? 'Soft all-round studio fill (like Blender\u2019s Material Preview) so the character reads well from every angle, even without extra lights.'
+            : 'Only affects Realistic mode.'}
+        </div>
       </div>
 
       <div className="light-controls">

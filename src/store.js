@@ -262,6 +262,15 @@ export const useStore = create((set) => ({
   setLightAzimuth: (lightAzimuth) => set({ lightAzimuth }),
   setLightElevation: (lightElevation) => set({ lightElevation }),
 
+  // ---- Environment (studio HDRI-style) fill lighting — Standard mode only,
+  // like Blender's Material Preview viewport shading. Off by default so it
+  // never changes an existing project's look until turned on. ----
+  envLightingEnabled: false,
+  envLightingIntensity: 1.0,
+
+  setEnvLightingEnabled: (envLightingEnabled) => set({ envLightingEnabled }),
+  setEnvLightingIntensity: (envLightingIntensity) => set({ envLightingIntensity }),
+
   // ---- Outline (inverted-hull, works in every material mode) ----
   outlineEnabled: false,
   outlineWidth: 0.003, // screen-space thickness; starts very thin

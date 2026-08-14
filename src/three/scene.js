@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { loadModel, disposeObject } from './loadModel.js'
 import {
   recordOriginalMaterials,
@@ -138,6 +139,9 @@ const state = {
   dirLight: null,
   ambientLight: null,
   lightDir: new THREE.Vector3(0.3, 0.6, 0.7), // unit direction to the key light
+  pmremGenerator: null,
+  envMap: null, // baked studio-room environment texture, for IBL fill lighting
+  envLightingOn: false,
   modelCenter: new THREE.Vector3(0, 1, 0),
   modelRadius: 1, // ~max model dimension, for light distance + shadow camera
 
@@ -208,6 +212,18 @@ export function initScene(container) {
   const scene = new THREE.Scene()
   // No scene.background => transparent by default. Toggled on via setBackground.
   state.scene = scene
+
+  // --- Environment (studio) lighting ---
+  // A soft, neutral studio-room environment map baked once via PMREM, used as
+  // image-based fill lighting — the same idea as Blender's "Material Preview"
+  // viewport shading, which lights the scene with a generic studio HDRI so
+  // nothing ever looks unlit/flat even before any lights are placed. It only
+  // affects materials that read scene.environment (Standard mode); Toon/Unlit
+  // are untouched. Off by default so it never changes an existing project's
+  // look — see setEnvironmentLighting.
+  const pmremGenerator = new THREE.PMREMGenerator(renderer)
+  state.pmremGenerator = pmremGenerator
+  state.envMap = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture
 
   // --- Camera ---
   const camera = new THREE.PerspectiveCamera(45, width / height, 0.01, 1000)
@@ -399,6 +415,7 @@ export function initScene(container) {
   setGroundVisible(s.showGround)
   setBackground(s.solidBackground, s.backgroundColor)
   setLightSettings(s.lightIntensity, s.lightAzimuth, s.lightElevation)
+  setEnvironmentLighting(s.envLightingEnabled, s.envLightingIntensity)
   setOutlineEnabled(s.outlineEnabled)
   setShadowVisible(s.showShadow)
   setShadowMapping(s.shadowMapping)
@@ -1513,6 +1530,18 @@ export function setLightSettings(intensity, azimuthDeg, elevationDeg) {
   requestRender()
 }
 
+// Toggle the baked studio-room environment map used as image-based fill
+// light (Blender "Material Preview"-style HDRI). `intensity` scales it via
+// Scene.environmentIntensity — the key/ambient lights above are unaffected,
+// so this only adds soft all-round fill + reflections on top of them.
+export function setEnvironmentLighting(enabled, intensity = 1) {
+  if (!state.scene) return
+  state.envLightingOn = !!enabled
+  state.scene.environment = enabled ? state.envMap : null
+  state.scene.environmentIntensity = intensity
+  requestRender()
+}
+
 // ---------------------------------------------------------------------------
 // Teardown (called when the Viewport unmounts)
 // ---------------------------------------------------------------------------
@@ -1557,6 +1586,14 @@ export function disposeScene() {
     state.shadowReceiver.geometry.dispose()
     state.shadowReceiver.material.dispose()
     state.shadowReceiver = null
+  }
+  if (state.envMap) {
+    state.envMap.dispose()
+    state.envMap = null
+  }
+  if (state.pmremGenerator) {
+    state.pmremGenerator.dispose()
+    state.pmremGenerator = null
   }
   if (state.renderer) {
     state.renderer.dispose()

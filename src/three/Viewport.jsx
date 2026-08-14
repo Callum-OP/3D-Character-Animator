@@ -10,6 +10,7 @@ import {
   setShadowMapping,
   applyModelMaterials,
   setLightSettings,
+  setEnvironmentLighting,
   setOutlineToggle,
   setViewCameraById,
 } from './scene.js'
@@ -106,6 +107,13 @@ export default function Viewport() {
   useEffect(() => {
     setLightSettings(lightIntensity, lightAzimuth, lightElevation)
   }, [lightIntensity, lightAzimuth, lightElevation])
+
+  const envLightingEnabled = useStore((s) => s.envLightingEnabled)
+  const envLightingIntensity = useStore((s) => s.envLightingIntensity)
+
+  useEffect(() => {
+    setEnvironmentLighting(envLightingEnabled, envLightingIntensity)
+  }, [envLightingEnabled, envLightingIntensity])
 
   const outlineEnabled = useStore((s) => s.outlineEnabled)
 
