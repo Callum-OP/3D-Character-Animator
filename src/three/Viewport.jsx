@@ -95,10 +95,23 @@ export default function Viewport() {
   const softenAmount = useStore((s) => s.softenAmount)
   const meshOverrides = useStore((s) => s.meshOverrides)
   const outlineWidth = useStore((s) => s.outlineWidth)
+  const rimLightEnabled = useStore((s) => s.rimLightEnabled)
+  const rimLightIntensity = useStore((s) => s.rimLightIntensity)
+  const rimLightColor = useStore((s) => s.rimLightColor)
 
   useEffect(() => {
     applyModelMaterials()
-  }, [materialMode, toonSteps, softenEnabled, softenAmount, meshOverrides, outlineWidth])
+  }, [
+    materialMode,
+    toonSteps,
+    softenEnabled,
+    softenAmount,
+    meshOverrides,
+    outlineWidth,
+    rimLightEnabled,
+    rimLightIntensity,
+    rimLightColor,
+  ])
 
   const lightIntensity = useStore((s) => s.lightIntensity)
   const lightAzimuth = useStore((s) => s.lightAzimuth)

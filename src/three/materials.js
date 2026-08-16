@@ -38,6 +38,12 @@ const SOFT_FLOOR = 0.55
 // so dragging the soften slider reuses a bounded set of ramps.
 const gradientCache = new Map()
 
+// Soft (non-banded) ramps for the 'soft' anime mode — same idea but LinearFilter
+// + a high sample count, so the diffuse term blends smoothly instead of
+// stepping. This is what gives that gentle "soft-shaded anime" look (a wide,
+// airbrushed shadow edge) instead of hard cel bands. Cached separately by floor.
+const softGradientCache = new Map()
+
 // Build a stepped grayscale ramp used as MeshToonMaterial.gradientMap. The toon
 // shader samples this at (N·L * 0.5 + 0.5) and reads the red channel, so a small
 // N-wide NearestFilter texture quantises the diffuse term into N hard bands.
@@ -64,6 +70,124 @@ export function getGradientMap(steps, floor) {
 
   gradientCache.set(key, tex)
   return tex
+}
+
+// Build a SMOOTH ramp (Linear-filtered, many samples) for 'soft' anime mode.
+// `floor` still lifts the dark end, but there are no hard bands — the transition
+// from lit to shadow is a gentle gradient, like typical soft-cel VTuber/anime
+// shading rather than sharp manga cel bands.
+function getSoftGradientMap(floor) {
+  const fq = Math.round(floor * 20) / 20
+  if (softGradientCache.has(fq)) return softGradientCache.get(fq)
+
+  const steps = 64
+  const data = new Uint8Array(steps)
+  const base = Math.round(fq * 255)
+  for (let i = 0; i < steps; i++) {
+    const t = i / (steps - 1)
+    // Ease the curve slightly (smoothstep) so the mid-tones linger a touch
+    // longer, which reads as softer than a straight lerp.
+    const e = t * t * (3 - 2 * t)
+    data[i] = Math.round(base + (255 - base) * e)
+  }
+
+  const tex = new THREE.DataTexture(data, steps, 1, THREE.RedFormat)
+  tex.minFilter = THREE.LinearFilter // smooth blend between samples
+  tex.magFilter = THREE.LinearFilter
+  tex.generateMipmaps = false
+  tex.needsUpdate = true
+
+  softGradientCache.set(fq, tex)
+  return tex
+}
+
+// ---------------------------------------------------------------------------
+// Rim light — a cheap fresnel-style edge highlight injected into the toon/soft
+// shaders via onBeforeCompile. Helps stylised materials read against busy
+// backgrounds and gives anime-style shading its characteristic glowing edge,
+// without needing an extra scene light. The shader chunk is always present on
+// toon/soft materials (cache key never changes); intensity is a live uniform
+// so sliders can update it without a shader recompile.
+// ---------------------------------------------------------------------------
+
+function installRimLight(material) {
+  material.userData.rimIntensity = material.userData.rimIntensity || 0
+  material.userData.rimColor = material.userData.rimColor || new THREE.Color(0xffffff)
+  material.userData.rimLightDir = material.userData.rimLightDir || new THREE.Vector3(0.3, 0.6, 0.7)
+  // Stable cache key: the injected code never changes, only the uniforms do,
+  // so every toon/soft material can safely share one compiled program variant.
+  material.customProgramCacheKey = () => 'charanim-rim-v2'
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.rimIntensity = { value: material.userData.rimIntensity }
+    shader.uniforms.rimColor = { value: material.userData.rimColor }
+    shader.uniforms.rimLightDir = { value: material.userData.rimLightDir }
+
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        '#include <common>\nvarying vec3 vRimView;\nvarying vec3 vRimLightDir;\nuniform vec3 rimLightDir;',
+      )
+      .replace(
+        '#include <project_vertex>',
+        `#include <project_vertex>
+        vRimView = normalize( -mvPosition.xyz );
+        // Light direction into view space, so it lines up with vNormal (also
+        // view-space) regardless of the model's own rotation.
+        vRimLightDir = normalize( ( viewMatrix * vec4( rimLightDir, 0.0 ) ).xyz );`,
+      )
+
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        '#include <common>\nvarying vec3 vRimView;\nvarying vec3 vRimLightDir;\nuniform float rimIntensity;\nuniform vec3 rimColor;',
+      )
+      .replace(
+        '#include <dithering_fragment>',
+        `
+        #ifdef USE_NORMALMAP
+          vec3 rimNormal = normal;
+        #else
+          vec3 rimNormal = normalize( vNormal );
+        #endif
+        // View-dependent edge term (classic fresnel rim)...
+        float rimEdge = 1.0 - max( dot( vRimView, rimNormal ), 0.0 );
+        rimEdge = pow( clamp( rimEdge, 0.0, 1.0 ), 2.5 );
+        // ...gated so it only shows on the side of the model actually facing
+        // the key light — a shoulder catches the glow, the far/shadowed side
+        // doesn't, just like a real backlit rim highlight.
+        float rimLit = smoothstep( -0.2, 0.25, dot( rimNormal, vRimLightDir ) );
+        float rimFactor = rimEdge * rimLit;
+        gl_FragColor.rgb += rimColor * rimFactor * rimIntensity;
+        #include <dithering_fragment>`,
+      )
+
+    // Keep a handle so later calls can update the uniform live, no recompile.
+    material.userData.rimUniforms = shader.uniforms
+  }
+  material.needsUpdate = true
+}
+
+// Push new rim settings onto an already-built toon/soft material (works before
+// or after its first compile — pre-compile it just seeds the values the
+// onBeforeCompile hook above will read).
+function updateRimLight(material, enabled, intensity, color, lightDir) {
+  const arr = Array.isArray(material) ? material : [material]
+  for (const m of arr) {
+    if (!m || !m.userData) continue
+    const amount = enabled ? intensity : 0
+    if (!m.userData.rimColor) m.userData.rimColor = new THREE.Color()
+    m.userData.rimColor.set(color)
+    m.userData.rimIntensity = amount
+    if (lightDir) {
+      if (!m.userData.rimLightDir) m.userData.rimLightDir = new THREE.Vector3()
+      m.userData.rimLightDir.copy(lightDir)
+    }
+    if (m.userData.rimUniforms) {
+      m.userData.rimUniforms.rimIntensity.value = amount
+      m.userData.rimUniforms.rimColor.value = m.userData.rimColor
+      if (lightDir) m.userData.rimUniforms.rimLightDir.value = m.userData.rimLightDir
+    }
+  }
 }
 
 // Record the as-loaded materials so mode switches stay non-destructive, and set
@@ -108,14 +232,18 @@ export function normalizeTransparency(material) {
  *
  * @param {object} model  parsed model with .meshes + .materials
  * @param {object} opts
- * @param {'unlit'|'toon'|'standard'} opts.mode
- * @param {number} [opts.toonSteps]  shadow band count
+ * @param {'unlit'|'toon'|'soft'|'standard'} opts.mode
+ * @param {number} [opts.toonSteps]  shadow band count (Cartoon mode only)
  * @param {number} [opts.soften]     global shadow lift, 0..1
  * @param {object} [opts.overrides]  { [mesh.uuid]: { outline?, shading? } }
+ * @param {object} [opts.rimLight]   { enabled, intensity, color, direction } edge
+ *                                    highlight for Cartoon/Soft Anime modes;
+ *                                    direction is a world-space THREE.Vector3
+ *                                    pointing toward the key light
  */
 export function applyMaterials(model, opts) {
   if (!model || !model.materials) return
-  const { mode, toonSteps = 3, soften = 0, overrides = {} } = opts
+  const { mode, toonSteps = 3, soften = 0, overrides = {}, rimLight } = opts
   const store = model.materials
 
   for (const mesh of model.meshes) {
@@ -136,11 +264,23 @@ export function applyMaterials(model, opts) {
       mesh.material = original
       continue
     }
-    // Toon: reuse the cached toon material and (re)assign its gradient ramp.
-    // 'soft' meshes get a floored (gentler) ramp on top of the global soften.
+    // Cartoon (hard cel bands) and Soft Anime (smooth painterly ramp) both
+    // reuse the same generated MeshToonMaterial — only the gradient texture
+    // assigned to it differs. 'soft' shading meshes get a floored (gentler)
+    // ramp stacked on top of the global soften amount.
     const floor = shading === 'soft' ? Math.max(soften, SOFT_FLOOR) : soften
     const toonMat = getOrBuild(store.toon, mesh, original, buildToon)
-    assignGradient(toonMat, toonSteps, floor)
+    const arr = Array.isArray(toonMat) ? toonMat : [toonMat]
+    if (mode === 'soft') {
+      assignGradient(toonMat, null, floor, true)
+    } else {
+      assignGradient(toonMat, toonSteps, floor, false)
+    }
+    if (rimLight) {
+      for (const m of arr) {
+        updateRimLight(m, rimLight.enabled, rimLight.intensity, rimLight.color, rimLight.direction)
+      }
+    }
     mesh.material = toonMat
   }
 }
@@ -178,9 +318,11 @@ function getOrBuild(cache, mesh, original, build) {
 }
 
 // Assign a shared gradient ramp to a (possibly multi-) toon material.
-function assignGradient(material, steps, floor) {
+// `smooth` picks the linear-filtered soft-anime ramp instead of the hard-
+// stepped cel ramp; `steps` is ignored when `smooth` is true.
+function assignGradient(material, steps, floor, smooth) {
   const arr = Array.isArray(material) ? material : [material]
-  const grad = getGradientMap(steps, floor)
+  const grad = smooth ? getSoftGradientMap(floor) : getGradientMap(steps, floor)
   for (const m of arr) {
     if (m.gradientMap !== grad) {
       m.gradientMap = grad
@@ -205,6 +347,7 @@ function buildToon(src) {
   if (src.emissiveMap) m.emissiveMap = src.emissiveMap
   if (src.emissiveIntensity != null) m.emissiveIntensity = src.emissiveIntensity
   if (src.normalMap) m.normalMap = src.normalMap
+  installRimLight(m) // adds the optional fresnel edge highlight, off by default
   m.needsUpdate = true
   return m
 }

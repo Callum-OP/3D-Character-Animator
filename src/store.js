@@ -247,11 +247,23 @@ export const useStore = create((set) => ({
   // ---- Material mode ----
   // 'unlit' is the default: raw base colour, no lighting — matches Blender's
   // flat colours exactly and side-steps FBX lighting artifacts.
-  materialMode: 'unlit', // 'unlit' | 'toon' | 'standard'
-  toonSteps: 3, // number of shadow bands in toon mode
+  materialMode: 'unlit', // 'unlit' | 'toon' | 'soft' | 'standard'
+  toonSteps: 3, // number of shadow bands in toon (Cartoon) mode
 
   setMaterialMode: (materialMode) => set({ materialMode }),
   setToonSteps: (toonSteps) => set({ toonSteps }),
+
+  // ---- Rim (edge) light — Cartoon / Soft Anime modes only ----
+  // A cheap fresnel highlight around silhouettes; helps stylised characters
+  // "pop" and is a big part of the classic anime look. Off by default so
+  // existing projects render unchanged.
+  rimLightEnabled: false,
+  rimLightIntensity: 0.6,
+  rimLightColor: '#ffffff',
+
+  setRimLightEnabled: (rimLightEnabled) => set({ rimLightEnabled }),
+  setRimLightIntensity: (rimLightIntensity) => set({ rimLightIntensity }),
+  setRimLightColor: (rimLightColor) => set({ rimLightColor }),
 
   // ---- Key light (affects Toon/Standard modes only; ignored by Unlit) ----
   lightIntensity: 2.0,
@@ -285,6 +297,13 @@ export const useStore = create((set) => ({
 
   setSoftenEnabled: (softenEnabled) => set({ softenEnabled }),
   setSoftenAmount: (softenAmount) => set({ softenAmount }),
+
+  // Apply a bundled "Style" preset (see STYLE_PRESETS in MaterialPanel.jsx) —
+  // one atomic update covering material mode, lighting and outline, so the
+  // viewport doesn't flash through intermediate states. Per-mesh overrides
+  // and env-lighting are deliberately left alone so a model-specific tweak
+  // (e.g. a flattened face) survives switching styles.
+  applyStylePreset: (preset) => set({ ...preset }),
 
   // Per-mesh overrides, keyed by mesh uuid: { outline: bool, shading: mode }.
   // Absent entry => defaults (outline on, 'full' shading). Cleared on load.

@@ -2,13 +2,15 @@ import { useStore } from '../store.js'
 import EditableValue from './EditableValue.jsx'
 
 // Side-panel section: material mode + key-light controls.
-// Unlit shows raw Blender colours (no lighting), Toon adds stepped anime shading,
-// Standard is the original PBR. The light sliders only affect Toon/Standard, so
-// they're disabled in Unlit mode.
+// Unlit shows raw Blender colours (no lighting), Cartoon adds stepped anime
+// shading, Soft Anime adds a smooth painterly ramp + optional rim glow,
+// Standard is the original PBR. The light sliders only affect
+// Cartoon/Soft/Standard, so they're disabled in Unlit mode.
 const MODES = [
   { value: 'unlit', label: 'Flat colour', hint: 'Exact colours, no lighting' },
-  { value: 'toon', label: 'Cartoon', hint: 'Anime-style stepped shading' },
-  { value: 'standard', label: 'Realistic', hint: 'Full 3D lighting' },
+  { value: 'toon', label: 'Cartoon', hint: 'Hard-edged anime cel shading' },
+  { value: 'soft', label: 'Soft Anime', hint: 'Smooth, gentle anime shading' },
+  { value: 'standard', label: 'Realistic', hint: 'Full 3D PBR lighting' },
 ]
 
 const TOON_STEP_OPTIONS = [2, 3, 4, 5]
@@ -26,6 +28,128 @@ const LIGHT_PRESETS = [
   { label: 'Top', az: 15, el: 80 },
 ]
 
+// ---------------------------------------------------------------------------
+// Style presets — one-click bundles of material mode + lighting + outline +
+// rim light, tuned for different model styles. These exist because the raw
+// sliders are powerful but fiddly to combine well; picking a preset gets you
+// most of the way there, and every field it sets is still a normal slider
+// underneath, so it's just a starting point, not a locked-in look.
+// Deliberately DON'T touch envLightingEnabled's off-by-default meaning for
+// Unlit/Cartoon/Soft styles (it only matters in Realistic) or per-mesh
+// overrides, so switching styles never clobbers a model-specific fix.
+// ---------------------------------------------------------------------------
+export const STYLE_PRESETS = [
+  {
+    label: 'Flat Colour',
+    hint: 'Exact Blender colours, no shading at all.',
+    config: {
+      materialMode: 'unlit',
+      outlineEnabled: false,
+      softenEnabled: false,
+      rimLightEnabled: false,
+    },
+  },
+  {
+    label: 'Crisp Cel',
+    hint: 'Bold 2–3 tone manga-style bands with a solid ink outline.',
+    config: {
+      materialMode: 'toon',
+      toonSteps: 2,
+      softenEnabled: false,
+      outlineEnabled: true,
+      outlineWidth: 0.0025,
+      rimLightEnabled: false,
+      lightIntensity: 2.2,
+      lightAzimuth: 35,
+      lightElevation: 45,
+    },
+  },
+  {
+    label: 'Soft Anime',
+    hint: 'Gentle, airbrushed shading with a soft glow at the edges — a good default for most anime-style models.',
+    config: {
+      materialMode: 'soft',
+      softenEnabled: true,
+      softenAmount: 0.3,
+      outlineEnabled: true,
+      outlineWidth: 0.0015,
+      rimLightEnabled: true,
+      rimLightIntensity: 0.5,
+      rimLightColor: '#fff2d8',
+      lightIntensity: 1.8,
+      lightAzimuth: 25,
+      lightElevation: 55,
+    },
+  },
+  {
+    label: 'Painterly',
+    hint: 'Very soft, almost hand-painted shading with no hard outline — good for rounder, softer character designs.',
+    config: {
+      materialMode: 'soft',
+      softenEnabled: true,
+      softenAmount: 0.55,
+      outlineEnabled: false,
+      rimLightEnabled: true,
+      rimLightIntensity: 0.25,
+      rimLightColor: '#ffe9c7',
+      lightIntensity: 1.5,
+      lightAzimuth: 20,
+      lightElevation: 50,
+    },
+  },
+  {
+    label: 'Toy / Figure',
+    hint: 'Bright, even product-shot lighting so the model reads clearly from every angle.',
+    config: {
+      materialMode: 'standard',
+      envLightingEnabled: true,
+      envLightingIntensity: 0.8,
+      outlineEnabled: true,
+      outlineWidth: 0.0015,
+      lightIntensity: 1.8,
+      lightAzimuth: 35,
+      lightElevation: 50,
+    },
+  },
+  {
+    label: 'Realistic Studio',
+    hint: 'Softer key light plus all-round fill, so PBR/realistic models don\u2019t get harsh, uncanny shadows across the face.',
+    config: {
+      materialMode: 'standard',
+      envLightingEnabled: true,
+      envLightingIntensity: 1.0,
+      outlineEnabled: false,
+      lightIntensity: 1.4,
+      lightAzimuth: 30,
+      lightElevation: 40,
+    },
+  },
+  {
+    label: 'Cinematic',
+    hint: 'Moody single-source side lighting with strong falloff, for dramatic renders and screenshots.',
+    config: {
+      materialMode: 'standard',
+      envLightingEnabled: true,
+      envLightingIntensity: 0.35,
+      outlineEnabled: false,
+      lightIntensity: 2.6,
+      lightAzimuth: 110,
+      lightElevation: 35,
+    },
+  },
+  {
+    label: 'Ink Outline',
+    hint: 'Flat colour with a heavy ink line and zero shading \u2014 clean manga-panel look.',
+    config: {
+      materialMode: 'unlit',
+      outlineEnabled: true,
+      outlineWidth: 0.0045,
+      softenEnabled: false,
+      rimLightEnabled: false,
+    },
+  },
+]
+
 export default function MaterialPanel() {
   const modelInfo = useStore((s) => s.modelInfo)
   const materialMode = useStore((s) => s.materialMode)
@@ -41,6 +165,9 @@ export default function MaterialPanel() {
   const softenEnabled = useStore((s) => s.softenEnabled)
   const softenAmount = useStore((s) => s.softenAmount)
   const meshOverrides = useStore((s) => s.meshOverrides)
+  const rimLightEnabled = useStore((s) => s.rimLightEnabled)
+  const rimLightIntensity = useStore((s) => s.rimLightIntensity)
+  const rimLightColor = useStore((s) => s.rimLightColor)
 
   const setMaterialMode = useStore((s) => s.setMaterialMode)
   const setToonSteps = useStore((s) => s.setToonSteps)
@@ -53,11 +180,16 @@ export default function MaterialPanel() {
   const setOutlineWidth = useStore((s) => s.setOutlineWidth)
   const setSoftenEnabled = useStore((s) => s.setSoftenEnabled)
   const setSoftenAmount = useStore((s) => s.setSoftenAmount)
+  const setRimLightEnabled = useStore((s) => s.setRimLightEnabled)
+  const setRimLightIntensity = useStore((s) => s.setRimLightIntensity)
+  const setRimLightColor = useStore((s) => s.setRimLightColor)
   const setMeshOutline = useStore((s) => s.setMeshOutline)
   const setMeshShading = useStore((s) => s.setMeshShading)
   const setMeshVisible = useStore((s) => s.setMeshVisible)
+  const applyStylePreset = useStore((s) => s.applyStylePreset)
 
-  const lit = materialMode !== 'unlit' // lights only matter for toon/standard
+  const lit = materialMode !== 'unlit' // lights only matter for toon/soft/standard
+  const rimCapable = materialMode === 'toon' || materialMode === 'soft'
   const meshes = modelInfo?.meshes || []
 
   function applyLightPreset(p) {
@@ -69,6 +201,26 @@ export default function MaterialPanel() {
     <div className="panel">
       <h2>Look</h2>
       <p className="panel-hint">Choose how the character is shaded and outlined.</p>
+
+      <div className="field">
+        <label className="field-label">Style presets</label>
+        <div className="preset-row" style={{ flexWrap: 'wrap' }}>
+          {STYLE_PRESETS.map((p) => (
+            <button
+              key={p.label}
+              className="preset-btn"
+              title={p.hint}
+              onClick={() => applyStylePreset(p.config)}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+        <div className="radio-hint" style={{ marginTop: 2 }}>
+          One-click starting points — every setting they change is still a normal
+          control below, so feel free to tweak after picking one.
+        </div>
+      </div>
 
       <div className="radio-group">
         {MODES.map((m) => (
@@ -102,9 +254,46 @@ export default function MaterialPanel() {
         </div>
       )}
 
+      <div className={'light-controls' + (rimCapable ? '' : ' disabled')}>
+        <label className="toggle-row" style={{ padding: 0 }}>
+          <input
+            type="checkbox"
+            checked={rimLightEnabled}
+            disabled={!rimCapable}
+            onChange={(e) => setRimLightEnabled(e.target.checked)}
+          />
+          Rim light
+        </label>
+
+        <Slider
+          label="Strength"
+          min={0}
+          max={1.5}
+          step={0.05}
+          value={rimLightIntensity}
+          disabled={!rimCapable || !rimLightEnabled}
+          onChange={setRimLightIntensity}
+          format={(v) => v.toFixed(2)}
+        />
+        <label className="slider-row">
+          <span className="slider-label">Colour</span>
+          <input
+            type="color"
+            value={rimLightColor}
+            disabled={!rimCapable || !rimLightEnabled}
+            onChange={(e) => setRimLightColor(e.target.value)}
+          />
+        </label>
+        <div className="radio-hint" style={{ marginTop: 2 }}>
+          {rimCapable
+            ? 'A soft edge glow around the silhouette \u2014 classic anime look, and helps the character stand out from busy backgrounds.'
+            : 'Only affects Cartoon / Soft Anime modes.'}
+        </div>
+      </div>
+
       <div className={'light-controls' + (lit ? '' : ' disabled')}>
         <div className="field-label" style={{ marginTop: 4 }}>
-          Light {lit ? '' : '(only affects Cartoon / Realistic)'}
+          Light {lit ? '' : '(only affects Cartoon / Soft Anime / Realistic)'}
         </div>
 
         <div className="preset-row">

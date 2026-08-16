@@ -1068,6 +1068,9 @@ function collectSettings() {
   return {
     materialMode: s.materialMode,
     toonSteps: s.toonSteps,
+    rimLightEnabled: s.rimLightEnabled,
+    rimLightIntensity: s.rimLightIntensity,
+    rimLightColor: s.rimLightColor,
     lightIntensity: s.lightIntensity,
     lightAzimuth: s.lightAzimuth,
     lightElevation: s.lightElevation,
@@ -1254,7 +1257,8 @@ export async function applyProjectData(record) {
   }
   const patch = {}
   for (const k of [
-    'materialMode', 'toonSteps', 'lightIntensity', 'lightAzimuth', 'lightElevation',
+    'materialMode', 'toonSteps', 'rimLightEnabled', 'rimLightIntensity', 'rimLightColor',
+    'lightIntensity', 'lightAzimuth', 'lightElevation',
     'envLightingEnabled', 'envLightingIntensity',
     'outlineEnabled', 'outlineWidth', 'softenEnabled', 'softenAmount',
     'showGrid', 'showGround', 'limbLimits', 'solidBackground', 'backgroundColor', 'showShadow', 'shadowMapping',
@@ -1489,6 +1493,12 @@ export function applyModelMaterials() {
     toonSteps: s.toonSteps,
     soften,
     overrides: s.meshOverrides,
+    rimLight: {
+      enabled: s.rimLightEnabled,
+      intensity: s.rimLightIntensity,
+      color: s.rimLightColor,
+      direction: state.lightDir,
+    },
   })
   // Cloth proxies live outside the model's own scene graph (see clothmod.js),
   // so applyMaterials' traversal never touches them — just rebuild any
@@ -1530,6 +1540,9 @@ export function setLightSettings(intensity, azimuthDeg, elevationDeg) {
     Math.cos(el) * Math.cos(az),
   )
   positionLight() // reposition the light + shadow camera along the new direction
+  // Rim light (Cartoon/Soft Anime) is gated by this same direction, so keep it
+  // in sync whenever the key light moves — cheap, no material rebuild.
+  applyModelMaterials()
   requestRender()
 }
 
