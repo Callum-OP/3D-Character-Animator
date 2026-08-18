@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import { disposeObject } from './loadModel.js'
+import { recordOriginalMaterials, applyMaterials, restoreOriginalMaterials, disposeGeneratedMaterials } from './materials.js'
 
 // ---------------------------------------------------------------------------
 // Scene objects
@@ -10,9 +11,12 @@ import { disposeObject } from './loadModel.js'
 // move/rotate/scale with a TransformControls gizmo. Selection is single: attach
 // the gizmo to one object at a time, cycling between them from the panel.
 //
-// These are intentionally NOT run through the material-mode/outline system — a
-// background looks best with its own materials, so we also opt them out of the
-// character's inverted-hull outline.
+// These are intentionally NOT run through the character's inverted-hull outline
+// system (a background looks best without an anime-style ink line by default —
+// outline is opt-in per object, see setObjectOutline). They DO run through the
+// same material-mode pipeline as the character (materials.js), so a prop can
+// either match the character's current style ('auto') or be pinned to its own
+// look — e.g. a photoreal background behind a toon-shaded character.
 // ---------------------------------------------------------------------------
 
 let idCounter = 0
@@ -33,6 +37,8 @@ const o = {
   redoStack: [],
   dragBefore: null, // selected root's TRS at gizmo-drag start
   onMoveCommit: null, // (root) => void — fired after a gizmo drag actually changes a root's TRS
+  gizmoGrabbed: false, // true once per interaction that actually grabbed a gizmo handle
+  lastStyleOpts: { mode: 'unlit', toonSteps: 3, soften: 0, rimLight: null }, // last scene-wide style, for 'auto' objects
 }
 
 // Register a callback fired whenever a move/rotate/scale drag finishes having
@@ -57,6 +63,7 @@ export function initObjects(refs) {
   transform.addEventListener('dragging-changed', (e) => {
     // Don't orbit while dragging; stay locked if a camera view has orbit off.
     o.controls.enabled = !e.value && !o.controls.locked
+    if (e.value) o.gizmoGrabbed = true // consumed by Viewport's empty-click deselect
   })
   transform.addEventListener('objectChange', () => o.requestRender())
   transform.addEventListener('mouseDown', () => {
@@ -99,7 +106,6 @@ export function clearAllCharacterObjects() {
 // `file` (the original File) is retained so the object can be saved to a project.
 export function addObject(parsed, name, format, file) {
   const root = parsed.root
-  excludeFromOutline(root) // props aren't part of the toon-outline look
   const meshes = []
   root.traverse((obj) => {
     if (obj.isMesh) {
@@ -110,7 +116,12 @@ export function addObject(parsed, name, format, file) {
   })
   o.scene.add(root)
   const id = ++idCounter
-  o.objects.push({
+  // Reuse the character's material-mode pipeline (materials.js) so props can
+  // be styled exactly like a character — 'auto' just means "whatever style
+  // the scene is currently using".
+  const materialModel = { meshes }
+  recordOriginalMaterials(materialModel)
+  const entry = {
     id,
     name,
     format,
@@ -118,13 +129,15 @@ export function addObject(parsed, name, format, file) {
     kind: 'model',
     file: file || null,
     meshes,
-    originalMaterials: meshes.map((m) => m.material), // for the lit/unlit toggle
-    unlitMaterials: null, // built lazily the first time lighting is turned off
-    lit: true,
+    materials: materialModel.materials,
+    style: 'auto', // 'auto' | 'unlit' | 'toon' | 'soft' | 'standard'
+    outline: false, // props default to no ink outline, even in Cartoon/Soft styles
     castShadow: true,
-  })
+  }
+  o.objects.push(entry)
+  applyObjectStyle(entry)
   o.requestRender()
-  return { id, name, format, kind: 'model', lit: true, castShadow: true }
+  return { id, name, format, kind: 'model', style: entry.style, outline: entry.outline, castShadow: true }
 }
 
 // Add an image as a movable reference plane. `map` is a loaded THREE.Texture;
@@ -176,7 +189,7 @@ export function removeObject(id) {
     o.selected = null
   }
   o.scene.remove(entry.root)
-  disposeUnattachedPropMaterials(entry)
+  disposePropMaterials(entry)
   disposeObject(entry.root)
   o.objects.splice(idx, 1)
   o.undoStack = o.undoStack.filter((b) => b.root !== entry.root)
@@ -184,24 +197,60 @@ export function removeObject(id) {
   o.requestRender()
 }
 
-// Toggle whether a prop responds to the scene's lights. Off swaps in a flat
-// MeshBasicMaterial clone (same map/colour, zero shading) — useful for a
-// backdrop or prop that should stay visually constant regardless of the light
-// rig. Only applies to model props; reference images are already unlit.
-export function setObjectLit(id, lit) {
+// Set a prop/background's look. 'auto' (the default) means "match whatever
+// style the character is currently using" — pick an explicit mode instead to
+// pin it (e.g. keep a realistic photo backdrop while the character is toon).
+export function setObjectStyle(id, style) {
   const entry = o.objects.find((e) => e.id === id && e.kind === 'model')
   if (!entry) return
-  entry.lit = lit
-  if (!lit && !entry.unlitMaterials) {
-    entry.unlitMaterials = entry.meshes.map((m) =>
-      Array.isArray(m.material) ? m.material.map(toUnlit) : toUnlit(m.material),
-    )
-  }
-  const source = lit ? entry.originalMaterials : entry.unlitMaterials
-  entry.meshes.forEach((mesh, i) => {
-    mesh.material = source[i]
-  })
+  entry.style = style
+  applyObjectStyle(entry)
   o.requestRender()
+}
+
+// Toggle the ink outline on a prop (off by default — most props/backgrounds
+// look better without the character's cel-shading outline, but it's there
+// for anything meant to read as part of the same toon look).
+export function setObjectOutline(id, outline) {
+  const entry = o.objects.find((e) => e.id === id && e.kind === 'model')
+  if (!entry) return
+  entry.outline = outline
+  applyObjectStyle(entry)
+  o.requestRender()
+}
+
+// Re-apply the current scene style (mode/toonSteps/soften/rimLight/outline
+// width) to every 'auto' prop, and re-stamp outline params on every prop —
+// called whenever the character's Look settings change, so props following
+// 'auto' track live.
+export function applyAllObjectStyles(opts) {
+  o.lastStyleOpts = opts
+  for (const entry of o.objects) {
+    if (entry.kind === 'model') applyObjectStyle(entry, opts)
+  }
+}
+
+function applyObjectStyle(entry, opts) {
+  const use = opts || o.lastStyleOpts
+  const mode = entry.style === 'auto' ? use.mode : entry.style
+  applyMaterials(
+    { meshes: entry.meshes, materials: entry.materials },
+    { mode, toonSteps: use.toonSteps, soften: use.soften, rimLight: use.rimLight },
+  )
+  const width = use.outlineWidth != null ? use.outlineWidth : 0.0025
+  for (const mesh of entry.meshes) {
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+    for (const mat of mats) {
+      if (!mat) continue
+      mat.userData.outlineParameters = {
+        thickness: width,
+        color: [0, 0, 0],
+        alpha: 1,
+        visible: entry.outline,
+        keepAlive: false,
+      }
+    }
+  }
 }
 
 // Toggle whether a prop casts shadows (it still receives them either way).
@@ -213,29 +262,14 @@ export function setObjectCastShadow(id, castShadow) {
   o.requestRender()
 }
 
-function toUnlit(mat) {
-  return new THREE.MeshBasicMaterial({
-    map: mat.map || null,
-    color: mat.color ? mat.color.clone() : new THREE.Color(0xffffff),
-    transparent: mat.transparent,
-    opacity: mat.opacity,
-    alphaTest: mat.alphaTest,
-    side: mat.side,
-    toneMapped: mat.toneMapped,
-  })
-}
-
-// Dispose whichever of the lit/unlit material sets ISN'T currently attached
-// (the attached set is disposed normally, textures and all, by disposeObject).
-// Plain .dispose() only — the shared texture is freed once, via the attached
-// set, so this must not touch it again.
-function disposeUnattachedPropMaterials(entry) {
-  if (!entry.unlitMaterials) return
-  const other = entry.lit ? entry.unlitMaterials : entry.originalMaterials
-  for (const m of other) {
-    const mats = Array.isArray(m) ? m : [m]
-    for (const mat of mats) mat.dispose()
-  }
+// Put a prop's real materials back and free the generated (toon/unlit) shells
+// before disposeObject frees geometry/materials/textures for good — mirrors
+// the character unload path in scene.js so shared textures are only disposed
+// once, via the real materials.
+function disposePropMaterials(entry) {
+  if (!entry.materials) return
+  restoreOriginalMaterials({ meshes: entry.meshes, materials: entry.materials })
+  disposeGeneratedMaterials({ meshes: entry.meshes, materials: entry.materials })
 }
 
 // Resolve an id (numeric prop id or a character id) to its root object.
@@ -261,6 +295,15 @@ export function setObjectMode(mode) {
   if (!o.transform) return
   o.transform.setMode(mode) // 'translate' | 'rotate' | 'scale'
   o.requestRender()
+}
+
+// Read (and clear) whether the most recent gizmo interaction actually grabbed
+// a handle. Used by Viewport's "click empty space to deselect" handler to
+// tell a real gizmo drag apart from a click that missed it entirely.
+export function consumeObjectGizmoGrab() {
+  const grabbed = o.gizmoGrabbed
+  o.gizmoGrabbed = false
+  return grabbed
 }
 
 // Swap the camera the gizmo works against (view-through-camera mode).
@@ -399,7 +442,8 @@ export function getObjectsForSave() {
         scale: e.root.scale.toArray(),
       },
       visible: e.root.visible,
-      lit: e.kind === 'model' ? e.lit : undefined,
+      style: e.kind === 'model' ? e.style : undefined,
+      outline: e.kind === 'model' ? e.outline : undefined,
       castShadow: e.kind === 'model' ? e.castShadow : undefined,
     }))
 }
@@ -442,7 +486,7 @@ export function disposeObjects() {
   if (o.transform) o.transform.detach()
   for (const e of o.objects) {
     if (o.scene) o.scene.remove(e.root)
-    disposeUnattachedPropMaterials(e)
+    disposePropMaterials(e)
     disposeObject(e.root)
   }
   o.objects = []

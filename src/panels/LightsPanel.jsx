@@ -129,8 +129,8 @@ export default function LightsPanel() {
           )}
 
           <div className="pose-hint">
-            Drag a light's gizmo to move it. Props/images can be set to ignore
-            all lighting (flat, unshaded) or ignore shadows from the Objects
+            Drag a light's gizmo to move it. Props can be styled (flat, cartoon,
+            soft anime, realistic) or set to ignore shadows from the Objects
             panel.
           </div>
         </>

@@ -12,6 +12,7 @@ import {
   stopAllCharacters,
 } from '../three/scene.js'
 import { exportAnimationBVH, setForceCameraCuts } from '../three/animation.js'
+import { selectLight } from '../three/lights.js'
 
 // Side-panel section: get your work out of the app — transparent PNG, a video of
 // the animation, or the in-app animation as a .bvh, plus a fullscreen view for
@@ -66,7 +67,9 @@ export default function ExportPanel() {
   const busy = recording || previewing
 
   function onPNG() {
+    const restoreGizmos = hideGizmosForShot()
     exportPNG(exportScale, name)
+    restoreGizmos()
     setMsg(`Saved a ${exportScale}× PNG.`)
   }
 
@@ -107,6 +110,42 @@ export default function ExportPanel() {
     return () => transitionViewCameraTo(prev)
   }
 
+  // Move/rotate/resize gizmos (props, cameras, lights, bones, mesh parts) are
+  // editing UI, not part of the shot — hide whatever's selected before a
+  // preview/recording starts, and bring it back after so the selection isn't
+  // lost. Store-driven selections (object/camera/bone/mesh) clear themselves
+  // through Viewport's reactive effects; the light gizmo is driven directly,
+  // so it's cleared here too.
+  function hideGizmosForShot() {
+    const s = st()
+    const prev = {
+      objectId: s.selectedObjectId,
+      cameraId: s.selectedCameraId,
+      lightId: s.selectedLightId,
+      boneName: s.selectedBoneName,
+      meshUuid: s.selectedMeshUuid,
+    }
+    if (prev.objectId != null) s.setSelectedObjectId(null)
+    if (prev.cameraId != null) s.setSelectedCameraId(null)
+    if (prev.boneName != null) s.setSelectedBoneName(null)
+    if (prev.meshUuid != null) s.setSelectedMeshUuid(null)
+    if (prev.lightId != null) {
+      s.setSelectedLightId(null)
+      selectLight(null)
+    }
+    return () => {
+      const s2 = st()
+      if (prev.objectId != null) s2.setSelectedObjectId(prev.objectId)
+      if (prev.cameraId != null) s2.setSelectedCameraId(prev.cameraId)
+      if (prev.boneName != null) s2.setSelectedBoneName(prev.boneName)
+      if (prev.meshUuid != null) s2.setSelectedMeshUuid(prev.meshUuid)
+      if (prev.lightId != null) {
+        s2.setSelectedLightId(prev.lightId)
+        selectLight(prev.lightId)
+      }
+    }
+  }
+
   // Play every loaded character's own selected clip/animation once from the
   // start — recording it to a file, or just previewing exactly what a
   // recording would show. One code path so the preview can never lie about
@@ -114,6 +153,7 @@ export default function ExportPanel() {
   function runShot(record) {
     if (busy) return
     stopAllCharacters() // clear any armed playback first (also restores cut-driven views)
+    const restoreGizmos = hideGizmosForShot()
     const s = st()
     const view = resolveShotView(s)
     const restoreView = armShotView(view)
@@ -125,12 +165,14 @@ export default function ExportPanel() {
     if (started === 0) {
       setForceCameraCuts(false)
       restoreView()
+      restoreGizmos()
       setMsg(`Nothing to ${record ? 'record' : 'preview'} — pick a clip or make an animation first.`)
       return
     }
     if (record && !startRecording(30)) {
       setForceCameraCuts(false)
       restoreView()
+      restoreGizmos()
       stopAllCharacters()
       setMsg('Video recording isn’t supported in this browser — use Fullscreen and screen-record instead.')
       return
@@ -153,6 +195,7 @@ export default function ExportPanel() {
         setMsg(null)
       }
       restoreView()
+      restoreGizmos()
     }, ms)
   }
 

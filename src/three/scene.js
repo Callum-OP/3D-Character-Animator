@@ -93,7 +93,9 @@ import {
   addImage,
   setObjectVisible,
   setObjectTransform,
-  setObjectLit,
+  setObjectStyle,
+  setObjectOutline,
+  applyAllObjectStyles,
   setObjectCastShadow,
   removeObject,
   resetObject,
@@ -704,6 +706,7 @@ export async function addObjectFile(file) {
   const parsed = await loadModel(file)
   const meta = addObject(parsed, parsed.info.name, parsed.info.format, file)
   useStore.getState().addSceneObject(meta) // sets selectedObjectId = meta.id
+  applyModelMaterials() // pick up the current Look settings immediately
   requestRender()
   return meta
 }
@@ -754,10 +757,16 @@ export function setObjectVisibleById(id, visible) {
   useStore.getState().setObjectVisible(id, visible)
 }
 
-// Toggle whether a prop responds to scene lighting (updates the scene + the store).
-export function setObjectLitById(id, lit) {
-  setObjectLit(id, lit)
-  useStore.getState().setObjectLit(id, lit)
+// Style/outline a prop (updates the scene + the store). 'auto' matches the
+// character's current Look; an explicit mode pins the prop regardless.
+export function setObjectStyleById(id, style) {
+  setObjectStyle(id, style)
+  useStore.getState().setObjectStyle(id, style)
+}
+
+export function setObjectOutlineById(id, outline) {
+  setObjectOutline(id, outline)
+  useStore.getState().setObjectOutline(id, outline)
 }
 
 // Toggle whether a prop casts shadows (updates the scene + the store).
@@ -1276,7 +1285,11 @@ export async function applyProjectData(record) {
     setObjectTransform(meta.id, obj.transform)
     setObjectVisibleById(meta.id, obj.visible !== false)
     if (obj.kind !== 'image') {
-      if (obj.lit === false) setObjectLitById(meta.id, false)
+      // 'lit' is the old (pre-styles) save field: false meant "flat/unlit".
+      // Map it onto the new style system so older project files still work.
+      const style = obj.style || (obj.lit === false ? 'unlit' : 'auto')
+      if (style !== 'auto') setObjectStyleById(meta.id, style)
+      if (obj.outline) setObjectOutlineById(meta.id, true)
       if (obj.castShadow === false) setObjectCastShadowById(meta.id, false)
     }
   }
@@ -1485,20 +1498,32 @@ export function setBackground(solid, color) {
 // This is the single entry point for any material/shading/outline-width change
 // (mode, toon steps, soften, per-mesh overrides). No-op if nothing is loaded.
 export function applyModelMaterials() {
-  if (!state.currentModel) return
   const s = useStore.getState()
   const soften = s.softenEnabled ? s.softenAmount : 0
+  const rimLight = {
+    enabled: s.rimLightEnabled,
+    intensity: s.rimLightIntensity,
+    color: s.rimLightColor,
+    direction: state.lightDir,
+  }
+  // Props/backgrounds follow the same style pipeline regardless of whether a
+  // character is loaded yet — 'auto' ones track this change live, pinned
+  // ones just pick up the shared toon/soften/rim/outline settings while
+  // keeping their own mode.
+  applyAllObjectStyles({
+    mode: s.materialMode,
+    toonSteps: s.toonSteps,
+    soften,
+    rimLight,
+    outlineWidth: s.outlineWidth,
+  })
+  if (!state.currentModel) return
   applyMaterials(state.currentModel, {
     mode: s.materialMode,
     toonSteps: s.toonSteps,
     soften,
     overrides: s.meshOverrides,
-    rimLight: {
-      enabled: s.rimLightEnabled,
-      intensity: s.rimLightIntensity,
-      color: s.rimLightColor,
-      direction: state.lightDir,
-    },
+    rimLight,
   })
   // Cloth proxies live outside the model's own scene graph (see clothmod.js),
   // so applyMaterials' traversal never touches them — just rebuild any

@@ -31,6 +31,7 @@ const c = {
   helper: null,
   cameras: [], // { id, name, rig, camera, body }
   selected: null, // selected rig (or null)
+  gizmoGrabbed: false,
 }
 
 const _qa = new THREE.Quaternion()
@@ -49,6 +50,7 @@ export function initCameras(refs) {
   transform.setSize(0.8)
   transform.addEventListener('dragging-changed', (e) => {
     c.controls.enabled = !e.value && !c.controls.locked
+    if (e.value) c.gizmoGrabbed = true
   })
   transform.addEventListener('objectChange', () => c.requestRender())
   c.transform = transform
@@ -108,6 +110,13 @@ export function setCameraGizmoMode(mode) {
   if (!c.transform) return
   c.transform.setMode(mode) // 'translate' | 'rotate'
   c.requestRender()
+}
+
+// See consumeObjectGizmoGrab() in objects.js for what this is for.
+export function consumeCameraGizmoGrab() {
+  const grabbed = c.gizmoGrabbed
+  c.gizmoGrabbed = false
+  return grabbed
 }
 
 export function setCameraFov(id, fov) {

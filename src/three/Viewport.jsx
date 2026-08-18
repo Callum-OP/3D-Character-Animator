@@ -34,9 +34,10 @@ import {
   redo as redoMeshEdit,
 } from './meshedit.js'
 import { setLimitsEnabled } from './limits.js'
-import { selectObject, setObjectMode, undo as undoObject, redo as redoObject } from './objects.js'
+import { selectObject, setObjectMode, undo as undoObject, redo as redoObject, consumeObjectGizmoGrab } from './objects.js'
 import { resolveUndoTarget } from './undoPriority.js'
-import { selectCamera, setCameraGizmoMode } from './cameras.js'
+import { selectCamera, setCameraGizmoMode, consumeCameraGizmoGrab } from './cameras.js'
+import { selectLight, consumeLightGizmoGrab } from './lights.js'
 import StatsOverlay from '../panels/StatsOverlay.jsx'
 
 // The viewport's mode switcher. Number keys jump straight to a mode.
@@ -223,6 +224,50 @@ export default function Viewport() {
   useEffect(() => {
     setViewCameraById(viewCameraId)
   }, [viewCameraId])
+
+  // --- Click empty space to deselect the active object/camera/light ---
+  // A prop/camera/light's move/rotate/resize gizmo stays up until you pick
+  // something else, hide the panel, or hit Esc — clicking past it (on the
+  // model, the ground, or open air) now clears it too, same as most 3D apps.
+  // Distinguished from an actual gizmo drag (which shouldn't deselect) via
+  // each manager's consume*GizmoGrab(), and from an orbit-drag via a small
+  // pointer-movement threshold so spinning the camera never deselects.
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    let down = null
+
+    function onPointerDown(e) {
+      down = { x: e.clientX, y: e.clientY }
+    }
+
+    function onPointerUp(e) {
+      const start = down
+      down = null
+      // Always consume the gizmo-grab flags so a real drag never leaks into
+      // the next, unrelated click.
+      const grabbed = consumeObjectGizmoGrab() || consumeCameraGizmoGrab() || consumeLightGizmoGrab()
+      if (!start || e.button !== 0 || grabbed) return
+      const dx = e.clientX - start.x
+      const dy = e.clientY - start.y
+      if (dx * dx + dy * dy > 25) return // moved too far — an orbit drag, not a click
+
+      const s = useStore.getState()
+      if (s.selectedObjectId != null) s.setSelectedObjectId(null)
+      if (s.selectedCameraId != null) s.setSelectedCameraId(null)
+      if (s.selectedLightId != null) {
+        s.setSelectedLightId(null)
+        selectLight(null) // Lights panel drives its own gizmo attach, not a store effect
+      }
+    }
+
+    el.addEventListener('pointerdown', onPointerDown)
+    el.addEventListener('pointerup', onPointerUp)
+    return () => {
+      el.removeEventListener('pointerdown', onPointerDown)
+      el.removeEventListener('pointerup', onPointerUp)
+    }
+  }, [])
 
   // Keyboard: 1/2/3 switch mode, W/E/R pick the Mesh-mode gizmo tool, Esc
   // deselects, Ctrl/Cmd+Z undoes an edit — a selected prop/image/camera/light

@@ -28,6 +28,7 @@ const l = {
   helper: null,
   lights: [], // { id, name, light, bulb }
   selected: null, // selected light (THREE.PointLight) or null
+  gizmoGrabbed: false,
 }
 
 export function initLights(refs) {
@@ -43,6 +44,7 @@ export function initLights(refs) {
   transform.setSize(0.8)
   transform.addEventListener('dragging-changed', (e) => {
     l.controls.enabled = !e.value && !l.controls.locked
+    if (e.value) l.gizmoGrabbed = true
   })
   transform.addEventListener('objectChange', () => l.requestRender())
   l.transform = transform
@@ -102,6 +104,13 @@ export function selectLight(id) {
   if (l.selected) l.transform.attach(l.selected)
   else l.transform.detach()
   l.requestRender()
+}
+
+// See consumeObjectGizmoGrab() in objects.js for what this is for.
+export function consumeLightGizmoGrab() {
+  const grabbed = l.gizmoGrabbed
+  l.gizmoGrabbed = false
+  return grabbed
 }
 
 export function setLightColor(id, hex) {

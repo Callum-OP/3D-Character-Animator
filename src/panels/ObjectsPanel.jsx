@@ -6,7 +6,8 @@ import {
   removeObjectById,
   resetObjectById,
   setObjectVisibleById,
-  setObjectLitById,
+  setObjectStyleById,
+  setObjectOutlineById,
   setObjectCastShadowById,
   getSceneData,
   applySceneData,
@@ -26,6 +27,17 @@ const MODES = [
   { value: 'translate', label: 'Move' },
   { value: 'rotate', label: 'Rotate' },
   { value: 'scale', label: 'Resize' },
+]
+
+// Per-object Look override. 'auto' means "match the character's Look panel
+// settings live" — everything else pins the prop to that style regardless of
+// what the character is doing.
+const STYLE_OPTIONS = [
+  { value: 'auto', label: 'Match scene' },
+  { value: 'unlit', label: 'Flat colour' },
+  { value: 'toon', label: 'Cartoon' },
+  { value: 'soft', label: 'Soft Anime' },
+  { value: 'standard', label: 'Realistic' },
 ]
 
 export default function ObjectsPanel() {
@@ -222,15 +234,29 @@ export default function ObjectsPanel() {
                 </button>
                 {o.kind === 'model' && (
                   <>
+                    <select
+                      className="select"
+                      style={{ width: 92, fontSize: 11, padding: '2px 4px' }}
+                      title="How this prop is shaded — 'Match scene' follows the character's Look panel"
+                      value={o.style || 'auto'}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => setObjectStyleById(o.id, e.target.value)}
+                    >
+                      {STYLE_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
                     <button
                       className="obj-eye"
-                      title={o.lit === false ? 'Not affected by lighting — click to re-light' : 'Affected by scene lighting — click to make flat/unlit'}
+                      title={o.outline ? 'Ink outline on — click to turn off' : 'No ink outline — click to turn on'}
                       onClick={(e) => {
                         e.stopPropagation()
-                        setObjectLitById(o.id, o.lit === false)
+                        setObjectOutlineById(o.id, !o.outline)
                       }}
                     >
-                      {o.lit === false ? '💡' : '☀️'}
+                      {o.outline ? '✏️' : '⬜'}
                     </button>
                     <button
                       className="obj-eye"

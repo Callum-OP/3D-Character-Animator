@@ -396,9 +396,13 @@ export const useStore = create((set) => ({
     set((s) => ({
       sceneObjects: s.sceneObjects.map((o) => (o.id === id ? { ...o, visible } : o)),
     })),
-  setObjectLit: (id, lit) =>
+  setObjectStyle: (id, style) =>
     set((s) => ({
-      sceneObjects: s.sceneObjects.map((o) => (o.id === id ? { ...o, lit } : o)),
+      sceneObjects: s.sceneObjects.map((o) => (o.id === id ? { ...o, style } : o)),
+    })),
+  setObjectOutline: (id, outline) =>
+    set((s) => ({
+      sceneObjects: s.sceneObjects.map((o) => (o.id === id ? { ...o, outline } : o)),
     })),
   setObjectCastShadow: (id, castShadow) =>
     set((s) => ({
