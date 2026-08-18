@@ -106,21 +106,37 @@ function getSoftGradientMap(floor) {
 // shaders via onBeforeCompile. Helps stylised materials read against busy
 // backgrounds and gives anime-style shading its characteristic glowing edge,
 // without needing an extra scene light. The shader chunk is always present on
-// toon/soft materials (cache key never changes); intensity is a live uniform
-// so sliders can update it without a shader recompile.
+// toon/soft materials (cache key never changes); everything below is a live
+// uniform so sliders update it without a shader recompile.
+//
+// Soft and Hard are two independent layers (not a single mode switch) — both
+// can be on together, each with its own strength and width, then summed. A
+// "Directional" mask can additionally restrict either layer to just the side
+// of the silhouette that horizontally faces the key light (e.g. light coming
+// from the right only lights the character's right edge), which reads as much
+// less busy than the full-hemisphere default, especially on rounder meshes.
 // ---------------------------------------------------------------------------
 
 function installRimLight(material) {
-  material.userData.rimIntensity = material.userData.rimIntensity || 0
-  material.userData.rimColor = material.userData.rimColor || new THREE.Color(0xffffff)
-  material.userData.rimLightDir = material.userData.rimLightDir || new THREE.Vector3(0.3, 0.6, 0.7)
+  const u = material.userData
+  u.rimColor = u.rimColor || new THREE.Color(0xffffff)
+  u.rimLightDir = u.rimLightDir || new THREE.Vector3(0.3, 0.6, 0.7)
+  u.rimSoftIntensity = u.rimSoftIntensity || 0
+  u.rimSoftWidth = u.rimSoftWidth != null ? u.rimSoftWidth : 0.5
+  u.rimHardIntensity = u.rimHardIntensity || 0
+  u.rimHardWidth = u.rimHardWidth != null ? u.rimHardWidth : 0.35
+  u.rimSideOnly = u.rimSideOnly || 0
   // Stable cache key: the injected code never changes, only the uniforms do,
   // so every toon/soft material can safely share one compiled program variant.
-  material.customProgramCacheKey = () => 'charanim-rim-v2'
+  material.customProgramCacheKey = () => 'charanim-rim-v4'
   material.onBeforeCompile = (shader) => {
-    shader.uniforms.rimIntensity = { value: material.userData.rimIntensity }
-    shader.uniforms.rimColor = { value: material.userData.rimColor }
-    shader.uniforms.rimLightDir = { value: material.userData.rimLightDir }
+    shader.uniforms.rimColor = { value: u.rimColor }
+    shader.uniforms.rimLightDir = { value: u.rimLightDir }
+    shader.uniforms.rimSoftIntensity = { value: u.rimSoftIntensity }
+    shader.uniforms.rimSoftWidth = { value: u.rimSoftWidth }
+    shader.uniforms.rimHardIntensity = { value: u.rimHardIntensity }
+    shader.uniforms.rimHardWidth = { value: u.rimHardWidth }
+    shader.uniforms.rimSideOnly = { value: u.rimSideOnly }
 
     shader.vertexShader = shader.vertexShader
       .replace(
@@ -139,7 +155,15 @@ function installRimLight(material) {
     shader.fragmentShader = shader.fragmentShader
       .replace(
         '#include <common>',
-        '#include <common>\nvarying vec3 vRimView;\nvarying vec3 vRimLightDir;\nuniform float rimIntensity;\nuniform vec3 rimColor;',
+        `#include <common>
+        varying vec3 vRimView;
+        varying vec3 vRimLightDir;
+        uniform vec3 rimColor;
+        uniform float rimSoftIntensity;
+        uniform float rimSoftWidth;
+        uniform float rimHardIntensity;
+        uniform float rimHardWidth;
+        uniform float rimSideOnly;`,
       )
       .replace(
         '#include <dithering_fragment>',
@@ -149,19 +173,38 @@ function installRimLight(material) {
         #else
           vec3 rimNormal = normalize( vNormal );
         #endif
-        // View-dependent edge term (classic fresnel rim)...
-        float rimEdge = 1.0 - max( dot( vRimView, rimNormal ), 0.0 );
-        rimEdge = pow( clamp( rimEdge, 0.0, 1.0 ), 2.5 );
-        // ...gated so it only shows on the side of the model actually facing
-        // the key light — a shoulder catches the glow, the far/shadowed side
+        // View-dependent edge term (classic fresnel rim), 0 at fully facing the
+        // camera, 1 right at the silhouette.
+        float rimEdgeRaw = 1.0 - max( dot( vRimView, rimNormal ), 0.0 );
+        // Gated so it only shows on the side of the model actually facing the
+        // key light — a shoulder catches the glow, the far/shadowed side
         // doesn't, just like a real backlit rim highlight.
-        float rimLit = smoothstep( -0.2, 0.25, dot( rimNormal, vRimLightDir ) );
-        float rimFactor = rimEdge * rimLit;
-        gl_FragColor.rgb += rimColor * rimFactor * rimIntensity;
+        float ndotl = dot( rimNormal, vRimLightDir );
+        // Optional extra mask: only the horizontal side of the silhouette
+        // that faces the light's left/right direction — e.g. a light coming
+        // from the right only rims the character's right edge, not top/bottom
+        // or the near-camera side too. Off by default (full hemisphere).
+        float rimSide = 1.0;
+        if ( rimSideOnly > 0.5 ) {
+          float lightSideX = vRimLightDir.x >= 0.0 ? 1.0 : -1.0;
+          rimSide = smoothstep( -0.15, 0.15, rimNormal.x * lightSideX );
+        }
+        // Soft layer: a smooth glow. Width widens the falloff exponent.
+        float softExp = mix( 6.0, 1.0, clamp( rimSoftWidth, 0.0, 1.0 ) );
+        float edgeSoft = pow( clamp( rimEdgeRaw, 0.0, 1.0 ), softExp );
+        float litSoft = smoothstep( -0.2, 0.25, ndotl );
+        float softTerm = edgeSoft * litSoft * rimSide * rimSoftIntensity;
+        // Hard layer: a crisp thresholded line. Width widens the band inward
+        // from the silhouette.
+        float hardLo = mix( 0.85, 0.25, clamp( rimHardWidth, 0.0, 1.0 ) );
+        float edgeHard = smoothstep( hardLo, hardLo + 0.08, rimEdgeRaw );
+        float litHard = smoothstep( -0.05, 0.05, ndotl );
+        float hardTerm = edgeHard * litHard * rimSide * rimHardIntensity;
+        gl_FragColor.rgb += rimColor * ( softTerm + hardTerm );
         #include <dithering_fragment>`,
       )
 
-    // Keep a handle so later calls can update the uniform live, no recompile.
+    // Keep a handle so later calls can update uniforms live, no recompile.
     material.userData.rimUniforms = shader.uniforms
   }
   material.needsUpdate = true
@@ -170,22 +213,39 @@ function installRimLight(material) {
 // Push new rim settings onto an already-built toon/soft material (works before
 // or after its first compile — pre-compile it just seeds the values the
 // onBeforeCompile hook above will read).
-function updateRimLight(material, enabled, intensity, color, lightDir) {
+//
+// `rim` shape: { color, direction, sideOnly,
+//                soft: { enabled, intensity, width },
+//                hard: { enabled, intensity, width } }
+function updateRimLight(material, rim) {
   const arr = Array.isArray(material) ? material : [material]
+  const soft = rim.soft || {}
+  const hard = rim.hard || {}
+  const softAmount = soft.enabled ? soft.intensity : 0
+  const hardAmount = hard.enabled ? hard.intensity : 0
   for (const m of arr) {
     if (!m || !m.userData) continue
-    const amount = enabled ? intensity : 0
-    if (!m.userData.rimColor) m.userData.rimColor = new THREE.Color()
-    m.userData.rimColor.set(color)
-    m.userData.rimIntensity = amount
-    if (lightDir) {
-      if (!m.userData.rimLightDir) m.userData.rimLightDir = new THREE.Vector3()
-      m.userData.rimLightDir.copy(lightDir)
+    const u = m.userData
+    if (!u.rimColor) u.rimColor = new THREE.Color()
+    u.rimColor.set(rim.color)
+    u.rimSoftIntensity = softAmount
+    u.rimSoftWidth = soft.width != null ? soft.width : 0.5
+    u.rimHardIntensity = hardAmount
+    u.rimHardWidth = hard.width != null ? hard.width : 0.35
+    u.rimSideOnly = rim.sideOnly ? 1 : 0
+    if (rim.direction) {
+      if (!u.rimLightDir) u.rimLightDir = new THREE.Vector3()
+      u.rimLightDir.copy(rim.direction)
     }
-    if (m.userData.rimUniforms) {
-      m.userData.rimUniforms.rimIntensity.value = amount
-      m.userData.rimUniforms.rimColor.value = m.userData.rimColor
-      if (lightDir) m.userData.rimUniforms.rimLightDir.value = m.userData.rimLightDir
+    const ru = u.rimUniforms
+    if (ru) {
+      ru.rimColor.value = u.rimColor
+      ru.rimSoftIntensity.value = u.rimSoftIntensity
+      ru.rimSoftWidth.value = u.rimSoftWidth
+      ru.rimHardIntensity.value = u.rimHardIntensity
+      ru.rimHardWidth.value = u.rimHardWidth
+      ru.rimSideOnly.value = u.rimSideOnly
+      if (rim.direction) ru.rimLightDir.value = u.rimLightDir
     }
   }
 }
@@ -236,10 +296,16 @@ export function normalizeTransparency(material) {
  * @param {number} [opts.toonSteps]  shadow band count (Cartoon mode only)
  * @param {number} [opts.soften]     global shadow lift, 0..1
  * @param {object} [opts.overrides]  { [mesh.uuid]: { outline?, shading? } }
- * @param {object} [opts.rimLight]   { enabled, intensity, color, direction } edge
- *                                    highlight for Cartoon/Soft Anime modes;
- *                                    direction is a world-space THREE.Vector3
- *                                    pointing toward the key light
+ * @param {object} [opts.rimLight]   { color, direction, sideOnly,
+ *                                     soft: { enabled, intensity, width },
+ *                                     hard: { enabled, intensity, width } }
+ *                                    edge highlight for Cartoon/Soft Anime modes.
+ *                                    Soft and Hard are independent layers (both
+ *                                    can be on at once); direction is a
+ *                                    world-space THREE.Vector3 pointing toward
+ *                                    the key light; sideOnly restricts the rim
+ *                                    to just the horizontal side of the
+ *                                    silhouette facing the light.
  */
 export function applyMaterials(model, opts) {
   if (!model || !model.materials) return
@@ -277,9 +343,7 @@ export function applyMaterials(model, opts) {
       assignGradient(toonMat, toonSteps, floor, false)
     }
     if (rimLight) {
-      for (const m of arr) {
-        updateRimLight(m, rimLight.enabled, rimLight.intensity, rimLight.color, rimLight.direction)
-      }
+      for (const m of arr) updateRimLight(m, rimLight)
     }
     mesh.material = toonMat
   }

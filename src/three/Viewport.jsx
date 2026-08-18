@@ -96,9 +96,14 @@ export default function Viewport() {
   const softenAmount = useStore((s) => s.softenAmount)
   const meshOverrides = useStore((s) => s.meshOverrides)
   const outlineWidth = useStore((s) => s.outlineWidth)
-  const rimLightEnabled = useStore((s) => s.rimLightEnabled)
-  const rimLightIntensity = useStore((s) => s.rimLightIntensity)
   const rimLightColor = useStore((s) => s.rimLightColor)
+  const rimSideOnly = useStore((s) => s.rimSideOnly)
+  const rimSoftEnabled = useStore((s) => s.rimSoftEnabled)
+  const rimSoftIntensity = useStore((s) => s.rimSoftIntensity)
+  const rimSoftWidth = useStore((s) => s.rimSoftWidth)
+  const rimHardEnabled = useStore((s) => s.rimHardEnabled)
+  const rimHardIntensity = useStore((s) => s.rimHardIntensity)
+  const rimHardWidth = useStore((s) => s.rimHardWidth)
 
   useEffect(() => {
     applyModelMaterials()
@@ -109,9 +114,14 @@ export default function Viewport() {
     softenAmount,
     meshOverrides,
     outlineWidth,
-    rimLightEnabled,
-    rimLightIntensity,
     rimLightColor,
+    rimSideOnly,
+    rimSoftEnabled,
+    rimSoftIntensity,
+    rimSoftWidth,
+    rimHardEnabled,
+    rimHardIntensity,
+    rimHardWidth,
   ])
 
   const lightIntensity = useStore((s) => s.lightIntensity)

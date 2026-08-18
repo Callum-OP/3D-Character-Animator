@@ -254,16 +254,28 @@ export const useStore = create((set) => ({
   setToonSteps: (toonSteps) => set({ toonSteps }),
 
   // ---- Rim (edge) light — Cartoon / Soft Anime modes only ----
-  // A cheap fresnel highlight around silhouettes; helps stylised characters
-  // "pop" and is a big part of the classic anime look. Off by default so
-  // existing projects render unchanged.
-  rimLightEnabled: false,
-  rimLightIntensity: 0.6,
+  // Soft and Hard are independent layers that can both be on at once, each
+  // with its own strength and width. Off by default so existing projects
+  // render unchanged.
   rimLightColor: '#ffffff',
+  rimSideOnly: false, // restrict the rim to just the side facing the light horizontally
 
-  setRimLightEnabled: (rimLightEnabled) => set({ rimLightEnabled }),
-  setRimLightIntensity: (rimLightIntensity) => set({ rimLightIntensity }),
+  rimSoftEnabled: false,
+  rimSoftIntensity: 0.6,
+  rimSoftWidth: 0.5, // 0 = thin, tight glow · 1 = broad, reaches further inward
+
+  rimHardEnabled: false,
+  rimHardIntensity: 0.8,
+  rimHardWidth: 0.35, // 0 = hairline · 1 = thick band
+
   setRimLightColor: (rimLightColor) => set({ rimLightColor }),
+  setRimSideOnly: (rimSideOnly) => set({ rimSideOnly }),
+  setRimSoftEnabled: (rimSoftEnabled) => set({ rimSoftEnabled }),
+  setRimSoftIntensity: (rimSoftIntensity) => set({ rimSoftIntensity }),
+  setRimSoftWidth: (rimSoftWidth) => set({ rimSoftWidth }),
+  setRimHardEnabled: (rimHardEnabled) => set({ rimHardEnabled }),
+  setRimHardIntensity: (rimHardIntensity) => set({ rimHardIntensity }),
+  setRimHardWidth: (rimHardWidth) => set({ rimHardWidth }),
 
   // ---- Key light (affects Toon/Standard modes only; ignored by Unlit) ----
   lightIntensity: 2.0,

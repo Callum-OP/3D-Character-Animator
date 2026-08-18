@@ -1077,9 +1077,14 @@ function collectSettings() {
   return {
     materialMode: s.materialMode,
     toonSteps: s.toonSteps,
-    rimLightEnabled: s.rimLightEnabled,
-    rimLightIntensity: s.rimLightIntensity,
     rimLightColor: s.rimLightColor,
+    rimSideOnly: s.rimSideOnly,
+    rimSoftEnabled: s.rimSoftEnabled,
+    rimSoftIntensity: s.rimSoftIntensity,
+    rimSoftWidth: s.rimSoftWidth,
+    rimHardEnabled: s.rimHardEnabled,
+    rimHardIntensity: s.rimHardIntensity,
+    rimHardWidth: s.rimHardWidth,
     lightIntensity: s.lightIntensity,
     lightAzimuth: s.lightAzimuth,
     lightElevation: s.lightElevation,
@@ -1266,7 +1271,10 @@ export async function applyProjectData(record) {
   }
   const patch = {}
   for (const k of [
-    'materialMode', 'toonSteps', 'rimLightEnabled', 'rimLightIntensity', 'rimLightColor',
+    'materialMode', 'toonSteps',
+    'rimLightColor', 'rimSideOnly',
+    'rimSoftEnabled', 'rimSoftIntensity', 'rimSoftWidth',
+    'rimHardEnabled', 'rimHardIntensity', 'rimHardWidth',
     'lightIntensity', 'lightAzimuth', 'lightElevation',
     'envLightingEnabled', 'envLightingIntensity',
     'outlineEnabled', 'outlineWidth', 'softenEnabled', 'softenAmount',
@@ -1501,10 +1509,11 @@ export function applyModelMaterials() {
   const s = useStore.getState()
   const soften = s.softenEnabled ? s.softenAmount : 0
   const rimLight = {
-    enabled: s.rimLightEnabled,
-    intensity: s.rimLightIntensity,
     color: s.rimLightColor,
     direction: state.lightDir,
+    sideOnly: s.rimSideOnly,
+    soft: { enabled: s.rimSoftEnabled, intensity: s.rimSoftIntensity, width: s.rimSoftWidth },
+    hard: { enabled: s.rimHardEnabled, intensity: s.rimHardIntensity, width: s.rimHardWidth },
   }
   // Props/backgrounds follow the same style pipeline regardless of whether a
   // character is loaded yet — 'auto' ones track this change live, pinned

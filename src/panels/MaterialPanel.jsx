@@ -46,19 +46,24 @@ export const STYLE_PRESETS = [
       materialMode: 'unlit',
       outlineEnabled: false,
       softenEnabled: false,
-      rimLightEnabled: false,
+      rimSoftEnabled: false,
+      rimHardEnabled: false,
     },
   },
   {
     label: 'Crisp Cel',
-    hint: 'Bold 2–3 tone manga-style bands with a solid ink outline.',
+    hint: 'Bold 2–3 tone manga-style bands with a solid ink outline and a hard rim line.',
     config: {
       materialMode: 'toon',
       toonSteps: 2,
       softenEnabled: false,
       outlineEnabled: true,
-      outlineWidth: 0.0025,
-      rimLightEnabled: false,
+      outlineWidth: 0.003,
+      rimSoftEnabled: false,
+      rimHardEnabled: true,
+      rimHardIntensity: 0.9,
+      rimHardWidth: 0.3,
+      rimLightColor: '#ffffff',
       lightIntensity: 2.2,
       lightAzimuth: 35,
       lightElevation: 45,
@@ -73,8 +78,10 @@ export const STYLE_PRESETS = [
       softenAmount: 0.3,
       outlineEnabled: true,
       outlineWidth: 0.0015,
-      rimLightEnabled: true,
-      rimLightIntensity: 0.5,
+      rimSoftEnabled: true,
+      rimSoftIntensity: 0.5,
+      rimSoftWidth: 0.5,
+      rimHardEnabled: false,
       rimLightColor: '#fff2d8',
       lightIntensity: 1.8,
       lightAzimuth: 25,
@@ -89,8 +96,10 @@ export const STYLE_PRESETS = [
       softenEnabled: true,
       softenAmount: 0.55,
       outlineEnabled: false,
-      rimLightEnabled: true,
-      rimLightIntensity: 0.25,
+      rimSoftEnabled: true,
+      rimSoftIntensity: 0.25,
+      rimSoftWidth: 0.65,
+      rimHardEnabled: false,
       rimLightColor: '#ffe9c7',
       lightIntensity: 1.5,
       lightAzimuth: 20,
@@ -143,9 +152,10 @@ export const STYLE_PRESETS = [
     config: {
       materialMode: 'unlit',
       outlineEnabled: true,
-      outlineWidth: 0.0045,
+      outlineWidth: 0.01,
       softenEnabled: false,
-      rimLightEnabled: false,
+      rimSoftEnabled: false,
+      rimHardEnabled: false,
     },
   },
 ]
@@ -165,9 +175,14 @@ export default function MaterialPanel() {
   const softenEnabled = useStore((s) => s.softenEnabled)
   const softenAmount = useStore((s) => s.softenAmount)
   const meshOverrides = useStore((s) => s.meshOverrides)
-  const rimLightEnabled = useStore((s) => s.rimLightEnabled)
-  const rimLightIntensity = useStore((s) => s.rimLightIntensity)
   const rimLightColor = useStore((s) => s.rimLightColor)
+  const rimSideOnly = useStore((s) => s.rimSideOnly)
+  const rimSoftEnabled = useStore((s) => s.rimSoftEnabled)
+  const rimSoftIntensity = useStore((s) => s.rimSoftIntensity)
+  const rimSoftWidth = useStore((s) => s.rimSoftWidth)
+  const rimHardEnabled = useStore((s) => s.rimHardEnabled)
+  const rimHardIntensity = useStore((s) => s.rimHardIntensity)
+  const rimHardWidth = useStore((s) => s.rimHardWidth)
 
   const setMaterialMode = useStore((s) => s.setMaterialMode)
   const setToonSteps = useStore((s) => s.setToonSteps)
@@ -180,9 +195,14 @@ export default function MaterialPanel() {
   const setOutlineWidth = useStore((s) => s.setOutlineWidth)
   const setSoftenEnabled = useStore((s) => s.setSoftenEnabled)
   const setSoftenAmount = useStore((s) => s.setSoftenAmount)
-  const setRimLightEnabled = useStore((s) => s.setRimLightEnabled)
-  const setRimLightIntensity = useStore((s) => s.setRimLightIntensity)
   const setRimLightColor = useStore((s) => s.setRimLightColor)
+  const setRimSideOnly = useStore((s) => s.setRimSideOnly)
+  const setRimSoftEnabled = useStore((s) => s.setRimSoftEnabled)
+  const setRimSoftIntensity = useStore((s) => s.setRimSoftIntensity)
+  const setRimSoftWidth = useStore((s) => s.setRimSoftWidth)
+  const setRimHardEnabled = useStore((s) => s.setRimHardEnabled)
+  const setRimHardIntensity = useStore((s) => s.setRimHardIntensity)
+  const setRimHardWidth = useStore((s) => s.setRimHardWidth)
   const setMeshOutline = useStore((s) => s.setMeshOutline)
   const setMeshShading = useStore((s) => s.setMeshShading)
   const setMeshVisible = useStore((s) => s.setMeshVisible)
@@ -255,38 +275,97 @@ export default function MaterialPanel() {
       )}
 
       <div className={'light-controls' + (rimCapable ? '' : ' disabled')}>
+        <div className="field-label" style={{ marginTop: 0 }}>
+          Rim light {rimCapable ? '' : '(only affects Cartoon / Soft Anime)'}
+        </div>
+
         <label className="toggle-row" style={{ padding: 0 }}>
           <input
             type="checkbox"
-            checked={rimLightEnabled}
+            checked={rimSoftEnabled}
             disabled={!rimCapable}
-            onChange={(e) => setRimLightEnabled(e.target.checked)}
+            onChange={(e) => setRimSoftEnabled(e.target.checked)}
           />
-          Rim light
+          Soft glow
         </label>
-
         <Slider
           label="Strength"
           min={0}
           max={1.5}
           step={0.05}
-          value={rimLightIntensity}
-          disabled={!rimCapable || !rimLightEnabled}
-          onChange={setRimLightIntensity}
+          value={rimSoftIntensity}
+          disabled={!rimCapable || !rimSoftEnabled}
+          onChange={setRimSoftIntensity}
           format={(v) => v.toFixed(2)}
         />
-        <label className="slider-row">
+        <Slider
+          label="Width"
+          min={0}
+          max={1}
+          step={0.05}
+          value={rimSoftWidth}
+          disabled={!rimCapable || !rimSoftEnabled}
+          onChange={setRimSoftWidth}
+          format={(v) => Math.round(v * 100) + '%'}
+          toInput={(v) => Math.round(v * 100)}
+          fromInput={(v) => v / 100}
+        />
+
+        <label className="toggle-row" style={{ padding: 0, marginTop: 6 }}>
+          <input
+            type="checkbox"
+            checked={rimHardEnabled}
+            disabled={!rimCapable}
+            onChange={(e) => setRimHardEnabled(e.target.checked)}
+          />
+          Hard line
+        </label>
+        <Slider
+          label="Strength"
+          min={0}
+          max={1.5}
+          step={0.05}
+          value={rimHardIntensity}
+          disabled={!rimCapable || !rimHardEnabled}
+          onChange={setRimHardIntensity}
+          format={(v) => v.toFixed(2)}
+        />
+        <Slider
+          label="Width"
+          min={0}
+          max={1}
+          step={0.05}
+          value={rimHardWidth}
+          disabled={!rimCapable || !rimHardEnabled}
+          onChange={setRimHardWidth}
+          format={(v) => Math.round(v * 100) + '%'}
+          toInput={(v) => Math.round(v * 100)}
+          fromInput={(v) => v / 100}
+        />
+
+        <label className="slider-row" style={{ marginTop: 6 }}>
           <span className="slider-label">Colour</span>
           <input
             type="color"
             value={rimLightColor}
-            disabled={!rimCapable || !rimLightEnabled}
+            disabled={!rimCapable || (!rimSoftEnabled && !rimHardEnabled)}
             onChange={(e) => setRimLightColor(e.target.value)}
           />
         </label>
+
+        <label className="toggle-row" style={{ padding: 0, marginTop: 4 }}>
+          <input
+            type="checkbox"
+            checked={rimSideOnly}
+            disabled={!rimCapable || (!rimSoftEnabled && !rimHardEnabled)}
+            onChange={(e) => setRimSideOnly(e.target.checked)}
+          />
+          Directional (light side only)
+        </label>
+
         <div className="radio-hint" style={{ marginTop: 2 }}>
           {rimCapable
-            ? 'A soft edge glow around the silhouette \u2014 classic anime look, and helps the character stand out from busy backgrounds.'
+            ? 'Soft and Hard are independent \u2014 turn on either, or both. Width controls how far each reaches in from the silhouette. Directional limits the glow to just the side of the character the key light is coming from (e.g. a light from the right only lights the right edge), which reads as calmer than the default all-round rim.'
             : 'Only affects Cartoon / Soft Anime modes.'}
         </div>
       </div>
