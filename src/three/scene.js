@@ -44,6 +44,8 @@ import {
   setLightColor,
   setLightIntensity,
   setLightCastShadow,
+  setLightDirectional,
+  getLightRimSource,
   getLightsData,
   applyLightsData,
   clearLights,
@@ -332,6 +334,7 @@ export function initScene(container) {
     controls,
     requestRender,
     getSceneScale: () => state.modelRadius,
+    onChange: () => applyModelMaterials(), // a followed light's colour/position may have moved
   })
 
   // --- Cloth modifier (drape a selected mesh against the rest of the character) ---
@@ -1085,6 +1088,13 @@ function collectSettings() {
     rimHardEnabled: s.rimHardEnabled,
     rimHardIntensity: s.rimHardIntensity,
     rimHardWidth: s.rimHardWidth,
+    rimFollowLight: s.rimFollowLight,
+    // Save the light's position in the list, not its runtime id — ids aren't
+    // stable across a reload (see the restore-side comment near applyLightsData).
+    rimFollowLightIndex: (() => {
+      const idx = s.sceneLights.findIndex((lt) => lt.id === s.rimFollowLightId)
+      return idx < 0 ? null : idx
+    })(),
     lightIntensity: s.lightIntensity,
     lightAzimuth: s.lightAzimuth,
     lightElevation: s.lightElevation,
@@ -1312,6 +1322,13 @@ export async function applyProjectData(record) {
   if (Array.isArray(record.lights) && record.lights.length) {
     const metas = applyLightsData(record.lights)
     useStore.setState({ sceneLights: metas, selectedLightId: null })
+    // Light ids aren't stable across a save/load (each restore mints new
+    // ones) — st.rimFollowLightIndex is the saved light's position in the
+    // list instead, remapped to whatever id it got this time.
+    if (st.rimFollowLight && st.rimFollowLightIndex != null && metas[st.rimFollowLightIndex]) {
+      useStore.setState({ rimFollowLight: true, rimFollowLightId: metas[st.rimFollowLightIndex].id })
+      applyModelMaterials()
+    }
   }
 
   // 5. (animData is already restored per-character inside the load loop
@@ -1508,9 +1525,22 @@ export function setBackground(solid, color) {
 export function applyModelMaterials() {
   const s = useStore.getState()
   const soften = s.softenEnabled ? s.softenAmount : 0
+  // Rim colour/direction normally come from the manual picker + key light —
+  // but if "follow a scene light" is on and that light still exists, use its
+  // actual colour + direction instead, so a placed rim/fill light drives the
+  // shading directly.
+  let rimColor = s.rimLightColor
+  let rimDir = state.lightDir
+  if (s.rimFollowLight && s.rimFollowLightId != null) {
+    const source = getLightRimSource(s.rimFollowLightId)
+    if (source) {
+      rimColor = source.color
+      rimDir = source.direction
+    }
+  }
   const rimLight = {
-    color: s.rimLightColor,
-    direction: state.lightDir,
+    color: rimColor,
+    direction: rimDir,
     sideOnly: s.rimSideOnly,
     soft: { enabled: s.rimSoftEnabled, intensity: s.rimSoftIntensity, width: s.rimSoftWidth },
     hard: { enabled: s.rimHardEnabled, intensity: s.rimHardIntensity, width: s.rimHardWidth },

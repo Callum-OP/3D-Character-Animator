@@ -1,5 +1,14 @@
 import { useStore } from '../store.js'
-import { addLight, removeLight, selectLight, setLightColor, setLightIntensity, setLightCastShadow } from '../three/lights.js'
+import {
+  addLight,
+  removeLight,
+  selectLight,
+  setLightColor,
+  setLightIntensity,
+  setLightCastShadow,
+  setLightDirectional,
+} from '../three/lights.js'
+import { applyModelMaterials } from '../three/scene.js'
 import EditableValue from './EditableValue.jsx'
 
 // Side-panel section: add point lights, move them around the character, and
@@ -9,6 +18,8 @@ export default function LightsPanel() {
   const sceneLights = useStore((s) => s.sceneLights)
   const selectedLightId = useStore((s) => s.selectedLightId)
   const setSelectedLightId = useStore((s) => s.setSelectedLightId)
+  const rimFollowLight = useStore((s) => s.rimFollowLight)
+  const rimFollowLightId = useStore((s) => s.rimFollowLightId)
   const st = useStore.getState
 
   const selected = sceneLights.find((lt) => lt.id === selectedLightId) || null
@@ -28,6 +39,11 @@ export default function LightsPanel() {
   function onRemove(id) {
     removeLight(id)
     st().removeSceneLight(id)
+    if (rimFollowLightId === id) {
+      st().setRimFollowLight(false)
+      st().setRimFollowLightId(null)
+      applyModelMaterials()
+    }
   }
 
   function onColor(color) {
@@ -46,6 +62,22 @@ export default function LightsPanel() {
     if (!selected) return
     setLightCastShadow(selected.id, castShadow)
     st().setLightCastShadow(selected.id, castShadow)
+  }
+
+  function onDirectional(directional) {
+    if (!selected) return
+    setLightDirectional(selected.id, directional)
+    st().setLightDirectional(selected.id, directional)
+  }
+
+  // Toggle whether this light drives the character's rim-light colour +
+  // direction (see the Rim light section of the Look panel). Only one light
+  // can drive it at a time — picking a different one just swaps which.
+  function onFollowRim(id) {
+    const next = rimFollowLight && rimFollowLightId === id
+    st().setRimFollowLight(!next)
+    st().setRimFollowLightId(!next ? id : null)
+    applyModelMaterials()
   }
 
   return (
@@ -70,7 +102,23 @@ export default function LightsPanel() {
                 title={lt.name}
                 onClick={() => onSelect(lt.id)}
               >
-                <span className="obj-name">💡 {lt.name}</span>
+                <span className="obj-name">
+                  {lt.directional ? '📐' : '💡'} {lt.name}
+                </span>
+                <button
+                  className="obj-eye"
+                  title={
+                    rimFollowLight && rimFollowLightId === lt.id
+                      ? 'Driving the rim light \u2014 click to stop'
+                      : 'Use this light\u2019s colour + direction for the rim light'
+                  }
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onFollowRim(lt.id)
+                  }}
+                >
+                  {rimFollowLight && rimFollowLightId === lt.id ? '🎯' : '🔘'}
+                </button>
                 <button
                   className="obj-del"
                   title="Remove this light"
@@ -120,10 +168,33 @@ export default function LightsPanel() {
               <label className="morph-label" style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
                 <input
                   type="checkbox"
+                  checked={!!selected.directional}
+                  onChange={(e) => onDirectional(e.target.checked)}
+                />
+                Directional (parallel rays, no falloff)
+              </label>
+              <div className="radio-hint" style={{ marginTop: -2, marginBottom: 4 }}>
+                {selected.directional
+                  ? 'Aimed at the scene origin \u2014 drag it around to change the angle it shines from, like a sun or a rim/fill light.'
+                  : 'Shines outward in every direction and fades with distance, like a lamp or bulb.'}
+              </div>
+
+              <label className="morph-label" style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                <input
+                  type="checkbox"
                   checked={!!selected.castShadow}
                   onChange={(e) => onCastShadow(e.target.checked)}
                 />
                 Cast shadows
+              </label>
+
+              <label className="morph-label" style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                <input
+                  type="checkbox"
+                  checked={rimFollowLight && rimFollowLightId === selected.id}
+                  onChange={() => onFollowRim(selected.id)}
+                />
+                Drive the rim light's colour + direction
               </label>
             </div>
           )}
@@ -131,7 +202,9 @@ export default function LightsPanel() {
           <div className="pose-hint">
             Drag a light's gizmo to move it. Props can be styled (flat, cartoon,
             soft anime, realistic) or set to ignore shadows from the Objects
-            panel.
+            panel. A light set to drive the rim light overrides the manual
+            colour/direction in the Look panel until it's turned off there or
+            here (🎯).
           </div>
         </>
       )}

@@ -183,6 +183,10 @@ export default function MaterialPanel() {
   const rimHardEnabled = useStore((s) => s.rimHardEnabled)
   const rimHardIntensity = useStore((s) => s.rimHardIntensity)
   const rimHardWidth = useStore((s) => s.rimHardWidth)
+  const rimFollowLight = useStore((s) => s.rimFollowLight)
+  const rimFollowLightId = useStore((s) => s.rimFollowLightId)
+  const sceneLights = useStore((s) => s.sceneLights)
+  const followedLightName = sceneLights.find((lt) => lt.id === rimFollowLightId)?.name
 
   const setMaterialMode = useStore((s) => s.setMaterialMode)
   const setToonSteps = useStore((s) => s.setToonSteps)
@@ -203,6 +207,8 @@ export default function MaterialPanel() {
   const setRimHardEnabled = useStore((s) => s.setRimHardEnabled)
   const setRimHardIntensity = useStore((s) => s.setRimHardIntensity)
   const setRimHardWidth = useStore((s) => s.setRimHardWidth)
+  const setRimFollowLight = useStore((s) => s.setRimFollowLight)
+  const setRimFollowLightId = useStore((s) => s.setRimFollowLightId)
   const setMeshOutline = useStore((s) => s.setMeshOutline)
   const setMeshShading = useStore((s) => s.setMeshShading)
   const setMeshVisible = useStore((s) => s.setMeshVisible)
@@ -348,10 +354,33 @@ export default function MaterialPanel() {
           <input
             type="color"
             value={rimLightColor}
-            disabled={!rimCapable || (!rimSoftEnabled && !rimHardEnabled)}
+            disabled={!rimCapable || (!rimSoftEnabled && !rimHardEnabled) || rimFollowLight}
             onChange={(e) => setRimLightColor(e.target.value)}
           />
         </label>
+        {rimFollowLight && (
+          <div className="radio-hint" style={{ marginTop: -2 }}>
+            Following {followedLightName || 'a scene light'}'s colour + direction (set in the Lights
+            panel).{' '}
+            <button
+              style={{
+                background: 'none',
+                border: 'none',
+                padding: 0,
+                color: 'var(--accent, #7dd3fc)',
+                textDecoration: 'underline',
+                cursor: 'pointer',
+                font: 'inherit',
+              }}
+              onClick={() => {
+                setRimFollowLight(false)
+                setRimFollowLightId(null)
+              }}
+            >
+              Stop following
+            </button>
+          </div>
+        )}
 
         <label className="toggle-row" style={{ padding: 0, marginTop: 4 }}>
           <input
@@ -365,7 +394,7 @@ export default function MaterialPanel() {
 
         <div className="radio-hint" style={{ marginTop: 2 }}>
           {rimCapable
-            ? 'Soft and Hard are independent \u2014 turn on either, or both. Width controls how far each reaches in from the silhouette. Directional limits the glow to just the side of the character the key light is coming from (e.g. a light from the right only lights the right edge), which reads as calmer than the default all-round rim.'
+            ? 'Soft and Hard are independent \u2014 turn on either, or both. Width controls how far each reaches in from the silhouette. Directional limits the glow to just the side of the character the key light is coming from (e.g. a light from the right only lights the right edge), which reads as calmer than the default all-round rim. To use a placed light instead of the key light, mark it "drive the rim light" in the Lights panel.'
             : 'Only affects Cartoon / Soft Anime modes.'}
         </div>
       </div>
