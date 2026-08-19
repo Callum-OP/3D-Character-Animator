@@ -82,7 +82,7 @@ function defaultCharacterFields(modelInfo) {
     importedClipNames: [],
     duration: 0,
     currentTime: 0,
-    animData: { tracks: {}, root: [], meshes: {}, cameras: {}, cuts: [], morphs: {} },
+    animData: { tracks: {}, root: [], meshes: {}, cameras: {}, cuts: [], morphs: {}, lights: {} },
     insertTime: 0,
     poseClipboard: null,
   }
@@ -268,6 +268,14 @@ export const useStore = create((set) => ({
   rimHardIntensity: 0.8,
   rimHardWidth: 0.35, // 0 = hairline · 1 = thick band
 
+  // When on, the rim's colour + direction are read live from a chosen scene
+  // light (see sceneLights above) instead of the manual colour picker / key
+  // light direction — e.g. drop a Directional light in behind the character,
+  // tint it, and the rim just follows it. Falls back to the manual settings
+  // if the chosen light no longer exists.
+  rimFollowLight: false,
+  rimFollowLightId: null,
+
   setRimLightColor: (rimLightColor) => set({ rimLightColor }),
   setRimSideOnly: (rimSideOnly) => set({ rimSideOnly }),
   setRimSoftEnabled: (rimSoftEnabled) => set({ rimSoftEnabled }),
@@ -276,6 +284,8 @@ export const useStore = create((set) => ({
   setRimHardEnabled: (rimHardEnabled) => set({ rimHardEnabled }),
   setRimHardIntensity: (rimHardIntensity) => set({ rimHardIntensity }),
   setRimHardWidth: (rimHardWidth) => set({ rimHardWidth }),
+  setRimFollowLight: (rimFollowLight) => set({ rimFollowLight }),
+  setRimFollowLightId: (rimFollowLightId) => set({ rimFollowLightId }),
 
   // ---- Key light (affects Toon/Standard modes only; ignored by Unlit) ----
   lightIntensity: 2.0,
@@ -468,7 +478,7 @@ export const useStore = create((set) => ({
   setViewCameraId: (viewCameraId) => set({ viewCameraId }),
 
   // ---- Scene lights ----
-  sceneLights: [], // [{ id, name, color, intensity, castShadow }] — placeable lights
+  sceneLights: [], // [{ id, name, color, intensity, castShadow, directional }] — placeable lights
   selectedLightId: null, // light the gizmo is attached to
 
   addSceneLight: (light) =>
@@ -506,6 +516,10 @@ export const useStore = create((set) => ({
   setLightCastShadow: (id, castShadow) =>
     set((s) => ({
       sceneLights: s.sceneLights.map((lt) => (lt.id === id ? { ...lt, castShadow } : lt)),
+    })),
+  setLightDirectional: (id, directional) =>
+    set((s) => ({
+      sceneLights: s.sceneLights.map((lt) => (lt.id === id ? { ...lt, directional } : lt)),
     })),
 
   // ---- Animation ----
@@ -556,9 +570,10 @@ export const useStore = create((set) => ({
   // tracks = bone rotations; root = character world motion [{ time, pos:[3], quat:[4] }];
   // meshes = part motion keyed by mesh INDEX [{ time, pos:[3], quat:[4], scale:[3] }];
   // cameras = camera motion keyed by camera NAME [{ time, pos:[3], quat:[4] }];
+  // lights = light motion keyed by light NAME [{ time, pos:[3], color: '#hex', intensity }];
   // cuts = camera switches [{ time, camera: name }] — the view hard-cuts to that
   // camera from that time on during playback (one cut per time)
-  animData: { tracks: {}, root: [], meshes: {}, cameras: {}, cuts: [] },
+  animData: { tracks: {}, root: [], meshes: {}, cameras: {}, cuts: [], lights: {} },
 
   setAnimFps: (animFps) => set({ animFps }),
   setAnimDuration: (animDuration) => set({ animDuration }),
@@ -572,10 +587,11 @@ export const useStore = create((set) => ({
         cameras: animData.cameras || {},
         cuts: animData.cuts || [],
         morphs: animData.morphs || {},
+        lights: animData.lights || {},
       },
     }),
   clearAnim: () =>
-    set({ animData: { tracks: {}, root: [], meshes: {}, cameras: {}, cuts: [], morphs: {} } }),
+    set({ animData: { tracks: {}, root: [], meshes: {}, cameras: {}, cuts: [], morphs: {}, lights: {} } }),
 
   // Insert/replace a camera cut: from this time on, the view is this camera.
   addCameraCut: (time, camera) =>
@@ -615,6 +631,17 @@ export const useStore = create((set) => ({
       return { animData: { ...s.animData, cameras } }
     }),
 
+  // Insert/replace a light keyframe (position + colour + intensity), by light name.
+  addLightKeyframe: (name, time, key) =>
+    set((s) => {
+      const lights = { ...(s.animData.lights || {}) }
+      const keys = (lights[name] || []).filter((k) => k.time !== time)
+      keys.push({ time, ...key })
+      keys.sort((a, b) => a.time - b.time)
+      lights[name] = keys
+      return { animData: { ...s.animData, lights } }
+    }),
+
   // Insert/replace a character root-motion keyframe (world position + rotation).
   // When `rippleAfter` is true (the "ripple edit" toggle), every existing
   // keyframe strictly after `time` is shifted by the same position delta as
@@ -649,7 +676,7 @@ export const useStore = create((set) => ({
       animData: { ...s.animData, root: (s.animData.root || []).filter((k) => k.time !== time) },
     })),
 
-  // Remove every keyframe (joints, position, parts, cameras) at a given time.
+  // Remove every keyframe (joints, position, parts, cameras, lights) at a given time.
   deleteAllAtTime: (time) =>
     set((s) => {
       const near = (k) => Math.abs(k.time - time) <= 1e-6
@@ -669,6 +696,11 @@ export const useStore = create((set) => ({
         const kept = keys.filter((k) => !near(k))
         if (kept.length) cameras[name] = kept
       }
+      const lights = {}
+      for (const [name, keys] of Object.entries(s.animData.lights || {})) {
+        const kept = keys.filter((k) => !near(k))
+        if (kept.length) lights[name] = kept
+      }
       const cuts = (s.animData.cuts || []).filter((k) => !near(k))
       const morphs = {}
       for (const [meshIndex, byName] of Object.entries(s.animData.morphs || {})) {
@@ -679,7 +711,7 @@ export const useStore = create((set) => ({
         }
         if (Object.keys(kept).length) morphs[meshIndex] = kept
       }
-      return { animData: { tracks, root, meshes, cameras, cuts, morphs } }
+      return { animData: { tracks, root, meshes, cameras, cuts, morphs, lights } }
     }),
 
   // Insert/replace a keyframe for one bone at a time.
@@ -754,6 +786,10 @@ export const useStore = create((set) => ({
       for (const [name, keys] of Object.entries(s.animData.cameras || {})) {
         cameras[name] = keys.map(shift)
       }
+      const lights = {}
+      for (const [name, keys] of Object.entries(s.animData.lights || {})) {
+        lights[name] = keys.map(shift)
+      }
       const cuts = (s.animData.cuts || []).map(shift)
       const morphs = {}
       for (const [meshIndex, byName] of Object.entries(s.animData.morphs || {})) {
@@ -769,10 +805,11 @@ export const useStore = create((set) => ({
       for (const k of root) maxTime = Math.max(maxTime, k.time)
       for (const keys of Object.values(meshes)) for (const k of keys) maxTime = Math.max(maxTime, k.time)
       for (const keys of Object.values(cameras)) for (const k of keys) maxTime = Math.max(maxTime, k.time)
+      for (const keys of Object.values(lights)) for (const k of keys) maxTime = Math.max(maxTime, k.time)
       for (const k of cuts) maxTime = Math.max(maxTime, k.time)
 
       return {
-        animData: { tracks, root, meshes, cameras, cuts, morphs },
+        animData: { tracks, root, meshes, cameras, cuts, morphs, lights },
         animDuration: Math.max(s.animDuration, maxTime),
       }
     }),

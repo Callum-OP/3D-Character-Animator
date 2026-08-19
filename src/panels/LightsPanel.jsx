@@ -7,6 +7,7 @@ import {
   setLightIntensity,
   setLightCastShadow,
   setLightDirectional,
+  getLightKeyValue,
 } from '../three/lights.js'
 import { applyModelMaterials } from '../three/scene.js'
 import EditableValue from './EditableValue.jsx'
@@ -14,15 +15,21 @@ import EditableValue from './EditableValue.jsx'
 // Side-panel section: add point lights, move them around the character, and
 // adjust colour/brightness/shadows per light. Separate from the built-in key
 // light (see the Material panel) — these are extra, freely placeable sources.
+// Position + colour + intensity can be keyframed on the same timeline as the
+// character/cameras — key it at two times and it glides between them on Play.
 export default function LightsPanel() {
   const sceneLights = useStore((s) => s.sceneLights)
   const selectedLightId = useStore((s) => s.selectedLightId)
   const setSelectedLightId = useStore((s) => s.setSelectedLightId)
   const rimFollowLight = useStore((s) => s.rimFollowLight)
   const rimFollowLightId = useStore((s) => s.rimFollowLightId)
+  const animData = useStore((s) => s.animData)
+  const animFps = useStore((s) => s.animFps)
+  const insertTime = useStore((s) => s.insertTime)
   const st = useStore.getState
 
   const selected = sceneLights.find((lt) => lt.id === selectedLightId) || null
+  const keyCount = selected ? (animData.lights?.[selected.name] || []).length : 0
 
   function onAdd() {
     const meta = addLight()
@@ -70,6 +77,17 @@ export default function LightsPanel() {
     st().setLightDirectional(selected.id, directional)
   }
 
+  // Save this light's position/colour/intensity at the Animate panel's
+  // insert time. Key it at two different times and it glides between them
+  // during playback, same idea as "Key camera" in the Cameras panel.
+  function onKeyLight() {
+    if (!selected) return
+    const key = getLightKeyValue(selected.id)
+    if (!key) return
+    const t = Math.round(insertTime * animFps) / animFps // snap to the fps grid
+    st().addLightKeyframe(selected.name, t, { pos: key.pos, color: key.color, intensity: key.intensity })
+  }
+
   // Toggle whether this light drives the character's rim-light colour +
   // direction (see the Rim light section of the Look panel). Only one light
   // can drive it at a time — picking a different one just swaps which.
@@ -104,6 +122,11 @@ export default function LightsPanel() {
               >
                 <span className="obj-name">
                   {lt.directional ? '📐' : '💡'} {lt.name}
+                  {(animData.lights?.[lt.name] || []).length > 0 && (
+                    <span className="kf-tag" style={{ marginLeft: 6 }}>
+                      {(animData.lights?.[lt.name] || []).length} keys
+                    </span>
+                  )}
                 </span>
                 <button
                   className="obj-eye"
@@ -196,6 +219,16 @@ export default function LightsPanel() {
                 />
                 Drive the rim light's colour + direction
               </label>
+
+              <div className="kf-actions" style={{ marginTop: 6 }}>
+                <button
+                  className="btn secondary"
+                  onClick={onKeyLight}
+                  title="Save this light's position/colour/intensity at the Animate panel's insert time — key it at two times and it glides between them"
+                >
+                  Key light{keyCount ? ` (${keyCount})` : ''}
+                </button>
+              </div>
             </div>
           )}
 
@@ -204,7 +237,10 @@ export default function LightsPanel() {
             soft anime, realistic) or set to ignore shadows from the Objects
             panel. A light set to drive the rim light overrides the manual
             colour/direction in the Look panel until it's turned off there or
-            here (🎯).
+            here (🎯). <b>Key light</b> animates a light's position, colour,
+            and intensity over time — key it at two times and it glides
+            between them during playback, on the same timeline as the
+            character and cameras (Animate panel).
           </div>
         </>
       )}

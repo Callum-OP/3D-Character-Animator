@@ -53,7 +53,7 @@ function rootTravels(keys) {
 function collectKeyframes(animData) {
   const map = new Map()
   const entry = (t) => {
-    const e = map.get(t) || { time: t, joints: 0, pos: false, parts: 0, cameras: 0, morphs: 0, cut: null }
+    const e = map.get(t) || { time: t, joints: 0, pos: false, parts: 0, cameras: 0, lights: 0, morphs: 0, cut: null }
     map.set(t, e)
     return e
   }
@@ -66,6 +66,9 @@ function collectKeyframes(animData) {
   }
   for (const keys of Object.values(animData.cameras || {})) {
     for (const k of keys) entry(k.time).cameras++
+  }
+  for (const keys of Object.values(animData.lights || {})) {
+    for (const k of keys) entry(k.time).lights++
   }
   for (const byName of Object.values(animData.morphs || {})) {
     for (const keys of Object.values(byName || {})) {
@@ -383,6 +386,7 @@ export default function AnimationPanel() {
       cameras: animData.cameras || {},
       cuts: animData.cuts || [],
       morphs: animData.morphs || {},
+      lights: animData.lights || {},
     }
     const blob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
@@ -410,6 +414,7 @@ export default function AnimationPanel() {
           cameras: json.cameras || {},
           cuts: json.cuts || [],
           morphs: json.morphs || {},
+          lights: json.lights || {},
         })
       } catch (err) {
         console.warn('Failed to load animation:', err)
@@ -1344,6 +1349,11 @@ export default function AnimationPanel() {
                     {k.cameras > 0 && (
                       <span className="kf-tag pos">
                         {k.cameras} camera{k.cameras > 1 ? 's' : ''}
+                      </span>
+                    )}
+                    {k.lights > 0 && (
+                      <span className="kf-tag pos">
+                        {k.lights} light{k.lights > 1 ? 's' : ''}
                       </span>
                     )}
                     {k.morphs > 0 && <span className="kf-tag">{k.morphs} shape key{k.morphs > 1 ? 's' : ''}</span>}

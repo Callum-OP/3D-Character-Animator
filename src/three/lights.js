@@ -9,8 +9,10 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 // unlit "bulb" sphere so it's visible and selectable, moved with a translate-
 // only TransformControls gizmo — like a prop, but lighting instead of geometry.
 //
-// Not keyframed/animated (out of scope for now) — just placed and left there,
-// same as an environment light in a photo shoot.
+// Position + colour + intensity can be keyframed on the same timeline as the
+// character/cameras (see getLightKeyValue / sampleLightTracks below) — key it
+// at two times in the Animate panel and it glides between them during
+// playback, same idea as a camera key.
 // ---------------------------------------------------------------------------
 
 let idCounter = 0
@@ -231,6 +233,91 @@ function applyShadowSettings(entry, castShadow, scale) {
     cam.far = scale * 10
     cam.updateProjectionMatrix()
   }
+}
+
+// --- Keyframing ----------------------------------------------------------------
+
+// A light's current placement + colour/intensity, for keyframing.
+export function getLightKeyValue(id) {
+  const entry = l.lights.find((e) => e.id === id)
+  if (!entry) return null
+  return {
+    name: entry.name,
+    pos: entry.light.position.toArray(),
+    color: '#' + entry.light.color.getHexString(),
+    intensity: entry.light.intensity,
+  }
+}
+
+// Snapshot every light's placement/colour/intensity before playback drives
+// them, so Stop puts them back where the user parked them.
+export function getLightsPlaybackSnapshot() {
+  return l.lights.map((entry) => ({
+    entry,
+    pos: entry.light.position.clone(),
+    color: entry.light.color.clone(),
+    intensity: entry.light.intensity,
+  }))
+}
+
+export function applyLightsPlaybackSnapshot(snap) {
+  if (!snap) return
+  for (const s of snap) {
+    s.entry.light.position.copy(s.pos)
+    s.entry.light.color.copy(s.color)
+    s.entry.bulb.material.color.copy(s.color)
+    s.entry.light.intensity = s.intensity
+  }
+  if (snap.length && l.onChange) l.onChange()
+}
+
+// Drive the lights from keyframe tracks at time t.
+// tracks: { [lightName]: [{ time, pos:[3], color: '#hex', intensity }] } (each sorted by time).
+export function sampleLightTracks(tracks, t) {
+  if (!tracks) return
+  let any = false
+  for (const [name, keys] of Object.entries(tracks)) {
+    if (!keys || keys.length === 0) continue
+    const entry = l.lights.find((e) => e.name === name)
+    if (!entry) continue
+    sampleLightKeys(entry, keys, t)
+    any = true
+  }
+  // A light driving the rim light (see getLightRimSource) needs the shader's
+  // colour/direction uniforms refreshed as it moves during playback — cheap
+  // (just uniform writes), so just do it every time something moved.
+  if (any && l.onChange) l.onChange()
+}
+
+const _c0 = new THREE.Color()
+const _c1 = new THREE.Color()
+
+function sampleLightKeys(entry, keys, t) {
+  const apply = (k) => {
+    entry.light.position.fromArray(k.pos)
+    entry.light.color.set(k.color)
+    entry.bulb.material.color.set(k.color)
+    entry.light.intensity = k.intensity
+  }
+  if (t <= keys[0].time) return apply(keys[0])
+  const last = keys[keys.length - 1]
+  if (t >= last.time) return apply(last)
+  let i = 0
+  while (i < keys.length - 1 && keys[i + 1].time < t) i++
+  const k0 = keys[i]
+  const k1 = keys[i + 1]
+  const span = k1.time - k0.time
+  const f = span > 0 ? (t - k0.time) / span : 0
+  entry.light.position.set(
+    k0.pos[0] + (k1.pos[0] - k0.pos[0]) * f,
+    k0.pos[1] + (k1.pos[1] - k0.pos[1]) * f,
+    k0.pos[2] + (k1.pos[2] - k0.pos[2]) * f,
+  )
+  _c0.set(k0.color)
+  _c1.set(k1.color)
+  entry.light.color.copy(_c0).lerp(_c1, f)
+  entry.bulb.material.color.copy(entry.light.color)
+  entry.light.intensity = k0.intensity + (k1.intensity - k0.intensity) * f
 }
 
 // --- Save / load ---------------------------------------------------------------

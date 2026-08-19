@@ -10,6 +10,11 @@ import {
   getCamerasPlaybackSnapshot,
   applyCamerasPlaybackSnapshot,
 } from './cameras.js'
+import {
+  sampleLightTracks,
+  getLightsPlaybackSnapshot,
+  applyLightsPlaybackSnapshot,
+} from './lights.js'
 
 // ---------------------------------------------------------------------------
 // Animation
@@ -57,12 +62,14 @@ function newEntry(model) {
     editRoot: null,
     editMeshes: null,
     editCameras: null,
+    editLights: null,
     editCuts: null,
     editMorphs: null,
     rootRest: null,
     meshRest: null,
     morphRest: null,
     camerasRest: null,
+    lightsRest: null,
     viewRest: null,
     hasViewRest: false,
     lastCut: undefined,
@@ -184,6 +191,7 @@ export function updateAnimation(delta) {
       if (id === uiActiveId) {
         if (entry.editMeshes) sampleMeshTracks(entry.editMeshes, t)
         if (entry.editCameras) sampleCameraTracks(entry.editCameras, t)
+        if (entry.editLights) sampleLightTracks(entry.editLights, t)
         sampleCuts(t)
         globalRefs.onTime(t)
       }
@@ -539,6 +547,7 @@ function setupOverlayTracks(animData) {
   a.editMeshes = animData && hasKeys(animData.meshes) ? sortTracks(animData.meshes) : null
   a.editMorphs = animData && hasMorphKeys(animData.morphs) ? sortMorphTracks(animData.morphs) : null
   a.editCameras = animData && hasKeys(animData.cameras) ? sortTracks(animData.cameras) : null
+  a.editLights = animData && hasKeys(animData.lights) ? sortTracks(animData.lights) : null
   const cuts = animData && animData.cuts
   a.editCuts = cuts && cuts.length ? [...cuts].sort((x, y) => x.time - y.time) : null
 
@@ -547,6 +556,7 @@ function setupOverlayTracks(animData) {
   a.meshRest = a.editMeshes ? getMeshPlaybackSnapshot() : null
   a.morphRest = a.editMorphs ? getMorphPlaybackSnapshot(a.editMorphs) : null
   a.camerasRest = a.editCameras ? getCamerasPlaybackSnapshot() : null
+  a.lightsRest = a.editLights ? getLightsPlaybackSnapshot() : null
   // Remember which camera (if any) the user was looking through before the
   // cuts take over, so Stop returns to their view.
   if (a.editCuts && !a.hasViewRest) {
@@ -714,6 +724,8 @@ export function stop() {
   a.morphRest = null
   applyCamerasPlaybackSnapshot(a.camerasRest)
   a.camerasRest = null
+  applyLightsPlaybackSnapshot(a.lightsRest)
+  a.lightsRest = null
   if (a.hasViewRest) {
     // Glide back to the pre-play view instead of snapping — cuts got here
     // smoothly, so leaving them the same way keeps Stop from looking like a
@@ -759,6 +771,7 @@ export function scrub(t) {
   if (a.editMeshes) sampleMeshTracks(a.editMeshes, a.action.time)
   if (a.editMorphs) sampleMorphTracks(a.editMorphs, a.action.time)
   if (a.editCameras) sampleCameraTracks(a.editCameras, a.action.time)
+  if (a.editLights) sampleLightTracks(a.editLights, a.action.time)
   sampleCuts(a.action.time)
   a.refs.requestRender()
 }
