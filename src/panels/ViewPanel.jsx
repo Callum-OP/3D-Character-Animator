@@ -1,4 +1,5 @@
 import { useStore } from '../store.js'
+import EditableValue from './EditableValue.jsx'
 
 // Side-panel section: viewport display toggles (grid, ground shadow, background,
 // stats). Background defaults to transparent because rendered output is meant for
@@ -8,6 +9,8 @@ export default function ViewPanel() {
   const showGround = useStore((s) => s.showGround)
   const showShadow = useStore((s) => s.showShadow)
   const shadowMapping = useStore((s) => s.shadowMapping)
+  const shadowSoftness = useStore((s) => s.shadowSoftness)
+  const shadowStrength = useStore((s) => s.shadowStrength)
   const solidBackground = useStore((s) => s.solidBackground)
   const backgroundColor = useStore((s) => s.backgroundColor)
   const showStats = useStore((s) => s.showStats)
@@ -15,6 +18,8 @@ export default function ViewPanel() {
   const setShowGround = useStore((s) => s.setShowGround)
   const setShowShadow = useStore((s) => s.setShowShadow)
   const setShadowMapping = useStore((s) => s.setShadowMapping)
+  const setShadowSoftness = useStore((s) => s.setShadowSoftness)
+  const setShadowStrength = useStore((s) => s.setShadowStrength)
   const setSolidBackground = useStore((s) => s.setSolidBackground)
   const setBackgroundColor = useStore((s) => s.setBackgroundColor)
   const setShowStats = useStore((s) => s.setShowStats)
@@ -59,6 +64,50 @@ export default function ViewPanel() {
           />
           Realistic shadows
         </label>
+      )}
+
+      {showShadow && shadowMapping && (
+        <div style={{ paddingLeft: 22 }}>
+          <label className="slider-row" title="How blurred the shadow's edge is — 0 is a crisp cut, higher is soft and diffused">
+            <span className="slider-label">Softness</span>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.01}
+              value={shadowSoftness}
+              onChange={(e) => setShadowSoftness(Number(e.target.value))}
+            />
+            <EditableValue
+              value={shadowSoftness}
+              min={0}
+              max={1}
+              onChange={setShadowSoftness}
+              format={(v) => Math.round(v * 100) + '%'}
+              label="Shadow softness"
+            />
+          </label>
+
+          <label className="slider-row" title="How dark the shadow is — 0 is barely visible, 1 is solid black">
+            <span className="slider-label">Strength</span>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.01}
+              value={shadowStrength}
+              onChange={(e) => setShadowStrength(Number(e.target.value))}
+            />
+            <EditableValue
+              value={shadowStrength}
+              min={0}
+              max={1}
+              onChange={setShadowStrength}
+              format={(v) => Math.round(v * 100) + '%'}
+              label="Shadow strength"
+            />
+          </label>
+        </div>
       )}
 
       <label className="toggle-row">

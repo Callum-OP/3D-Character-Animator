@@ -224,6 +224,8 @@ export const useStore = create((set) => ({
   backgroundColor: '#202127',
   showShadow: true, // ground shadow on/off
   shadowMapping: false, // true = real cast shadows; false = cheap blob
+  shadowSoftness: 0.4, // 0 = crisp/hard edge, 1 = very soft/blurred (realistic shadows only)
+  shadowStrength: 0.35, // 0 = barely visible, 1 = solid black (realistic shadows only)
   showStats: false, // FPS / memory readout overlay
   showHelp: false, // help & shortcuts overlay
 
@@ -233,6 +235,8 @@ export const useStore = create((set) => ({
   setBackgroundColor: (backgroundColor) => set({ backgroundColor }),
   setShowShadow: (showShadow) => set({ showShadow }),
   setShadowMapping: (shadowMapping) => set({ shadowMapping }),
+  setShadowSoftness: (shadowSoftness) => set({ shadowSoftness }),
+  setShadowStrength: (shadowStrength) => set({ shadowStrength }),
   setShowStats: (showStats) => set({ showStats }),
   setShowHelp: (showHelp) => set({ showHelp }),
   toggleHelp: () => set((s) => ({ showHelp: !s.showHelp })),

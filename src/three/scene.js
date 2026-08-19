@@ -424,6 +424,8 @@ export function initScene(container) {
   setOutlineEnabled(s.outlineEnabled)
   setShadowVisible(s.showShadow)
   setShadowMapping(s.shadowMapping)
+  setShadowSoftness(s.shadowSoftness)
+  setShadowStrength(s.shadowStrength)
 
   // --- Resize handling ---
   const resizeObserver = new ResizeObserver(() => handleResize())
@@ -1111,6 +1113,8 @@ function collectSettings() {
     backgroundColor: s.backgroundColor,
     showShadow: s.showShadow,
     shadowMapping: s.shadowMapping,
+    shadowSoftness: s.shadowSoftness,
+    shadowStrength: s.shadowStrength,
     animFps: s.animFps,
     animDuration: s.animDuration,
   }
@@ -1289,6 +1293,7 @@ export async function applyProjectData(record) {
     'envLightingEnabled', 'envLightingIntensity',
     'outlineEnabled', 'outlineWidth', 'softenEnabled', 'softenAmount',
     'showGrid', 'showGround', 'limbLimits', 'solidBackground', 'backgroundColor', 'showShadow', 'shadowMapping',
+    'shadowSoftness', 'shadowStrength',
     'animFps', 'animDuration',
   ]) {
     if (st[k] !== undefined) patch[k] = st[k]
@@ -1460,6 +1465,27 @@ export function setShadowVisible(visible) {
 export function setShadowMapping(on) {
   state.shadowMap = on
   applyShadowMode()
+}
+
+// Blur amount for the real cast shadow's edge, 0 (crisp/hard) – 1 (very soft).
+// Maps onto the light's shadow.radius (PCF sample spread) and blurSamples (how
+// many taps go into that spread) — more samples keeps a wide blur from looking
+// noisy/banded.
+export function setShadowSoftness(softness) {
+  state.shadowSoftness = softness
+  const dl = state.dirLight
+  if (dl) {
+    dl.shadow.radius = softness * 12
+    dl.shadow.blurSamples = Math.round(8 + softness * 16)
+  }
+  requestRender()
+}
+
+// Darkness of the real cast shadow, 0 (barely visible) – 1 (solid black).
+export function setShadowStrength(strength) {
+  state.shadowStrength = strength
+  if (state.shadowReceiver) state.shadowReceiver.material.opacity = strength
+  requestRender()
 }
 
 // The blob and the real cast-shadow are mutually exclusive: blob when shadows are

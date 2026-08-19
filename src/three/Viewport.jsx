@@ -8,6 +8,8 @@ import {
   setBackground,
   setShadowVisible,
   setShadowMapping,
+  setShadowSoftness,
+  setShadowStrength,
   applyModelMaterials,
   setLightSettings,
   setEnvironmentLighting,
@@ -82,12 +84,20 @@ export default function Viewport() {
 
   const showShadow = useStore((s) => s.showShadow)
   const shadowMapping = useStore((s) => s.shadowMapping)
+  const shadowSoftness = useStore((s) => s.shadowSoftness)
+  const shadowStrength = useStore((s) => s.shadowStrength)
   useEffect(() => {
     setShadowVisible(showShadow)
   }, [showShadow])
   useEffect(() => {
     setShadowMapping(shadowMapping)
   }, [shadowMapping])
+  useEffect(() => {
+    setShadowSoftness(shadowSoftness)
+  }, [shadowSoftness])
+  useEffect(() => {
+    setShadowStrength(shadowStrength)
+  }, [shadowStrength])
 
   // All material/shading/outline-width state funnels through applyModelMaterials.
   const materialMode = useStore((s) => s.materialMode)
