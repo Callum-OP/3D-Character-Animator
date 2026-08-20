@@ -167,6 +167,8 @@ export default function MaterialPanel() {
   const lightIntensity = useStore((s) => s.lightIntensity)
   const lightAzimuth = useStore((s) => s.lightAzimuth)
   const lightElevation = useStore((s) => s.lightElevation)
+  const defaultLightingEnabled = useStore((s) => s.defaultLightingEnabled)
+  const setDefaultLightingEnabled = useStore((s) => s.setDefaultLightingEnabled)
   const envLightingEnabled = useStore((s) => s.envLightingEnabled)
   const envLightingIntensity = useStore((s) => s.envLightingIntensity)
 
@@ -404,12 +406,23 @@ export default function MaterialPanel() {
           Light {lit ? '' : '(only affects Cartoon / Soft Anime / Realistic)'}
         </div>
 
+        <label className="toggle-row" style={{ padding: 0, marginBottom: 4 }} title="Turn off the built-in key + ambient light, e.g. to light the scene only with placed lights or the studio environment map">
+          <input
+            type="checkbox"
+            checked={defaultLightingEnabled}
+            disabled={!lit}
+            onChange={(e) => setDefaultLightingEnabled(e.target.checked)}
+          />
+          Enabled
+        </label>
+
+        <div className={defaultLightingEnabled ? '' : 'disabled'}>
         <div className="preset-row">
           {LIGHT_PRESETS.map((p) => (
             <button
               key={p.label}
               className="preset-btn"
-              disabled={!lit}
+              disabled={!lit || !defaultLightingEnabled}
               onClick={() => applyLightPreset(p)}
             >
               {p.label}
@@ -423,7 +436,7 @@ export default function MaterialPanel() {
           max={5}
           step={0.1}
           value={lightIntensity}
-          disabled={!lit}
+          disabled={!lit || !defaultLightingEnabled}
           onChange={setLightIntensity}
           format={(v) => v.toFixed(1)}
         />
@@ -433,7 +446,7 @@ export default function MaterialPanel() {
           max={180}
           step={1}
           value={lightAzimuth}
-          disabled={!lit}
+          disabled={!lit || !defaultLightingEnabled}
           onChange={setLightAzimuth}
           format={(v) => v + '°'}
         />
@@ -443,10 +456,11 @@ export default function MaterialPanel() {
           max={90}
           step={1}
           value={lightElevation}
-          disabled={!lit}
+          disabled={!lit || !defaultLightingEnabled}
           onChange={setLightElevation}
           format={(v) => v + '°'}
         />
+        </div>
       </div>
 
       <div className={'light-controls' + (materialMode === 'standard' ? '' : ' disabled')}>

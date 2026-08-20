@@ -142,6 +142,7 @@ const state = {
   shadowMap: false, // real shadow mapping vs blob
   dirLight: null,
   ambientLight: null,
+  defaultLightingOn: true,
   lightDir: new THREE.Vector3(0.3, 0.6, 0.7), // unit direction to the key light
   pmremGenerator: null,
   envMap: null, // baked studio-room environment texture, for IBL fill lighting
@@ -420,6 +421,7 @@ export function initScene(container) {
   setGroundVisible(s.showGround)
   setBackground(s.solidBackground, s.backgroundColor)
   setLightSettings(s.lightIntensity, s.lightAzimuth, s.lightElevation)
+  setDefaultLightingEnabled(s.defaultLightingEnabled)
   setEnvironmentLighting(s.envLightingEnabled, s.envLightingIntensity)
   setOutlineEnabled(s.outlineEnabled)
   setShadowVisible(s.showShadow)
@@ -1100,6 +1102,7 @@ function collectSettings() {
     lightIntensity: s.lightIntensity,
     lightAzimuth: s.lightAzimuth,
     lightElevation: s.lightElevation,
+    defaultLightingEnabled: s.defaultLightingEnabled,
     envLightingEnabled: s.envLightingEnabled,
     envLightingIntensity: s.envLightingIntensity,
     outlineEnabled: s.outlineEnabled,
@@ -1289,7 +1292,7 @@ export async function applyProjectData(record) {
     'rimLightColor', 'rimSideOnly',
     'rimSoftEnabled', 'rimSoftIntensity', 'rimSoftWidth',
     'rimHardEnabled', 'rimHardIntensity', 'rimHardWidth',
-    'lightIntensity', 'lightAzimuth', 'lightElevation',
+    'lightIntensity', 'lightAzimuth', 'lightElevation', 'defaultLightingEnabled',
     'envLightingEnabled', 'envLightingIntensity',
     'outlineEnabled', 'outlineWidth', 'softenEnabled', 'softenAmount',
     'showGrid', 'showGround', 'limbLimits', 'solidBackground', 'backgroundColor', 'showShadow', 'shadowMapping',
@@ -1611,6 +1614,18 @@ export function applyModelMaterials() {
 // Toggle the outline pass on/off (width/visibility come from applyModelMaterials).
 export function setOutlineToggle(enabled) {
   setOutlineEnabled(enabled)
+  requestRender()
+}
+
+// Toggle the built-in key + ambient light off entirely, e.g. to light the
+// scene only with placed lights (Lights panel) and/or the studio environment
+// map. Uses .visible rather than zeroing intensity so it also stops
+// contributing to the shadow-mapped key light's cast shadow.
+export function setDefaultLightingEnabled(enabled) {
+  state.defaultLightingOn = !!enabled
+  if (state.dirLight) state.dirLight.visible = state.defaultLightingOn
+  if (state.ambientLight) state.ambientLight.visible = state.defaultLightingOn
+  applyModelMaterials()
   requestRender()
 }
 

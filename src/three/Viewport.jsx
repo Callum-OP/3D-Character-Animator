@@ -12,6 +12,7 @@ import {
   setShadowStrength,
   applyModelMaterials,
   setLightSettings,
+  setDefaultLightingEnabled,
   setEnvironmentLighting,
   setOutlineToggle,
   setViewCameraById,
@@ -141,6 +142,11 @@ export default function Viewport() {
   useEffect(() => {
     setLightSettings(lightIntensity, lightAzimuth, lightElevation)
   }, [lightIntensity, lightAzimuth, lightElevation])
+
+  const defaultLightingEnabled = useStore((s) => s.defaultLightingEnabled)
+  useEffect(() => {
+    setDefaultLightingEnabled(defaultLightingEnabled)
+  }, [defaultLightingEnabled])
 
   const envLightingEnabled = useStore((s) => s.envLightingEnabled)
   const envLightingIntensity = useStore((s) => s.envLightingIntensity)

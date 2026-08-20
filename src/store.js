@@ -295,10 +295,12 @@ export const useStore = create((set) => ({
   lightIntensity: 2.0,
   lightAzimuth: 35, // degrees around the model (0 = front, +ve = to the right)
   lightElevation: 45, // degrees above the horizon
+  defaultLightingEnabled: true, // built-in key + ambient light; off = lit only by placed lights / env lighting
 
   setLightIntensity: (lightIntensity) => set({ lightIntensity }),
   setLightAzimuth: (lightAzimuth) => set({ lightAzimuth }),
   setLightElevation: (lightElevation) => set({ lightElevation }),
+  setDefaultLightingEnabled: (defaultLightingEnabled) => set({ defaultLightingEnabled }),
 
   // ---- Environment (studio HDRI-style) fill lighting — Standard mode only,
   // like Blender's Material Preview viewport shading. Off by default so it
