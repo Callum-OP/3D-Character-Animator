@@ -73,7 +73,9 @@ export function classifyBone(rawName) {
   // Skip fingers / twist / helper bones outright.
   if (/thumb|index|middle|ring|pinky|finger|twist|palm|metacarpal/.test(n)) return null
   // Facial bones ("eye_ball" must not read as a toe), correctives, attachments.
-  if (/eye|jaw|tongue|teeth|breast|cheek|brow|lip|nose|hair/.test(n)) return null
+  // "face" also excludes rigs that carry a separate face-direction/orientation
+  // helper bone (not a deforming joint) alongside the real Head bone.
+  if (/eye|jaw|tongue|teeth|breast|cheek|brow|lip|nose|hair|face/.test(n)) return null
   if (/(^|_)vol(ume)?(_|$)|cloth|socket|weapon|(^|_)ik(_|$)|_end(_\d+)*$/.test(n)) return null
 
   // Legs & feet (before generic torso).
@@ -319,17 +321,39 @@ export function retargetParsed(parsed, model, names, hip, clipName) {
   {
     const tDir = new THREE.Vector3()
     const sDir = new THREE.Vector3()
-    const firstMappedDescendant = (node) => {
-      for (const c of node.children) {
-        if (mappedSet.has(c)) return c
-        const deeper = firstMappedDescendant(c)
-        if (deeper) return deeper
+    // A bone can have more than one mapped branch below it — Hips leads to
+    // BOTH the spine and the two thighs; Spine2/chest leads to BOTH the neck
+    // and the two shoulders. Collect the first mapped bone on every branch
+    // instead of stopping at whichever branch happens to be first in the
+    // loaded file's children order (glTF/FBX exporters don't all preserve
+    // Blender's creation order), then prefer the branch that continues the
+    // same body region (torso -> spine/chest/neck/head before torso -> limb).
+    // Anchoring a hip's rest alignment on a thigh instead of the spine bakes
+    // a constant sideways tilt into the hips (and everything above them) on
+    // every single frame — exactly the "one hip permanently cocked up" look.
+    const collectBranches = (node) => {
+      const out = []
+      const visit = (n) => {
+        if (mappedSet.has(n)) {
+          out.push(n)
+          return
+        }
+        for (const c of n.children) visit(c)
       }
-      return null
+      for (const c of node.children) visit(c)
+      return out
+    }
+    const branchRank = (n) => {
+      const slot = classifyBone(n.name) || ''
+      if (/^(spine|chest|neck|head)/.test(slot)) return 0
+      if (/^(shoulder|upperArm)\./.test(slot)) return 1
+      return 2
     }
     for (const b of mapped) {
-      const childT = firstMappedDescendant(b)
-      if (!childT) continue
+      const branches = collectBranches(b)
+      if (branches.length === 0) continue
+      branches.sort((a, c) => branchRank(a) - branchRank(c))
+      const childT = branches[0]
       const srcBone = srcByName.get(names[b.name])
       const childS = srcByName.get(names[childT.name])
       if (!childS || childS === srcBone) continue

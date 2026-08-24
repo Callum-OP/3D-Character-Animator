@@ -74,6 +74,7 @@ describe('classifyBone', () => {
     ['cloth_flag_01', null],
     ['ik_hand_l', null],
     ['hand_l_end', null],
+    ['HeadFace', null],
   ]
 
   for (const [raw, expected] of cases) {
