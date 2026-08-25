@@ -1002,8 +1002,14 @@ export function stopRecordingAndDownload(name = 'animation') {
 
 // Enter fullscreen on the viewport (Esc exits — browser default).
 export function enterFullscreen() {
+  // The itch.io embed owns fullscreen and may reject the app's request while
+  // trying to lock orientation.
+  if (window.self !== window.top) return
   const el = state.container && state.container.parentElement
-  if (el && el.requestFullscreen) el.requestFullscreen()
+  if (!el || !el.requestFullscreen) return
+  // Fullscreen and orientation locking are optional and can be rejected by
+  // embedded browsers such as itch.io's game frame.
+  el.requestFullscreen().catch(() => {})
 }
 
 // ---------------------------------------------------------------------------

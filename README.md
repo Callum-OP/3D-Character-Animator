@@ -89,6 +89,16 @@ a model file onto the viewport.
 ```bash
 npm run build      # production build into dist/
 npm run preview    # serve the production build locally
+npm run package:itch # build and create 3d-character-animator-itch.zip (Windows)
+```
+
+### itch.io upload
+
+For a zip file to use in sites like itch.io run:
+
+```bash
+npm install
+npm run package:itch
 ```
 
 ## Deployment (GitHub Pages)

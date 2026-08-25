@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "package:itch": "npm run build && node scripts/inline-itch.mjs && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-itch.ps1",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest"
