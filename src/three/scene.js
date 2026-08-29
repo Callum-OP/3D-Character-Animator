@@ -1016,6 +1016,35 @@ export function enterFullscreen() {
 // Scene save / load (layout: character + object transforms + current pose)
 // ---------------------------------------------------------------------------
 
+// Capture where the orbit camera is currently looking from — position, orbit
+// target and FOV — so a save can restore the exact view instead of leaving it
+// wherever it happened to be (e.g. framed for a since-resized character).
+// Zoom done via OrbitControls scroll is a dolly (camera moves along its view
+// direction), so `position` alone already captures it; no separate zoom field
+// needed.
+export function getViewportCameraData() {
+  if (!state.camera || !state.controls) return null
+  return {
+    position: state.camera.position.toArray(),
+    target: state.controls.target.toArray(),
+    fov: state.camera.fov,
+  }
+}
+
+// Restore a previously captured viewport camera. Called AFTER models/objects
+// are loaded (which auto-frame the camera to fit) so this has the final say —
+// otherwise a saved "zoomed in on tiny character" view would get overwritten
+// by the auto-frame's own guess.
+export function applyViewportCameraData(data) {
+  if (!data || !state.camera || !state.controls) return
+  if (Array.isArray(data.position)) state.camera.position.fromArray(data.position)
+  if (Array.isArray(data.target)) state.controls.target.fromArray(data.target)
+  if (typeof data.fov === 'number') state.camera.fov = data.fov
+  state.camera.updateProjectionMatrix()
+  state.controls.update()
+  requestRender()
+}
+
 // Capture the placement of the character and every prop, plus the current pose.
 // NOTE: this stores TRANSFORMS, not geometry — reload the same files, then Load
 // scene to restore where everything sat.
@@ -1025,6 +1054,7 @@ export function getSceneData() {
     objects: getObjectsData(),
     cameras: getCamerasData(),
     lights: getLightsData(),
+    viewportCamera: getViewportCameraData(),
   }
   if (state.currentModel) {
     const root = state.currentModel.root
@@ -1071,6 +1101,7 @@ export function applySceneData(json) {
     const metas = applyLightsData(json.lights)
     useStore.setState({ sceneLights: metas, selectedLightId: null })
   }
+  if (json.viewportCamera) applyViewportCameraData(json.viewportCamera)
   requestRender()
 }
 
@@ -1204,6 +1235,11 @@ export function getProjectData() {
     objects: getObjectsForSave(),
     cameras: getCamerasData(),
     lights: getLightsData(),
+    // The orbit view itself (position/target/fov) — restored last in
+    // applyProjectData, after character loads have done their own
+    // auto-framing, so a project reloads looking exactly like it did when
+    // saved instead of re-framed for whatever size the character loaded at.
+    viewportCamera: getViewportCameraData(),
   }
 }
 
@@ -1347,6 +1383,12 @@ export async function applyProjectData(record) {
 
   // 5. (animData is already restored per-character inside the load loop
   // above — see step 2 — so there's nothing left to do here.)
+
+  // 6. Restore the saved view LAST — loadModelFile auto-frames the camera to
+  // fit whatever just loaded, so doing this any earlier would get clobbered.
+  // Falls back to whatever auto-frame already did if the project predates
+  // this field (older saves simply won't have `viewportCamera`).
+  if (record.viewportCamera) applyViewportCameraData(record.viewportCamera)
 
   requestRender()
 }
