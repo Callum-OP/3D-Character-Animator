@@ -53,6 +53,11 @@ export default function ObjectsPanel() {
   const dragBeforeRef = useRef(null)
   const [msg, setMsg] = useState(null)
   const [scaleVal, setScaleVal] = useState(1)
+  const [radialDragging, setRadialDragging] = useState(false)
+  // Text under edit in the exact-size box. Kept separate from scaleVal so
+  // typing "1." or "" mid-edit doesn't get clobbered by re-renders — only
+  // committed (parsed + applied) on blur/Enter.
+  const [scaleText, setScaleText] = useState(null)
 
   function onPick(e) {
     const file = e.target.files && e.target.files[0]
@@ -92,6 +97,24 @@ export default function ObjectsPanel() {
         setMsg('Scene layout applied.')
       })
       .catch((err) => setMsg(err.message || String(err)))
+  }
+
+  // Commit whatever's typed in the exact-size box: parse, clamp, apply, and
+  // push one undo step (mirrors the ring's onCommit) — then clear the edit
+  // buffer so the input goes back to reflecting the live value.
+  function commitExactScale(e) {
+    const raw = e.target.value
+    setScaleText(null)
+    const parsed = parseFloat(raw)
+    if (!selectedObjectId || !dragBeforeRef.current || !Number.isFinite(parsed)) {
+      dragBeforeRef.current = null
+      return
+    }
+    const v = Math.max(0.01, parsed)
+    setSelectedUniformScale(selectedObjectId, v)
+    setScaleVal(v)
+    commitUniformScale(selectedObjectId, dragBeforeRef.current)
+    dragBeforeRef.current = null
   }
 
   // Step through the objects (wraps around).
@@ -179,11 +202,23 @@ export default function ObjectsPanel() {
           {objectMode === 'scale' && selectedObjectId && (
             <div style={{ marginTop: 10 }}>
               <RadialScale
-                value={scaleVal || getSelectedUniformScale(selectedObjectId)}
+                // While dragging, show the live value being dragged. Otherwise
+                // always read straight from the object rather than trusting
+                // the last-known scaleVal — that number can go stale the
+                // moment the exact-size box (or the 3D gizmo) changes the
+                // scale without going through this dial.
+                value={radialDragging ? scaleVal : getSelectedUniformScale(selectedObjectId)}
+                // Always hand the dial the CURRENT live scale at the instant
+                // a drag starts, not whatever this component last rendered
+                // with — this is the actual fix for "resizing with the exact
+                // box/gizmo first, then using the ring, undoes that change".
+                getValue={() => getSelectedUniformScale(selectedObjectId)}
                 label="Uniform resize"
-                onDragStart={() => {
+                onDragStart={(v) => {
                   dragBeforeRef.current = snapshotObject(selectedObjectId)
-                  setScaleVal(getSelectedUniformScale(selectedObjectId))
+                  setScaleVal(v)
+                  setScaleText(null)
+                  setRadialDragging(true)
                 }}
                 onChange={(v) => {
                   setScaleVal(v)
@@ -192,8 +227,45 @@ export default function ObjectsPanel() {
                 onCommit={() => {
                   commitUniformScale(selectedObjectId, dragBeforeRef.current)
                   dragBeforeRef.current = null
+                  setRadialDragging(false)
                 }}
               />
+
+              <div className="scale-exact" style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <label htmlFor="scale-exact-input" style={{ fontSize: 11, opacity: 0.8 }}>
+                  Exact size
+                </label>
+                <input
+                  id="scale-exact-input"
+                  className="text-input"
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  style={{ width: 80 }}
+                  // Show whatever's mid-edit, else the live current scale —
+                  // never a value stuck from before a ring drag or gizmo tweak.
+                  value={scaleText ?? Number(getSelectedUniformScale(selectedObjectId).toFixed(2))}
+                  title="Type an exact uniform scale factor and press Enter"
+                  onFocus={() => {
+                    // Snapshot for undo the moment editing starts, same as
+                    // the ring's onDragStart, so typing a value is one undo
+                    // step just like dragging is.
+                    dragBeforeRef.current = snapshotObject(selectedObjectId)
+                  }}
+                  onChange={(e) => setScaleText(e.target.value)}
+                  onBlur={commitExactScale}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.currentTarget.blur()
+                    } else if (e.key === 'Escape') {
+                      setScaleText(null)
+                      dragBeforeRef.current = null
+                      e.currentTarget.blur()
+                    }
+                  }}
+                />
+                <span style={{ fontSize: 11, opacity: 0.6 }}>×</span>
+              </div>
             </div>
           )}
 

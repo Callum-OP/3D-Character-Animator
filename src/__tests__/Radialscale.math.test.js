@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { angleDeltaToValue } from '../panels/RadialScale.jsx'
+import { angleDeltaToValue, angleStepDelta, turnsToFactor } from '../panels/RadialScale.jsx'
 
 const TAU = Math.PI * 2
 
@@ -57,5 +57,55 @@ describe('RadialScale angleDeltaToValue', () => {
     // Same start value (5) with two different current angles should scale
     // proportionally from 5, regardless of call order/state elsewhere.
     expect(angleDeltaToValue(0, TAU / 2, 5)).toBeCloseTo(5 * Math.SQRT2, 3)
+  })
+})
+
+// The dial itself tracks a drag as a running SUM of small per-frame steps
+// (angleStepDelta + turnsToFactor) rather than one big start-vs-end
+// angleDeltaToValue call — this is what actually fixes the "spin all the
+// way around the ring and it resets" bug, since a single wrapped angle
+// comparison can never tell a 360-degree drag from no movement at all.
+describe('RadialScale continuous rotation tracking (angleStepDelta + turnsToFactor)', () => {
+  it('summing many small steps all the way around one full turn keeps growing, unlike a single wrapped comparison', () => {
+    // Simulate a smooth drag: 36 pointermove samples, 10 degrees apart,
+    // going all the way around once (360 degrees total).
+    const stepAngle = (Math.PI * 2) / 36
+    let angle = 0
+    let turns = 0
+    for (let i = 0; i < 36; i++) {
+      const next = angle + stepAngle
+      turns += angleStepDelta(angle, next) / (Math.PI * 2)
+      angle = next
+    }
+    // A full turn should double the value, NOT reset it back to the start
+    // (which is what the old single-comparison "angleDeltaToValue(0, TAU, v)"
+    // approach did — see the pinned regression test above).
+    expect(turnsToFactor(turns, 5)).toBeCloseTo(10, 2)
+  })
+
+  it('keeps growing past a full turn instead of wrapping back down', () => {
+    const stepAngle = (Math.PI * 2) / 72
+    let angle = 0
+    let turns = 0
+    // 1.5 full turns
+    for (let i = 0; i < 108; i++) {
+      const next = angle + stepAngle
+      turns += angleStepDelta(angle, next) / (Math.PI * 2)
+      angle = next
+    }
+    const factor = turnsToFactor(turns, 1)
+    // 1.5 turns == 2^1.5, definitely bigger than a single turn's 2x, and
+    // nowhere near "reset to 1" (the bug being fixed).
+    expect(factor).toBeCloseTo(Math.pow(2, 1.5), 1)
+    expect(factor).toBeGreaterThan(2)
+  })
+
+  it('a small step near the +/-180 degree seam is still small, not a huge jump', () => {
+    const step = angleStepDelta(Math.PI - 0.02, -Math.PI + 0.02)
+    expect(Math.abs(step)).toBeLessThan(0.1)
+  })
+
+  it('turnsToFactor never returns zero or negative, even for a large negative turn count', () => {
+    expect(turnsToFactor(-50, 1)).toBeGreaterThan(0)
   })
 })
