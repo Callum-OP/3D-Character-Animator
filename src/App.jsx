@@ -36,8 +36,8 @@ export default function App() {
       <aside className="sidebar">
         <div className="app-header">
           <div>
-            <h1 className="app-title">3D Character Poser</h1>
-            <div className="app-tagline">Pose &amp; animate characters for 2D art</div>
+            <h1 className="app-title">3D Animator</h1>
+            <div className="app-tagline">Pose &amp; animate characters or scenes</div>
           </div>
           <button className="help-btn" title="Help & shortcuts (?)" onClick={toggleHelp}>
             ?
