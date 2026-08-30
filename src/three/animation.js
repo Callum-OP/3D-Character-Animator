@@ -225,7 +225,8 @@ export function selectClip(name, opts = {}, animData = null) {
 export async function beginBVHImport(file) {
   if (!a.model) throw new Error('Load a model first.')
   const parsed = await parseBVH(file)
-  const targetBones = (a.model.bones || []).map((b) => b.name)
+  const targetBoneObjs = a.model.bones || []
+  const targetBones = targetBoneObjs.map((b) => b.name)
   // Full name-match (fingers, spine chains, …) kept alongside the parsed BVH;
   // the slot mapping is layered on top of it at retarget time.
   parsed.autoNames = buildNameMatch(targetBones, parsed.bones)
@@ -234,7 +235,7 @@ export async function beginBVHImport(file) {
     name: parsed.name,
     sourceBones: parsed.bones,
     targetBones,
-    slots: buildSlotMapping(targetBones, parsed.bones),
+    slots: buildSlotMapping(targetBones, parsed.bones, targetBoneObjs, parsed.skeleton.bones),
   }
 }
 

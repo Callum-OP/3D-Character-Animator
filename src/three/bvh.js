@@ -141,16 +141,233 @@ function firstBySlot(names) {
   return out
 }
 
+// Follow a chain of bones that each have exactly one (in-skeleton) child,
+// stopping at a branch point or a dead end. Used by guessSlotsByHierarchy to
+// walk spines, necks, arms and legs without caring what anything is named.
+function singleChildChain(start, bones) {
+  const chain = []
+  let cur = start
+  while (cur) {
+    chain.push(cur)
+    const kids = cur.children.filter((c) => bones.includes(c))
+    if (kids.length !== 1) break
+    cur = kids[0]
+  }
+  return chain
+}
+
+// Spread a chain of bones (in parent-to-child order) across a canonical
+// template of slot names, e.g. 4 arm bones -> [shoulder, upperArm, lowerArm,
+// hand]. Shorter chains skip the least essential slots first (the template is
+// ordered so the middle entries are dropped before the ends): a 3-bone arm
+// with no separate shoulder still lands upperArm/lowerArm/hand correctly.
+function assignChainToTemplate(chain, template, side, assign) {
+  const n = chain.length
+  if (n === 0) return
+  for (let i = 0; i < n; i++) {
+    const ti = n >= template.length ? Math.round((i * (template.length - 1)) / (n - 1)) : i
+    const key = side ? `${template[ti]}.${side}` : template[ti]
+    assign(key, chain[i])
+  }
+}
+
+// End of the settled run from `start` (see singleChildChain) — the bone
+// where a branch either forks again or stops. Comparisons use THIS instead
+// of `start` itself because some rigs put a joint's actual bone-length on
+// its CHILD's translation and only a rotation on the joint itself, so the
+// immediate child can sit at (essentially) the same position as its parent —
+// the real up/down or left/right divergence only shows up once the chain
+// has actually gone somewhere.
+function chainEnd(start, bones) {
+  const chain = singleChildChain(start, bones)
+  return chain[chain.length - 1]
+}
+
+// Pick whichever of X or Z shows the bigger spread across a set of world
+// positions. Left/right isn't always on the same axis — BVH/Mixamo-style
+// rigs conventionally split on X, but plenty of others (this function was
+// hardened against a Minecraft-style rig that does) split on Z instead.
+function lateralAxis(positions) {
+  const xs = positions.map((p) => p.x)
+  const zs = positions.map((p) => p.z)
+  const spreadX = Math.max(...xs) - Math.min(...xs)
+  const spreadZ = Math.max(...zs) - Math.min(...zs)
+  return spreadZ > spreadX ? 'z' : 'x'
+}
+
+// Guess canonical humanoid slots from the SHAPE of a skeleton — its bone
+// hierarchy and rest-pose positions — rather than bone names. This is the
+// fallback used when a skeleton's bones carry no usable names at all
+// ("Bone01", "Joint_3", numeric BVH/GLTF exports, …), so retargeting still
+// has a starting point instead of forcing the user to map every slot by
+// hand.
+//
+// Assumptions (true of essentially every humanoid rig, mocap or character
+// model alike): walking down from the topmost bone through any single-child
+// "pass-through" joints (a root-motion bone above the real pelvis, etc.)
+// eventually reaches the hips — the first real branch point, or a dead end
+// if there isn't one. From there, one branch goes up (spine) and, usually,
+// two go down (legs, split left/right). The spine ends at another branch
+// point (chest) with one branch going further up (neck/head) and two going
+// sideways (arms, split left/right). All comparisons use the world position
+// of where each branch actually settles (chainEnd), and whichever of X/Z has
+// the bigger spread is treated as "sideways" for that branch point, so this
+// works whether a rig encodes bone length in the joint's own offset or
+// pushes it onto a child, and whichever axis a given rig treats as left/right.
+// Anything that doesn't fit this shape is simply left unassigned — the
+// caller/user fills those gaps in by hand.
+export function guessSlotsByHierarchy(bones) {
+  const out = {}
+  if (!bones || bones.length === 0) return out
+
+  // BVH "End Site" placeholders (chain terminators with no animation of
+  // their own) all share the literal name "ENDSITE" — and some exporters
+  // produce other duplicate names too. Since a guessed slot is later looked
+  // up BY NAME, assigning one of these is ambiguous: it silently resolves to
+  // whichever same-named bone comes first, so every slot that lands on a
+  // shared name ends up pointing at the exact same physical bone. Strip
+  // those out and only reason about uniquely-named, real bones.
+  const nameCount = new Map()
+  for (const b of bones) nameCount.set(b.name, (nameCount.get(b.name) || 0) + 1)
+  const real = bones.filter((b) => b.name && b.name !== 'ENDSITE' && nameCount.get(b.name) === 1)
+  if (real.length === 0) return out
+
+  const topRoot = real.find((b) => !b.parent || !real.includes(b.parent)) || real[0]
+  topRoot.updateWorldMatrix(true, true)
+
+  const worldPos = new Map()
+  for (const b of real) worldPos.set(b, b.getWorldPosition(new THREE.Vector3()))
+
+  const used = new Set()
+  const assign = (key, bone) => {
+    if (!bone || used.has(bone) || out[key]) return
+    out[key] = bone.name
+    used.add(bone)
+  }
+
+  // Walk through any single-child pass-through bones above the real hips
+  // (a "root motion" bone, an armature wrapper joint, etc.) to find the
+  // actual pelvis: the first branch point, or a dead end if none exists.
+  const hipsChain = singleChildChain(topRoot, real)
+  const hips = hipsChain[hipsChain.length - 1]
+  assign('hips', hips)
+
+  // Split the hips' direct children into "settles upward" (spine) vs.
+  // "settles downward" (legs) by comparing each branch's chain-end Y
+  // against the hips itself.
+  const hipsY = worldPos.get(hips).y
+  const hipsKids = hips.children.filter((c) => real.includes(c))
+  const hipsBranches = hipsKids.map((k) => ({ bone: k, end: chainEnd(k, real) }))
+  const spineCandidates = hipsBranches.filter((b) => worldPos.get(b.end).y >= hipsY - 1e-4).map((b) => b.bone)
+  const legCandidates = hipsBranches.filter((b) => worldPos.get(b.end).y < hipsY - 1e-4).map((b) => b.bone)
+
+  // Legs: left/right by whichever axis actually separates them (leave
+  // unsplit if there aren't two).
+  const legTemplate = ['upperLeg', 'lowerLeg', 'foot', 'toe']
+  if (legCandidates.length >= 1) {
+    const ax = lateralAxis(legCandidates.map((k) => worldPos.get(chainEnd(k, real))))
+    legCandidates.sort((a, b) => worldPos.get(chainEnd(a, real))[ax] - worldPos.get(chainEnd(b, real))[ax])
+    assignChainToTemplate(singleChildChain(legCandidates[0], real), legTemplate, 'L', assign)
+    if (legCandidates.length >= 2) {
+      const right = legCandidates[legCandidates.length - 1]
+      assignChainToTemplate(singleChildChain(right, real), legTemplate, 'R', assign)
+    }
+  }
+
+  // Spine: walk up from the hips along single-child bones until a branch
+  // (the chest, where the neck and both arms split off) or a dead end. If
+  // more than one candidate "settles upward" prefer whichever reaches highest.
+  if (spineCandidates.length > 0) {
+    spineCandidates.sort((a, b) => worldPos.get(chainEnd(b, real)).y - worldPos.get(chainEnd(a, real)).y)
+    const spineChain = singleChildChain(spineCandidates[0], real)
+    assign('spine', spineChain[0])
+    if (spineChain.length > 1) assign('chest', spineChain[spineChain.length - 1])
+    const chest = spineChain[spineChain.length - 1]
+    const branchKids = chest.children.filter((c) => real.includes(c))
+
+    if (branchKids.length >= 2) {
+      const info = branchKids.map((k) => ({ bone: k, end: chainEnd(k, real) }))
+      const ax = lateralAxis(info.map((i) => worldPos.get(i.end)))
+      const chestLateral = worldPos.get(chest)[ax]
+      const withLateral = info.map((i) => ({ ...i, lateral: Math.abs(worldPos.get(i.end)[ax] - chestLateral) }))
+      withLateral.sort((a, b) => b.lateral - a.lateral)
+      // Arms sit noticeably off to the side; the neck continues roughly
+      // straight up. Whatever's left over is treated as part of the neck/head branch.
+      const armInfo = withLateral.slice(0, 2).filter((w) => w.lateral > 0.02)
+      const neckInfo = withLateral.find((w) => !armInfo.includes(w))
+
+      if (neckInfo) {
+        const neckChain = singleChildChain(neckInfo.bone, real)
+        assign(neckChain.length > 1 ? 'neck' : 'head', neckChain[0])
+        if (neckChain.length > 1) assign('head', neckChain[neckChain.length - 1])
+      }
+
+      const armTemplate = ['shoulder', 'upperArm', 'lowerArm', 'hand']
+      const sortedArms = armInfo
+        .map((w) => w.bone)
+        .sort((a, b) => worldPos.get(chainEnd(a, real))[ax] - worldPos.get(chainEnd(b, real))[ax])
+      if (sortedArms.length >= 1) {
+        assignChainToTemplate(singleChildChain(sortedArms[0], real), armTemplate, 'L', assign)
+      }
+      if (sortedArms.length >= 2) {
+        const right = sortedArms[sortedArms.length - 1]
+        assignChainToTemplate(singleChildChain(right, real), armTemplate, 'R', assign)
+      }
+    } else if (branchKids.length === 1) {
+      // Only one continuation past the chest, treat it as neck/head.
+      const neckChain = singleChildChain(branchKids[0], real)
+      assign(neckChain.length > 1 ? 'neck' : 'head', neckChain[0])
+      if (neckChain.length > 1) assign('head', neckChain[neckChain.length - 1])
+    }
+  }
+
+  return out
+}
+
+// Classify a skeleton's bones into slots by name; if that finds too few
+// (generic/anonymous bone names — a common problem for some character models, 
+// e.g. "Bone_01", "Bone_02"),
+// then fall back to guessing the rest from the skeleton's shape. Returns the slot
+// map plus which keys were filled by the position guess rather than a name.
+function classifyOrGuess(names, boneObjs) {
+  const map = firstBySlot(names)
+  const guessedKeys = new Set()
+  if (boneObjs && boneObjs.length && Object.keys(map).length < 4) {
+    const guessed = guessSlotsByHierarchy(boneObjs)
+    for (const key of Object.keys(guessed)) {
+      if (!map[key]) {
+        map[key] = guessed[key]
+        guessedKeys.add(key)
+      }
+    }
+  }
+  return { map, guessedKeys }
+}
+
 // Build the initial slot mapping (auto-guess) between a target rig and a mocap
-// skeleton: [{ key, label, target, source }].
-export function buildSlotMapping(targetNames, sourceNames) {
-  const t = firstBySlot(targetNames)
-  const s = firstBySlot(sourceNames)
+// skeleton: [{ key, label, target, source, guessed }].
+//
+// `targetBones`/`sourceBones` (optional) are the live THREE.Bone arrays for
+// each skeleton. When a skeleton's bone NAMES don't yield enough recognizable
+// slots — generic/numeric names, a custom pipeline, an anonymised export,
+// etc. — we fall back to guessSlotsByHierarchy to fill in the gaps from bone
+// positions instead, on WHICHEVER side needs it (the mocap file, the
+// character rig, or both), and flag which slots were filled that way
+// (`guessed: true`) so the mapping editor can prompt the user to double-check
+// them. Slots the name pass DID find always win; the position guess only
+// ever fills in what's missing, and simply leaves a slot blank if it can't
+// confidently place it (rather than guessing badly) — the same "make do with
+// what's there" behaviour the mapping editor already relies on for
+// hand-fixing a mapping.
+export function buildSlotMapping(targetNames, sourceNames, targetBones, sourceBones) {
+  const { map: t, guessedKeys: tGuessed } = classifyOrGuess(targetNames, targetBones)
+  const { map: s, guessedKeys: sGuessed } = classifyOrGuess(sourceNames, sourceBones)
   return HUMANOID_SLOTS.map((slot) => ({
     key: slot.key,
     label: slot.label,
     target: t[slot.key] || '',
     source: s[slot.key] || '',
+    guessed: tGuessed.has(slot.key) || sGuessed.has(slot.key),
   }))
 }
 

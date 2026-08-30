@@ -1002,6 +1002,18 @@ input.xform-value {
   min-width: 0;
 }
 
+/* A slot the auto-mapper couldn't name-match and instead guessed from bone
+   position/hierarchy — flagged so the user knows to double-check it. */
+.map-row-guessed .map-slot {
+  color: var(--accent, #d9a441);
+}
+
+.map-guessed-badge {
+  font-size: 9.5px;
+  font-style: italic;
+  opacity: 0.85;
+}
+
 /* --- Help & shortcuts overlay --- */
 .help-backdrop {
   position: fixed;

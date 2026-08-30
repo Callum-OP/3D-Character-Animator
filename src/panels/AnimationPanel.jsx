@@ -1046,12 +1046,27 @@ export default function AnimationPanel() {
           <div className="map-hint">
             Auto-guessed by body part. Fix any wrong rows (leave a row blank to
             skip it), then Retarget.
+            {mapping.slots.some((s) => s.guessed) && (
+              <>
+                {' '}Rows marked <strong>~guess</strong> have no usable bone
+                names (in the mocap file, the character rig, or both), so
+                they were guessed from the skeleton's shape instead — check
+                these carefully.
+              </>
+            )}
           </div>
 
           <div className="map-list">
             {mapping.slots.map((s) => (
-              <div key={s.key} className="map-row">
-                <span className="map-slot">{s.label}</span>
+              <div key={s.key} className={s.guessed ? 'map-row map-row-guessed' : 'map-row'}>
+                <span className="map-slot">
+                  {s.label}
+                  {s.guessed && (
+                    <span className="map-guessed-badge" title="Guessed from bone position, not name">
+                      {' '}~guess
+                    </span>
+                  )}
+                </span>
                 <select
                   className="select select-sm"
                   title="Character bone"
