@@ -37,7 +37,7 @@ import {
   redo as redoMeshEdit,
 } from './meshedit.js'
 import { setLimitsEnabled } from './limits.js'
-import { selectObject, setObjectMode, undo as undoObject, redo as redoObject, consumeObjectGizmoGrab } from './objects.js'
+import { selectObjects, setObjectMode, undo as undoObject, redo as redoObject, consumeObjectGizmoGrab } from './objects.js'
 import { resolveUndoTarget } from './undoPriority.js'
 import { selectCamera, setCameraGizmoMode, consumeCameraGizmoGrab } from './cameras.js'
 import { selectLight, consumeLightGizmoGrab } from './lights.js'
@@ -221,12 +221,15 @@ export default function Viewport() {
   }, [deformOnly, modelInfo])
 
   // --- Scene objects: push selection / gizmo mode into the objects manager ---
-  const selectedObjectId = useStore((s) => s.selectedObjectId)
+  // selectedObjectIds can hold several ids (shift/ctrl-click in the panel) —
+  // selectObjects() attaches the gizmo to all of them via a shared pivot when
+  // there's more than one, or behaves like a plain single-select otherwise.
+  const selectedObjectIds = useStore((s) => s.selectedObjectIds)
   const objectMode = useStore((s) => s.objectMode)
 
   useEffect(() => {
-    selectObject(selectedObjectId)
-  }, [selectedObjectId])
+    selectObjects(selectedObjectIds)
+  }, [selectedObjectIds])
 
   useEffect(() => {
     setObjectMode(objectMode)

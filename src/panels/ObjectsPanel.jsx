@@ -43,9 +43,12 @@ const STYLE_OPTIONS = [
 export default function ObjectsPanel() {
   const sceneObjects = useStore((s) => s.sceneObjects)
   const selectedObjectId = useStore((s) => s.selectedObjectId)
+  const selectedObjectIds = useStore((s) => s.selectedObjectIds)
   const objectMode = useStore((s) => s.objectMode)
   const setSelectedObjectId = useStore((s) => s.setSelectedObjectId)
+  const toggleObjectSelection = useStore((s) => s.toggleObjectSelection)
   const setObjectMode = useStore((s) => s.setObjectMode)
+  const multiSelected = selectedObjectIds.length > 1
 
   const fileRef = useRef(null)
   const imageRef = useRef(null)
@@ -130,6 +133,7 @@ export default function ObjectsPanel() {
       <h2>Objects</h2>
       <p className="panel-hint">
         Add props, backgrounds and reference images to place around your character.
+        Shift-click or Ctrl-click several in the list below to move, rotate or resize them all together.
       </p>
 
       <div className="kf-actions">
@@ -199,7 +203,14 @@ export default function ObjectsPanel() {
             ))}
           </div>
 
-          {objectMode === 'scale' && selectedObjectId && (
+          {multiSelected && (
+            <div className="pose-msg" style={{ marginTop: 10 }}>
+              {selectedObjectIds.length} objects selected — drag the 3D gizmo to{' '}
+              {objectMode === 'translate' ? 'move' : objectMode === 'rotate' ? 'rotate' : 'resize'} them all together.
+            </div>
+          )}
+
+          {objectMode === 'scale' && selectedObjectId && !multiSelected && (
             <div style={{ marginTop: 10 }}>
               <RadialScale
                 // While dragging, show the live value being dragged. Otherwise
@@ -270,15 +281,17 @@ export default function ObjectsPanel() {
           )}
 
           <div className="obj-cycle">
-            <button className="btn secondary" onClick={() => cycle(-1)} title="Previous object">
+            <button className="btn secondary" onClick={() => cycle(-1)} disabled={multiSelected} title="Previous object">
               ‹
             </button>
             <span className="obj-count">
-              {selectedObjectId
-                ? `${sceneObjects.findIndex((o) => o.id === selectedObjectId) + 1} / ${sceneObjects.length}`
-                : `${sceneObjects.length} object${sceneObjects.length > 1 ? 's' : ''}`}
+              {multiSelected
+                ? `${selectedObjectIds.length} selected`
+                : selectedObjectId
+                  ? `${sceneObjects.findIndex((o) => o.id === selectedObjectId) + 1} / ${sceneObjects.length}`
+                  : `${sceneObjects.length} object${sceneObjects.length > 1 ? 's' : ''}`}
             </span>
-            <button className="btn secondary" onClick={() => cycle(1)} title="Next object">
+            <button className="btn secondary" onClick={() => cycle(1)} disabled={multiSelected} title="Next object">
               ›
             </button>
           </div>
@@ -287,9 +300,22 @@ export default function ObjectsPanel() {
             {sceneObjects.map((o) => (
               <div
                 key={o.id}
-                className={'obj-row' + (o.id === selectedObjectId ? ' selected' : '')}
-                title={o.name}
-                onClick={() => setSelectedObjectId(o.id === selectedObjectId ? null : o.id)}
+                className={
+                  'obj-row' +
+                  (selectedObjectIds.includes(o.id) ? ' selected' : '') +
+                  (multiSelected && o.id === selectedObjectId ? ' obj-row-primary' : '')
+                }
+                title={multiSelected ? o.name : o.name + ' (Shift/Ctrl-click to select more)'}
+                onClick={(e) => {
+                  const additive = e.shiftKey || e.ctrlKey || e.metaKey
+                  if (!additive && selectedObjectIds.length <= 1) {
+                    // Plain click, nothing already multi-selected: keep the old
+                    // "click again to deselect" toggle behaviour.
+                    setSelectedObjectId(o.id === selectedObjectId ? null : o.id)
+                  } else {
+                    toggleObjectSelection(o.id, additive)
+                  }
+                }}
               >
                 <span className="obj-name">
                   {o.isCharacter ? `${o.name} (character)` : o.name}
@@ -358,13 +384,14 @@ export default function ObjectsPanel() {
             ))}
           </div>
 
-          {selectedObjectId && (
+          {selectedObjectIds.length > 0 && (
             <button
               className="btn secondary"
               style={{ marginTop: 8 }}
-              onClick={() => resetObjectById(selectedObjectId)}
+              onClick={() => selectedObjectIds.forEach((id) => resetObjectById(id))}
+              title={multiSelected ? 'Reset every selected object back to the origin' : 'Reset position'}
             >
-              Reset position
+              {multiSelected ? `Reset position (${selectedObjectIds.length})` : 'Reset position'}
             </button>
           )}
         </>

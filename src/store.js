@@ -132,6 +132,7 @@ export const useStore = create((set) => ({
         activeCharacterId: id,
         ...next,
         selectedObjectId: null,
+        selectedObjectIds: [],
         selectedCameraId: null,
         selectedLightId: null,
       }
@@ -156,6 +157,7 @@ export const useStore = create((set) => ({
         activeCharacterId: nextActiveId,
         sceneObjects: s.sceneObjects.filter((o) => o.id !== id),
         selectedObjectId: s.selectedObjectId === id ? null : s.selectedObjectId,
+        selectedObjectIds: s.selectedObjectIds.filter((oid) => oid !== id),
         ...nextFields,
       }
     }),
@@ -214,6 +216,7 @@ export const useStore = create((set) => ({
         activeCharacterId: nextActiveId,
         sceneObjects: s.sceneObjects.filter((o) => o.id !== id),
         selectedObjectId: s.selectedObjectId === id ? null : s.selectedObjectId,
+        selectedObjectIds: s.selectedObjectIds.filter((oid) => oid !== id),
       }
     }),
 
@@ -382,7 +385,7 @@ export const useStore = create((set) => ({
     // Selecting a bone deselects any scene object/camera/light (one gizmo at a time).
     set(
       selectedBoneName != null
-        ? { selectedBoneName, selectedObjectId: null, selectedCameraId: null, selectedLightId: null }
+        ? { selectedBoneName, selectedObjectId: null, selectedObjectIds: [], selectedCameraId: null, selectedLightId: null }
         : { selectedBoneName },
     ),
 
@@ -409,13 +412,15 @@ export const useStore = create((set) => ({
 
   // ---- Scene objects (props / backgrounds) ----
   sceneObjects: [], // [{ id, name, format }] — independent of the character
-  selectedObjectId: null,
+  selectedObjectId: null, // "primary" selection — last one clicked; drives the panel's single-target controls
+  selectedObjectIds: [], // full multi-selection (always includes selectedObjectId when non-empty)
   objectMode: 'translate', // gizmo mode: 'translate' | 'rotate' | 'scale'
 
   addSceneObject: (obj) =>
     set((s) => ({
       sceneObjects: [...s.sceneObjects, { visible: true, ...obj }],
       selectedObjectId: obj.id,
+      selectedObjectIds: [obj.id],
       selectedBoneName: null, // mutually exclusive with bone/camera/light selection
       selectedCameraId: null,
       selectedLightId: null,
@@ -440,13 +445,53 @@ export const useStore = create((set) => ({
     set((s) => ({
       sceneObjects: s.sceneObjects.filter((o) => o.id !== id),
       selectedObjectId: s.selectedObjectId === id ? null : s.selectedObjectId,
+      selectedObjectIds: s.selectedObjectIds.filter((oid) => oid !== id),
     })),
+  // Replace the selection outright with a single object (or clear it). Used
+  // by plain (non-modifier) clicks, cycling through the list, and anywhere
+  // else that should collapse a multi-selection back down to one.
   setSelectedObjectId: (id) =>
     set(
       id != null
-        ? { selectedObjectId: id, selectedBoneName: null, selectedCameraId: null, selectedLightId: null }
-        : { selectedObjectId: id },
+        ? {
+            selectedObjectId: id,
+            selectedObjectIds: [id],
+            selectedBoneName: null,
+            selectedCameraId: null,
+            selectedLightId: null,
+          }
+        : { selectedObjectId: id, selectedObjectIds: [] },
     ),
+  // Shift/Ctrl-click support: add or remove one object from the current
+  // selection instead of replacing it, so several props/characters can be
+  // moved, rotated or resized together with one gizmo. A plain click
+  // (additive=false) behaves like setSelectedObjectId.
+  toggleObjectSelection: (id, additive) =>
+    set((s) => {
+      if (!additive) {
+        return {
+          selectedObjectId: id,
+          selectedObjectIds: id != null ? [id] : [],
+          selectedBoneName: null,
+          selectedCameraId: null,
+          selectedLightId: null,
+        }
+      }
+      const already = s.selectedObjectIds.includes(id)
+      const selectedObjectIds = already
+        ? s.selectedObjectIds.filter((oid) => oid !== id)
+        : [...s.selectedObjectIds, id]
+      const selectedObjectId = already
+        ? (s.selectedObjectId === id ? selectedObjectIds[selectedObjectIds.length - 1] ?? null : s.selectedObjectId)
+        : id
+      return {
+        selectedObjectId,
+        selectedObjectIds,
+        selectedBoneName: null,
+        selectedCameraId: null,
+        selectedLightId: null,
+      }
+    }),
   setObjectMode: (objectMode) => set({ objectMode }),
 
   // ---- Scene cameras ----
@@ -460,6 +505,7 @@ export const useStore = create((set) => ({
       sceneCameras: [...s.sceneCameras, cam],
       selectedCameraId: cam.id,
       selectedObjectId: null, // one gizmo at a time
+      selectedObjectIds: [],
       selectedBoneName: null,
       selectedLightId: null,
     })),
@@ -473,7 +519,7 @@ export const useStore = create((set) => ({
   setSelectedCameraId: (id) =>
     set(
       id != null
-        ? { selectedCameraId: id, selectedObjectId: null, selectedBoneName: null, selectedLightId: null }
+        ? { selectedCameraId: id, selectedObjectId: null, selectedObjectIds: [], selectedBoneName: null, selectedLightId: null }
         : { selectedCameraId: id },
     ),
   setCameraGizmoMode: (cameraGizmoMode) => set({ cameraGizmoMode }),
@@ -492,6 +538,7 @@ export const useStore = create((set) => ({
       sceneLights: [...s.sceneLights, light],
       selectedLightId: light.id,
       selectedObjectId: null, // one gizmo at a time
+      selectedObjectIds: [],
       selectedCameraId: null,
       selectedBoneName: null,
     })),
@@ -504,7 +551,7 @@ export const useStore = create((set) => ({
   setSelectedLightId: (id) =>
     set(
       id != null
-        ? { selectedLightId: id, selectedObjectId: null, selectedCameraId: null, selectedBoneName: null }
+        ? { selectedLightId: id, selectedObjectId: null, selectedObjectIds: [], selectedCameraId: null, selectedBoneName: null }
         : { selectedLightId: id },
     ),
   setLightColor: (id, color) =>

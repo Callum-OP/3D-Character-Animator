@@ -48,9 +48,11 @@ blob).
   any bone by hand before retargeting. Any clip can also be applied as a single
   pose or baked into editable keyframes.
 - **Scene objects** — add props or backgrounds (`.glb`/`.gltf`/`.fbx`) around the
-  character, then move / rotate / resize and cycle between them. Save/load the
-  scene layout, copy & paste poses, and record **root motion** so the character can
-  walk across the scene instead of animating on the spot.
+  character, then move / rotate / resize and cycle between them. Shift-click or
+  Ctrl-click several in the list to select them as a group and move, rotate or
+  resize them all together with one gizmo. Save/load the scene layout, copy &
+  paste poses, and record **root motion** so the character can walk across the
+  scene instead of animating on the spot.
 - **Export** — save a **transparent PNG** at 1×/2×/4× the viewport resolution,
   record the animation to a **video** (webm) that automatically films through
   your placed camera (with a **Preview video** button to check the shot first —

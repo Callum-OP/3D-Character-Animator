@@ -8,8 +8,10 @@ import { recordOriginalMaterials, applyMaterials, restoreOriginalMaterials, disp
 //
 // Props and backgrounds the character can interact with — separate from the one
 // posable character model. Any number can be added; each is a plain Object3D you
-// move/rotate/scale with a TransformControls gizmo. Selection is single: attach
-// the gizmo to one object at a time, cycling between them from the panel.
+// move/rotate/scale with a TransformControls gizmo. Usually one object is
+// selected at a time, but shift/ctrl-clicking more than one in the panel
+// attaches the gizmo to a shared pivot instead (see selectObjects), so a
+// whole group can be moved, rotated or resized together in one drag.
 //
 // These are intentionally NOT run through the character's inverted-hull outline
 // system (a background looks best without an anime-style ink line by default —
@@ -32,13 +34,25 @@ const o = {
   helper: null,
   objects: [], // { id, name, format, root } — props only
   characterRoots: new Map(), // id -> { root, name } — every LOADED character (owned elsewhere), keyed by character id
-  selected: null, // selected root (or null)
+  selected: null, // single selected root (or null) — used when exactly one thing is selected
   undoStack: [],
   redoStack: [],
-  dragBefore: null, // selected root's TRS at gizmo-drag start
+  dragBefore: null, // selected root's TRS at gizmo-drag start (single-select path)
   onMoveCommit: null, // (root) => void — fired after a gizmo drag actually changes a root's TRS
   gizmoGrabbed: false, // true once per interaction that actually grabbed a gizmo handle
   lastStyleOpts: { mode: 'unlit', toonSteps: 3, soften: 0, rimLight: null }, // last scene-wide style, for 'auto' objects
+
+  // --- Multi-select (shift/ctrl-click several objects to move/rotate/resize
+  // them together) --- TransformControls can only attach to one Object3D, so
+  // when 2+ things are selected the gizmo is attached to an invisible pivot
+  // Object3D placed at the group's centroid instead. Dragging the pivot is
+  // turned into a world-space delta matrix that gets re-applied to every
+  // selected root, preserving their relative offsets from one another.
+  pivot: null, // THREE.Object3D the gizmo attaches to when 2+ objects are selected
+  pivotRoots: [], // roots currently driven by the pivot (empty unless 2+ selected)
+  pivotStartMatrix: null, // pivot's matrix at the start of the current drag
+  pivotRootStarts: null, // Map(root -> Matrix4) — each root's matrix at drag start
+  multiDragBefore: null, // [{root, before}] snapshots at drag start, for undo
 }
 
 // Register a callback fired whenever a move/rotate/scale drag finishes having
@@ -65,12 +79,28 @@ export function initObjects(refs) {
     o.controls.enabled = !e.value && !o.controls.locked
     if (e.value) o.gizmoGrabbed = true // consumed by Viewport's empty-click deselect
   })
-  transform.addEventListener('objectChange', () => o.requestRender())
+  transform.addEventListener('objectChange', () => {
+    if (o.pivotRoots.length > 1 && o.pivotStartMatrix) applyPivotDelta()
+    o.requestRender()
+  })
   transform.addEventListener('mouseDown', () => {
-    if (o.selected) o.dragBefore = snapshot(o.selected)
+    if (o.pivotRoots.length > 1) {
+      o.pivot.updateMatrix()
+      o.pivotStartMatrix = o.pivot.matrix.clone()
+      o.pivotRootStarts = new Map(
+        o.pivotRoots.map((r) => {
+          r.updateMatrix()
+          return [r, r.matrix.clone()]
+        }),
+      )
+      o.multiDragBefore = o.pivotRoots.map((r) => ({ root: r, before: snapshot(r) }))
+    } else if (o.selected) {
+      o.dragBefore = snapshot(o.selected)
+    }
   })
   transform.addEventListener('mouseUp', () => {
-    commitDragUndo()
+    if (o.pivotRoots.length > 1) commitMultiDragUndo()
+    else commitDragUndo()
     o.requestRender()
   })
   o.transform = transform
@@ -79,6 +109,13 @@ export function initObjects(refs) {
   excludeFromOutline(helper)
   o.scene.add(helper)
   o.helper = helper
+
+  // Invisible pivot used purely as a gizmo anchor for multi-object drags —
+  // never rendered, never itself part of the objects list.
+  const pivot = new THREE.Object3D()
+  pivot.visible = false
+  o.scene.add(pivot)
+  o.pivot = pivot
 }
 
 // Register a character model root so it can be selected/moved like an object,
@@ -93,6 +130,7 @@ export function clearCharacterObject(id) {
   if (entry) {
     if (o.selected === entry.root && o.transform) o.transform.detach()
     if (o.selected === entry.root) o.selected = null
+    o.pivotRoots = o.pivotRoots.filter((r) => r !== entry.root)
     o.characterRoots.delete(id)
   }
 }
@@ -192,8 +230,9 @@ export function removeObject(id) {
   disposePropMaterials(entry)
   disposeObject(entry.root)
   o.objects.splice(idx, 1)
-  o.undoStack = o.undoStack.filter((b) => b.root !== entry.root)
-  o.redoStack = o.redoStack.filter((b) => b.root !== entry.root)
+  o.pivotRoots = o.pivotRoots.filter((r) => r !== entry.root)
+  o.undoStack = o.undoStack.filter((b) => !b.entries.some((e) => e.root === entry.root))
+  o.redoStack = o.redoStack.filter((b) => !b.entries.some((e) => e.root === entry.root))
   o.requestRender()
 }
 
@@ -281,14 +320,101 @@ function rootFor(id) {
   return entry ? entry.root : null
 }
 
-// Attach the gizmo to an object (or null to detach).
+// Attach the gizmo to a single object (or null to detach). Also drops any
+// active multi-selection — used by plain clicks, cycling, and deselecting.
 export function selectObject(id) {
   if (!o.transform) return
+  o.pivotRoots = []
+  o.pivotStartMatrix = null
+  o.pivotRootStarts = null
+  o.multiDragBefore = null
+  if (o.pivot) o.pivot.visible = false
   const root = rootFor(id)
   o.selected = root
   if (root) o.transform.attach(root)
   else o.transform.detach()
   o.requestRender()
+}
+
+// Attach the gizmo to several objects at once (shift/ctrl-click in the
+// panel) so dragging it moves, rotates or resizes all of them together.
+// Falls back to the plain single-select path for 0 or 1 ids so existing
+// behaviour (and undo history) is unchanged in the common case.
+export function selectObjects(ids) {
+  if (!o.transform) return
+  const list = Array.isArray(ids) ? ids : ids != null ? [ids] : []
+  const roots = []
+  const seen = new Set()
+  for (const id of list) {
+    const root = rootFor(id)
+    if (root && !seen.has(root)) {
+      seen.add(root)
+      roots.push(root)
+    }
+  }
+  if (roots.length <= 1) {
+    selectObject(list.find((id) => rootFor(id)) ?? null)
+    return
+  }
+  o.selected = null
+  o.transform.detach()
+  o.pivotRoots = roots
+  o.pivotStartMatrix = null
+  o.pivotRootStarts = null
+  o.multiDragBefore = null
+  const center = new THREE.Vector3()
+  for (const r of roots) center.add(r.getWorldPosition(new THREE.Vector3()))
+  center.divideScalar(roots.length)
+  o.pivot.position.copy(center)
+  o.pivot.quaternion.identity()
+  o.pivot.scale.set(1, 1, 1)
+  o.pivot.updateMatrix()
+  o.pivot.visible = true
+  o.transform.attach(o.pivot)
+  o.requestRender()
+}
+
+// Re-apply a completed pivot drag's world-space delta to every selected
+// root: delta = pivot.matrix (now) * inverse(pivot.matrix at drag start),
+// then each root's new matrix = delta * that root's matrix at drag start.
+// This composes correctly for translate, rotate AND scale because every
+// prop/character root is added directly to the scene (no parent transform
+// of its own), so each root's local matrix already IS its world matrix.
+function applyPivotDelta() {
+  o.pivot.updateMatrix()
+  const delta = o.pivot.matrix.clone().multiply(o.pivotStartMatrix.clone().invert())
+  const pos = new THREE.Vector3()
+  const quat = new THREE.Quaternion()
+  const scl = new THREE.Vector3()
+  for (const root of o.pivotRoots) {
+    const startMatrix = o.pivotRootStarts.get(root)
+    if (!startMatrix) continue
+    const next = delta.clone().multiply(startMatrix)
+    next.decompose(pos, quat, scl)
+    root.position.copy(pos)
+    root.quaternion.copy(quat)
+    root.scale.copy(scl)
+  }
+}
+
+// Called once a multi-object drag ends: one undo step covers every object
+// that actually moved, so a single Ctrl+Z undoes the whole group edit.
+function commitMultiDragUndo() {
+  const before = o.multiDragBefore
+  o.multiDragBefore = null
+  o.pivotStartMatrix = null
+  o.pivotRootStarts = null
+  if (!before) return
+  const entries = before
+    .map(({ root, before }) => ({ root, before, after: snapshot(root) }))
+    .filter(({ before, after }) => !sameSnapshot(before, after))
+  if (!entries.length) return
+  o.undoStack.push({ entries })
+  o.redoStack = []
+  if (o.undoStack.length > UNDO_LIMIT) o.undoStack.shift()
+  if (o.onMoveCommit) {
+    for (const { root } of entries) o.onMoveCommit(root)
+  }
 }
 
 export function setObjectMode(mode) {
@@ -373,7 +499,7 @@ export function setObjectTransform(id, t) {
 export function undo() {
   const batch = o.undoStack.pop()
   if (!batch) return
-  applySnapshot(batch.root, batch.before)
+  for (const e of batch.entries) applySnapshot(e.root, e.before)
   o.redoStack.push(batch)
   o.requestRender()
 }
@@ -381,7 +507,7 @@ export function undo() {
 export function redo() {
   const batch = o.redoStack.pop()
   if (!batch) return
-  applySnapshot(batch.root, batch.after)
+  for (const e of batch.entries) applySnapshot(e.root, e.after)
   o.undoStack.push(batch)
   o.requestRender()
 }
@@ -407,7 +533,7 @@ function sameSnapshot(a, b) {
 function pushUndoIfChanged(root, before) {
   const after = snapshot(root)
   if (sameSnapshot(before, after)) return
-  o.undoStack.push({ root, before, after })
+  o.undoStack.push({ entries: [{ root, before, after }] })
   o.redoStack = [] // a fresh edit invalidates any redo history
   if (o.undoStack.length > UNDO_LIMIT) o.undoStack.shift()
 }
@@ -494,13 +620,19 @@ export function disposeObjects() {
   o.undoStack = []
   o.redoStack = []
   o.dragBefore = null
+  o.pivotRoots = []
+  o.pivotStartMatrix = null
+  o.pivotRootStarts = null
+  o.multiDragBefore = null
   o.characterRoots.clear() // owned by the model system; not disposed here
   if (o.helper && o.scene) o.scene.remove(o.helper)
+  if (o.pivot && o.scene) o.scene.remove(o.pivot)
   if (o.transform) {
     o.transform.dispose()
     o.transform = null
   }
   o.helper = null
+  o.pivot = null
   o.scene = null
   o.camera = null
   o.renderer = null
