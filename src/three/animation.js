@@ -782,10 +782,26 @@ export function scrub(t) {
 const RAD2DEG = 180 / Math.PI
 const _e = new THREE.Euler()
 const _wp = new THREE.Vector3()
+const _wq = new THREE.Quaternion()
+const _pwq = new THREE.Quaternion()
+const _bp = new THREE.Vector3()
+const _pp = new THREE.Vector3()
+const _pq = new THREE.Quaternion()
 
 function fmtNum(n) {
   return (Math.abs(n) < 1e-6 ? 0 : n).toFixed(4)
 }
+
+// A bone's world-space rotation with any scale/reflection in its ancestor
+// chain divided back out (Object3D.getWorldQuaternion decomposes matrixWorld,
+// which — unlike reading .quaternion directly — resolves a negatively-scaled
+// ("mirrored") parent into a proper rotation instead of silently ignoring the
+// flip). BVH has no scale channels at all, so this is the only representation
+// that can come out the other side undistorted.
+function getWorldQuat(bone) {
+  return bone.getWorldQuaternion(_wq2)
+}
+const _wq2 = new THREE.Quaternion()
 
 // Interpolate the character root-motion keys at time t onto an object3D.
 function applyRootAt(keys, t, obj) {
@@ -807,11 +823,29 @@ function applyRootAt(keys, t, obj) {
   obj.quaternion.slerpQuaternions(_qa, _qb, f)
 }
 
-// Export the in-app animation (bone rotations + character root motion) as BVH
-// text. Rotations use 'ZXY' Euler order to match our BVHLoader's channel order,
-// so re-importing round-trips. Single-root skeletons only; the root joint's
+// Export the SELECTED animation (bone rotations + character root motion) as
+// BVH text — whichever clip is chosen in the Animate panel's "Play a clip"
+// dropdown (baked, imported/retargeted mocap, ragdoll bake, combined/trimmed
+// clip, …), or the in-app hand-keyframed timeline when that's what's active.
+//
+// This looks the clip up BY NAME (store.activeClipName / store.playbackSource)
+// rather than relying on whatever's currently armed on the live mixer
+// (a.action/a.clip). Those get cleared by stop() the moment playback stops —
+// pressing Stop, a preview finishing, navigating away and back — so a naive
+// "sample whatever's currently playing" check very often finds nothing by the
+// time someone actually clicks Export, and silently falls back to sampling
+// animData.tracks (empty for a baked/imported clip) for the app's default
+// timeline length. That produces a file whose every single frame is
+// identical — a real single pose repeated N times, not a frozen mid-clip
+// frame — which is exactly the original "only exports a pose" bug, just
+// reintroduced by an export-time state check instead of a wrong data source.
+// Looking the clip up by name sidesteps play state entirely: whatever's
+// SELECTED gets exported, whether it's playing, paused, or stopped.
+//
+// Rotations use 'ZXY' Euler order to match our BVHLoader's channel order, so
+// re-importing round-trips. Single-root skeletons only; the root joint's
 // position channels carry the character's world motion.
-export function exportAnimationBVH(animData, fps, duration) {
+export function exportAnimationBVH(animData, fps, duration, clipName, playbackSource) {
   if (!a.model || !a.model.bones || a.model.bones.length === 0) return null
   const bones = a.model.bones
   const boneSet = new Set(bones)
@@ -825,19 +859,29 @@ export function exportAnimationBVH(animData, fps, duration) {
   const rootBone = roots[0]
   const isRoot = (b) => b === rootBone
 
-  // --- sample the animation frame by frame ---
-  const clip = buildEditClip(animData.tracks, duration)
+  // Resolve the real clip object by name (works regardless of whether it's
+  // currently playing, paused, or stopped) — only fall back to building a
+  // disposable clip from animData.tracks for genuine in-app hand-keyframing
+  // with no baked/imported clip involved at all.
+  const namedClip = playbackSource === 'clip' && clipName ? findClip(clipName) : null
+  const totalDuration = namedClip ? namedClip.duration : duration
+  if (!totalDuration || totalDuration <= 0) return null
+
+  // --- sample the animation frame by frame, on a throwaway mixer so this
+  // never disturbs whatever the live a.mixer/a.action are doing ---
+  const clip = namedClip || buildEditClip(animData.tracks, duration)
   const mixer = new THREE.AnimationMixer(a.model.root)
   const bvhAction = mixer.clipAction(clip)
   bvhAction.loop = THREE.LoopOnce // don't wrap when sampling the final frame
   bvhAction.clampWhenFinished = true
   bvhAction.play()
+
   const rootKeys = (animData.root || []).slice().sort((x, y) => x.time - y.time)
   const savedPos = a.model.root.position.clone()
   const savedQuat = a.model.root.quaternion.clone()
 
-  const numFrames = Math.max(2, Math.round(duration * fps) + 1)
-  const frameTime = duration / (numFrames - 1)
+  const numFrames = Math.max(2, Math.round(totalDuration * fps) + 1)
+  const frameTime = totalDuration / (numFrames - 1)
   const frames = []
   for (let f = 0; f < numFrames; f++) {
     const t = f * frameTime
@@ -846,12 +890,28 @@ export function exportAnimationBVH(animData, fps, duration) {
     a.model.root.updateWorldMatrix(true, true)
     const rot = new Map()
     for (const b of bones) {
-      _e.setFromQuaternion(b.quaternion, 'ZXY')
+      // Rotation is taken relative to the bone's WORLD orientation (not its
+      // raw local quaternion) — see the note above write(): this is what
+      // makes the root joint's facing correct when the model has a wrapper
+      // node above the skeleton (a common "Armature" node carrying a Z-up ->
+      // Y-up correction, or similar), and what keeps any bone whose parent
+      // chain includes a mirrored/negatively-scaled node (a common way rigs
+      // build a symmetric left/right pair) from coming out twisted — BVH has
+      // no scale channels, so the only faithful thing to export is each
+      // bone's rotation relative to its parent's actual WORLD orientation.
+      _wq.copy(getWorldQuat(b))
+      if (!isRoot(b)) {
+        _pwq.copy(getWorldQuat(b.parent)).invert()
+        _wq.premultiply(_pwq)
+      }
+      _e.setFromQuaternion(_wq, 'ZXY')
       rot.set(b, [_e.z * RAD2DEG, _e.x * RAD2DEG, _e.y * RAD2DEG])
     }
     rootBone.getWorldPosition(_wp)
     frames.push({ rot, rootPos: [_wp.x, _wp.y, _wp.z] })
   }
+
+  // --- put everything back exactly how it was before export ---
   mixer.stopAllAction()
   mixer.uncacheClip(clip)
   restoreRest()
@@ -859,21 +919,43 @@ export function exportAnimationBVH(animData, fps, duration) {
   a.model.root.quaternion.copy(savedQuat)
   a.model.root.updateWorldMatrix(true, true)
 
+  // Rest OFFSETS, one per non-root bone: the bone's rest position relative to
+  // its parent, expressed in the parent's UN-SCALED rotated frame (world-space
+  // delta, un-rotated by the parent's world orientation) rather than read
+  // straight off bone.position. Plain bone.position is defined in the
+  // parent's own (possibly scaled/mirrored) local space, so if a rig mirrors
+  // one side via a negative scale anywhere above a bone — a common cheap way
+  // to build a symmetric left/right pair — that bone's offset comes out
+  // mirrored to the wrong side once BVH (which has no scale channels at all)
+  // drops the scale. Computing it from world positions sidesteps that.
+  const restOffsets = new Map()
+  for (const b of bones) {
+    if (isRoot(b)) {
+      restOffsets.set(b, new THREE.Vector3())
+      continue
+    }
+    b.getWorldPosition(_bp)
+    b.parent.getWorldPosition(_pp)
+    getWorldQuat(b.parent)
+    _pq.copy(_wq2).invert()
+    restOffsets.set(b, _bp.clone().sub(_pp).applyQuaternion(_pq))
+  }
+
   // --- write HIERARCHY (rest offsets), collecting the channel order ---
   const order = []
   let out = 'HIERARCHY\n'
   const write = (bone, depth) => {
     const pad = '\t'.repeat(depth)
     out += `${pad}${isRoot(bone) ? 'ROOT' : 'JOINT'} ${bone.name || 'bone'}\n${pad}{\n`
-    const off = isRoot(bone) ? [0, 0, 0] : bone.position.toArray()
-    out += `${pad}\tOFFSET ${fmtNum(off[0])} ${fmtNum(off[1])} ${fmtNum(off[2])}\n`
+    const off = restOffsets.get(bone)
+    out += `${pad}\tOFFSET ${fmtNum(off.x)} ${fmtNum(off.y)} ${fmtNum(off.z)}\n`
     out += isRoot(bone)
       ? `${pad}\tCHANNELS 6 Xposition Yposition Zposition Zrotation Xrotation Yrotation\n`
       : `${pad}\tCHANNELS 3 Zrotation Xrotation Yrotation\n`
     order.push(bone)
     const kids = childrenOf.get(bone)
     if (kids.length === 0) {
-      const L = bone.position.length() || 0.1
+      const L = off.length() || 0.1
       out += `${pad}\tEnd Site\n${pad}\t{\n${pad}\t\tOFFSET 0 ${fmtNum(L)} 0\n${pad}\t}\n`
     } else {
       for (const k of kids) write(k, depth + 1)

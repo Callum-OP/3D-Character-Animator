@@ -75,7 +75,13 @@ export default function ExportPanel() {
 
   function onExportBVH() {
     const s = st()
-    const text = exportAnimationBVH(s.animData, s.animFps, s.animDuration)
+    const text = exportAnimationBVH(
+      s.animData,
+      s.animFps,
+      s.animDuration,
+      s.activeClipName,
+      s.playbackSource,
+    )
     if (!text) {
       setMsg('Nothing to export — make an in-app animation first.')
       return

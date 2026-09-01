@@ -487,7 +487,30 @@ export function retargetParsed(parsed, model, names, hip, clipName) {
   const numFrames = times.length
 
   // --- Rest world orientations & positions ---
-  // Source rest = the BVH skeleton before any motion.
+  // Source rest reference: pose the source skeleton at its OWN first frame
+  // and use THAT as "rest", not the freshly-loaded skeleton sitting at
+  // BVHLoader's default identity quaternion. Those are only the same thing
+  // for BVH files whose joints happen to use clean, untwisted local axes
+  // (true for most hand-authored/mocap-house files) — but BVH's OFFSET field
+  // is translation-only, so any rig with non-standard joint axes (Mixamo's
+  // thigh bones are a well-known example, and so is any BVH — including ones
+  // this app itself exports — round-tripped from such a rig) has to bake a
+  // constant per-bone rest-twist into EVERY frame's rotation channel just to
+  // play back correctly. Treating identity as "rest" then means that
+  // constant twist gets read as if it were motion, subtracted out of the
+  // delta, and re-added on the target side on top of the target's OWN rest
+  // twist — double-counting it and visibly twisting the retargeted limb.
+  // First-frame calibration is what most real mocap pipelines do anyway
+  // (clean files conventionally start at/near a neutral pose), so this is a
+  // strict improvement: harmless when frame 0 is already near-identity, and
+  // it correctly absorbs the baseline twist when it isn't.
+  for (const { bone, values } of srcTracks) {
+    bone.quaternion.set(values[0], values[1], values[2], values[3])
+  }
+  const origPos = new Map(srcPosTracks.map(({ bone }) => [bone, bone.position.clone()]))
+  for (const { bone, values } of srcPosTracks) {
+    bone.position.set(values[0], values[1], values[2])
+  }
   srcBones[0].updateWorldMatrix(false, true)
   const restSrcW = new Map()
   const restSrcP = new Map()
@@ -495,6 +518,21 @@ export function retargetParsed(parsed, model, names, hip, clipName) {
     restSrcW.set(b, b.getWorldQuaternion(new THREE.Quaternion()))
     restSrcP.set(b, b.getWorldPosition(new THREE.Vector3()))
   }
+  // Leave the source skeleton back at true identity for everything below
+  // (rest-direction alignment, yaw-fix, per-frame posing) that expects to
+  // pose it explicitly itself. Position-tracked bones (normally just the
+  // hip) go back to their ORIGINAL construction-time offset, not zero — for
+  // the root that's conventionally (0,0,0) already, but this must not assume
+  // that; it has to actually restore what BVHLoader put there.
+  for (const b of srcBones) b.quaternion.identity()
+  for (const { bone } of srcPosTracks) bone.position.copy(origPos.get(bone))
+  srcBones[0].updateWorldMatrix(false, true)
+  // The yaw-fix below needs to compare frame 0's hip orientation against raw
+  // identity specifically (BVH's own "facing +Z" convention), NOT against
+  // the frame-0-based restSrcW above — those are now the same thing for the
+  // hip, which would silently zero out the yaw check. Capture it here, while
+  // the skeleton is still sitting at identity.
+  const identityHipW = hip && srcByName.has(hip) ? srcByName.get(hip).getWorldQuaternion(new THREE.Quaternion()) : null
 
   // Target rest = the pose the bones are in right now (the caller restores the
   // load-time rest first). Deliberately NOT skeleton.pose(): that rebuilds the
@@ -598,7 +636,10 @@ export function retargetParsed(parsed, model, names, hip, clipName) {
     srcBones[0].updateWorldMatrix(false, true)
     // How much the hips have yawed away from the mocap rest at frame 0 — undo
     // it so the character starts out facing wherever its rest pose faces.
-    const d0 = restSrcW.get(srcHip).clone().invert().premultiply(srcHip.getWorldQuaternion(new THREE.Quaternion()))
+    const d0 = (identityHipW || restSrcW.get(srcHip))
+      .clone()
+      .invert()
+      .premultiply(srcHip.getWorldQuaternion(new THREE.Quaternion()))
     const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(d0)
     if (Math.abs(fwd.y) < 0.9) {
       // (skip when frame 0 has the body pitched vertical — yaw is meaningless)
