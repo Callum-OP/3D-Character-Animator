@@ -13,6 +13,9 @@ import {
   listProjects,
   loadProjectRecord,
   deleteProject,
+  requestPersistentStorage,
+  exportProjectToFile,
+  importProjectFromFile,
 } from '../three/projectStore.js'
 
 // Combined side-panel section: everything to do with "where does my character
@@ -25,6 +28,7 @@ import {
 export default function ProjectPanel() {
   const fileInputRef = useRef(null)
   const addFileInputRef = useRef(null)
+  const importFileInputRef = useRef(null)
   const modelInfo = useStore((s) => s.modelInfo)
   const loading = useStore((s) => s.loading)
   const loadError = useStore((s) => s.loadError)
@@ -53,6 +57,9 @@ export default function ProjectPanel() {
   }
   useEffect(() => {
     refresh()
+    // Ask the browser not to silently wipe our IndexedDB data under disk
+    // pressure. Best-effort — see the note in projectStore.js.
+    requestPersistentStorage()
   }, [])
 
   function onPickModel(e) {
@@ -101,6 +108,46 @@ export default function ProjectPanel() {
       setMsg(`Loaded “${n}”.`)
     } catch (e) {
       setMsg('Load failed: ' + (e.message || String(e)))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function onExport(n) {
+    setBusy(true)
+    setMsg(null)
+    try {
+      const rec = await loadProjectRecord(n)
+      if (!rec) {
+        setMsg('That project could not be found.')
+        return
+      }
+      await exportProjectToFile(rec)
+      setMsg(`Exported “${n}” to a file.`)
+    } catch (e) {
+      setMsg('Export failed: ' + (e.message || String(e)))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function onPickImportFile(e) {
+    const file = e.target.files && e.target.files[0]
+    e.target.value = ''
+    if (file) onImport(file)
+  }
+
+  async function onImport(file) {
+    setBusy(true)
+    setMsg(null)
+    try {
+      const rec = await importProjectFromFile(file)
+      await applyProjectData(rec)
+      const n = rec.name || file.name.replace(/\.[^.]+$/, '')
+      setName(n)
+      setMsg(`Loaded “${n}” from file. Hit "Save all" if you want it back in this browser's storage too.`)
+    } catch (e) {
+      setMsg('Import failed: ' + (e.message || String(e)))
     } finally {
       setBusy(false)
     }
@@ -229,7 +276,9 @@ export default function ProjectPanel() {
         </div>
         <p className="panel-hint">
           A project remembers everything — model, props, images, poses and style —
-          so it reloads exactly how you left it. Saved in this browser.
+          so it reloads exactly how you left it. Saved in this browser only —
+          browsers can clear this without warning, so use "Export" on a
+          project to back it up as a real file that won't disappear.
         </p>
 
         <div className="proj-save">
@@ -247,6 +296,23 @@ export default function ProjectPanel() {
             Save all
           </button>
         </div>
+
+        <button
+          className="btn secondary btn-tiny"
+          style={{ marginTop: 8 }}
+          onClick={() => importFileInputRef.current?.click()}
+          disabled={busy}
+          title="Load a project previously saved with Export, from a file on disk"
+        >
+          Import from file…
+        </button>
+        <input
+          ref={importFileInputRef}
+          type="file"
+          accept=".3dcp,application/json"
+          style={{ display: 'none' }}
+          onChange={onPickImportFile}
+        />
 
         {msg && <div className="pose-msg">{msg}</div>}
 
@@ -272,6 +338,14 @@ export default function ProjectPanel() {
                     title="Replace the current session with this project"
                   >
                     Load
+                  </button>
+                  <button
+                    className="btn secondary btn-tiny"
+                    onClick={() => onExport(p.name)}
+                    disabled={busy}
+                    title="Back this project up to a file on disk"
+                  >
+                    Export
                   </button>
                   <button
                     className="obj-del"
