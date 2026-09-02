@@ -15,6 +15,7 @@ import {
   sampleClipToPose,
   bakeClipToTracks,
   trimClip,
+  mirrorClip,
   combineClips,
   clipFromTracks,
   addGeneratedClip,
@@ -675,6 +676,19 @@ export default function AnimationPanel() {
     )
   }
 
+    // --- mirror ------------------------------------------------------------
+
+  function onMirrorClip() {
+    if (!activeClipName) return
+    const newName = mirrorClip(activeClipName, animFps)
+    if (!newName) {
+      setBvhMsg("Couldn't mirror that clip.")
+      return
+    }
+    armClip(newName)
+    setBvhMsg(`Created “${newName}” — the whole clip flipped left ↔ right. The original clip is untouched.`)
+  }
+
   // --- combine -----------------------------------------------------------
 
   function toggleCombineSel(name) {
@@ -873,6 +887,13 @@ export default function AnimationPanel() {
                     title="Cut this clip down to a shorter range, saved as a new clip"
                   >
                     ✂ Trim
+                  </button>
+                  <button
+                    className="btn secondary"
+                    onClick={onMirrorClip}
+                    title="Flip the whole clip left ↔ right, frame by frame, saved as a new clip"
+                  >
+                    ⇄ Mirror clip
                   </button>
                 </div>
               )}

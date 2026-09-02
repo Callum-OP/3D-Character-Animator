@@ -341,7 +341,7 @@ export function combineClips(names, fps) {
     for (const boneName of Object.keys(tracks)) {
       const keys = res.tracks[boneName]
       if (!keys || !keys.length) continue
-      for (const k of keys) tracks[boneName].push({ time: k.time + offset, quat: k.quat })
+      for (const k of keys) tracks[boneName].push({ time: k.time + offset, quat: k.quat, pos: k.pos })
     }
     offset += res.duration
   }
@@ -352,9 +352,10 @@ export function combineClips(names, fps) {
       delete tracks[boneName]
       continue
     }
-    const first = keys[0].quat
-    const moves = keys.some((k) => !quatClose(k.quat, first))
-    if (!moves) delete tracks[boneName]
+    const first = keys[0]
+    const rotates = keys.some((k) => !quatClose(k.quat, first.quat))
+    const translates = keys.some((k) => !posClose(k.pos, first.pos))
+    if (!rotates && !translates) delete tracks[boneName]
   }
   const combined = buildEditClip(tracks, offset, {})
   combined.name = names.join(' + ')
@@ -443,6 +444,95 @@ export function trimClip(name, fps, startTime, endTime) {
   return addGeneratedClip(trimmed)
 }
 
+// Flip an entire clip left ↔ right, frame by frame, and register the result
+// as a brand-new playable clip — the original is untouched. Each bone takes
+// its mirrored counterpart's rest-relative rotation at every sampled frame
+// (found by the usual L/R naming conventions; see mirrorBoneName), reflected
+// across the character's centre plane. Bones with no counterpart (spine,
+// head…) mirror in place. Same maths as posing.js's single-frame mirrorPose,
+// just applied across the whole timeline.
+//
+// Position is mirrored too, not just rotation: retargeted/mocap clips
+// usually put all of the character's actual movement — forward travel,
+// hip sway, the vertical bob that keeps a foot looking planted — on the
+// hip's local POSITION rather than its rotation (see restPos). Skipping that
+// left the hip sitting at its rest position throughout, so a mirrored walk
+// no longer matched its own foot rotations: weight looked shifted onto the
+// wrong side and feet floated or sank into the ground. Each bone's
+// rest-relative position offset is reflected across the same plane as
+// rotation (negate local X, keep Y/Z), so hip sway and bob carry over
+// correctly onto the swapped side.
+export function mirrorClip(name, fps) {
+  const clip = findClip(name)
+  if (!clip || !a.model || !a.restQuats || !a.restPos) return null
+  // prune=false: keep every bone's full per-frame data, sampled at the same
+  // time steps, so tracks line up index-for-index across bones below.
+  const res = sampleClipRange(clip, fps, 0, clip.duration, false)
+  if (!res) return null
+
+  const boneNames = new Set(a.model.bones.map((b) => b.name))
+  const boneByName = new Map(a.model.bones.map((b) => [b.name, b]))
+  const mirrored = {}
+
+  for (const bone of a.model.bones) {
+    const destName = bone.name
+    const restQuatDst = a.restQuats.get(bone)
+    const restPosDst = a.restPos.get(bone)
+    if (!restQuatDst || !restPosDst) continue
+    const counterpart = mirrorBoneName(destName, boneNames)
+    const srcName = counterpart || destName
+    const srcBone = boneByName.get(srcName)
+    const restQuatSrc = srcBone ? a.restQuats.get(srcBone) : null
+    const restPosSrc = srcBone ? a.restPos.get(srcBone) : null
+    const srcKeys = res.tracks[srcName]
+    if (!restQuatSrc || !restPosSrc || !srcKeys || !srcKeys.length) continue
+    const destKeys = res.tracks[destName]
+    const restQuatSrcInv = restQuatSrc.clone().invert()
+    const out = []
+    for (let i = 0; i < srcKeys.length; i++) {
+      const k = srcKeys[i]
+      const time = destKeys && destKeys[i] ? destKeys[i].time : k.time
+
+      _qa.fromArray(k.quat)
+      // Rest-relative rotation of the source side…
+      const delta = restQuatSrcInv.clone().multiply(_qa)
+      // …reflected across the YZ plane: axis x flips, so (x,y,z,w) → (x,-y,-z,w).
+      delta.set(delta.x, -delta.y, -delta.z, delta.w)
+      const after = restQuatDst.clone().multiply(delta)
+
+      // Same reflection, applied to the rest-relative POSITION offset (if
+      // this bone carries one — most don't, so this is a no-op for them:
+      // dx/dy/dz all stay 0 and pos ends up equal to restPosDst).
+      const dx = k.pos[0] - restPosSrc.x
+      const dy = k.pos[1] - restPosSrc.y
+      const dz = k.pos[2] - restPosSrc.z
+      const pos = [restPosDst.x - dx, restPosDst.y + dy, restPosDst.z + dz]
+
+      out.push({ time, quat: [after.x, after.y, after.z, after.w], pos })
+    }
+    mirrored[destName] = out
+  }
+
+  // Drop tracks whose rotation AND position never change, same as
+  // sampleClipRange's own pruning — keeps the mirrored clip's keyframe data
+  // small.
+  for (const boneName of Object.keys(mirrored)) {
+    const keys = mirrored[boneName]
+    if (!keys.length) {
+      delete mirrored[boneName]
+      continue
+    }
+    const first = keys[0]
+    const rotates = keys.some((k) => !quatClose(k.quat, first.quat))
+    const translates = keys.some((k) => !posClose(k.pos, first.pos))
+    if (!rotates && !translates) delete mirrored[boneName]
+  }
+
+  const mirroredClip = buildEditClip(mirrored, res.duration, {})
+  mirroredClip.name = `${name} (mirrored)`
+  return addGeneratedClip(mirroredClip)
+}
+
 // Turn the current in-app keyframe tracks (bone rotations only — root
 // motion, props, cameras, and morphs aren't part of a mixer clip and stay
 // keyframe-only) into a new playable clip. This is what lets a "Make your
@@ -492,7 +582,12 @@ function sampleClipRange(clip, fps, startTime, endTime, prune = true, opts = {})
     mixer.setTime(t)
     for (const b of a.model.bones) {
       const q = b.quaternion
-      tracks[b.name].push({ time: t - start, quat: [q.x, q.y, q.z, q.w] })
+      const bp = b.position
+      // Most bones only rotate, but retargeted/mocap clips typically animate
+      // the hip's (or another root-like bone's) POSITION too — capture it
+      // alongside rotation so nothing that keeps feet planted gets lost when
+      // this range is rebuilt into a new clip (trim/combine/mirror).
+      tracks[b.name].push({ time: t - start, quat: [q.x, q.y, q.z, q.w], pos: [bp.x, bp.y, bp.z] })
     }
     if (rootBone) {
       a.model.root.updateWorldMatrix(true, true)
@@ -522,9 +617,10 @@ function sampleClipRange(clip, fps, startTime, endTime, prune = true, opts = {})
   if (prune) {
     for (const boneName of Object.keys(tracks)) {
       const keys = tracks[boneName]
-      const first = keys[0].quat
-      const moves = keys.some((k) => !quatClose(k.quat, first))
-      if (!moves) delete tracks[boneName]
+      const first = keys[0]
+      const rotates = keys.some((k) => !quatClose(k.quat, first.quat))
+      const translates = keys.some((k) => !posClose(k.pos, first.pos))
+      if (!rotates && !translates) delete tracks[boneName]
     }
   }
   return { tracks, duration: span, root: rootKeys }
@@ -984,6 +1080,38 @@ function findClip(name) {
   return a.bakedClips.find((c) => c.name === name) || a.importedClips.find((c) => c.name === name)
 }
 
+// Find a bone's opposite-side counterpart by the common L/R naming schemes
+// (Left/Right words, .L/.R, _l/_r, l_/r_ affixes). Returns a name present in
+// `names`, or null for centre bones. Mirrors posing.js's own mirrorBoneName —
+// duplicated here (rather than imported) so this module doesn't depend on
+// whichever model posing.js currently has bound, since clip mirroring can run
+// on any loaded character, active-for-posing or not.
+const MIRROR_SIDE_PATTERNS = [
+  [/Left/g, 'Right'],
+  [/Right/g, 'Left'],
+  [/left/g, 'right'],
+  [/right/g, 'left'],
+  [/LEFT/g, 'RIGHT'],
+  [/RIGHT/g, 'LEFT'],
+  [/([._-])L($|[._-])/g, '$1R$2'],
+  [/([._-])R($|[._-])/g, '$1L$2'],
+  [/([._-])l($|[._-])/g, '$1r$2'],
+  [/([._-])r($|[._-])/g, '$1l$2'],
+  [/^L([._-])/, 'R$1'],
+  [/^R([._-])/, 'L$1'],
+  [/^l([._-])/, 'r$1'],
+  [/^r([._-])/, 'l$1'],
+]
+
+function mirrorBoneName(name, names) {
+  for (const [re, sub] of MIRROR_SIDE_PATTERNS) {
+    re.lastIndex = 0
+    const swapped = name.replace(re, sub)
+    if (swapped !== name && names.has(swapped)) return swapped
+  }
+  return null
+}
+
 function quatClose(x, y) {
   return (
     Math.abs(x[0] - y[0]) < 1e-4 &&
@@ -991,6 +1119,11 @@ function quatClose(x, y) {
     Math.abs(x[2] - y[2]) < 1e-4 &&
     Math.abs(x[3] - y[3]) < 1e-4
   )
+}
+
+function posClose(x, y) {
+  if (!x || !y) return true
+  return Math.abs(x[0] - y[0]) < 1e-5 && Math.abs(x[1] - y[1]) < 1e-5 && Math.abs(x[2] - y[2]) < 1e-5
 }
 
 // Sample the character root-motion keyframes at time t and drive model.root.
@@ -1060,6 +1193,19 @@ function buildEditClip(tracks, duration, morphs = {}) {
     const values = []
     for (const k of sorted) values.push(k.quat[0], k.quat[1], k.quat[2], k.quat[3])
     kfTracks.push(new THREE.QuaternionKeyframeTrack(name + '.quaternion', times, values))
+
+    // Most bones only rotate, so a position track would just be redundant,
+    // unchanging keyframes at the bind pose — skip it. Bones that actually
+    // translate (the hip on a retargeted/mocap clip, mainly — see restPos)
+    // get one too, or their contribution to foot placement/ground contact
+    // would silently vanish when this clip is rebuilt from sampled data.
+    const first = sorted[0].pos
+    const translates = first && sorted.some((k) => !posClose(k.pos, first))
+    if (translates) {
+      const posValues = []
+      for (const k of sorted) posValues.push(k.pos[0], k.pos[1], k.pos[2])
+      kfTracks.push(new THREE.VectorKeyframeTrack(name + '.position', times, posValues))
+    }
   }
   for (const [meshIndex, byName] of Object.entries(morphs)) {
     const mesh = a.model?.meshes?.[Number(meshIndex)]
