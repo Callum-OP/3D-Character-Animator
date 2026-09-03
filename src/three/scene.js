@@ -23,6 +23,7 @@ import {
   disposePosing,
   suspendPosing,
   resumePosing,
+  getBoneByName,
   setViewCamera as setPosingViewCamera,
 } from './posing.js'
 import {
@@ -108,6 +109,10 @@ import {
   getObjectsData,
   applyObjectsData,
   getObjectsForSave,
+  attachObjectToBone,
+  detachObject,
+  getObjectAttachment,
+  detachObjectsForCharacter,
   setViewCamera as setObjectsViewCamera,
 } from './objects.js'
 import { getPose, applyPose } from './posing.js'
@@ -692,6 +697,11 @@ function disposeCharacter(id) {
   clearAnimationModel(id) // only THIS character's mixer/action
   if (!isAnyPlaying()) setContinuousRender(false)
   clearClothForMeshes(model.meshes) // only THIS character's cloth, others keep simulating
+  // Props riding this character's bones -> back into the scene, not disposed
+  // along with the skeleton (disposeObject below would otherwise free their
+  // geometry too, since a bone's children are part of its subtree).
+  const detachedIds = detachObjectsForCharacter(id)
+  for (const objId of detachedIds) useStore.getState().setObjectAttachment(objId, null)
   clearCharacterObject(id)
   restoreOriginalMaterials(model)
   disposeGeneratedMaterials(model)
@@ -784,6 +794,27 @@ export function setObjectCastShadowById(id, castShadow) {
 
 export function resetObjectById(id) {
   resetObject(id)
+}
+
+// ---------------------------------------------------------------------------
+// Bone attachment (props parented to a character bone, e.g. a sword in a hand)
+// ---------------------------------------------------------------------------
+
+// Attach a prop to a bone by name on the currently active character (updates
+// the scene + the store). Passing boneName=null/'' detaches it back into the
+// scene at its current world position.
+export function setObjectAttachmentById(id, boneName) {
+  if (!boneName) {
+    detachObject(id)
+    useStore.getState().setObjectAttachment(id, null)
+    requestRender()
+    return
+  }
+  const bone = getBoneByName(boneName)
+  if (!bone) return
+  attachObjectToBone(id, bone, boneName, state.activeCharacterId)
+  useStore.getState().setObjectAttachment(id, boneName)
+  requestRender()
 }
 
 // ---------------------------------------------------------------------------
@@ -1090,7 +1121,16 @@ export function applySceneData(json) {
     }
     applyMeshEditsData(c.meshEdits)
   }
-  applyObjectsData(json.objects)
+  applyObjectsData(json.objects, getBoneByName)
+  // Sync the store's per-object attachment flag (drives the panel's dropdown)
+  // now that objects.js has resolved/applied whatever attachment was saved.
+  {
+    const st = useStore.getState()
+    for (const so of st.sceneObjects) {
+      const att = getObjectAttachment(so.id)
+      st.setObjectAttachment(so.id, att ? att.boneName : null)
+    }
+  }
   if (Array.isArray(json.cameras)) {
     clearCameras()
     const metas = applyCamerasData(json.cameras)
@@ -1350,6 +1390,10 @@ export async function applyProjectData(record) {
     if (!obj.blob) continue
     const file = new File([obj.blob], obj.fileName)
     const meta = obj.kind === 'image' ? await addImageFile(file) : await addObjectFile(file)
+    // Re-attach to its bone (if any) BEFORE applying the saved transform —
+    // attaching reparents-and-preserves-current-world-position, which we
+    // then immediately overwrite with the saved (already bone-local) TRS.
+    if (obj.attachedBoneName) setObjectAttachmentById(meta.id, obj.attachedBoneName)
     setObjectTransform(meta.id, obj.transform)
     setObjectVisibleById(meta.id, obj.visible !== false)
     if (obj.kind !== 'image') {

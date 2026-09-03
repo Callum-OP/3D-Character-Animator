@@ -1157,13 +1157,34 @@ input.xform-value {
 
 .obj-row {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 5px 8px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 6px 8px;
   font-size: 12px;
   cursor: pointer;
   border-bottom: 1px solid var(--panel-border);
+}
+
+.obj-row-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* Per-object controls (style/outline/shadow/bone-attach) — wraps onto as many
+   lines as it needs instead of forcing the whole row to scroll sideways. */
+.obj-row-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.obj-row-controls .select {
+  flex: 1 1 auto;
+  min-width: 78px;
 }
 
 .obj-row:last-child {

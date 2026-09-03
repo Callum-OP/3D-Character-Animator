@@ -9,6 +9,7 @@ import {
   setObjectStyleById,
   setObjectOutlineById,
   setObjectCastShadowById,
+  setObjectAttachmentById,
   getSceneData,
   applySceneData,
 } from '../three/scene.js'
@@ -41,6 +42,8 @@ const STYLE_OPTIONS = [
 ]
 
 export default function ObjectsPanel() {
+  const modelInfo = useStore((s) => s.modelInfo)
+  const boneNames = modelInfo?.bones ? modelInfo.bones.map((b) => b.name) : []
   const sceneObjects = useStore((s) => s.sceneObjects)
   const selectedObjectId = useStore((s) => s.selectedObjectId)
   const selectedObjectIds = useStore((s) => s.selectedObjectIds)
@@ -134,6 +137,7 @@ export default function ObjectsPanel() {
       <p className="panel-hint">
         Add props, backgrounds and reference images to place around your character.
         Shift-click or Ctrl-click several in the list below to move, rotate or resize them all together.
+        Attach a prop to a bone — like a gun in a hand — to make it follow that bone through posing and animation.
       </p>
 
       <div className="kf-actions">
@@ -317,68 +321,98 @@ export default function ObjectsPanel() {
                   }
                 }}
               >
-                <span className="obj-name">
-                  {o.isCharacter ? `${o.name} (character)` : o.name}
-                </span>
-                <button
-                  className="obj-eye"
-                  title={o.visible === false ? 'Show' : 'Hide'}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    setObjectVisibleById(o.id, o.visible === false)
-                  }}
-                >
-                  {o.visible === false ? '🙈' : '👁'}
-                </button>
-                {o.kind === 'model' && (
-                  <>
-                    <select
-                      className="select"
-                      style={{ width: 92, fontSize: 11, padding: '2px 4px' }}
-                      title="How this prop is shaded — 'Match scene' follows the character's Look panel"
-                      value={o.style || 'auto'}
-                      onClick={(e) => e.stopPropagation()}
-                      onChange={(e) => setObjectStyleById(o.id, e.target.value)}
-                    >
-                      {STYLE_OPTIONS.map((opt) => (
-                        <option key={opt.value} value={opt.value}>
-                          {opt.label}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      className="obj-eye"
-                      title={o.outline ? 'Ink outline on — click to turn off' : 'No ink outline — click to turn on'}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setObjectOutlineById(o.id, !o.outline)
-                      }}
-                    >
-                      {o.outline ? '✏️' : '⬜'}
-                    </button>
-                    <button
-                      className="obj-eye"
-                      title={o.castShadow === false ? 'Shadows off — click to cast shadows' : 'Casts shadows — click to ignore shadows'}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setObjectCastShadowById(o.id, o.castShadow === false)
-                      }}
-                    >
-                      {o.castShadow === false ? '🚫' : '🌑'}
-                    </button>
-                  </>
-                )}
-                {!o.isCharacter && (
+                <div className="obj-row-main">
+                  <span className="obj-name">{o.isCharacter ? `${o.name} (character)` : o.name}</span>
                   <button
-                    className="obj-del"
-                    title="Remove"
+                    className="obj-eye"
+                    title={o.visible === false ? 'Show' : 'Hide'}
                     onClick={(e) => {
                       e.stopPropagation()
-                      removeObjectById(o.id)
+                      setObjectVisibleById(o.id, o.visible === false)
                     }}
                   >
-                    ×
+                    {o.visible === false ? '🙈' : '👁'}
                   </button>
+                  {!o.isCharacter && (
+                    <button
+                      className="obj-del"
+                      title="Remove"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        removeObjectById(o.id)
+                      }}
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+
+                {(o.kind === 'model' || (!o.isCharacter && boneNames.length > 0)) && (
+                  <div className="obj-row-controls">
+                    {o.kind === 'model' && (
+                      <>
+                        <select
+                          className="select"
+                          style={{ fontSize: 11, padding: '2px 4px' }}
+                          title="How this prop is shaded — 'Match scene' follows the character's Look panel"
+                          value={o.style || 'auto'}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => setObjectStyleById(o.id, e.target.value)}
+                        >
+                          {STYLE_OPTIONS.map((opt) => (
+                            <option key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          className="obj-eye"
+                          title={o.outline ? 'Ink outline on — click to turn off' : 'No ink outline — click to turn on'}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setObjectOutlineById(o.id, !o.outline)
+                          }}
+                        >
+                          {o.outline ? '✏️' : '⬜'}
+                        </button>
+                        <button
+                          className="obj-eye"
+                          title={
+                            o.castShadow === false
+                              ? 'Shadows off — click to cast shadows'
+                              : 'Casts shadows — click to ignore shadows'
+                          }
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setObjectCastShadowById(o.id, o.castShadow === false)
+                          }}
+                        >
+                          {o.castShadow === false ? '🚫' : '🌑'}
+                        </button>
+                      </>
+                    )}
+                    {!o.isCharacter && boneNames.length > 0 && (
+                      <select
+                        className="select"
+                        style={{ fontSize: 11, padding: '2px 4px' }}
+                        title={
+                          o.attachedBoneName
+                            ? `Attached to "${o.attachedBoneName}" — follows that bone. Choose another bone, or "Not attached" to detach.`
+                            : 'Attach this to a bone (e.g. a gun to a hand bone) so it follows posing and animation'
+                        }
+                        value={o.attachedBoneName || ''}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => setObjectAttachmentById(o.id, e.target.value || null)}
+                      >
+                        <option value="">Not attached</option>
+                        {boneNames.map((name) => (
+                          <option key={name} value={name}>
+                            {name}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
                 )}
               </div>
             ))}
@@ -389,7 +423,13 @@ export default function ObjectsPanel() {
               className="btn secondary"
               style={{ marginTop: 8 }}
               onClick={() => selectedObjectIds.forEach((id) => resetObjectById(id))}
-              title={multiSelected ? 'Reset every selected object back to the origin' : 'Reset position'}
+              title={
+                multiSelected
+                  ? 'Reset every selected object back to the origin'
+                  : sceneObjects.find((o) => o.id === selectedObjectId)?.attachedBoneName
+                    ? 'Reset position (relative to the bone it’s attached to)'
+                    : 'Reset position'
+              }
             >
               {multiSelected ? `Reset position (${selectedObjectIds.length})` : 'Reset position'}
             </button>

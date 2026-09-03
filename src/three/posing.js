@@ -378,6 +378,13 @@ export function resetBone(name) {
 }
 
 // The selected bone's parent bone name (for "select parent" navigation).
+// Look up a live Bone Object3D by name on the currently active character —
+// used by the Objects panel to attach a prop (gun, shield, hat...) to a bone
+// so it follows posing/animation automatically via the normal scene graph.
+export function getBoneByName(name) {
+  return name ? p.boneMap.get(name) || null : null
+}
+
 export function getBoneParentName(name) {
   const bone = p.boneMap.get(name)
   const parent = bone && bone.parent

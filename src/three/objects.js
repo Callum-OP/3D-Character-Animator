@@ -171,6 +171,9 @@ export function addObject(parsed, name, format, file) {
     style: 'auto', // 'auto' | 'unlit' | 'toon' | 'soft' | 'standard'
     outline: false, // props default to no ink outline, even in Cartoon/Soft styles
     castShadow: true,
+    attachedBoneName: null, // bone name this prop is parented to, or null
+    attachedCharacterId: null, // which character owns that bone
+    attachedBone: null, // live Bone Object3D reference (not serialisable)
   }
   o.objects.push(entry)
   applyObjectStyle(entry)
@@ -204,9 +207,104 @@ export function addImage(map, name, aspect, file) {
   excludeFromOutline(root)
   o.scene.add(root)
   const id = ++idCounter
-  o.objects.push({ id, name, format: 'image', root, kind: 'image', file: file || null })
+  o.objects.push({
+    id,
+    name,
+    format: 'image',
+    root,
+    kind: 'image',
+    file: file || null,
+    attachedBoneName: null,
+    attachedCharacterId: null,
+    attachedBone: null,
+  })
   o.requestRender()
   return { id, name, format: 'image', kind: 'image' }
+}
+
+// ---------------------------------------------------------------------------
+// Bone attachment — glue a prop (gun, shield, hat...) to a bone on the active
+// character so it follows posing, animation playback and ragdoll for free.
+//
+// Implementation: reparent the prop's root under the live Bone Object3D.
+// Three.js's normal scene-graph traversal keeps a bone's children in lockstep
+// with it every frame (posing, the animation mixer and the ragdoll solver all
+// just rotate the bone) — no per-frame sync code needed here. The prop's
+// position/quaternion/scale become bone-LOCAL the moment it's attached, which
+// is exactly what you want: they now describe "offset from the bone", so the
+// existing Move/Rotate/Resize gizmo can nudge the prop into place in the hand
+// (or wherever) without fighting the bone's own transform.
+// ---------------------------------------------------------------------------
+
+// Snap `root`'s local TRS so its WORLD transform is unchanged after being
+// reparented under `newParent` — used both when attaching (so the prop
+// doesn't jump to the bone's origin) and detaching (so it doesn't jump back
+// to the scene origin).
+function reparentKeepingWorld(root, newParent) {
+  root.updateMatrixWorld(true)
+  const worldMatrix = root.matrixWorld.clone()
+  newParent.add(root)
+  newParent.updateMatrixWorld(true)
+  const invParent = new THREE.Matrix4().copy(newParent.matrixWorld).invert()
+  const localMatrix = new THREE.Matrix4().multiplyMatrices(invParent, worldMatrix)
+  localMatrix.decompose(root.position, root.quaternion, root.scale)
+}
+
+// Attach a prop to a bone by name on a given character. `bone` is the live
+// THREE.Bone (look it up via posing.js's getBoneByName). Re-attaching to a
+// different bone (or the same one) is fine — it just reparents again from
+// wherever the prop currently is.
+export function attachObjectToBone(id, bone, boneName, characterId) {
+  const entry = o.objects.find((e) => e.id === id)
+  if (!entry || !bone) return
+  if (o.selected === entry.root) o.transform.detach()
+  o.pivotRoots = o.pivotRoots.filter((r) => r !== entry.root)
+  reparentKeepingWorld(entry.root, bone)
+  entry.attachedBoneName = boneName || bone.name
+  entry.attachedCharacterId = characterId != null ? characterId : null
+  entry.attachedBone = bone
+  if (o.selected === entry.root) o.transform.attach(entry.root) // re-attach gizmo in new parent space
+  o.requestRender()
+}
+
+// Detach a prop back into the scene root, preserving its current world
+// position/rotation/scale (so it stays exactly where the bone left it).
+export function detachObject(id) {
+  const entry = o.objects.find((e) => e.id === id)
+  if (!entry || !entry.attachedBoneName) return
+  const wasSelected = o.selected === entry.root
+  if (wasSelected) o.transform.detach()
+  reparentKeepingWorld(entry.root, o.scene)
+  entry.attachedBoneName = null
+  entry.attachedCharacterId = null
+  entry.attachedBone = null
+  if (wasSelected) o.transform.attach(entry.root)
+  o.requestRender()
+}
+
+// { boneName, characterId } if attached, else null. Used by the panel to show
+// current attachment state and by save/load to persist it.
+export function getObjectAttachment(id) {
+  const entry = o.objects.find((e) => e.id === id)
+  if (!entry || !entry.attachedBoneName) return null
+  return { boneName: entry.attachedBoneName, characterId: entry.attachedCharacterId }
+}
+
+// Detach every prop currently attached to bones belonging to `characterId` —
+// called just before that character is disposed, so props don't get torn
+// down along with the skeleton they were riding on (disposeObject() below
+// frees an entire subtree, and a bone's children are part of that subtree).
+// Returns the ids of any props that were detached, so the caller can also
+// clear their attachment state in the store.
+export function detachObjectsForCharacter(characterId) {
+  const detached = []
+  for (const entry of o.objects) {
+    if (entry.attachedBoneName && entry.attachedCharacterId === characterId) {
+      detachObject(entry.id)
+      detached.push(entry.id)
+    }
+  }
+  return detached
 }
 
 // Show or hide an object (prop, image, or the character) without removing it.
@@ -226,7 +324,7 @@ export function removeObject(id) {
     o.transform.detach()
     o.selected = null
   }
-  o.scene.remove(entry.root)
+  if (entry.root.parent) entry.root.parent.remove(entry.root) // may be a bone, not the scene, if attached
   disposePropMaterials(entry)
   disposeObject(entry.root)
   o.objects.splice(idx, 1)
@@ -340,6 +438,12 @@ export function selectObject(id) {
 // panel) so dragging it moves, rotates or resizes all of them together.
 // Falls back to the plain single-select path for 0 or 1 ids so existing
 // behaviour (and undo history) is unchanged in the common case.
+//
+// Bone-attached props are left out of the shared group: applyPivotDelta below
+// treats every root's local matrix as its world matrix (true for anything
+// added directly to the scene), which no longer holds once a prop's parent is
+// a bone. Attached props still get moved individually via the bone panel /
+// re-attaching, just not through this group gizmo.
 export function selectObjects(ids) {
   if (!o.transform) return
   const list = Array.isArray(ids) ? ids : ids != null ? [ids] : []
@@ -347,7 +451,7 @@ export function selectObjects(ids) {
   const seen = new Set()
   for (const id of list) {
     const root = rootFor(id)
-    if (root && !seen.has(root)) {
+    if (root && !seen.has(root) && root.parent === o.scene) {
       seen.add(root)
       roots.push(root)
     }
@@ -571,6 +675,8 @@ export function getObjectsForSave() {
       style: e.kind === 'model' ? e.style : undefined,
       outline: e.kind === 'model' ? e.outline : undefined,
       castShadow: e.kind === 'model' ? e.castShadow : undefined,
+      // Bone this prop is riding, if any (transform above is already bone-local).
+      attachedBoneName: e.attachedBoneName || undefined,
     }))
 }
 
@@ -589,18 +695,45 @@ export function getObjectsData() {
     position: e.root.position.toArray(),
     quaternion: e.root.quaternion.toArray(),
     scale: e.root.scale.toArray(),
+    // Bone attachment, if any — position/quaternion/scale above are already
+    // bone-LOCAL in that case (see attachObjectToBone), so restoring both
+    // together puts the prop right back where it was riding the bone.
+    attachedBoneName: e.attachedBoneName || undefined,
+    attachedCharacterId: e.attachedCharacterId ?? undefined,
   }))
 }
 
 // Apply saved transforms to the currently-loaded props, matching by name.
-export function applyObjectsData(list) {
+// `resolveBone(name)` is an optional lookup (e.g. posing.js's getBoneByName)
+// used to re-attach a prop that was saved while riding a bone; without it,
+// attachment info is ignored and props just land at their saved local TRS.
+export function applyObjectsData(list, resolveBone) {
   if (!Array.isArray(list)) return
   const used = new Set()
   for (const item of list) {
     const idx = o.objects.findIndex((e, i) => e.name === item.name && !used.has(i))
     if (idx < 0) continue
     used.add(idx)
-    const root = o.objects[idx].root
+    const entry = o.objects[idx]
+    const root = entry.root
+    const bone = item.attachedBoneName && resolveBone ? resolveBone(item.attachedBoneName) : null
+    if (bone) {
+      // Raw reparent (no world-preserving math needed — the saved
+      // position/quaternion/scale below, applied next, are already the
+      // correct bone-local offset).
+      bone.add(root)
+      entry.attachedBoneName = item.attachedBoneName
+      entry.attachedCharacterId = item.attachedCharacterId ?? null
+      entry.attachedBone = bone
+    } else if (entry.attachedBoneName) {
+      // Was attached but the save says otherwise (or the bone no longer
+      // exists on whatever's currently loaded) — make sure it's not left
+      // dangling under a stale parent.
+      if (o.scene) o.scene.add(root)
+      entry.attachedBoneName = null
+      entry.attachedCharacterId = null
+      entry.attachedBone = null
+    }
     if (item.position) root.position.fromArray(item.position)
     if (item.quaternion) root.quaternion.fromArray(item.quaternion)
     if (item.scale) root.scale.fromArray(item.scale)
@@ -611,7 +744,7 @@ export function applyObjectsData(list) {
 export function disposeObjects() {
   if (o.transform) o.transform.detach()
   for (const e of o.objects) {
-    if (o.scene) o.scene.remove(e.root)
+    if (e.root.parent) e.root.parent.remove(e.root) // may be a bone, not the scene, if attached
     disposePropMaterials(e)
     disposeObject(e.root)
   }

@@ -441,6 +441,12 @@ export const useStore = create((set) => ({
     set((s) => ({
       sceneObjects: s.sceneObjects.map((o) => (o.id === id ? { ...o, castShadow } : o)),
     })),
+  // attachedBoneName: null when un-attached, else the bone it's parented to
+  // (e.g. a sword riding the character's right-hand bone).
+  setObjectAttachment: (id, attachedBoneName) =>
+    set((s) => ({
+      sceneObjects: s.sceneObjects.map((o) => (o.id === id ? { ...o, attachedBoneName } : o)),
+    })),
   removeSceneObject: (id) =>
     set((s) => ({
       sceneObjects: s.sceneObjects.filter((o) => o.id !== id),
