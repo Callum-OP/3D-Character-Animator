@@ -802,7 +802,14 @@ export function play() {
 export function pause() {
   if (!a.action) return
   a.action.paused = true
-  if (!anyPlaying()) a.refs.setContinuousRender(false)
+  if (!anyPlaying()) {
+    a.refs.setContinuousRender(false)
+    // Only actually paused (not another clip still playing): hand control
+    // back to posing/mesh-edit so parts/bones can be clicked in the frozen
+    // pose, same as stop() does. This doesn't touch the current pose —
+    // resumePosing()/resumeMeshEdit() just clear the "ignore picks" flag.
+    a.refs.resumePosing()
+  }
   a.refs.requestRender()
 }
 

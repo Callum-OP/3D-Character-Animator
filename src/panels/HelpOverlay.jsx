@@ -80,7 +80,7 @@ export default function HelpOverlay() {
                 <b>Click a part</b> — select it to move / resize (Mesh mode)
               </li>
               <li>
-                <b>Click a prop/image</b> — select it to move / rotate / resize (View mode)
+                <b>Click a prop/image</b> — select it to move / rotate / resize (Object mode)
               </li>
             </ul>
             <h3>Keyboard</h3>
@@ -89,10 +89,10 @@ export default function HelpOverlay() {
                 <b>?</b> — open / close this help
               </li>
               <li>
-                <b>1 / 2 / 3</b> — View, Pose or Mesh mode
+                <b>1 / 2 / 3 / 4</b> — View, Object, Pose or Mesh mode
               </li>
               <li>
-                <b>W / E / R</b> — move, rotate or resize (Mesh mode)
+                <b>W / E / R</b> — move, rotate or resize (Object &amp; Mesh mode)
               </li>
               <li>
                 <b>H</b> — hide / show the selected part (Mesh mode)

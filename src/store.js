@@ -164,9 +164,12 @@ export const useStore = create((set) => ({
 
 
   // ---- Interaction mode ----
-  // 'view'  — navigate only: no gizmos, no picking.
-  // 'bone'  — pose the skeleton (bone dots + rotate gizmo).
-  // 'mesh'  — move/rotate/scale individual parts (eyes, hair…) of the character.
+  // 'view'   — navigate only: no gizmos, no picking, no selection at all.
+  // 'object' — click a prop/image/camera/light to select + gizmo it (this
+  //            used to be called 'view', which was confusing since it did
+  //            pick things — renamed, and a real look-only 'view' added).
+  // 'bone'   — pose the skeleton (bone dots + rotate gizmo).
+  // 'mesh'   — move/rotate/scale individual parts (eyes, hair…) of the character.
   // Selections are remembered across mode switches; only the active mode's
   // gizmo and picking are live.
   mode: 'bone',

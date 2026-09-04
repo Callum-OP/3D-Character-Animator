@@ -50,14 +50,28 @@ import { selectCamera, setCameraGizmoMode, consumeCameraGizmoGrab } from './came
 import { selectLight, consumeLightGizmoGrab } from './lights.js'
 import StatsOverlay from '../panels/StatsOverlay.jsx'
 
-// The viewport's mode switcher. Number keys jump straight to a mode.
+// The viewport's mode switcher. 'view' is look-only (no picking at all);
+// 'object' does prop/camera/light picking. Number keys jump straight to a
+// mode.
 const MODE_BUTTONS = [
-  { value: 'view', label: 'View', title: 'Just look around — no gizmos (1)' },
-  { value: 'bone', label: 'Pose', title: 'Select joints and bend them (2)' },
-  { value: 'mesh', label: 'Mesh', title: 'Move, rotate or resize parts like eyes and hair (3)' },
+  { value: 'view', label: 'View', title: 'Just look around — nothing is selectable (1)' },
+  { value: 'object', label: 'Object', title: 'Click a prop, camera or light to select + move it (2)' },
+  { value: 'bone', label: 'Pose', title: 'Select joints and bend them (3)' },
+  { value: 'mesh', label: 'Mesh', title: 'Move, rotate or resize parts like eyes and hair (4)' },
 ]
-const MODE_KEYS = { 1: 'view', 2: 'bone', 3: 'mesh' }
+const MODE_KEYS = { 1: 'view', 2: 'object', 3: 'bone', 4: 'mesh' }
 const GIZMO_KEYS = { w: 'translate', e: 'rotate', r: 'scale' }
+
+// Move / Rotate / Resize widgets, shown below the mode strip for every mode
+// except View (nothing is selectable there, so nothing to transform). Which
+// store field they read/write depends on the active mode — Object mode's
+// gizmo, Mesh mode's gizmo, or (fixed, since bone move/resize don't exist
+// yet) always 'rotate' for Pose.
+const TRANSFORM_BUTTONS = [
+  { value: 'translate', icon: '✥', label: 'Move', title: 'Move (W)' },
+  { value: 'rotate', icon: '↻', label: 'Rotate', title: 'Rotate (E)' },
+  { value: 'scale', icon: '⤢', label: 'Resize', title: 'Resize (R)' },
+]
 
 // The 3D viewport: owns the canvas container and the scene lifecycle, and
 // handles drag-and-drop of model files onto itself.
@@ -290,10 +304,12 @@ export default function Viewport() {
 
       const s = useStore.getState()
 
-      // View mode: clicking a prop/image selects it directly — gizmo and
+      // Object mode: clicking a prop/image selects it directly — gizmo and
       // all — without needing to find it in the Objects panel first.
       // Shift/Ctrl-click adds it to the current selection, same as the panel.
-      if (s.mode === 'view' && s.viewCameraId == null) {
+      // (Plain 'view' mode intentionally falls through to here and does
+      // nothing — it's look-only, no picking.)
+      if (s.mode === 'object' && s.viewCameraId == null) {
         const rect = el.getBoundingClientRect()
         const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1
         const ndcY = -((e.clientY - rect.top) / rect.height) * 2 + 1
@@ -350,6 +366,8 @@ export default function Viewport() {
         s.setMode(MODE_KEYS[e.key])
       } else if (plainKey && s.mode === 'mesh' && GIZMO_KEYS[e.key.toLowerCase()]) {
         s.setMeshGizmoMode(GIZMO_KEYS[e.key.toLowerCase()])
+      } else if (plainKey && s.mode === 'object' && GIZMO_KEYS[e.key.toLowerCase()]) {
+        s.setObjectMode(GIZMO_KEYS[e.key.toLowerCase()])
       } else if (plainKey && s.mode === 'mesh' && e.key.toLowerCase() === 'h' && s.selectedMeshUuid) {
         // H hides the selected part (Blender-style); pressing it again on the
         // same part (re-selected from the list, since a hidden mesh can't be
@@ -430,6 +448,41 @@ export default function Viewport() {
               {b.label}
             </button>
           ))}
+        </div>
+      )}
+
+      {modelInfo && mode !== 'view' && (
+        <div className="transform-widget-strip" title="What dragging the gizmo does">
+          {TRANSFORM_BUTTONS.map((b) => {
+            // Bone mode only has a rotate gizmo — Move/Resize are shown
+            // disabled rather than hidden, so the tool exists visibly and can
+            // gain real bone-move/-resize support later without moving
+            // anything else in the UI.
+            const isBone = mode === 'bone'
+            const disabled = isBone && b.value !== 'rotate'
+            const activeValue = isBone ? 'rotate' : mode === 'mesh' ? meshGizmoMode : objectMode
+            const active = activeValue === b.value
+            return (
+              <button
+                key={b.value}
+                className={'transform-widget-btn' + (active ? ' active' : '') + (disabled ? ' disabled' : '')}
+                title={disabled ? b.title + ' — not available for bones yet' : b.title}
+                aria-label={b.label}
+                disabled={disabled}
+                onClick={() => {
+                  if (disabled) return
+                  // Go through the store actions (not the imported
+                  // setMeshGizmoMode from meshedit.js, which is the
+                  // imperative three.js setter) so the panels and this
+                  // widget stay in sync.
+                  if (mode === 'mesh') useStore.getState().setMeshGizmoMode(b.value)
+                  else if (mode === 'object') useStore.getState().setObjectMode(b.value)
+                }}
+              >
+                <span className="transform-widget-icon">{b.icon}</span>
+              </button>
+            )
+          })}
         </div>
       )}
 

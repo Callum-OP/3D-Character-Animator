@@ -139,10 +139,67 @@ body {
 .mode-toolbar .seg-btn {
   background: transparent;
   padding: 6px 16px;
+  font-size: 15px;
 }
 
 .mode-toolbar .seg-btn.active {
   background: var(--accent);
+}
+
+/* Move/Rotate/Resize widgets, pinned to the left edge of the viewport.
+   Sized up (~2.3x a normal 32px icon button) and given a bright, high-
+   contrast look since they sit over a busy 3D scene and need to read at a
+   glance regardless of what's behind them. */
+.transform-widget-strip {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 10px;
+  background: rgba(16, 17, 20, 0.72);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  z-index: 5;
+}
+
+.transform-widget-btn {
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel-bg-2);
+  border: 1 solid #fff;
+  border-radius: 8px;
+  padding: 0;
+  cursor: pointer;
+  color: #fff;
+  transition: background 0.1s ease, border-color 0.1s ease, transform 0.05s ease;
+}
+
+.transform-widget-btn:hover:not(.disabled) {
+  background: #3a3c46;
+  transform: scale(1.04);
+}
+
+.transform-widget-btn.active {
+  background: var(--accent);
+  border-color: #fff;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5);
+}
+
+.transform-widget-btn.disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+  border-color: var(--panel-border);
+}
+
+.transform-widget-icon {
+  font-size: 30px;
+  line-height: 1;
+  color: #fff;
 }
 
 /* Banner shown while the viewport looks through a placed camera */
