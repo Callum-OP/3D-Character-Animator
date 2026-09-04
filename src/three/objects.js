@@ -409,6 +409,31 @@ function disposePropMaterials(entry) {
   disposeGeneratedMaterials({ meshes: entry.meshes, materials: entry.materials })
 }
 
+// --- View-mode click-to-pick ---------------------------------------------
+// Lets the user select a prop/image directly by clicking it in the viewport
+// while in View mode, instead of having to find it in the Objects panel
+// first. Only props/images are picked this way (not characters, which are
+// posed via Bone mode) — see Viewport's pointerup handler for the caller.
+const _pickRaycaster = new THREE.Raycaster()
+const _pickNdc = new THREE.Vector2()
+
+export function pickObjectId(ndcX, ndcY) {
+  if (!o.camera) return null
+  const roots = o.objects.filter((e) => e.root.visible).map((e) => e.root)
+  if (!roots.length) return null
+  _pickNdc.set(ndcX, ndcY)
+  _pickRaycaster.setFromCamera(_pickNdc, o.camera)
+  const hits = _pickRaycaster.intersectObjects(roots, true)
+  if (!hits.length) return null
+  let obj = hits[0].object
+  while (obj) {
+    const entry = o.objects.find((e) => e.root === obj)
+    if (entry) return entry.id
+    obj = obj.parent
+  }
+  return null
+}
+
 // Resolve an id (numeric prop id or a character id) to its root object.
 function rootFor(id) {
   if (id == null) return null

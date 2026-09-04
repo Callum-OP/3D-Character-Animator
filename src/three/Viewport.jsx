@@ -37,7 +37,14 @@ import {
   redo as redoMeshEdit,
 } from './meshedit.js'
 import { setLimitsEnabled } from './limits.js'
-import { selectObjects, setObjectMode, undo as undoObject, redo as redoObject, consumeObjectGizmoGrab } from './objects.js'
+import {
+  selectObjects,
+  setObjectMode,
+  undo as undoObject,
+  redo as redoObject,
+  consumeObjectGizmoGrab,
+  pickObjectId,
+} from './objects.js'
 import { resolveUndoTarget } from './undoPriority.js'
 import { selectCamera, setCameraGizmoMode, consumeCameraGizmoGrab } from './cameras.js'
 import { selectLight, consumeLightGizmoGrab } from './lights.js'
@@ -282,6 +289,22 @@ export default function Viewport() {
       if (dx * dx + dy * dy > 25) return // moved too far — an orbit drag, not a click
 
       const s = useStore.getState()
+
+      // View mode: clicking a prop/image selects it directly — gizmo and
+      // all — without needing to find it in the Objects panel first.
+      // Shift/Ctrl-click adds it to the current selection, same as the panel.
+      if (s.mode === 'view' && s.viewCameraId == null) {
+        const rect = el.getBoundingClientRect()
+        const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1
+        const ndcY = -((e.clientY - rect.top) / rect.height) * 2 + 1
+        const hitId = pickObjectId(ndcX, ndcY)
+        if (hitId != null) {
+          if (e.shiftKey || e.ctrlKey || e.metaKey) s.toggleObjectSelection(hitId, true)
+          else s.setSelectedObjectId(hitId)
+          return
+        }
+      }
+
       if (s.selectedObjectId != null) s.setSelectedObjectId(null)
       if (s.selectedCameraId != null) s.setSelectedCameraId(null)
       if (s.selectedLightId != null) {
@@ -327,6 +350,12 @@ export default function Viewport() {
         s.setMode(MODE_KEYS[e.key])
       } else if (plainKey && s.mode === 'mesh' && GIZMO_KEYS[e.key.toLowerCase()]) {
         s.setMeshGizmoMode(GIZMO_KEYS[e.key.toLowerCase()])
+      } else if (plainKey && s.mode === 'mesh' && e.key.toLowerCase() === 'h' && s.selectedMeshUuid) {
+        // H hides the selected part (Blender-style); pressing it again on the
+        // same part (re-selected from the list, since a hidden mesh can't be
+        // clicked in the viewport) shows it again.
+        const hidden = s.meshOverrides[s.selectedMeshUuid]?.visible === false
+        s.setMeshVisible(s.selectedMeshUuid, hidden)
       } else if (
         (e.ctrlKey || e.metaKey) &&
         (e.key === 'y' || e.key === 'Y' || ((e.key === 'z' || e.key === 'Z') && e.shiftKey))

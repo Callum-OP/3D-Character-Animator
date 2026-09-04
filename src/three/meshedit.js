@@ -68,6 +68,7 @@ const m = {
   dragBefore: null, // selected part's pivot TRS at gizmo-drag start
   pointerDown: null, // { x, y, axis } for click-vs-drag discrimination
   raycaster: new THREE.Raycaster(),
+  posedProxies: new Map(), // SkinnedMesh -> { proxy, geometry } — see getPosedLocalPositions()
 }
 
 const _ndc = new THREE.Vector2()
@@ -202,12 +203,8 @@ export function clearMeshEditModel() {
   m.suspended = false
   m.undoStack = []
   m.redoStack = []
-  if (m.box) {
-    m.scene.remove(m.box)
-    m.box.geometry.dispose()
-    m.box.material.dispose()
-    m.box = null
-  }
+  removeSelectionBox()
+  disposePosedProxies()
   m.model = null
   m.meshes = []
   m.meshByUuid = new Map()
@@ -259,7 +256,10 @@ export function setMeshGizmoMode(mode) {
 }
 
 export function updateMeshEditHelpers() {
-  if (m.box && m.box.visible) m.box.update()
+  // Box3Helper (used for a skinned/posed part) has no per-frame update() —
+  // it just sits under the pivot and follows gizmo drags via the transform
+  // hierarchy. Only the rest-pose BoxHelper needs re-reading each frame.
+  if (m.box && m.box.visible && typeof m.box.update === 'function') m.box.update()
 }
 
 export function getMeshDelta(uuid) {
@@ -538,21 +538,123 @@ function notifyChange() {
   if (m.onChange) m.onChange()
 }
 
+// A plain BoxHelper(mesh) reads the mesh's REST-pose geometry, which is fine
+// for an unposed/unskinned part but places the box at the wrong spot for a
+// skinned part on a posed character (see the posed-skin comment above
+// onPointerUp). For those, build the box from the same posed proxy used for
+// picking, expressed in the PIVOT's local space (mesh's own local transform
+// relative to its pivot is fixed forever — see setMeshEditModel — so this
+// still tracks live gizmo drags for free once parented under the pivot).
 function updateSelectionBox() {
   const show = m.enabled && !!m.selected
   if (show) {
-    if (!m.box) {
-      m.box = new THREE.BoxHelper(m.selected, HIGHLIGHT_COLOR)
-      m.box.material.transparent = true
-      m.box.material.opacity = 0.7
-      m.box.material.depthTest = false
-      excludeFromOutline(m.box)
-      m.scene.add(m.box)
+    const wantsSkinBox = m.selected.isSkinnedMesh
+    const haveSkinBox = m.box instanceof THREE.Box3Helper
+    if (wantsSkinBox) {
+      m.scene.updateMatrixWorld(true)
+      const { geometry } = refreshPosedProxy(m.selected)
+      const box = geometry.boundingBox.clone().applyMatrix4(m.selected.matrix)
+      if (!haveSkinBox) {
+        removeSelectionBox()
+        m.box = new THREE.Box3Helper(box, HIGHLIGHT_COLOR)
+        m.box.material.transparent = true
+        m.box.material.opacity = 0.7
+        m.box.material.depthTest = false
+        excludeFromOutline(m.box)
+        const rest = m.rest.get(m.selected)
+        ;(rest ? rest.pivot : m.scene).add(m.box)
+      } else {
+        m.box.box.copy(box)
+      }
     } else {
-      m.box.setFromObject(m.selected)
+      if (haveSkinBox) removeSelectionBox()
+      if (!m.box) {
+        m.box = new THREE.BoxHelper(m.selected, HIGHLIGHT_COLOR)
+        m.box.material.transparent = true
+        m.box.material.opacity = 0.7
+        m.box.material.depthTest = false
+        excludeFromOutline(m.box)
+        m.scene.add(m.box)
+      } else {
+        m.box.setFromObject(m.selected)
+      }
     }
   }
   if (m.box) m.box.visible = show
+}
+
+function removeSelectionBox() {
+  if (!m.box) return
+  if (m.box.parent) m.box.parent.remove(m.box)
+  m.box.geometry.dispose()
+  m.box.material.dispose()
+  m.box = null
+}
+
+// ---------------------------------------------------------------------------
+// Posed-skin support
+//
+// THREE.Mesh's built-in raycast (inherited by SkinnedMesh) tests against the
+// geometry's REST-pose vertex positions — it has no idea about the skeleton.
+// It only ever produced correct hits because it also applies the mesh node's
+// own matrixWorld, and an unposed character's meshes just happen to sit where
+// they visually render. The moment a bone bends (Pose mode), the actual
+// on-screen shape is entirely a GPU/CPU skinning effect that the mesh node's
+// own transform knows nothing about, so clicking the (now-bent) arm raycasts
+// against where the STRAIGHT arm used to be and misses — Mesh mode's
+// click-to-select (and the selection highlight box) silently broke for any
+// posed character.
+//
+// Fix: for SkinnedMesh parts, don't raycast the mesh itself. Build a small
+// proxy Mesh that shares the same triangle indices but whose position
+// attribute is recomputed on demand from THREE's own applyBoneTransform() —
+// i.e. the same per-vertex skin math the GPU uses — so it matches whatever
+// pose is currently on screen. Recomputed only at the moment of a click (or a
+// selection change), never per-frame, since posing is disabled while in Mesh
+// mode anyway.
+// ---------------------------------------------------------------------------
+const _skinTarget = new THREE.Vector3()
+
+// Returns { proxy, geometry } for a skinned mesh, creating it on first use.
+// `geometry`'s position attribute holds MESH-LOCAL (pre-matrixWorld) posed
+// vertex positions — the same space applyBoneTransform() returns.
+function getPosedProxyEntry(mesh) {
+  let entry = m.posedProxies.get(mesh)
+  if (entry) return entry
+  const srcPos = mesh.geometry.attributes.position
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(srcPos.count * 3), 3))
+  if (mesh.geometry.index) geometry.setIndex(mesh.geometry.index)
+  const proxy = new THREE.Mesh(geometry)
+  proxy.matrixAutoUpdate = false
+  entry = { proxy, geometry }
+  m.posedProxies.set(mesh, entry)
+  return entry
+}
+
+// Recomputes a skinned mesh's proxy geometry to match its CURRENT pose and
+// returns the entry. Cheap enough to call once per click/selection, not
+// meant to run every frame.
+function refreshPosedProxy(mesh) {
+  const entry = getPosedProxyEntry(mesh)
+  const srcPos = mesh.geometry.attributes.position
+  const outPos = entry.geometry.attributes.position
+  for (let i = 0; i < outPos.count; i += 1) {
+    // applyBoneTransform reads its target vector as the vertex's REST
+    // position on input, then overwrites it with the skinned result.
+    _skinTarget.fromBufferAttribute(srcPos, i)
+    mesh.applyBoneTransform(i, _skinTarget)
+    outPos.setXYZ(i, _skinTarget.x, _skinTarget.y, _skinTarget.z)
+  }
+  outPos.needsUpdate = true
+  entry.geometry.computeBoundingSphere()
+  entry.geometry.computeBoundingBox()
+  return entry
+}
+
+function disposePosedProxies() {
+  for (const { geometry } of m.posedProxies.values()) geometry.dispose()
+  m.posedProxies.clear()
 }
 
 function onPointerDown(e) {
@@ -573,11 +675,28 @@ function onPointerUp(e) {
     -((e.clientY - rect.top) / rect.height) * 2 + 1,
   )
   m.raycaster.setFromCamera(_ndc, m.camera)
-  const hits = m.raycaster.intersectObjects(
-    m.meshes.filter((mesh) => mesh.visible),
-    false,
-  )
-  m.onSelect(hits.length ? hits[0].object.uuid : null)
+
+  // Make sure bone/ancestor matrices are current before trusting them below —
+  // rendering may be on-demand, so a click right after a pose change could
+  // otherwise read stale matrixWorld data.
+  m.scene.updateMatrixWorld(true)
+
+  const proxyToMesh = new Map()
+  const targets = []
+  for (const mesh of m.meshes) {
+    if (!mesh.visible) continue
+    if (mesh.isSkinnedMesh) {
+      const { proxy } = refreshPosedProxy(mesh)
+      proxy.matrixWorld.copy(mesh.matrixWorld)
+      proxyToMesh.set(proxy, mesh)
+      targets.push(proxy)
+    } else {
+      targets.push(mesh)
+    }
+  }
+  const hits = m.raycaster.intersectObjects(targets, false)
+  const hit = hits.length ? proxyToMesh.get(hits[0].object) || hits[0].object : null
+  m.onSelect(hit ? hit.uuid : null)
 }
 
 function excludeFromOutline(obj3d) {
