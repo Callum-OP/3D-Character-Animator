@@ -32,6 +32,7 @@ const o = {
 
   transform: null, // TransformControls (move/rotate/scale)
   helper: null,
+  enabled: true, // false outside Object mode — gizmo stays detached even if something is selected
   objects: [], // { id, name, format, root } — props only
   characterRoots: new Map(), // id -> { root, name } — every LOADED character (owned elsewhere), keyed by character id
   selected: null, // single selected root (or null) — used when exactly one thing is selected
@@ -263,7 +264,7 @@ export function attachObjectToBone(id, bone, boneName, characterId) {
   entry.attachedBoneName = boneName || bone.name
   entry.attachedCharacterId = characterId != null ? characterId : null
   entry.attachedBone = bone
-  if (o.selected === entry.root) o.transform.attach(entry.root) // re-attach gizmo in new parent space
+  if (o.selected === entry.root && o.enabled) o.transform.attach(entry.root) // re-attach gizmo in new parent space
   o.requestRender()
 }
 
@@ -278,7 +279,7 @@ export function detachObject(id) {
   entry.attachedBoneName = null
   entry.attachedCharacterId = null
   entry.attachedBone = null
-  if (wasSelected) o.transform.attach(entry.root)
+  if (wasSelected && o.enabled) o.transform.attach(entry.root)
   o.requestRender()
 }
 
@@ -409,17 +410,20 @@ function disposePropMaterials(entry) {
   disposeGeneratedMaterials({ meshes: entry.meshes, materials: entry.materials })
 }
 
-// --- View-mode click-to-pick ---------------------------------------------
-// Lets the user select a prop/image directly by clicking it in the viewport
-// while in View mode, instead of having to find it in the Objects panel
-// first. Only props/images are picked this way (not characters, which are
-// posed via Bone mode) — see Viewport's pointerup handler for the caller.
+// --- Object-mode click-to-pick --------------------------------------------
+// Lets the user select a prop/image/character directly by clicking it in the
+// viewport while in Object mode, instead of having to find it in a panel
+// first. Characters are included too — Object mode is a distinct mode from
+// Pose now, and a character can be moved/rotated/resized as a whole object
+// exactly like a prop (see setCharacterObject / rootFor below).
 const _pickRaycaster = new THREE.Raycaster()
 const _pickNdc = new THREE.Vector2()
 
 export function pickObjectId(ndcX, ndcY) {
   if (!o.camera) return null
-  const roots = o.objects.filter((e) => e.root.visible).map((e) => e.root)
+  const propRoots = o.objects.filter((e) => e.root.visible).map((e) => e.root)
+  const charEntries = [...o.characterRoots.entries()].filter(([, e]) => e.root.visible)
+  const roots = propRoots.concat(charEntries.map(([, e]) => e.root))
   if (!roots.length) return null
   _pickNdc.set(ndcX, ndcY)
   _pickRaycaster.setFromCamera(_pickNdc, o.camera)
@@ -429,6 +433,8 @@ export function pickObjectId(ndcX, ndcY) {
   while (obj) {
     const entry = o.objects.find((e) => e.root === obj)
     if (entry) return entry.id
+    const charHit = charEntries.find(([, e]) => e.root === obj)
+    if (charHit) return charHit[0]
     obj = obj.parent
   }
   return null
@@ -454,9 +460,35 @@ export function selectObject(id) {
   if (o.pivot) o.pivot.visible = false
   const root = rootFor(id)
   o.selected = root
-  if (root) o.transform.attach(root)
+  if (root && o.enabled) o.transform.attach(root)
   else o.transform.detach()
   o.requestRender()
+}
+
+// Enable/disable Object mode's gizmo as a whole (mirrors posing.js's /
+// meshedit.js's setPosingEnabled/setMeshEditEnabled). The selection itself
+// is remembered so switching back to Object mode re-attaches it — this only
+// controls whether the gizmo is actually visible/attached right now, which
+// is what was leaving the Move/Rotate/Resize gizmo stuck on screen after
+// switching to another mode until the next click.
+export function setObjectsEnabled(enabled) {
+  o.enabled = enabled
+  if (!o.transform) return
+  if (!enabled) {
+    o.transform.detach()
+  } else if (o.pivotRoots.length > 1 && o.pivot) {
+    o.transform.attach(o.pivot)
+  } else if (o.selected) {
+    o.transform.attach(o.selected)
+  }
+  o.requestRender()
+}
+
+// Whether the Move/Rotate/Resize gizmo is currently attached to anything.
+// Exists mainly so tests can check the gizmo actually detaches on a mode
+// switch, rather than just that setObjectsEnabled() didn't throw.
+export function isObjectGizmoAttached() {
+  return !!(o.transform && o.transform.object)
 }
 
 // Attach the gizmo to several objects at once (shift/ctrl-click in the
@@ -499,7 +531,7 @@ export function selectObjects(ids) {
   o.pivot.scale.set(1, 1, 1)
   o.pivot.updateMatrix()
   o.pivot.visible = true
-  o.transform.attach(o.pivot)
+  if (o.enabled) o.transform.attach(o.pivot)
   o.requestRender()
 }
 

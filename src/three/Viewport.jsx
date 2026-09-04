@@ -40,6 +40,7 @@ import { setLimitsEnabled } from './limits.js'
 import {
   selectObjects,
   setObjectMode,
+  setObjectsEnabled,
   undo as undoObject,
   redo as redoObject,
   consumeObjectGizmoGrab,
@@ -189,6 +190,7 @@ export default function Viewport() {
   useEffect(() => {
     setPosingEnabled(mode === 'bone')
     setMeshEditEnabled(mode === 'mesh')
+    setObjectsEnabled(mode === 'object')
   }, [mode])
 
   // --- Mesh editing: push selection / gizmo mode into the mesh-edit manager ---
