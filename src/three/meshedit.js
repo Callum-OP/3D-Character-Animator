@@ -612,8 +612,60 @@ function removeSelectionBox() {
 // pose is currently on screen. Recomputed only at the moment of a click (or a
 // selection change), never per-frame, since posing is disabled while in Mesh
 // mode anyway.
+//
+// Bounding-sphere pre-filter: a click only ever needs the exact per-vertex
+// pass for the (usually one) part actually near the ray. Before paying for
+// refreshPosedProxy() on a given skinned mesh, do a cheap ray/sphere test
+// against a bounding sphere built from a small SAMPLE of that mesh's verts
+// run through the same applyBoneTransform() the full pass uses.
+//
+// The pad below only needs to cover what a coarse sample might miss between
+// sample points (e.g. a fingertip that falls between sampled indices), not
+// whole-limb-scale pose changes — those are already captured because the
+// samples themselves are posed. Worst case of the pad being too tight is a
+// missed click on a thin extremity, never a wrong hit, so this stays a pure
+// perf optimisation rather than a correctness-sensitive one.
 // ---------------------------------------------------------------------------
 const _skinTarget = new THREE.Vector3()
+const _worldScale = new THREE.Vector3()
+const _sphereHit = new THREE.Vector3()
+const _pickSphere = new THREE.Sphere()
+const _pickCenter = new THREE.Vector3()
+const SAMPLE_COUNT = 48 // upper bound on verts sampled per mesh per click
+const POSE_PICK_SPHERE_PAD = 1.6 // slack to cover gaps between sample points
+
+// Cheap reject test: does the current raycaster ray even pass near a coarse,
+// correctly-posed approximation of this mesh? No full per-vertex work.
+function rayMightHitMesh(mesh) {
+  const srcPos = mesh.geometry.attributes.position
+  const count = srcPos.count
+  const step = Math.max(1, Math.floor(count / SAMPLE_COUNT))
+
+  _pickCenter.set(0, 0, 0)
+  let n = 0
+  for (let i = 0; i < count; i += step) {
+    _skinTarget.fromBufferAttribute(srcPos, i)
+    mesh.applyBoneTransform(i, _skinTarget)
+    _pickCenter.add(_skinTarget)
+    n += 1
+  }
+  _pickCenter.multiplyScalar(1 / n)
+
+  let maxDistSq = 0
+  for (let i = 0; i < count; i += step) {
+    _skinTarget.fromBufferAttribute(srcPos, i)
+    mesh.applyBoneTransform(i, _skinTarget)
+    const d = _skinTarget.distanceToSquared(_pickCenter)
+    if (d > maxDistSq) maxDistSq = d
+  }
+
+  mesh.updateMatrixWorld()
+  mesh.getWorldScale(_worldScale)
+  const worldMaxScale = Math.max(_worldScale.x, _worldScale.y, _worldScale.z)
+  _pickSphere.center.copy(_pickCenter).applyMatrix4(mesh.matrixWorld)
+  _pickSphere.radius = Math.sqrt(maxDistSq) * POSE_PICK_SPHERE_PAD * worldMaxScale
+  return m.raycaster.ray.intersectSphere(_pickSphere, _sphereHit) !== null
+}
 
 // Returns { proxy, geometry } for a skinned mesh, creating it on first use.
 // `geometry`'s position attribute holds MESH-LOCAL (pre-matrixWorld) posed
@@ -686,6 +738,11 @@ function onPointerUp(e) {
   for (const mesh of m.meshes) {
     if (!mesh.visible) continue
     if (mesh.isSkinnedMesh) {
+      // Cheap sphere reject first — skip the per-vertex pose recompute
+      // entirely for parts the ray couldn't plausibly touch. This is what
+      // keeps a click affordable even with many parts or one very-high-poly
+      // mesh (see comment above rayMightHitMesh).
+      if (!rayMightHitMesh(mesh)) continue
       const { proxy } = refreshPosedProxy(mesh)
       proxy.matrixWorld.copy(mesh.matrixWorld)
       proxyToMesh.set(proxy, mesh)
