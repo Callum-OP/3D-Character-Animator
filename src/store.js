@@ -384,6 +384,12 @@ export const useStore = create((set) => ({
   setLimbLimits: (limbLimits) => set({ limbLimits }),
   bumpPoseVersion: () => set((s) => ({ poseVersion: s.poseVersion + 1 })),
 
+  // Pose (bone) mode's gizmo: 'rotate' is plain FK; 'translate' is an IK move
+  // (drag a joint and its ancestor chain swings to follow, within its reach
+  // and limb limits). No 'scale' — a bone has no size of its own.
+  boneGizmoMode: 'rotate',
+  setBoneGizmoMode: (boneGizmoMode) => set({ boneGizmoMode }),
+
   setSelectedBoneName: (selectedBoneName) =>
     // Selecting a bone deselects any scene object/camera/light (one gizmo at a time).
     set(

@@ -26,6 +26,7 @@ import {
   setPickableBones,
   setRotationSnapDeg,
   setPosingEnabled,
+  setBoneGizmoMode,
   undo,
   redo,
 } from './posing.js'
@@ -57,7 +58,7 @@ import StatsOverlay from '../panels/StatsOverlay.jsx'
 const MODE_BUTTONS = [
   { value: 'view', label: 'View', title: 'Just look around — nothing is selectable (1)' },
   { value: 'object', label: 'Object', title: 'Click a prop, camera or light to select + move it (2)' },
-  { value: 'bone', label: 'Pose', title: 'Select joints and bend them (3)' },
+  { value: 'bone', label: 'Pose', title: 'Select joints and bend or move them (3)' },
   { value: 'mesh', label: 'Mesh', title: 'Move, rotate or resize parts like eyes and hair (4)' },
 ]
 const MODE_KEYS = { 1: 'view', 2: 'object', 3: 'bone', 4: 'mesh' }
@@ -66,8 +67,8 @@ const GIZMO_KEYS = { w: 'translate', e: 'rotate', r: 'scale' }
 // Move / Rotate / Resize widgets, shown below the mode strip for every mode
 // except View (nothing is selectable there, so nothing to transform). Which
 // store field they read/write depends on the active mode — Object mode's
-// gizmo, Mesh mode's gizmo, or (fixed, since bone move/resize don't exist
-// yet) always 'rotate' for Pose.
+// gizmo, Mesh mode's gizmo, or Pose mode's (Move = IK, Rotate = FK; Resize
+// doesn't apply to a bone, which has no size of its own).
 const TRANSFORM_BUTTONS = [
   { value: 'translate', icon: '✥', label: 'Move', title: 'Move (W)' },
   { value: 'rotate', icon: '↻', label: 'Rotate', title: 'Rotate (E)' },
@@ -217,6 +218,11 @@ export default function Viewport() {
   useEffect(() => {
     setTransformSpace(transformSpace)
   }, [transformSpace])
+
+  const boneGizmoMode = useStore((s) => s.boneGizmoMode)
+  useEffect(() => {
+    setBoneGizmoMode(boneGizmoMode)
+  }, [boneGizmoMode])
 
   useEffect(() => {
     setBonesVisible(showBones)
@@ -456,19 +462,18 @@ export default function Viewport() {
       {modelInfo && mode !== 'view' && (
         <div className="transform-widget-strip" title="What dragging the gizmo does">
           {TRANSFORM_BUTTONS.map((b) => {
-            // Bone mode only has a rotate gizmo — Move/Resize are shown
-            // disabled rather than hidden, so the tool exists visibly and can
-            // gain real bone-move/-resize support later without moving
-            // anything else in the UI.
+            // Bone mode has Move (IK: drag the joint, its ancestor chain
+            // follows within its reach and limb limits) and Rotate (FK) —
+            // but no Resize, since a bone has no size of its own.
             const isBone = mode === 'bone'
-            const disabled = isBone && b.value !== 'rotate'
-            const activeValue = isBone ? 'rotate' : mode === 'mesh' ? meshGizmoMode : objectMode
+            const disabled = isBone && b.value === 'scale'
+            const activeValue = isBone ? boneGizmoMode : mode === 'mesh' ? meshGizmoMode : objectMode
             const active = activeValue === b.value
             return (
               <button
                 key={b.value}
                 className={'transform-widget-btn' + (active ? ' active' : '') + (disabled ? ' disabled' : '')}
-                title={disabled ? b.title + ' — not available for bones yet' : b.title}
+                title={disabled ? b.title + ' — not available for bones (no size of their own)' : b.title}
                 aria-label={b.label}
                 disabled={disabled}
                 onClick={() => {
@@ -477,7 +482,8 @@ export default function Viewport() {
                   // setMeshGizmoMode from meshedit.js, which is the
                   // imperative three.js setter) so the panels and this
                   // widget stay in sync.
-                  if (mode === 'mesh') useStore.getState().setMeshGizmoMode(b.value)
+                  if (mode === 'bone') useStore.getState().setBoneGizmoMode(b.value)
+                  else if (mode === 'mesh') useStore.getState().setMeshGizmoMode(b.value)
                   else if (mode === 'object') useStore.getState().setObjectMode(b.value)
                 }}
               >

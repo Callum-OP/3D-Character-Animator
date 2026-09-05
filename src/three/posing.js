@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import { poseToJSON, validatePose } from './poses.js'
+import { classifyBone } from './bvh.js'
 import {
   setLimitsModel,
   clearLimitsModel,
@@ -11,8 +12,12 @@ import {
 // ---------------------------------------------------------------------------
 // Bone posing
 //
-// - A TransformControls gizmo (rotate mode) attaches to the selected bone. FK
-//   only: rotating a bone deforms the SkinnedMesh via the skeleton (no IK).
+// - A TransformControls gizmo attaches to the selected bone. Rotate mode is
+//   plain FK: rotating a bone deforms the SkinnedMesh via the skeleton.
+//   Translate mode is a small CCD IK solver (see solveIk): the gizmo actually
+//   drags an invisible proxy target, and the selected bone's ancestor chain
+//   (elbow/shoulder, knee/hip…) swings each frame to bring the bone to it,
+//   naturally capped by the chain's reach and each joint's own limb limits.
 // - Bones have no geometry, so we draw a screen-constant dot per bone (a Points
 //   cloud with sizeAttenuation off) and pick the nearest dot to the click in
 //   screen space. Dots ignore depth so occluded bones stay pickable.
@@ -26,6 +31,17 @@ const SNAP_DEG = 15 // rotation snap increment (checkbox or Shift-hold)
 const DOT_SIZE_PX = 9 // bone dot diameter in pixels (screen-constant)
 const PICK_THRESHOLD_PX = 12 // click must land within this of a dot to select
 const DRAG_SLOP_PX = 4 // pointer travel above this is an orbit-drag, not a click
+
+// IK move (Pose mode's Move gizmo) ------------------------------------------
+const IK_CHAIN_LINKS = 3 // ancestor joints an IK move may recruit (hand -> forearm -> upper-arm -> shoulder)
+const IK_ITERATIONS = 12 // CCD passes per drag tick — chains are short (≤3), so this stays cheap
+// Only real limb joints extend an IK chain; hitting the spine/hips/chest/head
+// (or an unclassified bone) stops the climb, so moving a hand can't drag the
+// whole torso along with it.
+const IK_LIMB_ROLES = new Set([
+  'hand', 'lowerArm', 'upperArm', 'shoulder',
+  'foot', 'lowerLeg', 'upperLeg', 'toe',
+])
 
 const BASE_COLOR = new THREE.Color(0x9aa0b4)
 const SELECTED_COLOR = new THREE.Color(0xffc24a)
@@ -42,6 +58,11 @@ const p = {
 
   transform: null, // TransformControls
   helper: null, // transform.getHelper() (added to scene)
+  gizmoMode: 'rotate', // 'rotate' (FK) | 'translate' (IK move) — bones have no resize gizmo
+
+  ikProxy: null, // invisible Object3D the translate gizmo actually drags
+  ikChain: [], // selected bone's ancestor joints (nearest first) solved by solveIk()
+  ikDragBefore: null, // Map<Bone, Quaternion> captured at IK-drag start, for undo
 
   model: null,
   bones: [],
@@ -88,18 +109,36 @@ export function initPosing(refs) {
     p.controls.enabled = !e.value && !p.controls.locked
   })
   transform.addEventListener('objectChange', () => {
-    if (p.selected) clampBoneLocal(p.selected) // keep gizmo edits inside the limb limits
+    if (p.gizmoMode === 'translate') {
+      solveIk() // drag the proxy → CCD-solve the ancestor chain toward it
+    } else if (p.selected) {
+      clampBoneLocal(p.selected) // keep gizmo edits inside the limb limits
+    }
     notifyPoseChange() // keep the rotation sliders in sync while dragging
     p.requestRender()
   })
   transform.addEventListener('mouseDown', () => {
-    if (p.selected) p.dragBefore = p.selected.quaternion.clone()
+    if (!p.selected) return
+    if (p.gizmoMode === 'translate') {
+      p.ikDragBefore = new Map(p.ikChain.map((b) => [b, b.quaternion.clone()]))
+    } else {
+      p.dragBefore = p.selected.quaternion.clone()
+    }
   })
   transform.addEventListener('mouseUp', () => {
-    commitDragUndo()
+    if (p.gizmoMode === 'translate') commitIkDragUndo()
+    else commitDragUndo()
     p.requestRender()
   })
   p.transform = transform
+
+  // An invisible target the translate gizmo drags instead of the bone itself
+  // — the bone's actual position is FK-derived from its ancestors' rotations,
+  // so "moving" it means solving those rotations, not setting a position.
+  const ikProxy = new THREE.Object3D()
+  ikProxy.name = '(ik target)'
+  p.scene.add(ikProxy)
+  p.ikProxy = ikProxy
 
   const helper = transform.getHelper()
   // Keep the outline pass off the gizmo itself.
@@ -195,6 +234,8 @@ export function clearPoseModel() {
   p.selected = null
   p.dragBefore = null
   p.adjustBefore = null
+  p.ikChain = []
+  p.ikDragBefore = null
   p.suspended = false
   p.undoStack = []
   p.redoStack = []
@@ -239,14 +280,31 @@ export function updateBoneHelpers() {
 export function selectBone(name) {
   const bone = name ? p.boneMap.get(name) || null : null
   p.selected = bone
+  p.ikChain = bone ? buildIkChain(bone) : []
   if (!p.suspended && p.enabled) {
-    if (bone && p.transform) p.transform.attach(bone)
-    else if (p.transform) p.transform.detach()
+    attachGizmoToSelected()
   } else if (!bone && p.transform) {
     p.transform.detach()
   }
   applyOverlayVisibility() // attach/detach set helper visibility; re-apply the gates
   p.requestRender()
+}
+
+// Attach the (already-moded) TransformControls to whatever the current gizmo
+// mode needs: the bone directly for FK rotate, or the IK proxy — parked on
+// the bone's current world position — for an IK move.
+function attachGizmoToSelected() {
+  if (!p.transform) return
+  if (!p.selected) {
+    p.transform.detach()
+    return
+  }
+  if (p.gizmoMode === 'translate') {
+    p.selected.getWorldPosition(p.ikProxy.position)
+    p.transform.attach(p.ikProxy)
+  } else {
+    p.transform.attach(p.selected)
+  }
 }
 
 // Enable/disable interactive posing as a whole (Bone mode on/off). Unlike
@@ -255,7 +313,7 @@ export function selectBone(name) {
 export function setPosingEnabled(enabled) {
   p.enabled = enabled
   if (p.transform) {
-    if (enabled && p.selected && !p.suspended) p.transform.attach(p.selected)
+    if (enabled && p.selected && !p.suspended) attachGizmoToSelected()
     else if (!enabled) p.transform.detach()
   }
   applyOverlayVisibility()
@@ -273,8 +331,19 @@ export function suspendPosing() {
 
 export function resumePosing() {
   p.suspended = false
-  if (p.enabled && p.selected && p.transform) p.transform.attach(p.selected)
+  if (p.enabled && p.selected && p.transform) attachGizmoToSelected()
   applyOverlayVisibility()
+  p.requestRender()
+}
+
+// Switch the Pose-mode gizmo between FK rotate (drag rings to bend the joint)
+// and IK move (drag the joint itself; its ancestor chain swings to follow it,
+// capped by its reach and each joint's own limb limits). Bones have no resize
+// gizmo — there's nothing on a bone to resize.
+export function setBoneGizmoMode(mode) {
+  p.gizmoMode = mode === 'translate' ? 'translate' : 'rotate'
+  if (p.transform) p.transform.setMode(p.gizmoMode)
+  if (p.selected) attachGizmoToSelected()
   p.requestRender()
 }
 
@@ -546,6 +615,10 @@ export function disposePosing() {
     p.transform.dispose()
     p.transform = null
   }
+  if (p.ikProxy) {
+    p.scene.remove(p.ikProxy)
+    p.ikProxy = null
+  }
   p.scene = null
   p.camera = null
   p.renderer = null
@@ -600,6 +673,18 @@ function mirrorBoneName(name) {
   return null
 }
 
+// Exposed mainly so the IK solve can be exercised directly (drag simulation
+// in tests, or future scripting) without going through a simulated pointer
+// drag on the TransformControls widget. The real gizmo path sets
+// p.ikProxy.position itself (that's literally what dragging it does) and
+// just calls solveIk() from the 'objectChange' listener above.
+export function debugMoveSelectedBoneToward(worldPos) {
+  if (!p.ikProxy) return null
+  p.ikProxy.position.copy(worldPos)
+  solveIk()
+  return p.ikProxy.position.clone()
+}
+
 function commitDragUndo() {
   if (!p.selected || !p.dragBefore) return
   const after = p.selected.quaternion.clone()
@@ -607,6 +692,89 @@ function commitDragUndo() {
     pushUndo([{ bone: p.selected, before: p.dragBefore, after }])
   }
   p.dragBefore = null
+}
+
+// The ancestor joints an IK move on `effector` is allowed to swing: nearest
+// first, stopping at IK_CHAIN_LINKS or as soon as an ancestor isn't itself a
+// limb joint (spine/chest/hips/neck/head, or anything unclassified). A bone
+// rotating its own joint doesn't move ITS OWN position — only its ancestors'
+// rotations do — so the effector bone itself is never part of the chain.
+function buildIkChain(effector) {
+  const chain = []
+  let b = effector.parent
+  while (b && b.isBone && p.boneMap.has(b.name) && chain.length < IK_CHAIN_LINKS) {
+    const slot = classifyBone(b.name)
+    const role = slot ? slot.split('.')[0] : null
+    if (!IK_LIMB_ROLES.has(role)) break
+    chain.push(b)
+    b = b.parent
+  }
+  return chain
+}
+
+const _effPos = new THREE.Vector3()
+const _jPos = new THREE.Vector3()
+const _toEff = new THREE.Vector3()
+const _toTarget = new THREE.Vector3()
+const _jWorldQuat = new THREE.Quaternion()
+const _parentWorldQuat = new THREE.Quaternion()
+const _deltaQuat = new THREE.Quaternion()
+const _newWorldQuat = new THREE.Quaternion()
+
+// CCD (cyclic coordinate descent): for each joint in the chain (nearest to
+// the moved bone first), swing it so the vector from the joint to the bone
+// points at the target instead, then clamp it to its limb limits and move on.
+// Repeat a handful of passes to converge. If the target is farther than the
+// chain can reach, this just leaves the limb fully extended toward it rather
+// than doing anything unnatural — reach and per-joint limits are the only
+// "budget", exactly like a real arm or leg.
+function solveIk() {
+  const effector = p.selected
+  if (!effector || !p.model) return
+  const target = p.ikProxy.position // ikProxy is a scene-root child, so this IS its world position
+  if (p.ikChain.length) {
+    for (let iter = 0; iter < IK_ITERATIONS; iter++) {
+      for (const joint of p.ikChain) {
+        effector.getWorldPosition(_effPos)
+        joint.getWorldPosition(_jPos)
+        _toEff.copy(_effPos).sub(_jPos)
+        _toTarget.copy(target).sub(_jPos)
+        if (_toEff.lengthSq() < 1e-10 || _toTarget.lengthSq() < 1e-10) continue
+        _toEff.normalize()
+        _toTarget.normalize()
+        _deltaQuat.setFromUnitVectors(_toEff, _toTarget)
+
+        joint.getWorldQuaternion(_jWorldQuat)
+        _newWorldQuat.copy(_deltaQuat).multiply(_jWorldQuat)
+        if (joint.parent) joint.parent.getWorldQuaternion(_parentWorldQuat)
+        else _parentWorldQuat.identity()
+        joint.quaternion.copy(_parentWorldQuat.invert().multiply(_newWorldQuat))
+
+        clampBoneLocal(joint) // each step stays inside the joint's natural range
+        joint.updateWorldMatrix(true, true) // so the next joint/iteration sees the new pose
+      }
+    }
+    updateBoneHelpers()
+  }
+  // Keep the gizmo glued to the bone it's actually moving, rather than
+  // letting it drift toward wherever the mouse currently is. Without this,
+  // dragging past the chain's reach (or dragging a bone with no eligible
+  // chain at all — e.g. the hips) leaves the handle sliding further and
+  // further from the model the longer the drag continues, since nothing
+  // was otherwise pulling the proxy itself back toward the actual result.
+  effector.getWorldPosition(p.ikProxy.position)
+}
+
+function commitIkDragUndo() {
+  const before = p.ikDragBefore
+  p.ikDragBefore = null
+  if (!before) return
+  const changes = []
+  for (const [bone, beforeQuat] of before) {
+    const after = bone.quaternion.clone()
+    if (!after.equals(beforeQuat)) changes.push({ bone, before: beforeQuat, after })
+  }
+  if (changes.length) pushUndo(changes)
 }
 
 function onPointerDown(e) {

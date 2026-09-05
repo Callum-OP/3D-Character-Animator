@@ -128,6 +128,12 @@ export function setMeshEditModel(model) {
     m.meshByUuid.set(mesh.uuid, mesh)
     const parent = mesh.parent
     mesh.updateMatrix()
+
+    // Mesh's local transform relative to `parent`, BEFORE wrapping — fixed
+    // forever after this point. Needed below to keep SkinnedMesh rendering
+    // correctly once wrapped.
+    const restLocalMatrix = mesh.matrix.clone()
+
     if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox()
 
     const pivotPos = mesh.geometry.boundingBox.getCenter(new THREE.Vector3())
@@ -147,6 +153,42 @@ export function setMeshEditModel(model) {
     pivot.add(mesh)
     newMeshLocal.decompose(mesh.position, mesh.quaternion, mesh.scale)
     mesh.updateMatrix()
+
+    // SkinnedMesh recomputes bindMatrixInverse on EVERY updateMatrixWorld()
+    // call, and neither built-in bindMode is right for a mesh we've just
+    // wrapped in an editable pivot:
+    //  - 'attached' derives it from the mesh's OWN live matrixWorld — which
+    //    includes the pivot's edit — so it cancels our deliberate edit right
+    //    back out. That's the original "Move/Rotate/Resize only ever moved
+    //    the bounding-box helper, never the visible mesh" bug.
+    //  - Freezing it to a fixed snapshot fixes THAT, but breaks the moment
+    //    `parent` (an ancestor of the pivot — e.g. the whole character)
+    //    moves or rotates afterward, since the snapshot can't track it:
+    //    `parent`'s later transform ends up applied twice — a rotation gets
+    //    doubled, turning a straight "move left" into a diagonal drift, and
+    //    the pose bone dots (driven by the same skeleton, with no pivot in
+    //    THEIR ancestry to double up) stop matching the mesh.
+    //  - Cancelling `parent.matrixWorld` alone (live, no snapshot) fixes
+    //    THAT in turn, but is still wrong whenever this mesh's own rest
+    //    local transform (`restLocalMatrix` above — essentially always
+    //    non-trivial, since a real mesh part's bounding-box centre is
+    //    basically never exactly at its own local origin) is non-identity:
+    //    that fixed piece then gets incorrectly dragged along by whatever
+    //    `parent` does later, a different wrong amount for every mesh part
+    //    (each has its own bounding box), which is exactly what scatters a
+    //    multi-part character (tshirt/body/hair/shoes...) apart from itself.
+    //
+    // What's actually needed is dynamic in exactly one place — `parent`,
+    // since only its ancestry can legitimately keep changing later (e.g. the
+    // whole character moving) — while also still cancelling this mesh's own
+    // FIXED rest-local transform, every frame, so the two compose correctly
+    // together rather than one distorting the other.
+    if (mesh.isSkinnedMesh) {
+      mesh.updateMatrixWorld = function (force) {
+        THREE.Object3D.prototype.updateMatrixWorld.call(mesh, force)
+        mesh.bindMatrixInverse.multiplyMatrices(parent.matrixWorld, restLocalMatrix).invert()
+      }
+    }
 
     m.rest.set(mesh, {
       pivot,
