@@ -1680,6 +1680,7 @@ export function applyModelMaterials() {
     soften,
     rimLight,
     outlineWidth: s.outlineWidth,
+    overrides: s.meshOverrides, // per-part visibility (H key / eye icon) — same map the character uses
   })
   if (!state.currentModel) return
   applyMaterials(state.currentModel, {

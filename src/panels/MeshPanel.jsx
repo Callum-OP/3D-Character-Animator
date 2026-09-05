@@ -492,18 +492,33 @@ export default function MeshPanel() {
           <div className="joint-parent" style={{ marginBottom: 4 }} title={group.objectName}>
             {group.objectName}
           </div>
-          {group.parts.map((part) => (
-            <div
-              key={part.uuid}
-              className={'obj-row' + (part.uuid === selectedMeshUuid ? ' selected' : '')}
-              title={part.name}
-              onClick={() =>
-                setSelectedMeshUuid(part.uuid === selectedMeshUuid ? null : part.uuid)
-              }
-            >
-              <span className="obj-name">{part.name}</span>
-            </div>
-          ))}
+          {group.parts.map((part) => {
+            const hidden = meshOverrides[part.uuid]?.visible === false
+            return (
+              <div
+                key={part.uuid}
+                className={'obj-row' + (part.uuid === selectedMeshUuid ? ' selected' : '')}
+                title={part.name}
+                onClick={() =>
+                  setSelectedMeshUuid(part.uuid === selectedMeshUuid ? null : part.uuid)
+                }
+              >
+                <span className="obj-name" style={hidden ? { opacity: 0.45 } : undefined}>
+                  {part.name}
+                </span>
+                <button
+                  className="obj-eye"
+                  title={hidden ? 'Show this part' : 'Hide this part'}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setMeshVisible(part.uuid, hidden)
+                  }}
+                >
+                  {hidden ? '🙈' : '👁'}
+                </button>
+              </div>
+            )
+          })}
         </div>
       ))}
 
