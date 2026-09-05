@@ -746,6 +746,21 @@ export function getObjectRoots() {
   return o.objects.map((e) => e.root)
 }
 
+// Lightweight per-part listing for every loaded prop (Mesh mode's Parts panel
+// uses this to offer props' parts alongside the character's, since — unlike
+// the character — every prop's parts are pickable at once with no separate
+// "active object" step). Images are a single flat plane already fully
+// covered by Object mode, so only real multi-mesh models are listed here.
+export function getObjectMeshesInfo() {
+  return o.objects
+    .filter((e) => e.kind === 'model' && e.meshes.length)
+    .map((e) => ({
+      objectId: e.id,
+      objectName: e.name,
+      parts: e.meshes.map((mesh, i) => ({ uuid: mesh.uuid, name: mesh.name || `Part ${i + 1}` })),
+    }))
+}
+
 export function getObjectsData() {
   return o.objects.map((e) => ({
     name: e.name,

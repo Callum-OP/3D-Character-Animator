@@ -56,6 +56,8 @@ const m = {
 
   model: null,
   meshes: [], // the character's Mesh/SkinnedMesh nodes
+  objectMeshes: [], // Mesh/SkinnedMesh nodes belonging to scene objects (props), flattened
+  objectMeshGroups: new Map(), // objectId -> meshes[] registered for that object (for clean removal)
   meshByUuid: new Map(),
   rest: new Map(), // Mesh -> { pivot, position, quaternion, scale } (see setMeshEditModel)
 
@@ -126,8 +128,60 @@ export function setMeshEditModel(model) {
   m.meshes = model.meshes || []
   for (const mesh of m.meshes) {
     m.meshByUuid.set(mesh.uuid, mesh)
-    const parent = mesh.parent
-    mesh.updateMatrix()
+    wrapMeshForEdit(mesh)
+  }
+}
+
+// Give a scene object's (prop's) parts the same pivot-wrapped, gizmo-editable
+// treatment as a character's parts (see the header comment for why the pivot
+// indirection exists). Unlike the character — which is single-active and
+// fully re-registered via setMeshEditModel on every switch — any number of
+// props can be loaded at once, so their meshes are tracked additively here,
+// keyed by objectId, and only ever added/removed as props are added/removed
+// (never wholesale-cleared when the active character changes).
+export function registerObjectMeshes(objectId, meshes) {
+  const wrapped = []
+  for (const mesh of meshes || []) {
+    if (m.rest.has(mesh)) continue // already wrapped — don't double-wrap
+    wrapMeshForEdit(mesh)
+    m.meshByUuid.set(mesh.uuid, mesh)
+    wrapped.push(mesh)
+  }
+  m.objectMeshGroups.set(objectId, wrapped)
+  m.objectMeshes = m.objectMeshes.concat(wrapped)
+}
+
+// Unregister a prop's parts (called when the prop is removed/disposed). The
+// pivot Groups themselves live inside the prop's own subtree and are freed
+// along with it by the caller (objects.js) — this just drops our bookkeeping
+// so they're no longer pickable/selectable and don't leak in these maps.
+export function unregisterObjectMeshes(objectId) {
+  const meshes = m.objectMeshGroups.get(objectId)
+  if (!meshes || !meshes.length) {
+    m.objectMeshGroups.delete(objectId)
+    return
+  }
+  m.objectMeshGroups.delete(objectId)
+  const removed = new Set(meshes)
+  m.objectMeshes = m.objectMeshes.filter((mesh) => !removed.has(mesh))
+  for (const mesh of meshes) {
+    if (m.selected === mesh) {
+      m.selected = null
+      if (m.transform) m.transform.detach()
+      removeSelectionBox()
+    }
+    m.meshByUuid.delete(mesh.uuid)
+    m.rest.delete(mesh)
+    m.posedProxies.delete(mesh)
+  }
+}
+
+// Wraps a single mesh in an editable pivot Group (see the file header comment
+// for the full rationale) and records its rest transform in m.rest. Shared by
+// setMeshEditModel (the active character) and registerObjectMeshes (props).
+function wrapMeshForEdit(mesh) {
+  const parent = mesh.parent
+  mesh.updateMatrix()
 
     // Mesh's local transform relative to `parent`, BEFORE wrapping — fixed
     // forever after this point. Needed below to keep SkinnedMesh rendering
@@ -196,7 +250,6 @@ export function setMeshEditModel(model) {
       quaternion: pivot.quaternion.clone(),
       scale: pivot.scale.clone(),
     })
-  }
 }
 
 const MORPH_LINK_PROXIMITY_FACTOR = 3
@@ -232,25 +285,56 @@ export function getMeshIndex(mesh) {
   return m.meshes.indexOf(mesh)
 }
 
+// Looks up any currently mesh-editable part by uuid — the active character's
+// OR any loaded prop's. Lets the Parts panel resolve a selection generically
+// instead of only ever checking the character's mesh list.
+export function getMeshByUuid(uuid) {
+  return m.meshByUuid.get(uuid) || null
+}
+
+// True if `mesh` belongs to a registered scene object (prop) rather than the
+// active character — the panel uses this to hide character-only sections
+// (cloth, morphs, animation keyframing) for a prop's part.
+export function isObjectMesh(mesh) {
+  return m.objectMeshes.includes(mesh)
+}
+
 // Also used by clothmod.js so it can find a mesh's pivot group directly.
 export function getMeshPivot(mesh) {
   const rest = m.rest.get(mesh)
   return rest ? rest.pivot : null
 }
 
+// Clears out the ACTIVE CHARACTER's parts only. Scene objects (props)
+// registered via registerObjectMeshes are intentionally left alone — they
+// aren't tied to which character is active and shouldn't disappear (or lose
+// their edits) just because the user switched characters.
 export function clearMeshEditModel() {
-  if (m.transform) m.transform.detach()
-  m.selected = null
-  m.dragBefore = null
-  m.suspended = false
-  m.undoStack = []
-  m.redoStack = []
-  removeSelectionBox()
-  disposePosedProxies()
+  const oldMeshes = m.meshes
+  const selectedWasCharacterPart = m.selected && oldMeshes.includes(m.selected)
+  if (selectedWasCharacterPart) {
+    if (m.transform) m.transform.detach()
+    m.selected = null
+    m.dragBefore = null
+    removeSelectionBox()
+  }
+  disposePosedProxies() // cheap to rebuild; simplest to drop proxies for everyone on a switch
+
+  // Undo/redo batches reference pivots directly, so batches belonging to the
+  // character being cleared would otherwise sit in the stack undoing a part
+  // on a model that's no longer active/loaded. Drop just those; prop batches
+  // (and any other character not being touched here) are unaffected.
+  const oldPivots = new Set(oldMeshes.map((mesh) => m.rest.get(mesh)?.pivot).filter(Boolean))
+  const keepsBatch = (batch) => !batch.some((e) => oldPivots.has(e.obj))
+  m.undoStack = m.undoStack.filter(keepsBatch)
+  m.redoStack = m.redoStack.filter(keepsBatch)
+
+  for (const mesh of oldMeshes) {
+    m.meshByUuid.delete(mesh.uuid)
+    m.rest.delete(mesh)
+  }
   m.model = null
   m.meshes = []
-  m.meshByUuid = new Map()
-  m.rest = new Map()
 }
 
 export function setMeshEditEnabled(enabled) {
@@ -510,6 +594,14 @@ export function disposeMeshEdit() {
     dom.removeEventListener('pointerup', m._onPointerUp)
   }
   clearMeshEditModel()
+  m.objectMeshes = []
+  m.objectMeshGroups = new Map()
+  m.meshByUuid = new Map()
+  m.rest = new Map()
+  m.undoStack = []
+  m.redoStack = []
+  m.selected = null
+  m.suspended = false
   if (m.helper) {
     m.scene.remove(m.helper)
     m.helper = null
@@ -751,6 +843,21 @@ function disposePosedProxies() {
   m.posedProxies.clear()
 }
 
+// A character's meshes are only ever registered here while that character is
+// active, so `mesh.visible` alone was enough to skip a hidden PART. Props are
+// all registered at once regardless of which is "active", though, so a click
+// must also skip every part of a prop that's hidden as a WHOLE (root.visible
+// false, e.g. the eye icon in the Objects panel) — mesh.visible on its own
+// doesn't see that, since visibility doesn't cascade through intersectObjects.
+function isMeshEffectivelyVisible(mesh) {
+  let node = mesh
+  while (node && node !== m.scene) {
+    if (!node.visible) return false
+    node = node.parent
+  }
+  return true
+}
+
 function onPointerDown(e) {
   m.pointerDown = { x: e.clientX, y: e.clientY, axis: m.transform ? m.transform.axis : null }
 }
@@ -759,7 +866,8 @@ function onPointerUp(e) {
   const down = m.pointerDown
   m.pointerDown = null
   if (m.suspended) return
-  if (!m.enabled || !down || e.button !== 0 || m.meshes.length === 0) return
+  const pickable = m.meshes.length || m.objectMeshes.length
+  if (!m.enabled || !down || e.button !== 0 || !pickable) return
   if (down.axis !== null) return
   if (Math.abs(e.clientX - down.x) + Math.abs(e.clientY - down.y) > DRAG_SLOP_PX) return
 
@@ -777,8 +885,11 @@ function onPointerUp(e) {
 
   const proxyToMesh = new Map()
   const targets = []
-  for (const mesh of m.meshes) {
-    if (!mesh.visible) continue
+  // Character parts AND every loaded prop's parts are all pickable at once in
+  // Mesh mode — a prop has no separate "active" concept the way characters
+  // do, so all of them are always live targets here.
+  for (const mesh of m.meshes.concat(m.objectMeshes)) {
+    if (!isMeshEffectivelyVisible(mesh)) continue
     if (mesh.isSkinnedMesh) {
       // Cheap sphere reject first — skip the per-vertex pose recompute
       // entirely for parts the ray couldn't plausibly touch. This is what

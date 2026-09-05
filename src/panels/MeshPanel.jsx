@@ -10,11 +10,14 @@ import {
   redo,
   getLinkedMorphTargets,
   getMeshIndex,
+  getMeshByUuid,
+  isObjectMesh,
 } from '../three/meshedit.js'
 import {
   getCurrentModel,
   requestRender,
 } from '../three/scene.js'
+import { getObjectMeshesInfo } from '../three/objects.js'
 import {
   FABRIC_PRESETS,
   isClothEnabled,
@@ -59,6 +62,7 @@ export default function MeshPanel() {
   const animData = useStore((s) => s.animData)
   const animFps = useStore((s) => s.animFps)
   const insertTime = useStore((s) => s.insertTime)
+  useStore((s) => s.sceneObjects) // re-render the prop-parts list as props are added/removed
   const st = useStore.getState
   useStore((s) => s.meshVersion) // re-render on every mesh edit (gizmo drag, undo…)
   const [, setMorphVersion] = useState(0)
@@ -73,13 +77,22 @@ export default function MeshPanel() {
   const currentModel = getCurrentModel()
   const meshes = modelInfo?.meshes || []
   const selectedMeta = meshes.find((mesh) => mesh.uuid === selectedMeshUuid) || null
-  const selectedMesh = selectedMeta
+  const characterMesh = selectedMeta
     ? currentModel?.meshes?.find((mesh) => mesh.uuid === selectedMeta.uuid) || null
     : null
+  // Props are pickable in Mesh mode too (see meshedit.js's registerObjectMeshes) but
+  // aren't part of the character's mesh list — fall back to a direct lookup so
+  // clicking a prop's part (in the viewport, or the list below) still drives the
+  // gizmo + these controls. isObjectMesh gates the character-only sections below
+  // (cloth/morphs/keyframing) which don't apply to a standalone prop part.
+  const objectMesh = !characterMesh && selectedMeshUuid ? getMeshByUuid(selectedMeshUuid) : null
+  const selectedMesh = characterMesh || objectMesh
+  const isPropPart = !!objectMesh && isObjectMesh(objectMesh)
   const selectedIndex = selectedMeta ? meshes.indexOf(selectedMeta) : -1
   const delta = selectedMesh ? getMeshDelta(selectedMesh.uuid) : null
   const keyCount = selectedIndex >= 0 ? (animData.meshes?.[selectedIndex] || []).length : 0
   const snap = (t) => Math.round(t * animFps) / animFps
+  const objectPartGroups = getObjectMeshesInfo()
 
   function forceRerender() {
     setMorphVersion((v) => v + 1)
@@ -164,11 +177,11 @@ export default function MeshPanel() {
     selectedMesh?.geometry?.morphAttributes?.position?.length,
   ])
 
-  if (!modelInfo) {
+  if (!modelInfo && objectPartGroups.length === 0) {
     return (
       <div className="panel">
         <h2>Parts</h2>
-        <div className="empty">Load a character to edit its parts.</div>
+        <div className="empty">Load a character or object to edit its parts.</div>
       </div>
     )
   }
@@ -177,8 +190,9 @@ export default function MeshPanel() {
     <div className="panel">
       <h2>Parts</h2>
       <p className="panel-hint">
-        Click a part of the character (eyes, hair, clothing…) then drag the gizmo
-        to move, rotate or resize just that piece.
+        Click a part of the character or an object (eyes, hair, clothing, a
+        prop's pieces…) then drag the gizmo to move, rotate or resize just
+        that piece.
       </p>
 
       <div className="seg" title="What the gizmo does when you drag it">
@@ -237,7 +251,7 @@ export default function MeshPanel() {
             onChange={(scale) => setMeshDelta(selectedMesh.uuid, { scale })}
           />
 
-          {selectedMesh && morphEntries.length > 0 && (
+          {selectedMesh && morphEntries.length > 0 && !isPropPart && (
             <div className="joint-controls" style={{ marginTop: 8 }}>
               <div className="joint-header">
                 <span className="joint-name">Shape keys</span>
@@ -310,18 +324,20 @@ export default function MeshPanel() {
             >
               Reset this part
             </button>
-            <button
-              className="btn secondary"
-              onClick={onKeyPart}
-              title="Save this part's position/rotation/size at the Animate panel's insert time — key it at two times and it animates between them"
-            >
-              Key part{keyCount ? ` (${keyCount})` : ''}
-            </button>
+            {!isPropPart && (
+              <button
+                className="btn secondary"
+                onClick={onKeyPart}
+                title="Save this part's position/rotation/size at the Animate panel's insert time — key it at two times and it animates between them"
+              >
+                Key part{keyCount ? ` (${keyCount})` : ''}
+              </button>
+            )}
           </div>
         </div>
       )}
 
-      {selectedMesh && (
+      {selectedMesh && !isPropPart && (
         <div className="joint-controls" style={{ marginTop: 10 }}>
           <div className="joint-header">
             <span className="joint-name">Cloth</span>
@@ -471,10 +487,32 @@ export default function MeshPanel() {
         })}
       </div>
 
+      {objectPartGroups.map((group) => (
+        <div key={group.objectId} className="obj-list" style={{ marginTop: 10 }}>
+          <div className="joint-parent" style={{ marginBottom: 4 }} title={group.objectName}>
+            {group.objectName}
+          </div>
+          {group.parts.map((part) => (
+            <div
+              key={part.uuid}
+              className={'obj-row' + (part.uuid === selectedMeshUuid ? ' selected' : '')}
+              title={part.name}
+              onClick={() =>
+                setSelectedMeshUuid(part.uuid === selectedMeshUuid ? null : part.uuid)
+              }
+            >
+              <span className="obj-name">{part.name}</span>
+            </div>
+          ))}
+        </div>
+      ))}
+
       <div className="pose-hint">
         Click a part or a name to select, then drag the gizmo. W/E/R switch
         Move/Rotate/Resize · Esc deselects · Ctrl+Z undoes. Parts attached to the
         skeleton keep following it — an offset eye still turns with the head.
+        Object parts don't have shape keys, cloth or keyframing, but move,
+        rotate, resize, undo and reset all work the same way.
       </div>
     </div>
   )

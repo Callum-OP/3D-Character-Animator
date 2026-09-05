@@ -88,6 +88,8 @@ import {
   applyMeshEditsData,
   suspendMeshEdit,
   resumeMeshEdit,
+  registerObjectMeshes,
+  unregisterObjectMeshes,
   setViewCamera as setMeshEditViewCamera,
 } from './meshedit.js'
 import {
@@ -722,6 +724,7 @@ function disposeCharacter(id) {
 export async function addObjectFile(file) {
   const parsed = await loadModel(file)
   const meta = addObject(parsed, parsed.info.name, parsed.info.format, file)
+  registerObjectMeshes(meta.id, parsed.meshes) // makes its parts pickable/editable in Mesh mode
   useStore.getState().addSceneObject(meta) // sets selectedObjectId = meta.id
   applyModelMaterials() // pick up the current Look settings immediately
   requestRender()
@@ -763,6 +766,7 @@ function loadImageTexture(file) {
 }
 
 export function removeObjectById(id) {
+  unregisterObjectMeshes(id) // drop its parts from Mesh mode before the geometry is disposed
   removeObject(id)
   useStore.getState().removeSceneObject(id)
   requestRender()
