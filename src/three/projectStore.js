@@ -84,8 +84,10 @@ async function upsertRecent({ name, handle }) {
     }
     if (!existing && !handle) existing = all.find((r) => r.name === name && !r.handle)
 
-    const id = existing?.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    const record = { id, name, savedAt: Date.now(), handle: handle || existing?.handle }
+    const latestSavedAt = all.reduce((latest, record) => Math.max(latest, record.savedAt || 0), 0)
+    const savedAt = Math.max(Date.now(), latestSavedAt + 1)
+    const id = existing?.id || `${savedAt}-${Math.random().toString(36).slice(2, 8)}`
+    const record = { id, name, savedAt, handle: handle || existing?.handle }
 
     await new Promise((resolve, reject) => {
       const tx = db.transaction(STORE, 'readwrite')
