@@ -570,6 +570,7 @@ function sampleClipRange(clip, fps, startTime, endTime, prune = true, opts = {})
   act.play()
 
   const rootBone = opts.preserveMotion ? findMovingRootBone(clip, a.model.bones) : null
+  const rootBoneRestPos = rootBone && a.restPos ? a.restPos.get(rootBone) : null
   const basePos = a.model.root.position.clone()
   const baseQuat = a.model.root.quaternion.clone()
   let startWorld = null
@@ -587,7 +588,18 @@ function sampleClipRange(clip, fps, startTime, endTime, prune = true, opts = {})
       // the hip's (or another root-like bone's) POSITION too — capture it
       // alongside rotation so nothing that keeps feet planted gets lost when
       // this range is rebuilt into a new clip (trim/combine/mirror).
-      tracks[b.name].push({ time: t - start, quat: [q.x, q.y, q.z, q.w], pos: [bp.x, bp.y, bp.z] })
+      //
+      // Exception: the bone we're already extracting world-space `root`
+      // motion from (below) must NOT also keep its own animated local
+      // position here, or the character's forward/vertical travel gets
+      // applied twice — once as root motion moving the whole model, and
+      // again as this bone's local offset moving just the hip within it.
+      // That double motion is what made the whole body slide past its own
+      // leg rotations instead of the feet staying planted. Pin it to its
+      // rest-pose local position instead so no position track gets baked
+      // for it at all; the root keys below carry its full travel.
+      const usePos = b === rootBone && rootBoneRestPos ? [rootBoneRestPos.x, rootBoneRestPos.y, rootBoneRestPos.z] : [bp.x, bp.y, bp.z]
+      tracks[b.name].push({ time: t - start, quat: [q.x, q.y, q.z, q.w], pos: usePos })
     }
     if (rootBone) {
       a.model.root.updateWorldMatrix(true, true)

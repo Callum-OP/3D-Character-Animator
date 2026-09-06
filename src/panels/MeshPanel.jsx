@@ -297,16 +297,31 @@ export default function MeshPanel() {
                     <button
                       className="btn secondary"
                       onClick={() => {
-                        const currentValue = morphValues[idx] ?? 0
                         const t = snap(insertTime)
-                        st().addMorphKeyframe(getMeshIndex(selectedMesh), name, t, currentValue)
+                        // Key every shape key on this mesh at its current
+                        // value, not just this row — otherwise shapes that
+                        // were keyed earlier (e.g. "Neutral" at the start)
+                        // keep holding their old value forward through the
+                        // whole clip once a later shape (e.g. "Angry"/
+                        // "Shocked") gets its own single key, since a track
+                        // with one key holds constant across the whole
+                        // timeline. Snapshotting all of them here means the
+                        // ones currently back at 0 actually get a 0-key too,
+                        // so the expressions crossfade instead of stacking.
+                        const allValues = morphEntries.map((e) => ({
+                          morphName: e.name,
+                          value: morphValues[e.idx] ?? 0,
+                        }))
+                        st().addMorphKeyframesAtTime(getMeshIndex(selectedMesh), allValues, t)
                         if (linkedShapeKeys) {
-                          for (const link of getLinkedMorphTargets(selectedMesh, name)) {
-                            st().addMorphKeyframe(getMeshIndex(link.mesh), name, t, currentValue)
+                          for (const { morphName: linkName, value } of allValues) {
+                            for (const link of getLinkedMorphTargets(selectedMesh, linkName)) {
+                              st().addMorphKeyframe(getMeshIndex(link.mesh), linkName, t, value)
+                            }
                           }
                         }
                       }}
-                      title={`Save “${name}” at the current insert time`}
+                      title={`Save all shape key values on “${selectedMesh.name}” at the current insert time`}
                     >
                       Key
                     </button>

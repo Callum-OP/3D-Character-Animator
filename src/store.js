@@ -829,6 +829,32 @@ export const useStore = create((set) => ({
       return { animData: { ...s.animData, morphs: existingMorphs } }
     }),
 
+  // Key every shape key on a mesh at once, at their CURRENT slider values —
+  // this is what the per-shape "Key" button actually calls now. A shape-key
+  // channel with only a single keyframe holds that value across the WHOLE
+  // timeline (same as a bone with one key), so keying just the one shape
+  // that changed (e.g. "Angry" going to 1 at the midpoint) left every other
+  // shape's earlier key (e.g. "Neutral" = 1 at the start) holding forward
+  // right through to the end — they all end up fully blended together for
+  // the whole clip instead of crossfading, which is why playback looked
+  // stuck on whichever shape happened to read as most dominant. Snapshotting
+  // every shape on the mesh at this time (mirroring addKeyframesAtTime for
+  // bones) means the ones the user brought back down to 0 actually get a
+  // 0-key here too, so they properly ramp down instead of holding on.
+  addMorphKeyframesAtTime: (meshIndex, list, time) =>
+    set((s) => {
+      const existingMorphs = { ...(s.animData.morphs || {}) }
+      const meshMorphs = { ...(existingMorphs[meshIndex] || {}) }
+      for (const { morphName, value } of list) {
+        const keys = (meshMorphs[morphName] || []).filter((k) => k.time !== time)
+        keys.push({ time, value })
+        keys.sort((a, b) => a.time - b.time)
+        meshMorphs[morphName] = keys
+      }
+      existingMorphs[meshIndex] = meshMorphs
+      return { animData: { ...s.animData, morphs: existingMorphs } }
+    }),
+
   // Insert N blank frames at `atTime`: every keyframe (joints, root, parts,
   // cameras, cuts, morphs) at or after that time is pushed later by
   // frames/fps seconds, leaving a hold/gap in the timeline. animDuration is

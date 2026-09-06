@@ -23,7 +23,7 @@
 // without a picker, since the browser never gave us a handle to disk).
 // ---------------------------------------------------------------------------
 
-import { openDB, PROJECTS_STORE as STORE } from './localDb.js'
+import { openDB, PROJECTS_STORE as STORE } from './localdb.js'
 
 const FILE_EXT = '.3dcp' // "3D Character Poser" project — just JSON inside
 const MIME = 'application/json'
@@ -213,7 +213,13 @@ function restoreBlobsFromBase64(value) {
 }
 
 function safeFileName(name) {
-  return (name || 'project').replace(/[\\/:*?"<>|]/g, '_')
+  let clean = (name || 'project').replace(/[\\/:*?"<>|]/g, '_')
+  // Strip a trailing .3dcp (case-insensitive) so callers who pass a name
+  // that already ends in FILE_EXT don't end up with "name.3dcp.3dcp".
+  if (clean.toLowerCase().endsWith(FILE_EXT)) {
+    clean = clean.slice(0, clean.length - FILE_EXT.length)
+  }
+  return clean
 }
 
 async function readProjectFile(file) {
