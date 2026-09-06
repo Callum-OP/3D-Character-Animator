@@ -24,10 +24,13 @@ import {
   renameClip,
 } from '../three/animation.js'
 import {
-  listSavedClips,
-  saveClipToLibrary,
-  loadClipFromLibrary,
-  deleteSavedClip,
+  listRecentClips,
+  removeRecentClip,
+  openRecentClip,
+  openClipFromDisk,
+  openClipFromFileObject,
+  saveClipAs,
+  hasFileSystemAccess as hasClipFileSystemAccess,
 } from '../three/clipLibrary.js'
 import { getBoneQuaternion, getPosedBones, applyPose } from '../three/posing.js'
 import { getCharacterRootTransform, getCurrentModel, getGroundY, scrubTimeline, playAllCharacters, stopAllCharacters } from '../three/scene.js'
@@ -149,11 +152,10 @@ export default function AnimationPanel() {
   const characterOrder = useStore((s) => s.characterOrder)
 
   const st = useStore.getState // for imperative setters inside handlers
-  const fileRef = useRef(null)
   const bvhRef = useRef(null)
   const clipFileRef = useRef(null)
   const [bvhMsg, setBvhMsg] = useState(null)
-  const [savedClips, setSavedClips] = useState(() => listSavedClips())
+  const [recentClips, setRecentClips] = useState([])
   const [trimOpen, setTrimOpen] = useState(false)
   const [trimRange, setTrimRange] = useState([0, 0]) // [start, end] seconds
   const [toolsOpen, setToolsOpen] = useState(false) // collapses the less-common clip tools
@@ -171,6 +173,11 @@ export default function AnimationPanel() {
   // When a BVH is parsed, this holds the mapping editor state until the user
   // confirms (Retarget) or cancels: { name, sourceBones, targetBones, slots }.
   const [mapping, setMapping] = useState(null)
+
+  useEffect(() => {
+    refreshRecentClips()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Space = play/pause, ←/→ = step one frame (the insert time while authoring
   // keyframes, otherwise the playhead). Re-registered every render so the
@@ -376,52 +383,11 @@ export default function AnimationPanel() {
     )
   }
 
-  function onSaveAnim() {
-    const json = {
-      format: 'anim-v1',
-      fps: animFps,
-      duration: animDuration,
-      tracks: animData.tracks,
-      root: animData.root || [],
-      meshes: animData.meshes || {},
-      cameras: animData.cameras || {},
-      cuts: animData.cuts || [],
-      morphs: animData.morphs || {},
-      lights: animData.lights || {},
-    }
-    const blob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${modelInfo.name || 'animation'}.anim.json`
-    a.click()
-    URL.revokeObjectURL(url)
-  }
-
-  function onLoadAnim(e) {
-    const file = e.target.files && e.target.files[0]
-    e.target.value = ''
-    if (!file) return
-    file.text().then((text) => {
-      try {
-        const json = JSON.parse(text)
-        if (json.format !== 'anim-v1') throw new Error('Not an anim-v1 file.')
-        st().setAnimFps(json.fps || 24)
-        st().setAnimDuration(json.duration || 2)
-        st().setAnimData({
-          tracks: json.tracks || {},
-          root: json.root || [],
-          meshes: json.meshes || {},
-          cameras: json.cameras || {},
-          cuts: json.cuts || [],
-          morphs: json.morphs || {},
-          lights: json.lights || {},
-        })
-      } catch (err) {
-        console.warn('Failed to load animation:', err)
-      }
-    })
-  }
+  // Raw "download the whole keyframe timeline as anim-v1 JSON" / "load one
+  // back" buttons used to live here, as a second way to save the same work
+  // "Save as clip" already covers. That's now the one path: turn what
+  // you've keyframed into a clip, then use Open Clip / Save Clip As on it
+  // like anything else under "Play a clip".
 
   // --- mocap (BVH) + clip-to-pose/keyframes ---------------------------------
 
@@ -582,10 +548,17 @@ export default function AnimationPanel() {
     setBvhMsg(finalName === activeClipName ? null : `Renamed to “${finalName}”.`)
   }
 
-  // --- clip library (save-permanently / export / import) -------------------
+  // --- clip files (Open Clip / Save Clip As / Recent Clips) -----------------
+  //
+  // One file-based flow, matching the Project panel: a clip is a real file
+  // on disk, "Save Clip As…" writes it out, "Open Clip…" reads one back in,
+  // and Recent Clips is a quick-access list of the last few (with real file
+  // handles where the browser supports them, so reopening doesn't need a
+  // picker). This replaces the old three-button spread of a browser-only
+  // "library" plus a separate download/upload pair.
 
-  // Bring a freshly-registered clip (from import or the library) straight into
-  // the transport, paused on frame 0 — mirrors what BVH retarget/ragdoll do.
+  // Bring a freshly-registered clip (from a file) straight into the
+  // transport, paused on frame 0 — mirrors what BVH retarget/ragdoll do.
   function armClip(name) {
     st().addImportedClipName(name)
     st().setPlaybackSource('clip')
@@ -596,61 +569,82 @@ export default function AnimationPanel() {
     st().setPlayback('paused')
   }
 
-  function onSaveToLibrary() {
-    if (!activeClipName) return
-    const json = exportClipJSON(activeClipName)
-    if (!json) return
-    const ok = saveClipToLibrary(activeClipName, json)
-    setSavedClips(listSavedClips())
-    setBvhMsg(
-      ok
-        ? `Saved “${activeClipName}” to your library — it'll still be here next time you open the app.`
-        : `Couldn't save “${activeClipName}” — your browser's storage may be full.`,
-    )
+  async function refreshRecentClips() {
+    try {
+      setRecentClips(await listRecentClips())
+    } catch {
+      /* IndexedDB unavailable (e.g. private mode) — leave the list empty */
+    }
   }
 
-  function onExportClip() {
+  async function onSaveClipAs() {
     if (!activeClipName) return
     const json = exportClipJSON(activeClipName)
     if (!json) return
-    const blob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `${activeClipName}.clip.json`
-    link.click()
-    URL.revokeObjectURL(url)
+    try {
+      const { name } = await saveClipAs(json, activeClipName)
+      setBvhMsg(`Saved “${name}”.`)
+      refreshRecentClips()
+    } catch (err) {
+      if (err?.name !== 'AbortError') setBvhMsg('Save failed: ' + (err.message || String(err)))
+    }
+  }
+
+  async function onOpenClip() {
+    try {
+      if (hasClipFileSystemAccess()) {
+        const { json, name } = await openClipFromDisk()
+        const clipName = importClipJSON(json)
+        if (!clipName) throw new Error('Load a model first.')
+        armClip(clipName)
+        setBvhMsg(`Opened “${name}”.`)
+        refreshRecentClips()
+      } else {
+        clipFileRef.current?.click()
+      }
+    } catch (err) {
+      if (err?.name !== 'AbortError' && err?.message !== 'FILE_SYSTEM_ACCESS_UNAVAILABLE') {
+        setBvhMsg('Open failed: ' + (err.message || String(err)))
+      }
+    }
   }
 
   function onImportClipFile(e) {
     const file = e.target.files && e.target.files[0]
     e.target.value = ''
     if (!file) return
-    file.text().then((text) => {
-      try {
-        const json = JSON.parse(text)
-        const name = importClipJSON(json)
-        if (!name) throw new Error('Load a model first.')
-        armClip(name)
-        setBvhMsg(`Imported “${name}”.`)
-      } catch (err) {
-        setBvhMsg(err.message || String(err))
-      }
-    })
+    openClipFromFileObject(file)
+      .then(({ json, name }) => {
+        const clipName = importClipJSON(json)
+        if (!clipName) throw new Error('Load a model first.')
+        armClip(clipName)
+        setBvhMsg(`Opened “${name}”.`)
+        refreshRecentClips()
+      })
+      .catch((err) => setBvhMsg(err.message || String(err)))
   }
 
-  function onLoadFromLibrary(name) {
-    const json = loadClipFromLibrary(name)
-    if (!json) return
-    const finalName = importClipJSON(json)
-    if (!finalName) return
-    armClip(finalName)
-    setBvhMsg(`Loaded “${finalName}” from your library.`)
+  async function onOpenRecentClip(recent) {
+    try {
+      const { json, name } = await openRecentClip(recent)
+      const clipName = importClipJSON(json)
+      if (!clipName) throw new Error('Load a model first.')
+      armClip(clipName)
+      setBvhMsg(`Opened “${name}”.`)
+      refreshRecentClips()
+    } catch (err) {
+      setBvhMsg('Could not reopen that file: ' + (err.message || String(err)))
+    }
   }
 
-  function onDeleteFromLibrary(name) {
-    deleteSavedClip(name)
-    setSavedClips(listSavedClips())
+  async function onRemoveRecentClip(id, e) {
+    e.stopPropagation()
+    try {
+      await removeRecentClip(id)
+      refreshRecentClips()
+    } catch {
+      /* ignore */
+    }
   }
 
   // --- trim ------------------------------------------------------------------
@@ -869,17 +863,10 @@ export default function AnimationPanel() {
                 <div className="kf-actions" style={{ marginTop: 6 }}>
                   <button
                     className="btn secondary"
-                    onClick={onSaveToLibrary}
-                    title="Keep this clip in your browser so it's here next time, even after reloading or switching models"
+                    onClick={onSaveClipAs}
+                    title="Save this clip to a file on disk — pick where, same as Save Project As"
                   >
-                    💾 Save clip
-                  </button>
-                  <button
-                    className="btn secondary"
-                    onClick={onExportClip}
-                    title="Download this clip as a file to share or back up"
-                  >
-                    ⬇ Export clip
+                    💾 Save Clip As…
                   </button>
                   <button
                     className="btn secondary"
@@ -963,15 +950,15 @@ export default function AnimationPanel() {
               <div className="kf-actions" style={{ marginTop: 6 }}>
                 <button
                   className="btn secondary"
-                  onClick={() => clipFileRef.current?.click()}
-                  title="Load a clip file exported from here (or by someone else)"
+                  onClick={onOpenClip}
+                  title="Open a clip file from disk — pick one exported from here (or by someone else)"
                 >
-                  ⬆ Import clip file
+                  📂 Open Clip…
                 </button>
                 <input
                   ref={clipFileRef}
                   type="file"
-                  accept=".json,application/json"
+                  accept=".3dclip,.json,application/json"
                   style={{ display: 'none' }}
                   onChange={onImportClipFile}
                 />
@@ -1020,29 +1007,30 @@ export default function AnimationPanel() {
                 </>
               )}
 
-              {savedClips.length > 0 && (
+              {recentClips.length > 0 && (
                 <>
                   <div className="field-label" style={{ marginTop: 10 }}>
-                    Saved clips ({savedClips.length})
+                    Recent Clips ({recentClips.length})
                   </div>
                   <div className="kf-list">
-                    {savedClips.map((s) => (
-                      <div key={s.name} className="kf-list-row" title="Load into the clip list">
+                    {recentClips.map((r) => (
+                      <div
+                        key={r.id}
+                        className="kf-list-row"
+                        title={r.handle ? 'Open this clip' : 'No file handle in this browser — use "Open Clip…"'}
+                      >
                         <span
                           className="kf-time"
-                          style={{ cursor: 'pointer' }}
-                          onClick={() => onLoadFromLibrary(s.name)}
+                          style={{ cursor: r.handle ? 'pointer' : 'default' }}
+                          onClick={() => r.handle && onOpenRecentClip(r)}
                         >
-                          {s.name}
+                          {r.name}
                         </span>
                         <span className="kf-what" />
                         <button
                           className="kf-del"
-                          title="Remove from your saved library"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            onDeleteFromLibrary(s.name)
-                          }}
+                          title="Remove from this list (does not delete the file)"
+                          onClick={(e) => onRemoveRecentClip(r.id, e)}
                         >
                           ×
                         </button>
@@ -1429,22 +1417,9 @@ export default function AnimationPanel() {
             >
               🎬 Save as clip
             </button>
-            <button className="btn secondary" onClick={onSaveAnim}>
-              Save
-            </button>
-            <button className="btn secondary" onClick={() => fileRef.current?.click()}>
-              Load
-            </button>
             <button className="btn secondary" onClick={() => st().clearAnim()}>
               Clear
             </button>
-            <input
-              ref={fileRef}
-              type="file"
-              accept=".json,application/json"
-              style={{ display: 'none' }}
-              onChange={onLoadAnim}
-            />
           </div>
         </div>
       )}

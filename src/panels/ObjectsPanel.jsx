@@ -10,8 +10,6 @@ import {
   setObjectOutlineById,
   setObjectCastShadowById,
   setObjectAttachmentById,
-  getSceneData,
-  applySceneData,
 } from '../three/scene.js'
 import {
   getSelectedUniformScale,
@@ -55,7 +53,6 @@ export default function ObjectsPanel() {
 
   const fileRef = useRef(null)
   const imageRef = useRef(null)
-  const sceneRef = useRef(null)
   const dragBeforeRef = useRef(null)
   const [msg, setMsg] = useState(null)
   const [scaleVal, setScaleVal] = useState(1)
@@ -81,29 +78,12 @@ export default function ObjectsPanel() {
     addImageFile(file).catch((err) => setMsg(err.message || String(err)))
   }
 
-  function onSaveScene() {
-    const blob = new Blob([JSON.stringify(getSceneData(), null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = 'scene.scene.json'
-    a.click()
-    URL.revokeObjectURL(url)
-    setMsg('Scene layout saved.')
-  }
-
-  function onLoadScene(e) {
-    const file = e.target.files && e.target.files[0]
-    e.target.value = ''
-    if (!file) return
-    file
-      .text()
-      .then((text) => {
-        applySceneData(JSON.parse(text))
-        setMsg('Scene layout applied.')
-      })
-      .catch((err) => setMsg(err.message || String(err)))
-  }
+  // Scene layout used to have its own "Save scene" / "Load scene" buttons
+  // here, downloading just a JSON of object positions with no actual model
+  // files, so "loading" a saved scene silently produced empty placeholders
+  // unless you'd re-added every prop by hand first. The whole scene (models,
+  // props, images and their placement) is captured properly by the Project
+  // panel's Save/Open now — that's the one place a full layout is saved.
 
   // Commit whatever's typed in the exact-size box: parse, clamp, apply, and
   // push one undo step (mirrors the ring's onCommit) — then clear the edit
@@ -166,26 +146,6 @@ export default function ObjectsPanel() {
         style={{ display: 'none' }}
         onChange={onPickImage}
       />
-
-      <div className="kf-actions" style={{ marginTop: 6 }}>
-        <button className="btn secondary" onClick={onSaveScene} title="Save the placement of everything">
-          Save scene
-        </button>
-        <button
-          className="btn secondary"
-          onClick={() => sceneRef.current?.click()}
-          title="Restore a saved layout (re-add the same files first)"
-        >
-          Load scene
-        </button>
-        <input
-          ref={sceneRef}
-          type="file"
-          accept=".json,application/json"
-          style={{ display: 'none' }}
-          onChange={onLoadScene}
-        />
-      </div>
 
       {msg && <div className="pose-msg">{msg}</div>}
 

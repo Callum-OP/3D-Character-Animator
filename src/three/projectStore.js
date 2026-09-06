@@ -23,9 +23,8 @@
 // without a picker, since the browser never gave us a handle to disk).
 // ---------------------------------------------------------------------------
 
-const DB_NAME = 'pose-studio'
-const STORE = 'recentProjects'
-const VERSION = 2
+import { openDB, PROJECTS_STORE as STORE } from './localDb.js'
+
 const FILE_EXT = '.3dcp' // "3D Character Poser" project — just JSON inside
 const MIME = 'application/json'
 const MAX_RECENTS = 10
@@ -43,25 +42,6 @@ export async function requestPersistentStorage() {
   } catch {
     return false
   }
-}
-
-function openDB() {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, VERSION)
-    req.onupgradeneeded = () => {
-      const db = req.result
-      // Drop the old "projects" store (whole project blobs saved in-browser)
-      // — that whole concept is gone now, replaced by real files on disk.
-      if (db.objectStoreNames.contains('projects')) {
-        db.deleteObjectStore('projects')
-      }
-      if (!db.objectStoreNames.contains(STORE)) {
-        db.createObjectStore(STORE, { keyPath: 'id' })
-      }
-    }
-    req.onsuccess = () => resolve(req.result)
-    req.onerror = () => reject(req.error)
-  })
 }
 
 // ---------------------------------------------------------------------------
