@@ -538,9 +538,21 @@ export function mirrorClip(name, fps) {
 // keyframe-only) into a new playable clip. This is what lets a "Make your
 // own" creation show up anywhere clips do: the clip list, Save/Export, Trim,
 // Combine. Returns the final clip name, or null.
-export function clipFromTracks(tracks, duration, name) {
+//
+// `root` (animData.root) is the character's separate model-root travel
+// timeline — hand-keyed "Save position" keys, or motion captured by a
+// preserveMotion bake. It normally only plays back as a live overlay on top
+// of whatever clip is selected (see sampleRoot/setupOverlayTracks), driven
+// from the per-character animData in the store, NOT from the clip itself.
+// That overlay is ephemeral: it doesn't survive Save Clip As -> Open Clip
+// (a fresh session starts with empty root data), so a clip saved this way
+// used to come back with its hip/root travel silently gone — pose intact,
+// but feet sliding instead of the hips carrying the movement. Baking `root`
+// into the clip's own tracks here (see buildEditClip) makes the clip fully
+// self-contained so it survives export/import and reload correctly.
+export function clipFromTracks(tracks, duration, name, root) {
   if (!a.model) return null
-  const clip = buildEditClip(tracks, duration, {})
+  const clip = buildEditClip(tracks, duration, {}, root)
   clip.name = name || 'My clip'
   return addGeneratedClip(clip)
 }
@@ -1203,8 +1215,26 @@ function activate(clip, opts) {
   a.refs.requestRender()
 }
 
-function buildEditClip(tracks, duration, morphs = {}) {
+function buildEditClip(tracks, duration, morphs = {}, root = null) {
   const kfTracks = []
+  // Model-root travel (see clipFromTracks above): an unqualified track name
+  // (no node path, just ".position"/".quaternion") binds directly to the
+  // AnimationMixer's root object — which is always a.model.root for every
+  // mixer this app creates — rather than to any particular bone. That's what
+  // lets this ride along in a perfectly normal, serializable AnimationClip
+  // instead of needing the separate live "root" overlay to be present.
+  if (root && root.length) {
+    const sorted = [...root].sort((x, y) => x.time - y.time)
+    const times = sorted.map((k) => k.time)
+    const posValues = []
+    const quatValues = []
+    for (const k of sorted) {
+      posValues.push(k.pos[0], k.pos[1], k.pos[2])
+      quatValues.push(k.quat[0], k.quat[1], k.quat[2], k.quat[3])
+    }
+    kfTracks.push(new THREE.VectorKeyframeTrack('.position', times, posValues))
+    kfTracks.push(new THREE.QuaternionKeyframeTrack('.quaternion', times, quatValues))
+  }
   for (const [name, keys] of Object.entries(tracks)) {
     if (!keys || keys.length === 0) continue
     const sorted = [...keys].sort((x, y) => x.time - y.time)

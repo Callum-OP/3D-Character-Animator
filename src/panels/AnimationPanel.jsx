@@ -522,7 +522,12 @@ export default function AnimationPanel() {
   // tools as anything under "Play a clip".
   function onSaveAsClip() {
     const nameGuess = activeClipName ? `${activeClipName} (edited)` : 'My clip'
-    const name = clipFromTracks(animData.tracks, animDuration, nameGuess)
+    // Carry animData.root (hand-keyed position keys, or a preserveMotion
+    // bake's captured travel) into the saved clip itself — otherwise it only
+    // exists as a live overlay tied to this editing session and gets lost
+    // the moment the clip is saved to a file and reopened later (see
+    // clipFromTracks).
+    const name = clipFromTracks(animData.tracks, animDuration, nameGuess, animData.root)
     if (!name) return
     stop()
     armClip(name)
