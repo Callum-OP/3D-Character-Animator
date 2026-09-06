@@ -19,7 +19,7 @@
 // several clips one click away, exactly like Recent Projects.
 // ---------------------------------------------------------------------------
 
-import { openDB, CLIPS_STORE as STORE } from './localDb.js'
+import { openDB, CLIPS_STORE as STORE } from './localdb.js'
 
 const FILE_EXT = '.3dclip' // just THREE.AnimationClip.toJSON() inside
 const MIME = 'application/json'
