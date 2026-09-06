@@ -1,18 +1,38 @@
 // ---------------------------------------------------------------------------
-// Project store (IndexedDB)
+// Project file I/O — Blender / Clip Studio Paint style.
 //
-// A "project" bundles everything needed to recreate a session: the character
-// model, props and reference images (as their original FILE BLOBS, not just
-// transforms), the pose/keyframe sequence, and the style settings. localStorage
-// can't hold multi-megabyte model files, so we use IndexedDB — its structured
-// clone happily stores Blob/File objects directly.
+// A project is a real file on disk (.3dcp — JSON with any Blob/File fields
+// embedded as base64). There is no separate in-app "saved projects" list
+// backed by IndexedDB anymore — that used to sit alongside a plain file
+// export/import and confused people ("which one is my project actually
+// in?"). Now there is exactly one concept:
 //
-// One object store keyed by project name (saving the same name overwrites).
+//   Open      — pick a .3dcp file from disk and load it.
+//   Save      — write back to the same file you opened/last saved to.
+//   Save As…  — pick a new location on disk and remember it as "current".
+//
+// On top of that we keep a small "Recent Projects" list (à la Blender's
+// splash screen / CSP's start menu) so the last several files you touched
+// are one click away. Where the browser supports the File System Access
+// API (Chrome, Edge, Opera) we store the actual FileSystemFileHandle, so
+// re-opening a recent project doesn't need a file picker and re-saving
+// goes straight back to the same spot on disk. Where it isn't supported
+// (Firefox, Safari) we transparently fall back to classic
+// download-a-file / choose-a-file-to-upload, and the recent list just
+// remembers file names for reference (they can't be silently reopened
+// without a picker, since the browser never gave us a handle to disk).
 // ---------------------------------------------------------------------------
 
 const DB_NAME = 'pose-studio'
-const STORE = 'projects'
-const VERSION = 1
+const STORE = 'recentProjects'
+const VERSION = 2
+const FILE_EXT = '.3dcp' // "3D Character Poser" project — just JSON inside
+const MIME = 'application/json'
+const MAX_RECENTS = 10
+
+export function hasFileSystemAccess() {
+  return typeof window !== 'undefined' && typeof window.showOpenFilePicker === 'function'
+}
 
 export async function requestPersistentStorage() {
   try {
@@ -30,8 +50,13 @@ function openDB() {
     const req = indexedDB.open(DB_NAME, VERSION)
     req.onupgradeneeded = () => {
       const db = req.result
+      // Drop the old "projects" store (whole project blobs saved in-browser)
+      // — that whole concept is gone now, replaced by real files on disk.
+      if (db.objectStoreNames.contains('projects')) {
+        db.deleteObjectStore('projects')
+      }
       if (!db.objectStoreNames.contains(STORE)) {
-        db.createObjectStore(STORE, { keyPath: 'name' })
+        db.createObjectStore(STORE, { keyPath: 'id' })
       }
     }
     req.onsuccess = () => resolve(req.result)
@@ -39,38 +64,13 @@ function openDB() {
   })
 }
 
-// Insert or overwrite a project record ({ name, savedAt, ...payload }).
-export async function saveProject(record) {
-  const db = await openDB()
-  try {
-    await new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE, 'readwrite')
-      tx.objectStore(STORE).put(record)
-      tx.oncomplete = resolve
-      tx.onerror = () => reject(tx.error)
-    })
-  } finally {
-    db.close()
-  }
-}
+// ---------------------------------------------------------------------------
+// Recent Projects list
+// Record shape: { id, name, savedAt, handle? } — handle is a
+// FileSystemFileHandle when the browser supports it, otherwise omitted.
+// ---------------------------------------------------------------------------
 
-// Fetch the full record (including blobs) for one project, or null.
-export async function loadProjectRecord(name) {
-  const db = await openDB()
-  try {
-    return await new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE, 'readonly')
-      const req = tx.objectStore(STORE).get(name)
-      req.onsuccess = () => resolve(req.result || null)
-      req.onerror = () => reject(req.error)
-    })
-  } finally {
-    db.close()
-  }
-}
-
-// Lightweight listing for the UI: name + savedAt only, newest first.
-export async function listProjects() {
+export async function listRecentProjects() {
   const db = await openDB()
   try {
     const all = await new Promise((resolve, reject) => {
@@ -79,20 +79,67 @@ export async function listProjects() {
       req.onsuccess = () => resolve(req.result || [])
       req.onerror = () => reject(req.error)
     })
-    return all
-      .map((r) => ({ name: r.name, savedAt: r.savedAt || 0 }))
-      .sort((a, b) => b.savedAt - a.savedAt)
+    return all.sort((a, b) => b.savedAt - a.savedAt).slice(0, MAX_RECENTS)
   } finally {
     db.close()
   }
 }
 
-export async function deleteProject(name) {
+async function upsertRecent({ name, handle }) {
+  const db = await openDB()
+  try {
+    // De-dupe by handle identity where possible, otherwise by name.
+    const all = await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, 'readonly')
+      const req = tx.objectStore(STORE).getAll()
+      req.onsuccess = () => resolve(req.result || [])
+      req.onerror = () => reject(req.error)
+    })
+    let existing = null
+    for (const r of all) {
+      if (handle && r.handle && (await isSameEntry(r.handle, handle))) {
+        existing = r
+        break
+      }
+    }
+    if (!existing && !handle) existing = all.find((r) => r.name === name && !r.handle)
+
+    const id = existing?.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const record = { id, name, savedAt: Date.now(), handle: handle || existing?.handle }
+
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, 'readwrite')
+      tx.objectStore(STORE).put(record)
+      tx.oncomplete = resolve
+      tx.onerror = () => reject(tx.error)
+    })
+
+    // Trim to MAX_RECENTS, oldest first out.
+    const after = await listRecentProjects()
+    if (after.length > MAX_RECENTS) {
+      const toDrop = after.slice(MAX_RECENTS)
+      for (const r of toDrop) await removeRecentProject(r.id)
+    }
+    return record
+  } finally {
+    db.close()
+  }
+}
+
+async function isSameEntry(a, b) {
+  try {
+    return typeof a.isSameEntry === 'function' ? await a.isSameEntry(b) : a === b
+  } catch {
+    return false
+  }
+}
+
+export async function removeRecentProject(id) {
   const db = await openDB()
   try {
     await new Promise((resolve, reject) => {
       const tx = db.transaction(STORE, 'readwrite')
-      tx.objectStore(STORE).delete(name)
+      tx.objectStore(STORE).delete(id)
       tx.oncomplete = resolve
       tx.onerror = () => reject(tx.error)
     })
@@ -101,15 +148,39 @@ export async function deleteProject(name) {
   }
 }
 
+// Re-open a recent entry. Throws if permission is denied or the file has
+// moved/been deleted — callers should catch and offer to remove the entry.
+export async function openRecentProject(recent) {
+  if (!recent.handle) {
+    throw new Error('This entry has no file handle in this browser — use "Open Project…" instead.')
+  }
+  const handle = recent.handle
+  await ensureReadPermission(handle)
+  const file = await handle.getFile()
+  const record = await readProjectFile(file)
+  await upsertRecent({ name: file.name, handle })
+  return { record, handle, name: file.name }
+}
+
+async function ensureReadPermission(handle) {
+  const opts = { mode: 'read' }
+  if ((await handle.queryPermission?.(opts)) === 'granted') return
+  const result = await handle.requestPermission?.(opts)
+  if (result !== 'granted') throw new Error('Permission to read this file was not granted.')
+}
+
+async function ensureWritePermission(handle) {
+  const opts = { mode: 'readwrite' }
+  if ((await handle.queryPermission?.(opts)) === 'granted') return
+  const result = await handle.requestPermission?.(opts)
+  if (result !== 'granted') throw new Error('Permission to write to this file was not granted.')
+}
+
 // ---------------------------------------------------------------------------
-// Export / import to a real file on disk.
-//
-// Format: JSON, with every Blob/File in the record replaced by a base64
-// string (recursively, so it doesn't matter where in the record a blob
-// lives — character model files, prop/image blobs, etc all get caught).
+// Blob <-> base64 embedding, so the whole record (including any model /
+// prop / image files) survives a round-trip through plain JSON.
 // ---------------------------------------------------------------------------
 
-const FILE_EXT = '.3dcp' // "3D Character Poser" project — just JSON inside
 const BLOB_TAG = '__blob__'
 
 async function blobToBase64(blob) {
@@ -161,29 +232,103 @@ function restoreBlobsFromBase64(value) {
   return value
 }
 
-// Save a project record (as produced by getProjectData(), plus name/savedAt)
-// straight to a downloaded file, bypassing IndexedDB entirely.
-export async function exportProjectToFile(record) {
-  const portable = await replaceBlobsWithBase64(record)
-  const json = JSON.stringify(portable)
-  const blob = new Blob([json], { type: 'application/json' })
-  const url = URL.createObjectURL(blob)
-  const safeName = (record.name || 'project').replace(/[\\/:*?"<>|]/g, '_')
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `${safeName}${FILE_EXT}`
-  a.click()
-  URL.revokeObjectURL(url)
+function safeFileName(name) {
+  return (name || 'project').replace(/[\\/:*?"<>|]/g, '_')
 }
 
-// Read a .3dcp file back into a project record ready for applyProjectData().
-export async function importProjectFromFile(file) {
+async function readProjectFile(file) {
   const text = await file.text()
   let portable
   try {
     portable = JSON.parse(text)
   } catch {
-    throw new Error('That file is not a valid project export.')
+    throw new Error('That file is not a valid project (' + FILE_EXT + ').')
   }
   return restoreBlobsFromBase64(portable)
+}
+
+// ---------------------------------------------------------------------------
+// Open
+// ---------------------------------------------------------------------------
+
+// Returns { record, handle, name } — handle is null on browsers without the
+// File System Access API (Firefox/Safari), in which case "Save" later on
+// will have to fall back to Save As (there's no disk handle to write back to).
+export async function openProjectFromDisk() {
+  if (hasFileSystemAccess()) {
+    const [handle] = await window.showOpenFilePicker({
+      id: 'character-animator-project',
+      types: [{ description: '3D Character Animator project', accept: { [MIME]: [FILE_EXT] } }],
+      excludeAcceptAllOption: false,
+      multiple: false,
+    })
+    const file = await handle.getFile()
+    const record = await readProjectFile(file)
+    await upsertRecent({ name: file.name, handle })
+    return { record, handle, name: file.name }
+  }
+
+  // Fallback: plain <input type="file">, driven by the caller (it owns the
+  // hidden input element and calls openProjectFromFileObject with the file).
+  throw new Error('FILE_SYSTEM_ACCESS_UNAVAILABLE')
+}
+
+// Fallback path for browsers without the picker API: caller supplies the
+// File it got from a normal <input type="file">.
+export async function openProjectFromFileObject(file) {
+  const record = await readProjectFile(file)
+  await upsertRecent({ name: file.name, handle: null })
+  return { record, handle: null, name: file.name }
+}
+
+// ---------------------------------------------------------------------------
+// Save / Save As
+// ---------------------------------------------------------------------------
+
+async function writeToHandle(handle, record) {
+  await ensureWritePermission(handle)
+  const portable = await replaceBlobsWithBase64(record)
+  const json = JSON.stringify(portable)
+  const writable = await handle.createWritable()
+  await writable.write(json)
+  await writable.close()
+}
+
+// Save straight back to a known handle (no dialog) — this is "Save" once a
+// project already has a file on disk, exactly like Ctrl+S in Blender/CSP.
+export async function saveProjectToHandle(handle, record) {
+  await writeToHandle(handle, record)
+  const file = await handle.getFile().catch(() => null)
+  await upsertRecent({ name: file?.name || record.name || 'project', handle })
+  return { handle, name: file?.name || record.name }
+}
+
+// "Save As…" — always shows a picker for a new (or different) location.
+export async function saveProjectAs(record, suggestedName) {
+  if (hasFileSystemAccess()) {
+    const handle = await window.showSaveFilePicker({
+      id: 'character-animator-project',
+      suggestedName: `${safeFileName(suggestedName || record.name)}${FILE_EXT}`,
+      types: [{ description: '3D Character Animator project', accept: { [MIME]: [FILE_EXT] } }],
+    })
+    await writeToHandle(handle, record)
+    await upsertRecent({ name: handle.name, handle })
+    return { handle, name: handle.name }
+  }
+
+  // Fallback: classic forced download. There's no handle to remember, so
+  // future "Save" presses in this session will need Save As again — the
+  // browser gives us no way to write back to a chosen spot on disk.
+  const portable = await replaceBlobsWithBase64(record)
+  const json = JSON.stringify(portable)
+  const blob = new Blob([json], { type: MIME })
+  const url = URL.createObjectURL(blob)
+  const name = `${safeFileName(suggestedName || record.name)}${FILE_EXT}`
+  const a = document.createElement('a')
+  a.href = url
+  a.download = name
+  a.click()
+  URL.revokeObjectURL(url)
+  await upsertRecent({ name, handle: null })
+  return { handle: null, name }
 }

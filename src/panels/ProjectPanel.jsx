@@ -9,26 +9,32 @@ import {
   applyProjectData,
 } from '../three/scene.js'
 import {
-  saveProject,
-  listProjects,
-  loadProjectRecord,
-  deleteProject,
+  hasFileSystemAccess,
   requestPersistentStorage,
-  exportProjectToFile,
-  importProjectFromFile,
+  listRecentProjects,
+  removeRecentProject,
+  openRecentProject,
+  openProjectFromDisk,
+  openProjectFromFileObject,
+  saveProjectToHandle,
+  saveProjectAs,
 } from '../three/projectStore.js'
 
 // Combined side-panel section: everything to do with "where does my character
-// come from" lives here. Two clear, always-visible sources to load from:
+// come from" lives here.
 //   1. A model file straight off disk (.glb/.gltf/.fbx) — any number of
 //      characters can be loaded at once and switched between.
-//   2. A previously saved project (whole session — model, props, poses, style)
-// Previously these were two separate panels; merging them means there's one
-// obvious place to look when you want to get a character on screen.
+//   2. The project file itself (whole session — model, props, poses, style),
+//      handled the way Blender / Clip Studio Paint handle documents: it
+//      lives as a real file on disk, "Save" writes back to that same file,
+//      and a Recent Projects list gives one-click access to what you had
+//      open before. There's no separate in-browser save slot to keep track
+//      of any more — a project either is a file on disk, or it hasn't been
+//      saved yet.
 export default function ProjectPanel() {
   const fileInputRef = useRef(null)
   const addFileInputRef = useRef(null)
-  const importFileInputRef = useRef(null)
+  const openProjectInputRef = useRef(null)
   const modelInfo = useStore((s) => s.modelInfo)
   const loading = useStore((s) => s.loading)
   const loadError = useStore((s) => s.loadError)
@@ -43,22 +49,29 @@ export default function ProjectPanel() {
     info: id === activeCharacterId ? modelInfo : characters[id]?.modelInfo,
   }))
 
-  const [name, setName] = useState('')
-  const [projects, setProjects] = useState([])
+  // The project currently "open" — mirrors Blender's notion of the current
+  // .blend file. `handle` is the FileSystemFileHandle to write straight
+  // back to on "Save" (null until you've opened or saved-as a real file,
+  // or in browsers without File System Access support).
+  const [current, setCurrent] = useState(null) // { name, handle }
+  const [recents, setRecents] = useState([])
   const [msg, setMsg] = useState(null)
   const [busy, setBusy] = useState(false)
+  const fsAccess = hasFileSystemAccess()
 
-  async function refresh() {
+  async function refreshRecents() {
     try {
-      setProjects(await listProjects())
+      setRecents(await listRecentProjects())
     } catch {
       /* IndexedDB unavailable (e.g. private mode) — leave the list empty */
     }
   }
   useEffect(() => {
-    refresh()
-    // Ask the browser not to silently wipe our IndexedDB data under disk
-    // pressure. Best-effort — see the note in projectStore.js.
+    refreshRecents()
+    // Ask the browser not to silently wipe our IndexedDB data (which now
+    // only holds the recent-files list and, on supporting browsers, file
+    // handles) under disk pressure. Best-effort — see the note in
+    // projectStore.js.
     requestPersistentStorage()
   }, [])
 
@@ -74,93 +87,120 @@ export default function ProjectPanel() {
     if (file) loadModelFile(file, { addNew: true }).catch(() => {})
   }
 
-  async function onSave() {
-    const n = name.trim()
-    if (!n) {
-      setMsg('Type a name for this project first.')
-      return
+  // ---- Open ----
+
+  async function onOpen() {
+    setBusy(true)
+    setMsg(null)
+    try {
+      if (fsAccess) {
+        const { record, handle, name } = await openProjectFromDisk()
+        await applyProjectData(record)
+        setCurrent({ name, handle })
+        setMsg(`Opened “${name}”.`)
+        refreshRecents()
+      } else {
+        openProjectInputRef.current?.click()
+      }
+    } catch (e) {
+      if (e?.name !== 'AbortError') setMsg('Open failed: ' + (e.message || String(e)))
+    } finally {
+      setBusy(false)
     }
+  }
+
+  function onPickOpenFile(e) {
+    const file = e.target.files && e.target.files[0]
+    e.target.value = ''
+    if (file) onOpenFileObject(file)
+  }
+
+  async function onOpenFileObject(file) {
+    setBusy(true)
+    setMsg(null)
+    try {
+      const { record, handle, name } = await openProjectFromFileObject(file)
+      await applyProjectData(record)
+      setCurrent({ name, handle })
+      setMsg(`Opened “${name}”. This browser can't write back to disk automatically — "Save" will ask where to save.`)
+      refreshRecents()
+    } catch (e) {
+      setMsg('Open failed: ' + (e.message || String(e)))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function onOpenRecent(recent) {
+    setBusy(true)
+    setMsg(null)
+    try {
+      const { record, handle, name } = await openRecentProject(recent)
+      await applyProjectData(record)
+      setCurrent({ name, handle })
+      setMsg(`Opened “${name}”.`)
+      refreshRecents()
+    } catch (e) {
+      setMsg('Could not reopen that file: ' + (e.message || String(e)))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function onRemoveRecent(id, e) {
+    e.stopPropagation()
+    try {
+      await removeRecentProject(id)
+      refreshRecents()
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // ---- Save / Save As ----
+
+  async function onSave() {
     setBusy(true)
     setMsg(null)
     try {
       const data = getProjectData()
-      await saveProject({ name: n, savedAt: Date.now(), ...data })
-      setMsg(`Saved “${n}”.`)
-      refresh()
-    } catch (e) {
-      setMsg('Save failed: ' + (e.message || String(e)))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function onLoad(n) {
-    setBusy(true)
-    setMsg(null)
-    try {
-      const rec = await loadProjectRecord(n)
-      if (!rec) {
-        setMsg('That project could not be found.')
-        return
+      if (current?.handle) {
+        // Same spot on disk you opened/last saved to — no dialog, just like
+        // Ctrl+S in Blender or Clip Studio Paint.
+        const { name } = await saveProjectToHandle(current.handle, { name: current.name, ...data })
+        setCurrent((c) => ({ ...c, name }))
+        setMsg(`Saved “${name}”.`)
+      } else {
+        // Nothing open yet — first save always needs a location.
+        const { handle, name } = await saveProjectAs(
+          { name: current?.name || 'Untitled', ...data },
+          current?.name
+        )
+        setCurrent({ name, handle })
+        setMsg(`Saved “${name}”.`)
       }
-      await applyProjectData(rec)
-      setName(n)
-      setMsg(`Loaded “${n}”.`)
+      refreshRecents()
     } catch (e) {
-      setMsg('Load failed: ' + (e.message || String(e)))
+      if (e?.name !== 'AbortError') setMsg('Save failed: ' + (e.message || String(e)))
     } finally {
       setBusy(false)
     }
   }
 
-  async function onExport(n) {
+  async function onSaveAs() {
     setBusy(true)
     setMsg(null)
     try {
-      const rec = await loadProjectRecord(n)
-      if (!rec) {
-        setMsg('That project could not be found.')
-        return
-      }
-      await exportProjectToFile(rec)
-      setMsg(`Exported “${n}” to a file.`)
+      const data = getProjectData()
+      const { handle, name } = await saveProjectAs(
+        { name: current?.name || 'Untitled', ...data },
+        current?.name
+      )
+      setCurrent({ name, handle })
+      setMsg(`Saved “${name}”.`)
+      refreshRecents()
     } catch (e) {
-      setMsg('Export failed: ' + (e.message || String(e)))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  function onPickImportFile(e) {
-    const file = e.target.files && e.target.files[0]
-    e.target.value = ''
-    if (file) onImport(file)
-  }
-
-  async function onImport(file) {
-    setBusy(true)
-    setMsg(null)
-    try {
-      const rec = await importProjectFromFile(file)
-      await applyProjectData(rec)
-      const n = rec.name || file.name.replace(/\.[^.]+$/, '')
-      setName(n)
-      setMsg(`Loaded “${n}” from file. Hit "Save all" if you want it back in this browser's storage too.`)
-    } catch (e) {
-      setMsg('Import failed: ' + (e.message || String(e)))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function onDelete(n) {
-    setBusy(true)
-    try {
-      await deleteProject(n)
-      if (name === n) setName('')
-      refresh()
-    } catch (e) {
-      setMsg('Delete failed: ' + (e.message || String(e)))
+      if (e?.name !== 'AbortError') setMsg('Save failed: ' + (e.message || String(e)))
     } finally {
       setBusy(false)
     }
@@ -268,98 +308,97 @@ export default function ProjectPanel() {
         )}
       </div>
 
-      {/* ---- Source 2: saved projects ---- */}
+      {/* ---- Source 2: the project file ---- */}
       <div className="subpanel">
         <div className="subpanel-head">
-          <span className="subpanel-title">Saved projects</span>
-          <span className="subpanel-count">{projects.length}</span>
+          <span className="subpanel-title">Project</span>
+          {current && <span className="subpanel-count" title={current.name}>{current.name}</span>}
         </div>
         <p className="panel-hint">
-          A project remembers everything — model, props, images, poses and style —
-          so it reloads exactly how you left it. Saved in this browser only —
-          browsers can clear this without warning, so use "Export" on a
-          project to back it up as a real file that won't disappear.
+          A project remembers everything — model, props, images, poses and
+          style — as one file on disk. Open picks a file up, Save writes
+          straight back to it, Save As lets you pick a new spot.
+          {!fsAccess && ' Your browser can open project files but can\'t write back to the same spot automatically, so Save will ask where to put the file each time.'}
         </p>
 
-        <div className="proj-save">
+        <div className="proj-save" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button className="btn" onClick={onOpen} disabled={busy}>
+            {loading || busy ? 'Working…' : 'Open Project…'}
+          </button>
           <input
-            className="text-input"
-            type="text"
-            placeholder="Project name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') onSave()
-            }}
+            ref={openProjectInputRef}
+            type="file"
+            accept=".3dcp,application/json"
+            style={{ display: 'none' }}
+            onChange={onPickOpenFile}
           />
-          <button className="btn" onClick={onSave} disabled={busy}>
-            Save all
+          <button className="btn" onClick={onSave} disabled={busy} title="Save back to the currently open file (or choose one, if none is open yet)">
+            Save
+          </button>
+          <button className="btn secondary" onClick={onSaveAs} disabled={busy} title="Save to a new file / location">
+            Save As…
           </button>
         </div>
 
-        <button
-          className="btn secondary btn-tiny"
-          style={{ marginTop: 8 }}
-          onClick={() => importFileInputRef.current?.click()}
-          disabled={busy}
-          title="Load a project previously saved with Export, from a file on disk"
-        >
-          Import from file…
-        </button>
-        <input
-          ref={importFileInputRef}
-          type="file"
-          accept=".3dcp,application/json"
-          style={{ display: 'none' }}
-          onChange={onPickImportFile}
-        />
-
         {msg && <div className="pose-msg">{msg}</div>}
 
-        {projects.length === 0 ? (
-          <div className="empty" style={{ marginTop: 10 }}>
-            No saved projects yet — save your current session above once you
-            have a character you like.
+        <div style={{ marginTop: 14 }}>
+          <div className="subpanel-head">
+            <span className="subpanel-title">Recent Projects</span>
+            <span className="subpanel-count">{recents.length}</span>
           </div>
-        ) : (
-          <div className="proj-grid">
-            {projects.map((p) => (
-              <div key={p.name} className="proj-card" title={savedLabel(p.savedAt)}>
-                <div className="proj-card-thumb" aria-hidden="true">🧍</div>
-                <div className="proj-card-body">
-                  <span className="proj-card-name">{p.name}</span>
-                  <span className="proj-card-date">{savedLabel(p.savedAt)}</span>
+
+          {recents.length === 0 ? (
+            <div className="empty" style={{ marginTop: 10 }}>
+              Nothing opened or saved yet — projects you open or save will
+              show up here for quick access.
+            </div>
+          ) : (
+            <div className="proj-grid">
+              {recents.map((r) => (
+                <div
+                  key={r.id}
+                  className="proj-card"
+                  title={savedLabel(r.savedAt)}
+                  style={{ cursor: r.handle ? 'pointer' : 'default' }}
+                  onClick={() => r.handle && onOpenRecent(r)}
+                >
+                  <div className="proj-card-thumb" aria-hidden="true">🧍</div>
+                  <div className="proj-card-body">
+                    <span className="proj-card-name">{r.name}</span>
+                    <span className="proj-card-date">
+                      {savedLabel(r.savedAt)}
+                      {!r.handle && ' · reopen via "Open Project…"'}
+                    </span>
+                  </div>
+                  <div className="proj-card-actions">
+                    {r.handle && (
+                      <button
+                        className="btn btn-tiny"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          onOpenRecent(r)
+                        }}
+                        disabled={busy}
+                        title="Open this project"
+                      >
+                        Open
+                      </button>
+                    )}
+                    <button
+                      className="obj-del"
+                      title="Remove from recent list (does not delete the file)"
+                      onClick={(e) => onRemoveRecent(r.id, e)}
+                      disabled={busy}
+                    >
+                      ×
+                    </button>
+                  </div>
                 </div>
-                <div className="proj-card-actions">
-                  <button
-                    className="btn btn-tiny"
-                    onClick={() => onLoad(p.name)}
-                    disabled={busy}
-                    title="Replace the current session with this project"
-                  >
-                    Load
-                  </button>
-                  <button
-                    className="btn secondary btn-tiny"
-                    onClick={() => onExport(p.name)}
-                    disabled={busy}
-                    title="Back this project up to a file on disk"
-                  >
-                    Export
-                  </button>
-                  <button
-                    className="obj-del"
-                    title="Delete this project"
-                    onClick={() => onDelete(p.name)}
-                    disabled={busy}
-                  >
-                    ×
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -368,7 +407,7 @@ export default function ProjectPanel() {
 function savedLabel(savedAt) {
   if (!savedAt) return ''
   try {
-    return 'Saved ' + new Date(savedAt).toLocaleString()
+    return new Date(savedAt).toLocaleString()
   } catch {
     return ''
   }
