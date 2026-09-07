@@ -363,9 +363,9 @@ export function initScene(container) {
   const dirLight = new THREE.DirectionalLight(0xffffff, 2.0)
   dirLight.position.set(2, 4, 3)
   dirLight.castShadow = false // enabled only in "realistic shadows" mode
-  // Larger map keeps shadows crisp over the wide frustum (positionLight sizes it
-  // to cover props + root-motion, not just the character).
-  dirLight.shadow.mapSize.set(4096, 4096)
+  // 2048² keeps the contact shadow crisp while using one quarter of the
+  // 4096² shadow atlas memory for scenes with many loaded characters.
+  dirLight.shadow.mapSize.set(2048, 2048)
   dirLight.shadow.bias = -0.0005
   scene.add(dirLight)
   scene.add(dirLight.target) // shadow camera aims at the model via this target
@@ -460,11 +460,24 @@ function renderOnce() {
   updateBoneHelpers() // park bone dots on their (possibly just-moved) bones
   updateMeshEditHelpers() // keep the part-selection box hugging its mesh
   const camera = state.viewCamera || state.camera
+  if (camera === state.camera) updateFreeCameraClipping()
   // Route through the outline effect. When the outline is disabled it falls
   // straight through to renderer.render, so there's no overhead when it's off.
   const effect = getOutlineEffect()
   if (effect) effect.render(state.scene, camera)
   else state.renderer.render(state.scene, camera)
+}
+
+function updateFreeCameraClipping() {
+  if (!state.camera || !state.controls) return
+  const distance = state.camera.position.distanceTo(state.controls.target)
+  const radius = Math.max(state.modelRadius, 0.5)
+  const near = Math.max(0.01, radius * 0.001)
+  const far = Math.max(distance + radius * 8, radius * 20)
+  if (state.camera.near === near && state.camera.far === far) return
+  state.camera.near = near
+  state.camera.far = far
+  state.camera.updateProjectionMatrix()
 }
 
 // Continuous render loop, used later for animation playback. Off by default.
@@ -545,6 +558,7 @@ export async function loadModelFile(file, { addNew = false } = {}) {
   try {
     const parsed = await loadModel(file)
     parsed.file = file // retain the source blob so the model can be saved to a project
+    prepareModelTextures(parsed)
 
     let id
     if (addNew && state.currentModel) {
@@ -1829,4 +1843,23 @@ export function disposeScene() {
 // Expose current model reference for panels that need live objects later.
 export function getCurrentModel() {
   return state.currentModel
+}
+
+function prepareModelTextures(model) {
+  if (!state.renderer) return
+  const anisotropy = Math.min(4, state.renderer.capabilities.getMaxAnisotropy())
+  const seen = new Set()
+  for (const mesh of model.meshes) {
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+    for (const material of materials) {
+      if (!material) continue
+      for (const value of Object.values(material)) {
+        if (value?.isTexture && !seen.has(value)) {
+          value.anisotropy = anisotropy
+          value.needsUpdate = true
+          seen.add(value)
+        }
+      }
+    }
+  }
 }

@@ -139,7 +139,9 @@ function parseRoot(root, animations, fileName, format, source) {
 
   root.traverse((obj) => {
     if (obj.isSkinnedMesh) {
-      obj.frustumCulled = false
+      // Keep animated meshes eligible for culling. The old blanket opt-out made
+      // every high-poly character pay for every draw even when off-screen.
+      obj.frustumCulled = true
       skinnedMeshes.push(obj)
       if (!skeleton && obj.skeleton) skeleton = obj.skeleton
       if (obj.skeleton) {
