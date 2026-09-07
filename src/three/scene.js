@@ -118,6 +118,7 @@ import {
   detachObjectsForCharacter,
   setViewCamera as setObjectsViewCamera,
   updateAllObjectRimLight,
+  getAllRootsForExport,
 } from './objects.js'
 import { getPose, applyPose } from './posing.js'
 import { useStore } from '../store.js'
@@ -1012,6 +1013,62 @@ function downloadBlob(blob, filename) {
   a.download = filename
   a.click()
   URL.revokeObjectURL(url)
+}
+
+// Export every visible character and prop combined into a single .glb/.gltf
+// file, each one baked at its current saved position/rotation/scale. Props
+// riding a bone (attachObjectToBone) are flattened onto that world transform
+// too, so the exported file is a plain static layout — a "photo" of the
+// scene's arrangement, not a rig or an animation (use "Export animation
+// (.bvh)" for that). GLTFExporter and SkeletonUtils are dynamically imported
+// since this is a rarely-used, moderately heavy code path.
+//
+// NOTE: three.js does not ship an FBX exporter (only FBXLoader, for reading
+// .fbx in), so there is no in-app "Save as .fbx". The .glb this produces can
+// be opened in Blender and re-exported as .fbx in a couple of clicks if an
+// .fbx is specifically needed.
+export async function exportSceneModel(format = 'glb', name = 'scene') {
+  const items = getAllRootsForExport()
+  if (!items.length) {
+    return { ok: false, message: 'Nothing to export — load a character or add an object first.' }
+  }
+  try {
+    const [{ GLTFExporter }, { clone: cloneSkinned }] = await Promise.all([
+      import('three/examples/jsm/exporters/GLTFExporter.js'),
+      import('three/examples/jsm/utils/SkeletonUtils.js'),
+    ])
+
+    // Fresh, transform-less parent: every child below gets its WORLD matrix
+    // baked into its local transform, so nesting (e.g. a prop parented under
+    // a character's bone) collapses into one flat, self-contained group.
+    const exportGroup = new THREE.Group()
+    exportGroup.name = 'Scene'
+    for (const { root, name: objName } of items) {
+      root.updateWorldMatrix(true, false)
+      const dup = cloneSkinned(root) // preserves SkinnedMesh <-> skeleton/bone bindings
+      dup.name = objName || dup.name
+      root.matrixWorld.decompose(dup.position, dup.quaternion, dup.scale)
+      exportGroup.add(dup)
+    }
+
+    const binary = format !== 'gltf'
+    const exporter = new GLTFExporter()
+    const result = await new Promise((resolve, reject) => {
+      exporter.parse(exportGroup, resolve, reject, { binary, onlyVisible: true })
+    })
+
+    const blob = binary
+      ? new Blob([result], { type: 'model/gltf-binary' })
+      : new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' })
+    const ext = binary ? 'glb' : 'gltf'
+    downloadBlob(blob, `${name}_${timestamp()}.${ext}`)
+    return {
+      ok: true,
+      message: `Exported ${items.length} object${items.length === 1 ? '' : 's'} as .${ext}.`,
+    }
+  } catch (err) {
+    return { ok: false, message: 'Export failed: ' + (err && err.message ? err.message : String(err)) }
+  }
 }
 
 // Render the current frame at `scale`× the viewport resolution and save a PNG.

@@ -769,6 +769,20 @@ export function getObjectRoots() {
   return o.objects.map((e) => e.root)
 }
 
+// Every prop root plus every loaded character root, for a combined scene
+// export (see scene.js exportSceneModel). Each root keeps its own current
+// world transform (including any bone attachment), so the caller just needs
+// to bake that world transform when flattening into one export group.
+export function getAllRootsForExport() {
+  const props = o.objects
+    .filter((e) => e.root.visible)
+    .map((e) => ({ root: e.root, name: e.name || 'Object' }))
+  const chars = [...o.characterRoots.entries()]
+    .filter(([, e]) => e.root.visible)
+    .map(([, e]) => ({ root: e.root, name: e.name || 'Character' }))
+  return props.concat(chars)
+}
+
 // Lightweight per-part listing for every loaded prop (Mesh mode's Parts panel
 // uses this to offer props' parts alongside the character's, since — unlike
 // the character — every prop's parts are pickable at once with no separate

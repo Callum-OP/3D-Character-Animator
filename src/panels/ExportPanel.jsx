@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useStore } from '../store.js'
 import {
   exportPNG,
+  exportSceneModel,
   enterFullscreen,
   canRecordVideo,
   startRecording,
@@ -60,6 +61,7 @@ export default function ExportPanel() {
   const st = useStore.getState
   const [msg, setMsg] = useState(null)
   const [previewing, setPreviewing] = useState(false)
+  const [exportingModel, setExportingModel] = useState(false)
 
   const name = modelInfo?.name || 'render'
   const canRecord = canRecordVideo()
@@ -94,6 +96,15 @@ export default function ExportPanel() {
     a.click()
     URL.revokeObjectURL(url)
     setMsg('Animation exported as .bvh.')
+  }
+
+  async function onExportScene(format) {
+    if (exportingModel) return
+    setExportingModel(true)
+    setMsg(format === 'glb' ? 'Exporting scene as .glb…' : 'Exporting scene as .gltf…')
+    const result = await exportSceneModel(format, name)
+    setExportingModel(false)
+    setMsg(result.message)
   }
 
   // Switch the viewport into the shot's camera (returns a restore function
@@ -264,6 +275,31 @@ export default function ExportPanel() {
       <button className="btn secondary" style={{ marginTop: 6 }} onClick={onExportBVH}>
         Export animation (.bvh)
       </button>
+
+      <div className="field" style={{ marginTop: 10 }}>
+        <label className="field-label">Export scene as one file</label>
+        <div className="kf-actions">
+          <button
+            className="btn secondary"
+            onClick={() => onExportScene('glb')}
+            disabled={exportingModel}
+          >
+            {exportingModel ? 'Exporting…' : 'Save as .glb'}
+          </button>
+          <button
+            className="btn secondary"
+            onClick={() => onExportScene('gltf')}
+            disabled={exportingModel}
+          >
+            {exportingModel ? 'Exporting…' : 'Save as .gltf'}
+          </button>
+        </div>
+        <div className="radio-hint" style={{ marginTop: 4 }}>
+          Combines every visible character and object into one file at their
+          current positions. Three.js can't write .fbx directly — open the
+          .glb in Blender and re-export as .fbx if you need that format.
+        </div>
+      </div>
 
       <button className="btn secondary" style={{ marginTop: 6 }} onClick={() => enterFullscreen()}>
         Fullscreen (Esc to exit)
