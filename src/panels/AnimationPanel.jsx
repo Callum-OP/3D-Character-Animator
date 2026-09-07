@@ -54,6 +54,16 @@ function rootTravels(keys) {
   return maxDist > 0.01
 }
 
+// True if a mesh/morph track map has at least one non-empty entry.
+// `nested` = true for morph maps ({ meshIndex: { morphName: keys[] } }),
+// false for plain mesh transform maps ({ meshIndex: keys[] }).
+function hasAny(tracks, nested = false) {
+  if (!tracks) return false
+  return Object.values(tracks).some((v) =>
+    nested ? v && Object.values(v).some((keys) => keys && keys.length) : v && v.length,
+  )
+}
+
 function collectKeyframes(animData) {
   const map = new Map()
   const entry = (t) => {
@@ -527,11 +537,22 @@ export default function AnimationPanel() {
     // exists as a live overlay tied to this editing session and gets lost
     // the moment the clip is saved to a file and reopened later (see
     // clipFromTracks).
-    const name = clipFromTracks(animData.tracks, animDuration, nameGuess, animData.root)
+    // Mesh-transform (Mesh mode) and shape-key (morph) edits ride along too —
+    // see clipFromTracks — so they come back if this clip is reopened later,
+    // including on a different character (whatever meshes/morphs it doesn't
+    // have are just skipped).
+    const name = clipFromTracks(animData.tracks, animDuration, nameGuess, animData.root, animData.meshes, animData.morphs)
     if (!name) return
+    const extra = []
+    if (hasAny(animData.meshes)) extra.push('mesh edits')
+    if (hasAny(animData.morphs, true)) extra.push('shape keys')
     stop()
     armClip(name)
-    setKfMsg(`Saved as the clip “${name}” — find it under Play a clip, with the same tools.`)
+    setKfMsg(
+      extra.length
+        ? `Saved as the clip “${name}” (including ${extra.join(' and ')}) — find it under Play a clip, with the same tools.`
+        : `Saved as the clip “${name}” — find it under Play a clip, with the same tools.`,
+    )
   }
 
   function onOpenRename() {

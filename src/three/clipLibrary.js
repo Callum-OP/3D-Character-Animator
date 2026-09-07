@@ -21,7 +21,7 @@
 
 import { openDB, CLIPS_STORE as STORE } from './localdb.js'
 
-const FILE_EXT = '.3dclip' // just THREE.AnimationClip.toJSON() inside
+const FILE_EXT = '.3dclip' // { clip: THREE.AnimationClip.toJSON(), meshTracks, morphTracks } — see animation.js's wrapClipJSON
 const MIME = 'application/json'
 const MAX_RECENTS = 10
 
@@ -185,7 +185,7 @@ export async function openClipFromFileObject(file) {
 // ---------------------------------------------------------------------------
 
 export async function saveClipAs(json, suggestedName) {
-  const name = safeFileName(suggestedName || json?.name || 'clip')
+  const name = safeFileName(suggestedName || json?.clip?.name || json?.name || 'clip')
   if (hasFileSystemAccess()) {
     const handle = await window.showSaveFilePicker({
       id: 'character-animator-clip',

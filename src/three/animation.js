@@ -4,6 +4,8 @@ import {
   sampleMeshTracks,
   getMeshPlaybackSnapshot,
   applyMeshPlaybackSnapshot,
+  getMeshNameByIndex,
+  findMeshIndexByName,
 } from './meshedit.js'
 import {
   sampleCameraTracks,
@@ -213,7 +215,7 @@ export function updateAnimation(delta) {
 export function selectClip(name, opts = {}, animData = null) {
   const clip = findClip(name)
   if (!clip) return 0
-  setupOverlayTracks(animData)
+  setupOverlayTracks(withClipOverlay(animData, clip))
   activate(clip, opts)
   return clip.duration
 }
@@ -283,12 +285,40 @@ export function renameClip(name, newName) {
   return final
 }
 
+// Wrap a clip's standard three.js JSON together with its (optional) baked
+// mesh-transform/shape-key data (see clipFromTracks) into one plain object
+// for downloading, stashing in the clip library, or a project save. Kept as
+// a thin wrapper — `{ clip: <three.js AnimationClip JSON>, meshTracks,
+// morphTracks }` — rather than mutating the three.js JSON shape itself,
+// since AnimationClip.toJSON()/parse() are fixed-format and don't round-trip
+// arbitrary extra fields.
+function wrapClipJSON(clip) {
+  return {
+    clip: clip.toJSON(),
+    meshTracks: clip.charMeshTracks || null,
+    morphTracks: clip.charMorphTracks || null,
+  }
+}
+
+// Accepts either the wrapped format above, or a bare three.js clip JSON
+// (older saved clips/projects, from before mesh/morph data was carried
+// alongside clips) — parses either into a live AnimationClip with its extra
+// data (if any) attached.
+function unwrapClipJSON(json) {
+  const isWrapped = json && typeof json === 'object' && json.clip
+  const clipJSON = isWrapped ? json.clip : json
+  const clip = THREE.AnimationClip.parse(clipJSON)
+  clip.charMeshTracks = isWrapped ? json.meshTracks || null : null
+  clip.charMorphTracks = isWrapped ? json.morphTracks || null : null
+  return clip
+}
+
 // Serialize a clip (baked or imported) to a plain JSON object, for downloading
 // or stashing in the persistent clip library. Returns null if not found.
 export function exportClipJSON(name) {
   const clip = findClip(name)
   if (!clip) return null
-  return clip.toJSON()
+  return wrapClipJSON(clip)
 }
 
 // Every IMPORTED/GENERATED clip (BVH imports, ragdoll bakes, combined/trimmed
@@ -298,7 +328,7 @@ export function exportClipJSON(name) {
 export function getImportedClipsData(id) {
   const entry = perChar.get(id)
   if (!entry || !entry.importedClips.length) return []
-  return entry.importedClips.map((c) => c.toJSON())
+  return entry.importedClips.map((c) => wrapClipJSON(c))
 }
 
 // Restore previously-exported imported clips onto character `id` (call after
@@ -308,7 +338,7 @@ export function restoreImportedClips(id, clipsJSON) {
   if (!entry || !clipsJSON || !clipsJSON.length) return
   for (const json of clipsJSON) {
     try {
-      entry.importedClips.push(THREE.AnimationClip.parse(json))
+      entry.importedClips.push(unwrapClipJSON(json))
     } catch {
       /* a clip that fails to parse is skipped rather than aborting the load */
     }
@@ -319,7 +349,7 @@ export function restoreImportedClips(id, clipsJSON) {
 // other imported clip. Returns the final (deduped) name, or null with no model.
 export function importClipJSON(json) {
   if (!a.model) return null
-  const clip = THREE.AnimationClip.parse(json)
+  const clip = unwrapClipJSON(json)
   return addGeneratedClip(clip)
 }
 
@@ -550,10 +580,98 @@ export function mirrorClip(name, fps) {
 // but feet sliding instead of the hips carrying the movement. Baking `root`
 // into the clip's own tracks here (see buildEditClip) makes the clip fully
 // self-contained so it survives export/import and reload correctly.
-export function clipFromTracks(tracks, duration, name, root) {
+// A saved clip carries its mesh-transform and shape-key (morph) data keyed
+// by NAME rather than by index. Index only means anything for the character
+// it was authored on — a different model's meshes are numbered differently —
+// but names (mesh names, and morph/shape-key names, which the app already
+// keys by name via each mesh's morphTargetDictionary) tend to survive across
+// characters that share parts, and are what let a re-applied clip skip
+// gracefully over anything the target character doesn't have.
+function namifyMeshTracks(tracks) {
+  if (!tracks || !a.model) return null
+  const out = {}
+  for (const [index, keys] of Object.entries(tracks)) {
+    if (!keys || !keys.length) continue
+    const name = getMeshNameByIndex(Number(index))
+    if (!name) continue // an unnamed mesh can't be matched back up later — skip it
+    out[name] = keys
+  }
+  return Object.keys(out).length ? out : null
+}
+
+function namifyMorphTracks(tracks) {
+  if (!tracks || !a.model) return null
+  const out = {}
+  for (const [index, byName] of Object.entries(tracks)) {
+    if (!byName || !Object.keys(byName).length) continue
+    const name = getMeshNameByIndex(Number(index))
+    if (!name) continue
+    out[name] = byName
+  }
+  return Object.keys(out).length ? out : null
+}
+
+// The reverse direction: match a saved clip's name-keyed mesh/morph data back
+// onto whichever character is currently active, by mesh name. Anything the
+// active character doesn't have (a different mesh set, or no morph target of
+// that name on the matched mesh) is silently dropped rather than erroring —
+// per-mesh and per-morph-name, so a clip built on a richer character still
+// applies its motion-only (or partially: whatever parts DO match) to a
+// simpler one. Morph existence is re-checked per morph name at sample time
+// (sampleMorphTracks already does this), so this only needs to resolve mesh
+// names to the active character's mesh indices.
+function denamifyMeshTracks(nameTracks) {
+  if (!nameTracks || !a.model) return null
+  const out = {}
+  for (const [name, keys] of Object.entries(nameTracks)) {
+    if (!keys || !keys.length) continue
+    const index = findMeshIndexByName(name)
+    if (index < 0) continue // this character has no mesh by that name — skip
+    out[index] = keys
+  }
+  return Object.keys(out).length ? out : null
+}
+
+function denamifyMorphTracks(nameTracks) {
+  if (!nameTracks || !a.model) return null
+  const out = {}
+  for (const [name, byName] of Object.entries(nameTracks)) {
+    if (!byName || !Object.keys(byName).length) continue
+    const index = findMeshIndexByName(name)
+    if (index < 0) continue
+    out[index] = byName
+  }
+  return Object.keys(out).length ? out : null
+}
+
+// Merge the currently-armed clip's own baked mesh/morph data (if it has any —
+// see namifyMeshTracks/namifyMorphTracks) into the live animData overlay used
+// for playback, matched against the ACTIVE character by name. The session's
+// own live edits (animData.meshes/morphs, from "Make your own") take
+// priority per-mesh where both exist, since those are what the user is
+// actively looking at right now; the clip's baked data only fills in meshes/
+// morphs the session doesn't already have an opinion on. This is what makes
+// "Save Clip As" → reopen (possibly on a different character) bring shape-
+// key and mesh-transform changes back, not just joint motion.
+function withClipOverlay(animData, clip) {
+  const meshFromClip = clip && clip.charMeshTracks ? denamifyMeshTracks(clip.charMeshTracks) : null
+  const morphFromClip = clip && clip.charMorphTracks ? denamifyMorphTracks(clip.charMorphTracks) : null
+  if (!meshFromClip && !morphFromClip) return animData
+  const meshes = { ...(meshFromClip || {}), ...(animData?.meshes || {}) }
+  const morphs = { ...(morphFromClip || {}), ...(animData?.morphs || {}) }
+  return { ...(animData || {}), meshes, morphs }
+}
+
+export function clipFromTracks(tracks, duration, name, root, meshes = null, morphs = null) {
   if (!a.model) return null
   const clip = buildEditClip(tracks, duration, {}, root)
   clip.name = name || 'My clip'
+  // Stash the active character's mesh-transform/shape-key edits on the clip
+  // itself (name-keyed — see namifyMeshTracks/namifyMorphTracks) so they
+  // travel with it through Save Clip As / Open Clip and project save/load,
+  // instead of only living as an ephemeral per-session overlay.
+  clip.charMeshTracks = namifyMeshTracks(meshes)
+  clip.charMorphTracks = namifyMorphTracks(morphs)
   return addGeneratedClip(clip)
 }
 

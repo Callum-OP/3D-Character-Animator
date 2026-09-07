@@ -285,6 +285,48 @@ export function getMeshIndex(mesh) {
   return m.meshes.indexOf(mesh)
 }
 
+// Name-based lookups for the ACTIVE CHARACTER's own meshes only (m.meshes —
+// never props). Used to make saved clip data (mesh transform + morph keys)
+// portable across characters: a clip is authored against mesh INDICES, which
+// only mean anything for the character it was made on, so it gets converted
+// to/from mesh NAME at save/load time. Two different models rarely share
+// mesh indices but often share meaningful names (e.g. exported from the same
+// rig/base mesh, or just conventionally named "Head", "Body", …).
+//
+// Names are only trusted when they're UNIQUE on the character. Exporters
+// (Blender/Mixamo GLTF especially) routinely leave several parts sharing the
+// same name, or no name at all — matching by a non-unique name would collapse
+// two different meshes' data onto one key, or send an edit to the wrong part
+// entirely (e.g. a moving keyframe meant for a hat pivot silently landing on
+// a foot/shoe mesh instead, since both happened to be named "Object"). An
+// ambiguous name is treated as unmatched — the data for that mesh is skipped
+// rather than risking it lands on the wrong part.
+function meshNameCounts() {
+  const counts = new Map()
+  for (const mesh of m.meshes) {
+    if (!mesh.name) continue
+    counts.set(mesh.name, (counts.get(mesh.name) || 0) + 1)
+  }
+  return counts
+}
+
+export function getMeshNameByIndex(index) {
+  const mesh = m.meshes[index]
+  if (!mesh || !mesh.name) return null
+  return meshNameCounts().get(mesh.name) === 1 ? mesh.name : null
+}
+
+export function findMeshIndexByName(name) {
+  if (!name) return -1
+  let match = -1
+  for (let i = 0; i < m.meshes.length; i++) {
+    if (m.meshes[i].name !== name) continue
+    if (match !== -1) return -1 // a second match makes this name ambiguous — refuse both
+    match = i
+  }
+  return match
+}
+
 // Looks up any currently mesh-editable part by uuid — the active character's
 // OR any loaded prop's. Lets the Parts panel resolve a selection generically
 // instead of only ever checking the character's mesh list.
