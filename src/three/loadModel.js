@@ -1,5 +1,20 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
+import { SimplifyModifier } from 'three/examples/jsm/modifiers/SimplifyModifier.js'
+
+export const IMPORT_DECIMATION_LEVELS = [
+  { minVertices: 150_000, level: 1, reduction: 0.2 },
+  { minVertices: 500_000, level: 2, reduction: 0.4 },
+  { minVertices: 1_000_000, level: 3, reduction: 0.6 },
+]
+
+export function getImportDecimationPlan(vertexCount) {
+  for (let i = IMPORT_DECIMATION_LEVELS.length - 1; i >= 0; i--) {
+    const level = IMPORT_DECIMATION_LEVELS[i]
+    if (vertexCount >= level.minVertices) return level
+  }
+  return null
+}
 
 // Minimal reader for the deprecated KHR_materials_pbrSpecularGlossiness
 // extension, which GLTFLoader no longer supports — without this, materials on
@@ -90,19 +105,21 @@ export const SUPPORTED_EXTENSION_RE = new RegExp(
  * export uses Draco mesh compression, the loader will throw; we surface a clear
  * message telling the user to re-export without it.
  */
-export async function loadModel(file) {
+export async function loadModel(file, { autoDecimate = true } = {}) {
   const ext = extensionOf(file.name)
   const url = URL.createObjectURL(file)
   try {
     if (ext === 'glb' || ext === 'gltf') {
       const gltf = await gltfLoader.loadAsync(url)
       const root = gltf.scene || (gltf.scenes && gltf.scenes[0])
+      if (autoDecimate) applyImportOptimization(root)
       return parseRoot(root, gltf.animations, file.name, ext, gltf)
     }
     if (ext === 'fbx') {
       // FBXLoader resolves to the model Group directly; clips live on .animations.
       const loader = await getFbxLoader()
       const group = await loader.loadAsync(url)
+      if (autoDecimate) applyImportOptimization(group)
       return parseRoot(group, group.animations, file.name, ext, group)
     }
     throw new Error(
@@ -122,6 +139,40 @@ export async function loadModel(file) {
     // The blob is fully parsed into GPU/CPU memory by now; free the URL handle.
     URL.revokeObjectURL(url)
   }
+}
+
+// SimplifyModifier intentionally removes skin attributes, so applying it to a
+// SkinnedMesh would break animation. Static meshes and morph targets are also
+// skipped when their vertex data has animation-specific semantics.
+export function applyImportOptimization(root) {
+  if (!root) return { optimizedMeshes: 0, skippedMeshes: 0, savedVertices: 0 }
+
+  const modifier = new SimplifyModifier()
+  const result = { optimizedMeshes: 0, skippedMeshes: 0, savedVertices: 0 }
+  root.traverse((obj) => {
+    if (!obj.isMesh || !obj.geometry) return
+
+    const position = obj.geometry.getAttribute('position')
+    const vertexCount = position ? position.count : 0
+    const plan = getImportDecimationPlan(vertexCount)
+    if (!plan) return
+
+    const hasMorphTargets =
+      Object.keys(obj.morphTargetDictionary || {}).length > 0 ||
+      Object.keys(obj.geometry.morphAttributes || {}).length > 0
+    if (obj.isSkinnedMesh || hasMorphTargets || obj.geometry.groups.length > 0) {
+      result.skippedMeshes++
+      return
+    }
+
+    const simplified = modifier.modify(obj.geometry, Math.floor(vertexCount * plan.reduction))
+    const oldGeometry = obj.geometry
+    obj.geometry = simplified
+    oldGeometry.dispose()
+    result.optimizedMeshes++
+    result.savedVertices += Math.max(0, vertexCount - simplified.getAttribute('position').count)
+  })
+  return result
 }
 
 // Backwards-compatible alias (some callers still import loadGLB).

@@ -570,7 +570,7 @@ export async function loadModelFile(file, { addNew = false } = {}) {
   const store = useStore.getState()
   store.setLoading(true)
   try {
-    const parsed = await loadModel(file)
+    const parsed = await loadModel(file, { autoDecimate: store.autoDecimate })
     parsed.file = file // retain the source blob so the model can be saved to a project
     prepareModelTextures(parsed)
 
@@ -1227,6 +1227,7 @@ function collectSettings() {
     shadowMapping: s.shadowMapping,
     shadowSoftness: s.shadowSoftness,
     shadowStrength: s.shadowStrength,
+    autoDecimate: s.autoDecimate,
     animFps: s.animFps,
     animDuration: s.animDuration,
   }
@@ -1341,6 +1342,12 @@ export async function applyProjectData(record) {
     ? (record.character ? [record.character] : [])
     : record.characters || []
 
+  // The import policy must be in place before the saved model blobs are
+  // parsed; the rest of the saved settings can safely be restored afterward.
+  if (record.settings?.autoDecimate !== undefined) {
+    useStore.setState({ autoDecimate: record.settings.autoDecimate })
+  }
+
   let activeIdToRestore = null
   for (let i = 0; i < characterRecords.length; i++) {
     const c = characterRecords[i]
@@ -1410,7 +1417,7 @@ export async function applyProjectData(record) {
     'envLightingEnabled', 'envLightingIntensity',
     'outlineEnabled', 'outlineWidth', 'softenEnabled', 'softenAmount',
     'showGrid', 'showGround', 'limbLimits', 'solidBackground', 'backgroundColor', 'showShadow', 'shadowMapping',
-    'shadowSoftness', 'shadowStrength',
+    'shadowSoftness', 'shadowStrength', 'autoDecimate',
     'animFps', 'animDuration',
   ]) {
     if (st[k] !== undefined) patch[k] = st[k]

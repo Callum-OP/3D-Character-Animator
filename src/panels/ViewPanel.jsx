@@ -14,6 +14,7 @@ export default function ViewPanel() {
   const solidBackground = useStore((s) => s.solidBackground)
   const backgroundColor = useStore((s) => s.backgroundColor)
   const showStats = useStore((s) => s.showStats)
+  const autoDecimate = useStore((s) => s.autoDecimate)
   const setShowGrid = useStore((s) => s.setShowGrid)
   const setShowGround = useStore((s) => s.setShowGround)
   const setShowShadow = useStore((s) => s.setShowShadow)
@@ -23,6 +24,7 @@ export default function ViewPanel() {
   const setSolidBackground = useStore((s) => s.setSolidBackground)
   const setBackgroundColor = useStore((s) => s.setBackgroundColor)
   const setShowStats = useStore((s) => s.setShowStats)
+  const setAutoDecimate = useStore((s) => s.setAutoDecimate)
 
   return (
     <div className="panel">
@@ -138,6 +140,18 @@ export default function ViewPanel() {
         />
         Performance readout
       </label>
+
+      <label className="toggle-row" title="Reduce very dense static meshes during import. Animated meshes and morph-target meshes are preserved.">
+        <input
+          type="checkbox"
+          checked={autoDecimate}
+          onChange={(e) => setAutoDecimate(e.target.checked)}
+        />
+        Optimize heavy meshes on import
+      </label>
+      <p className="panel-hint">
+        Static meshes are reduced in stages at 150k, 500k and 1m vertices. Existing models are not changed.
+      </p>
     </div>
   )
 }

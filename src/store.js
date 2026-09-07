@@ -247,6 +247,11 @@ export const useStore = create((set) => ({
   setShowHelp: (showHelp) => set({ showHelp }),
   toggleHelp: () => set((s) => ({ showHelp: !s.showHelp })),
 
+  // Import-time decimation only affects static meshes; skinned meshes are
+  // preserved because Three's SimplifyModifier does not retain skin weights.
+  autoDecimate: true,
+  setAutoDecimate: (autoDecimate) => set({ autoDecimate }),
+
   // ---- Export ----
   exportScale: 2, // PNG resolution multiplier (1× / 2× / 4×)
   recording: false, // true while capturing a video
