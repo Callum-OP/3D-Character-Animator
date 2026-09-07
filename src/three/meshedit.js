@@ -358,6 +358,13 @@ export function selectMesh(uuid) {
   m.requestRender()
 }
 
+export function setMeshVisible(uuid, visible) {
+  const mesh = uuid ? m.meshByUuid.get(uuid) || null : null
+  if (!mesh) return
+  mesh.visible = visible
+  m.requestRender()
+}
+
 export function suspendMeshEdit() {
   m.suspended = true
   if (m.transform) m.transform.detach()

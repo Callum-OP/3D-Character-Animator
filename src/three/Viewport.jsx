@@ -32,6 +32,7 @@ import {
 } from './posing.js'
 import {
   selectMesh,
+  setMeshVisible as setMeshVisibleInScene,
   setMeshEditEnabled,
   setMeshGizmoMode,
   undo as undoMeshEdit,
@@ -382,6 +383,7 @@ export default function Viewport() {
         // clicked in the viewport) shows it again.
         const hidden = s.meshOverrides[s.selectedMeshUuid]?.visible === false
         s.setMeshVisible(s.selectedMeshUuid, hidden)
+        setMeshVisibleInScene(s.selectedMeshUuid, hidden)
       } else if (
         (e.ctrlKey || e.metaKey) &&
         (e.key === 'y' || e.key === 'Y' || ((e.key === 'z' || e.key === 'Z') && e.shiftKey))
