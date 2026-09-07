@@ -432,6 +432,10 @@ export default function Viewport() {
   const loading = useStore((s) => s.loading)
   const loadError = useStore((s) => s.loadError)
   const showStats = useStore((s) => s.showStats)
+  const sceneObjects = useStore((s) => s.sceneObjects)
+  const hasCharacter = Boolean(modelInfo)
+  const hasSceneContent = hasCharacter || sceneObjects.length > 0
+  const modeButtons = hasCharacter ? MODE_BUTTONS : MODE_BUTTONS.filter((b) => b.value === 'view' || b.value === 'object' || b.value === 'mesh')
 
   return (
     <div
@@ -444,9 +448,9 @@ export default function Viewport() {
           live as siblings so React never fights the imperatively-added canvas. */}
       <div ref={containerRef} className="viewport-canvas-host" />
 
-      {modelInfo && (
+      {hasSceneContent && (
         <div className="mode-toolbar seg" title="What clicking and dragging does in the view">
-          {MODE_BUTTONS.map((b) => (
+          {modeButtons.map((b) => (
             <button
               key={b.value}
               className={'seg-btn' + (mode === b.value ? ' active' : '')}
@@ -504,10 +508,10 @@ export default function Viewport() {
         </button>
       )}
 
-      {!modelInfo && !loading && (
+      {!hasSceneContent && !loading && (
         <div className="viewport-empty">
           <div className="ve-icon">{loadError ? '⚠' : '⬚'}</div>
-          <div className="ve-title">{loadError ? 'Unable to start the 3D view' : 'Drop a character here'}</div>
+          <div className="ve-title">{loadError ? 'Unable to start the 3D view' : 'Drop a character or object here'}</div>
           <div className="ve-sub">
             {loadError ? (
               <span>{loadError}</span>
