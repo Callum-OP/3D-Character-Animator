@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import {
   recordOriginalMaterials,
   applyMaterials,
+  updateRimLightMaterials,
   restoreOriginalMaterials,
   disposeGeneratedMaterials,
 } from '../three/materials.js'
@@ -85,5 +86,32 @@ describe('material mode switching', () => {
     const mat = mesh.material
     applyMaterials(model, { mode: 'toon', toonSteps: 6, soften: 0.5 })
     expect(mesh.material).toBe(mat) // same object, just its gradient map changed
+  })
+
+  it('updates a live rim light without replacing the generated material', () => {
+    const { model, mesh } = makeModel()
+    applyMaterials(model, {
+      mode: 'soft',
+      rimLight: {
+        color: '#ffffff',
+        direction: new THREE.Vector3(1, 0, 0),
+        sideOnly: false,
+        soft: { enabled: true, intensity: 0.5, width: 0.5 },
+        hard: { enabled: false, intensity: 0, width: 0.35 },
+      },
+    })
+    const mat = mesh.material
+    updateRimLightMaterials(model, {
+      color: '#ff0000',
+      direction: new THREE.Vector3(0, 1, 0),
+      sideOnly: true,
+      soft: { enabled: true, intensity: 0.75, width: 0.25 },
+      hard: { enabled: false, intensity: 0, width: 0.35 },
+    })
+
+    expect(mesh.material).toBe(mat)
+    expect(mat.userData.rimColor.getHexString()).toBe('ff0000')
+    expect(mat.userData.rimLightDir).toEqual(new THREE.Vector3(0, 1, 0))
+    expect(mat.userData.rimSoftIntensity).toBe(0.75)
   })
 })

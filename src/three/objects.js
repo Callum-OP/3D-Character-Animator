@@ -1,7 +1,13 @@
 import * as THREE from 'three'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import { disposeObject } from './loadModel.js'
-import { recordOriginalMaterials, applyMaterials, restoreOriginalMaterials, disposeGeneratedMaterials } from './materials.js'
+import {
+  recordOriginalMaterials,
+  applyMaterials,
+  updateRimLightMaterials,
+  restoreOriginalMaterials,
+  disposeGeneratedMaterials,
+} from './materials.js'
 
 // ---------------------------------------------------------------------------
 // Scene objects
@@ -365,6 +371,13 @@ export function applyAllObjectStyles(opts) {
   o.lastStyleOpts = opts
   for (const entry of o.objects) {
     if (entry.kind === 'model') applyObjectStyle(entry, opts)
+  }
+}
+
+export function updateAllObjectRimLight(rimLight) {
+  if (!rimLight) return
+  for (const entry of o.objects) {
+    if (entry.kind === 'model') updateRimLightMaterials(entry, rimLight)
   }
 }
 

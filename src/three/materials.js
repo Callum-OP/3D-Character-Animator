@@ -349,6 +349,20 @@ export function applyMaterials(model, opts) {
   }
 }
 
+// Update only the live rim uniforms when a followed scene light moves. The
+// material mode and outline state have not changed, so rebuilding the style
+// pipeline here would only add CPU work during a drag or playback tick.
+export function updateRimLightMaterials(model, rimLight) {
+  if (!model || !model.meshes || !rimLight) return
+  for (const mesh of model.meshes) {
+    const material = mesh.material
+    const arr = Array.isArray(material) ? material : [material]
+    for (const mat of arr) {
+      if (mat?.userData?.rimColor) updateRimLight(mat, rimLight)
+    }
+  }
+}
+
 // Put the original materials back on every mesh. Called before unload so the
 // deep-dispose walk frees the real materials (and their textures), not a
 // generated shell that only borrows those textures.

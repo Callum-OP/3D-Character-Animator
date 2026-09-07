@@ -5,6 +5,7 @@ import { loadModel, disposeObject } from './loadModel.js'
 import {
   recordOriginalMaterials,
   applyMaterials,
+  updateRimLightMaterials,
   restoreOriginalMaterials,
   disposeGeneratedMaterials,
 } from './materials.js'
@@ -116,6 +117,7 @@ import {
   getObjectAttachment,
   detachObjectsForCharacter,
   setViewCamera as setObjectsViewCamera,
+  updateAllObjectRimLight,
 } from './objects.js'
 import { getPose, applyPose } from './posing.js'
 import { useStore } from '../store.js'
@@ -136,6 +138,7 @@ import { useStore } from '../store.js'
 
 const state = {
   renderer: null,
+  pixelRatio: 1,
   scene: null,
   camera: null,
   controls: null,
@@ -208,7 +211,8 @@ export function initScene(container) {
     )
     return
   }
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)) // cap DPR (memory)
+  state.pixelRatio = Math.min(window.devicePixelRatio, 2)
+  renderer.setPixelRatio(state.pixelRatio) // cap DPR (memory)
   renderer.setSize(width, height)
   renderer.setClearColor(0x000000, 0) // fully transparent clear
   renderer.outputColorSpace = THREE.SRGBColorSpace
@@ -249,6 +253,16 @@ export function initScene(container) {
   const controls = new OrbitControls(camera, renderer.domElement)
   controls.enableDamping = false
   controls.target.set(0, 1, 0)
+  controls.addEventListener('start', () => {
+    // Orbiting is fragment-bound with lit materials and the outline pass. A
+    // temporary lower DPR keeps interaction responsive; the final frame is
+    // rendered at the normal quality as soon as the drag ends.
+    if (state.pixelRatio > 1.25) renderer.setPixelRatio(1.25)
+  })
+  controls.addEventListener('end', () => {
+    renderer.setPixelRatio(state.pixelRatio)
+    requestRender()
+  })
   controls.addEventListener('change', requestRender)
   controls.update()
   state.controls = controls
@@ -342,7 +356,7 @@ export function initScene(container) {
     controls,
     requestRender,
     getSceneScale: () => state.modelRadius,
-    onChange: () => applyModelMaterials(), // a followed light's colour/position may have moved
+    onChange: updateFollowedRimLight,
   })
 
   // --- Cloth modifier (drape a selected mesh against the rest of the character) ---
@@ -1668,22 +1682,7 @@ export function applyModelMaterials() {
   // but if "follow a scene light" is on and that light still exists, use its
   // actual colour + direction instead, so a placed rim/fill light drives the
   // shading directly.
-  let rimColor = s.rimLightColor
-  let rimDir = state.lightDir
-  if (s.rimFollowLight && s.rimFollowLightId != null) {
-    const source = getLightRimSource(s.rimFollowLightId)
-    if (source) {
-      rimColor = source.color
-      rimDir = source.direction
-    }
-  }
-  const rimLight = {
-    color: rimColor,
-    direction: rimDir,
-    sideOnly: s.rimSideOnly,
-    soft: { enabled: s.rimSoftEnabled, intensity: s.rimSoftIntensity, width: s.rimSoftWidth },
-    hard: { enabled: s.rimHardEnabled, intensity: s.rimHardIntensity, width: s.rimHardWidth },
-  }
+  const rimLight = getCurrentRimLight(s)
   // Props/backgrounds follow the same style pipeline regardless of whether a
   // character is loaded yet — 'auto' ones track this change live, pinned
   // ones just pick up the shared toon/soften/rim/outline settings while
@@ -1720,6 +1719,33 @@ export function applyModelMaterials() {
   // Materials may have been swapped; re-stamp outline params onto the live ones.
   applyOutlineParams(state.currentModel, s.outlineWidth, soften, s.meshOverrides)
   requestRender()
+}
+
+function getCurrentRimLight(s) {
+  let rimColor = s.rimLightColor
+  let rimDir = state.lightDir
+  if (s.rimFollowLight && s.rimFollowLightId != null) {
+    const source = getLightRimSource(s.rimFollowLightId)
+    if (source) {
+      rimColor = source.color
+      rimDir = source.direction
+    }
+  }
+  return {
+    color: rimColor,
+    direction: rimDir,
+    sideOnly: s.rimSideOnly,
+    soft: { enabled: s.rimSoftEnabled, intensity: s.rimSoftIntensity, width: s.rimSoftWidth },
+    hard: { enabled: s.rimHardEnabled, intensity: s.rimHardIntensity, width: s.rimHardWidth },
+  }
+}
+
+function updateFollowedRimLight() {
+  const s = useStore.getState()
+  if (!s.rimFollowLight || s.rimFollowLightId == null) return
+  const rimLight = getCurrentRimLight(s)
+  if (state.currentModel) updateRimLightMaterials(state.currentModel, rimLight)
+  updateAllObjectRimLight(rimLight)
 }
 
 // Toggle the outline pass on/off (width/visibility come from applyModelMaterials).
