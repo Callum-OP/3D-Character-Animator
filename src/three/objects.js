@@ -737,7 +737,25 @@ function commitDragUndo() {
 // transform and visibility. Entries without a retained blob (e.g. added before
 // this feature, or restored from a transforms-only scene file) are skipped —
 // there's nothing to reload them from.
-export function getObjectsForSave() {
+// `meshOverrides` is the store's map of per-part overrides (outline/shading/
+// visible), keyed by mesh uuid — the SAME map the active character uses (see
+// MeshPanel). Since a prop's mesh uuids are only ever meaningful while that
+// exact mesh instance is loaded, we remap them onto each prop's own mesh
+// INDEX here (mirroring meshOverridesByIndexFor in scene.js for characters),
+// so per-part visibility on props actually survives a save→reload round trip
+// instead of silently being dropped (the uuids never match anything after
+// reload, so `applyProjectData` had nothing to restore them from).
+function objectMeshOverridesByIndex(entry, meshOverrides) {
+  if (!meshOverrides || !entry.meshes || !entry.meshes.length) return undefined
+  const byIndex = {}
+  entry.meshes.forEach((mesh, i) => {
+    const ov = meshOverrides[mesh.uuid]
+    if (ov) byIndex[i] = ov
+  })
+  return Object.keys(byIndex).length ? byIndex : undefined
+}
+
+export function getObjectsForSave(meshOverrides) {
   return o.objects
     .filter((e) => e.file)
     .map((e) => ({
@@ -757,7 +775,17 @@ export function getObjectsForSave() {
       castShadow: e.kind === 'model' ? e.castShadow : undefined,
       // Bone this prop is riding, if any (transform above is already bone-local).
       attachedBoneName: e.attachedBoneName || undefined,
+      // Per-part (mesh) visibility/outline/shading overrides — see comment above.
+      meshOverridesByIndex: e.kind === 'model' ? objectMeshOverridesByIndex(e, meshOverrides) : undefined,
     }))
+}
+
+// Look up an object's own ordered mesh list by id (same order used when the
+// record was built above) — used on load to remap saved per-part overrides
+// back onto the freshly-created meshes' (new) uuids.
+export function getObjectMeshesById(id) {
+  const entry = o.objects.find((e) => e.id === id)
+  return (entry && entry.meshes) || []
 }
 
 // --- Scene save/load (transforms only) ---------------------------------------

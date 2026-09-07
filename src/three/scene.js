@@ -112,6 +112,7 @@ import {
   getObjectsData,
   applyObjectsData,
   getObjectsForSave,
+  getObjectMeshesById,
   attachObjectToBone,
   detachObject,
   getObjectAttachment,
@@ -1362,7 +1363,7 @@ export function getProjectData() {
     format: 'project-v2',
     settings: collectSettings(),
     characters,
-    objects: getObjectsForSave(),
+    objects: getObjectsForSave(s.meshOverrides),
     cameras: getCamerasData(),
     lights: getLightsData(),
     // The orbit view itself (position/target/fov) — restored last in
@@ -1492,6 +1493,20 @@ export async function applyProjectData(record) {
     if (obj.attachedBoneName) setObjectAttachmentById(meta.id, obj.attachedBoneName)
     setObjectTransform(meta.id, obj.transform)
     setObjectVisibleById(meta.id, obj.visible !== false)
+    // Restore this prop's per-part (mesh) overrides — saved keyed by mesh
+    // INDEX (see objectMeshOverridesByIndex in objects.js), remapped here
+    // onto whatever fresh uuids this load just gave its meshes.
+    if (obj.meshOverridesByIndex) {
+      const meshes = getObjectMeshesById(meta.id)
+      const patch = {}
+      for (const [idx, ov] of Object.entries(obj.meshOverridesByIndex)) {
+        const mesh = meshes[Number(idx)]
+        if (mesh) patch[mesh.uuid] = ov
+      }
+      if (Object.keys(patch).length) {
+        useStore.setState((s2) => ({ meshOverrides: { ...s2.meshOverrides, ...patch } }))
+      }
+    }
     if (obj.kind !== 'image') {
       // 'lit' is the old (pre-styles) save field: false meant "flat/unlit".
       // Map it onto the new style system so older project files still work.
