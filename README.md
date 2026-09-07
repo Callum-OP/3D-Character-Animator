@@ -89,9 +89,11 @@ a model file onto the viewport.
 ### Other scripts
 
 ```bash
-npm run build      # production build into dist/
-npm run preview    # serve the production build locally
-npm run package:itch # build and create 3d-character-animator-itch.zip (Windows)
+npm run build         # production build into dist/
+npm run preview       # serve the production build locally
+npm run test          # run all vitest unit tests
+npm run test:watch    # run tests in watch mode
+npm run package:itch  # build and create 3d-character-animator-itch.zip (Windows)
 ```
 
 ### itch.io upload
@@ -171,6 +173,8 @@ Vite build sets `base: '/3D-Character-Animator/'` (see `vite.config.js`). Local
 ```
 src/
   App.jsx               # top-level layout: viewport + sidebar
+  index.css             # global styles
+  main.jsx              # React entry point
   store.js              # Zustand store (UI + model info)
   three/
     scene.js            # scene manager singleton (on-demand rendering, disposal)
@@ -184,19 +188,33 @@ src/
     objects.js          # scene props/backgrounds + move/rotate/scale gizmo
     meshedit.js         # Mesh mode: pick parts, pivot-centred gizmo, keyframes
     cameras.js          # placeable cameras: rigs, view-through, cuts, keyframes
+    materials.js        # material layer management
+    clipLibrary.js      # animation clip management
+    clothmod.js         # cloth simulation
+    lights.js           # scene lighting
+    limits.js           # bone rotation/position limits
+    localdb.js          # local storage via IndexedDB
+    ragdoll.js          # ragdoll physics
+    undoPriority.js     # undo system state priority
     Viewport.jsx        # canvas host + drag-and-drop + mode/keyboard shortcuts
   panels/
-    ModelPanel.jsx      # load button / drop zone, model stats
-    MaterialPanel.jsx   # material mode + key-light controls
-    BonePanel.jsx       # bone tree, pose save/load/reset/undo
-    MeshPanel.jsx       # Mesh mode: part list, transform values, part keyframes
+    Accordion.jsx       # collapsible panel component
+    EditableValue.jsx   # editable input field component
+    TabGroup.jsx        # tab switcher component
+    RadialScale.jsx     # radial scaling tool UI
     AnimationPanel.jsx  # clip playback + in-app keyframing
-    ObjectsPanel.jsx    # add / move / cycle props & backgrounds
+    BonePanel.jsx       # bone tree, pose save/load/reset/undo
     CamerasPanel.jsx    # place cameras, look through, keyframe + cuts
     ExportPanel.jsx     # PNG / video / BVH / fullscreen export
-    ViewPanel.jsx       # scene toggles (grid, shadow, background, stats)
     HelpOverlay.jsx     # ? help & shortcuts
+    LightsPanel.jsx     # lighting controls
+    MaterialPanel.jsx   # material mode + key-light controls
+    MeshPanel.jsx       # Mesh mode: part list, transform values, part keyframes
+    ObjectsPanel.jsx    # add / move / cycle props & backgrounds
+    ProjectPanel.jsx    # project management (save/load/export)
     StatsOverlay.jsx    # optional FPS/memory readout
+    ViewPanel.jsx       # scene toggles (grid, shadow, background, stats)
+  __tests__/            # vitest unit tests for all major features
 ```
 
 ## Design principles (low overhead is the point)
