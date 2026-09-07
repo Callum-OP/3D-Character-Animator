@@ -907,9 +907,13 @@ export function scrub(t) {
 // --- BVH export --------------------------------------------------------------
 
 const RAD2DEG = 180 / Math.PI
+const DEG2RAD = Math.PI / 180
 const _e = new THREE.Euler()
 const _wp = new THREE.Vector3()
 const _wq = new THREE.Quaternion()
+const _wq3 = new THREE.Vector3()
+const _upAxis = new THREE.Vector3()
+const _identityQuat = new THREE.Quaternion()
 const _pwq = new THREE.Quaternion()
 const _bp = new THREE.Vector3()
 const _pp = new THREE.Vector3()
@@ -1010,6 +1014,7 @@ export function exportAnimationBVH(animData, fps, duration, clipName, playbackSo
   const numFrames = Math.max(2, Math.round(totalDuration * fps) + 1)
   const frameTime = totalDuration / (numFrames - 1)
   const frames = []
+  let frame0RootWorldQuat = null
   for (let f = 0; f < numFrames; f++) {
     const t = f * frameTime
     mixer.setTime(t)
@@ -1030,12 +1035,36 @@ export function exportAnimationBVH(animData, fps, duration, clipName, playbackSo
       if (!isRoot(b)) {
         _pwq.copy(getWorldQuat(b.parent)).invert()
         _wq.premultiply(_pwq)
+      } else if (f === 0) {
+        frame0RootWorldQuat = _wq.clone()
       }
       _e.setFromQuaternion(_wq, 'ZXY')
       rot.set(b, [_e.z * RAD2DEG, _e.x * RAD2DEG, _e.y * RAD2DEG])
     }
     rootBone.getWorldPosition(_wp)
     frames.push({ rot, rootPos: [_wp.x, _wp.y, _wp.z] })
+  }
+
+  const yawCancel = new THREE.Quaternion()
+  if (frame0RootWorldQuat) {
+    const fwd = _wq3.set(0, 0, 1).applyQuaternion(frame0RootWorldQuat)
+    if (Math.abs(fwd.y) < 0.9) {
+      yawCancel.setFromAxisAngle(_upAxis.set(0, 1, 0), -Math.atan2(fwd.x, fwd.z))
+    }
+  }
+  if (!yawCancel.equals(_identityQuat)) {
+    for (const fr of frames) {
+      const rr = fr.rot.get(rootBone)
+      _e.set(rr[1] * DEG2RAD, rr[2] * DEG2RAD, rr[0] * DEG2RAD, 'ZXY')
+      _wq.setFromEuler(_e).premultiply(yawCancel)
+      _e.setFromQuaternion(_wq, 'ZXY')
+      fr.rot.set(rootBone, [_e.z * RAD2DEG, _e.x * RAD2DEG, _e.y * RAD2DEG])
+      // The root's translation is likewise a world-space quantity; rotate it
+      // by the same correction so position and rotation stay consistent.
+      const rp = fr.rootPos
+      _wp.set(rp[0], rp[1], rp[2]).applyQuaternion(yawCancel)
+      fr.rootPos = [_wp.x, _wp.y, _wp.z]
+    }
   }
 
   // --- put everything back exactly how it was before export ---
