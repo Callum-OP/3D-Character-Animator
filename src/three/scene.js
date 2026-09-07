@@ -377,9 +377,9 @@ export function initScene(container) {
   const dirLight = new THREE.DirectionalLight(0xffffff, 2.0)
   dirLight.position.set(2, 4, 3)
   dirLight.castShadow = false // enabled only in "realistic shadows" mode
-  // 2048² keeps the contact shadow crisp while using one quarter of the
-  // 4096² shadow atlas memory for scenes with many loaded characters.
-  dirLight.shadow.mapSize.set(2048, 2048)
+  // 1024² keeps realistic shadows responsive: shadow rendering scales with
+  // the number of map texels, so this is one quarter of the 2048² cost.
+  dirLight.shadow.mapSize.set(1024, 1024)
   dirLight.shadow.bias = -0.0005
   scene.add(dirLight)
   scene.add(dirLight.target) // shadow camera aims at the model via this target
@@ -1546,8 +1546,8 @@ function placeShadowUnder(box) {
 }
 
 // Position the key light along its direction, high and far enough out to cast
-// shadows across a generous area — not just the character's bounding box, so
-// props and root-motion movement stay shadowed. `r` ~ the model's max dimension.
+// shadows across the character and nearby props without wasting map texels on
+// empty space. `r` ~ the model's max dimension.
 function positionLight() {
   const dl = state.dirLight
   if (!dl) return
@@ -1558,7 +1558,7 @@ function positionLight() {
   dl.target.updateMatrixWorld()
 
   const cam = dl.shadow.camera
-  const half = Math.max(r * 4, 1) // cover ±4× the model size around the centre
+  const half = Math.max(r * 3, 1) // cover ±3× the model size around the centre
   cam.left = -half
   cam.right = half
   cam.top = half

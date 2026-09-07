@@ -229,7 +229,7 @@ export const useStore = create((set) => ({
   solidBackground: false, // false = transparent (the default, for compositing)
   backgroundColor: '#202127',
   showShadow: true, // ground shadow on/off
-  shadowMapping: false, // true = real cast shadows; false = cheap blob
+  shadowMapping: true, // true = real cast shadows; false = cheap blob
   shadowSoftness: 0.4, // 0 = crisp/hard edge, 1 = very soft/blurred (realistic shadows only)
   shadowStrength: 0.35, // 0 = barely visible, 1 = solid black (realistic shadows only)
   showStats: false, // FPS / memory readout overlay
