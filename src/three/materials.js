@@ -119,6 +119,8 @@ function getSoftGradientMap(floor) {
 
 function installRimLight(material) {
   const u = material.userData
+  if (u.rimLightInstalled) return
+  u.rimLightInstalled = true
   u.rimColor = u.rimColor || new THREE.Color(0xffffff)
   u.rimLightDir = u.rimLightDir || new THREE.Vector3(0.3, 0.6, 0.7)
   u.rimSoftIntensity = u.rimSoftIntensity || 0

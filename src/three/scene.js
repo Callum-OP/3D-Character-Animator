@@ -120,6 +120,7 @@ import {
   detachObjectsForCharacter,
   setViewCamera as setObjectsViewCamera,
   updateAllObjectRimLight,
+  getObjectRootById,
   getAllRootsForExport,
 } from './objects.js'
 import { getPose, applyPose } from './posing.js'
@@ -571,6 +572,7 @@ let characterIdCounter = 0
 //     one alongside them as a new, separately-posable character.
 export async function loadModelFile(file, { addNew = false } = {}) {
   const store = useStore.getState()
+  const shouldFrameInitialCharacter = state.characters.size === 0 && store.sceneObjects.length === 0
   store.setLoading(true)
   try {
     const parsed = await loadModel(file, { autoDecimate: store.autoDecimate })
@@ -609,7 +611,9 @@ export async function loadModelFile(file, { addNew = false } = {}) {
     } else {
       useStore.getState().setModelInfo(parsed.info)
     }
-    setActiveCharacter(id, parsed, { frame: true, isNewLoad: true })
+    // Only the first character establishes the initial viewport. Adding or
+    // replacing another character must leave the user's current view alone.
+    setActiveCharacter(id, parsed, { frame: shouldFrameInitialCharacter, isNewLoad: true })
 
     requestRender()
     return parsed
@@ -753,11 +757,13 @@ function disposeCharacter(id) {
 // Load a file and add it as a movable scene object (does NOT replace the
 // character). Selects it so the gizmo is ready. Errors propagate to the caller.
 export async function addObjectFile(file) {
+  const shouldFrameInitialObject = state.characters.size === 0 && useStore.getState().sceneObjects.length === 0
   const parsed = await loadModel(file)
   const meta = addObject(parsed, parsed.info.name, parsed.info.format, file)
   registerObjectMeshes(meta.id, parsed.meshes) // makes its parts pickable/editable in Mesh mode
   useStore.getState().addSceneObject(meta) // sets selectedObjectId = meta.id
   applyModelMaterials() // pick up the current Look settings immediately
+  if (shouldFrameInitialObject) setCameraToObject(meta.id)
   requestRender()
   return meta
 }
@@ -766,10 +772,12 @@ export async function addObjectFile(file) {
 // it does NOT replace the character and selects the new plane so the gizmo is
 // ready. Errors propagate to the caller.
 export async function addImageFile(file) {
+  const shouldFrameInitialObject = state.characters.size === 0 && useStore.getState().sceneObjects.length === 0
   const { texture, aspect } = await loadImageTexture(file)
   const name = file.name.replace(/\.[^.]+$/, '')
   const meta = addImage(texture, name, aspect, file)
   useStore.getState().addSceneObject({ ...meta, kind: 'image' })
+  if (shouldFrameInitialObject) setCameraToObject(meta.id)
   requestRender()
   return meta
 }
@@ -1490,6 +1498,9 @@ export async function applyProjectData(record) {
     if (st[k] !== undefined) patch[k] = st[k]
   }
   useStore.setState(patch) // Viewport effects push these into the scene reactively
+  // Apply saved shared style settings immediately to every loaded character;
+  // the active-character UI effect alone would leave inactive models behind.
+  applyModelMaterials()
 
   // 4. Re-add props/images in order, restoring transform + visibility.
   for (const obj of record.objects || []) {
@@ -1760,9 +1771,10 @@ export function setBackground(solid, color) {
 // Material mode + lighting
 // ---------------------------------------------------------------------------
 
-// Re-apply materials + outline to the loaded model from the current store state.
-// This is the single entry point for any material/shading/outline-width change
-// (mode, toon steps, soften, per-mesh overrides). No-op if nothing is loaded.
+// Re-apply materials + outline to every loaded character from the shared scene
+// settings. Each character keeps its own mesh overrides, but material style is
+// global across the scene. This is the single entry point for any
+// material/shading/outline-width change.
 export function applyModelMaterials() {
   const s = useStore.getState()
   applyCharacterLightLinks(s)
@@ -1791,8 +1803,7 @@ export function applyModelMaterials() {
     outlineOpacity: s.outlineOpacity,
     overrides: s.meshOverrides, // per-part visibility (H key / eye icon) — same map the character uses
   })
-  if (!state.currentModel) return
-  applyMaterials(state.currentModel, {
+  const materialOptions = {
     mode: s.materialMode,
     toonSteps: s.toonSteps,
     soften,
@@ -1801,9 +1812,20 @@ export function applyModelMaterials() {
     backlightColor: s.backlightColor,
     backlightFalloff: s.backlightFalloff,
     shadowStrength: s.shadowStrength,
-    overrides: s.meshOverrides,
     rimLight,
-  })
+  }
+  for (const [id, model] of state.characters) {
+    const character = id === s.activeCharacterId ? s : s.characters[id]
+    applyMaterials(model, { ...materialOptions, overrides: character?.meshOverrides || {} })
+    applyOutlineParams(
+      model,
+      s.outlineWidth,
+      soften,
+      character?.meshOverrides || {},
+      s.outlineColor,
+      s.outlineOpacity,
+    )
+  }
   // Cloth proxies live outside the model's own scene graph (see clothmod.js),
   // so applyMaterials' traversal never touches them — just rebuild any
   // active drapes so their proxy material picks up the new style.
@@ -1814,18 +1836,11 @@ export function applyModelMaterials() {
   // re-ran this and stomped the real mesh back to visible=true — leaving it
   // stacked right on top of its own still-visible draped proxy, which reads
   // as the mesh having been duplicated. Re-assert the hide here.
-  for (const mesh of state.currentModel.meshes) {
-    if (isClothEnabled(mesh.uuid)) mesh.visible = false
+  for (const model of state.characters.values()) {
+    for (const mesh of model.meshes) {
+      if (isClothEnabled(mesh.uuid)) mesh.visible = false
+    }
   }
-  // Materials may have been swapped; re-stamp outline params onto the live ones.
-  applyOutlineParams(
-    state.currentModel,
-    s.outlineWidth,
-    soften,
-    s.meshOverrides,
-    s.outlineColor,
-    s.outlineOpacity,
-  )
   requestRender()
 }
 
@@ -1870,7 +1885,6 @@ export function setDefaultLightingEnabled(enabled) {
   state.defaultLightingOn = !!enabled
   if (state.dirLight) state.dirLight.visible = state.defaultLightingOn
   if (state.ambientLight) state.ambientLight.visible = state.defaultLightingOn
-  applyModelMaterials()
   requestRender()
 }
 
@@ -1891,9 +1905,23 @@ export function setLightSettings(intensity, azimuthDeg, elevationDeg) {
   )
   positionLight() // reposition the light + shadow camera along the new direction
   // Rim light (Cartoon/Soft Anime) is gated by this same direction, so keep it
-  // in sync whenever the key light moves — cheap, no material rebuild.
-  applyModelMaterials()
+  // in sync whenever the key light moves. Updating its uniforms directly is
+  // important here: rebuilding every character, prop, outline and cloth proxy
+  // on every slider tick makes light adjustment needlessly expensive.
+  updateLightDrivenMaterials()
   requestRender()
+}
+
+// Update only shader state that depends on the key-light direction. The actual
+// Three.js light and shadow camera are updated by setLightSettings above; all
+// other material state is unchanged during a light drag.
+function updateLightDrivenMaterials() {
+  const s = useStore.getState()
+  const rimLight = getCurrentRimLight(s)
+  for (const model of state.characters.values()) {
+    updateRimLightMaterials(model, rimLight)
+  }
+  updateAllObjectRimLight(rimLight)
 }
 
 // Toggle the baked studio-room environment map used as image-based fill
@@ -2013,4 +2041,14 @@ function applyCharacterLightLinks(s) {
     })
   }
   setLightLinks(s.lightLinks || {}, ids)
+}
+
+// Explicitly frame a prop or character without changing selection or its
+// transform. Normal loading deliberately never calls this after the initial
+// scene subject has established the viewport.
+export function setCameraToObject(id) {
+  const object = getObjectRootById(id)
+  if (!object) return
+  frameCameraToObject(object)
+  requestRender()
 }

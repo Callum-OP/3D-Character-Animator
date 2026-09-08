@@ -10,6 +10,7 @@ import {
   setObjectOutlineById,
   setObjectCastShadowById,
   setObjectAttachmentById,
+  setCameraToObject,
 } from '../three/scene.js'
 import {
   getSelectedUniformScale,
@@ -76,6 +77,11 @@ export default function ObjectsPanel() {
     if (!file) return
     setMsg(null)
     addImageFile(file).catch((err) => setMsg(err.message || String(err)))
+  }
+
+  function confirmDeleteObject(object) {
+    if (!window.confirm(`Are you sure you want to delete this${object.isCharacter ? ' character' : ' object'}?`)) return
+    removeObjectById(object.id)
   }
 
   // Scene layout used to have its own "Save scene" / "Load scene" buttons
@@ -299,7 +305,7 @@ export default function ObjectsPanel() {
                       title="Remove"
                       onClick={(e) => {
                         e.stopPropagation()
-                        removeObjectById(o.id)
+                        confirmDeleteObject(o)
                       }}
                     >
                       ×
@@ -379,20 +385,30 @@ export default function ObjectsPanel() {
           </div>
 
           {selectedObjectIds.length > 0 && (
-            <button
-              className="btn secondary"
-              style={{ marginTop: 8 }}
-              onClick={() => selectedObjectIds.forEach((id) => resetObjectById(id))}
-              title={
-                multiSelected
-                  ? 'Reset every selected object back to the origin'
-                  : sceneObjects.find((o) => o.id === selectedObjectId)?.attachedBoneName
-                    ? 'Reset position (relative to the bone it’s attached to)'
-                    : 'Reset position'
-              }
-            >
-              {multiSelected ? `Reset position (${selectedObjectIds.length})` : 'Reset position'}
-            </button>
+            <div className="kf-actions" style={{ marginTop: 8 }}>
+              {!multiSelected && (
+                <button
+                  className="btn secondary"
+                  onClick={() => setCameraToObject(selectedObjectId)}
+                  title="Frame this object in the viewport and orbit around it"
+                >
+                  Set camera to object
+                </button>
+              )}
+              <button
+                className="btn secondary"
+                onClick={() => selectedObjectIds.forEach((id) => resetObjectById(id))}
+                title={
+                  multiSelected
+                    ? 'Reset every selected object back to the origin'
+                    : sceneObjects.find((o) => o.id === selectedObjectId)?.attachedBoneName
+                      ? 'Reset position (relative to the bone it’s attached to)'
+                      : 'Reset position'
+                }
+              >
+                {multiSelected ? `Reset position (${selectedObjectIds.length})` : 'Reset position'}
+              </button>
+            </div>
           )}
         </>
       )}

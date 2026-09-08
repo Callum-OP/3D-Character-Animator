@@ -87,6 +87,12 @@ export default function ProjectPanel() {
     if (file) loadModelFile(file, { addNew: true }).catch(() => {})
   }
 
+  function confirmDeleteCharacter(id) {
+    const info = roster.find((character) => character.id === id)?.info
+    if (!window.confirm(`Are you sure you want to delete this character${info?.name ? ` "${info.name}"` : ''}?`)) return
+    removeCharacter(id)
+  }
+
   // ---- Open ----
 
   async function onOpen() {
@@ -264,20 +270,22 @@ export default function ProjectPanel() {
                 style={{ fontWeight: id === activeCharacterId ? 600 : 400, cursor: 'pointer' }}
                 onClick={() => setActiveCharacter(id)}
               >
-                <span className="obj-name">
-                  {id === activeCharacterId ? '● ' : '○ '}
-                  {info?.name || id}
-                </span>
-                <button
-                  className="obj-del"
-                  title="Remove this character"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    removeCharacter(id)
-                  }}
-                >
-                  ×
-                </button>
+                <div className="obj-row-main">
+                  <span className="obj-name">
+                    {id === activeCharacterId ? '● ' : '○ '}
+                    {info?.name || id}
+                  </span>
+                  <button
+                    className="obj-del"
+                    title="Delete character"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      confirmDeleteCharacter(id)
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
               </div>
             ))}
           </div>
@@ -298,9 +306,10 @@ export default function ProjectPanel() {
             <button
               className="btn secondary btn-tiny"
               style={{ marginTop: 8 }}
-              onClick={() =>
+              onClick={() => {
+                if (!window.confirm('Are you sure you want to delete this character?')) return
                 characterOrder.length > 1 ? removeCharacter(activeCharacterId) : disposeCurrentModel()
-              }
+              }}
             >
               {characterOrder.length > 1 ? 'Remove active character' : 'Unload'}
             </button>

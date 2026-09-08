@@ -202,6 +202,7 @@ function wrapMeshForEdit(mesh) {
 
     const pivot = new THREE.Object3D()
     pivot.name = (mesh.name || 'part') + ' (pivot)'
+    pivot.userData.meshEditPivot = true
     pivotLocalMatrix.decompose(pivot.position, pivot.quaternion, pivot.scale)
     parent.add(pivot)
     pivot.add(mesh)
@@ -372,6 +373,7 @@ export function clearMeshEditModel() {
   m.redoStack = m.redoStack.filter(keepsBatch)
 
   for (const mesh of oldMeshes) {
+    unwrapMeshForEdit(mesh)
     m.meshByUuid.delete(mesh.uuid)
     m.rest.delete(mesh)
   }
@@ -964,4 +966,20 @@ function excludeFromOutline(obj3d) {
     const mats = Array.isArray(obj.material) ? obj.material : [obj.material]
     for (const mat of mats) mat.userData.outlineParameters = { visible: false }
   })
+}
+
+function unwrapMeshForEdit(mesh) {
+  const pivot = mesh.parent
+  if (!pivot || !pivot.userData.meshEditPivot) return
+
+  const parent = pivot.parent
+  if (!parent) return
+
+  pivot.updateMatrix()
+  mesh.updateMatrix()
+  const localMatrix = pivot.matrix.clone().multiply(mesh.matrix)
+  parent.add(mesh)
+  localMatrix.decompose(mesh.position, mesh.quaternion, mesh.scale)
+  mesh.updateMatrix()
+  parent.remove(pivot)
 }

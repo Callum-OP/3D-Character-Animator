@@ -1312,6 +1312,8 @@ input.xform-value {
 
 .obj-del {
   flex: 0 0 auto;
+  margin-left: auto;
+  padding: 2px 0 2px 8px;
   border: none;
   background: transparent;
   color: inherit;

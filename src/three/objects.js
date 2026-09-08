@@ -802,6 +802,13 @@ export function getObjectRoots() {
   return o.objects.map((e) => e.root)
 }
 
+// Resolve a prop or character id to its live scene root for viewport commands.
+export function getObjectRootById(id) {
+  const prop = o.objects.find((entry) => entry.id === id)
+  if (prop) return prop.root
+  return o.characterRoots.get(id)?.root || null
+}
+
 // Every prop root plus every loaded character root, for a combined scene
 // export (see scene.js exportSceneModel). Each root keeps its own current
 // world transform (including any bone attachment), so the caller just needs
