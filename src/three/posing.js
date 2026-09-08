@@ -259,7 +259,7 @@ export function clearPoseModel() {
 // Called each render (before draw) to park each dot on its bone's head and tint
 // the selected one. Reads live world matrices, so it tracks bones during a drag.
 export function updateBoneHelpers() {
-  if (!p.points || !p.model) return
+  if (!p.enabled || p.suspended || !p.points || !p.model) return
   p.model.root.updateWorldMatrix(true, true) // refresh bone world matrices
   const pos = p.pointsGeom.attributes.position
   const col = p.pointsGeom.attributes.color

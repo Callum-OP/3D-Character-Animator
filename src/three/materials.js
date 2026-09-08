@@ -191,34 +191,35 @@ function installRimLight(material) {
         #else
           vec3 rimNormal = normalize( vNormal );
         #endif
-        // View-dependent edge term (classic fresnel rim), 0 at fully facing the
-        // camera, 1 right at the silhouette.
-        float rimEdgeRaw = 1.0 - max( dot( vRimView, rimNormal ), 0.0 );
-        // Gated so it only shows on the side of the model actually facing the
-        // key light — a shoulder catches the glow, the far/shadowed side
-        // doesn't, just like a real backlit rim highlight.
-        float ndotl = dot( rimNormal, vRimLightDir );
-        // Optional extra mask: only the horizontal side of the silhouette
-        // that faces the light's left/right direction — e.g. a light coming
-        // from the right only rims the character's right edge, not top/bottom
-        // or the near-camera side too. Off by default (full hemisphere).
-        float rimSide = 1.0;
-        if ( rimSideOnly > 0.5 ) {
-          float lightSideX = vRimLightDir.x >= 0.0 ? 1.0 : -1.0;
-          rimSide = smoothstep( -0.15, 0.15, rimNormal.x * lightSideX );
+        // Rim lighting is opt-in. Avoid the expensive fresnel, light-direction,
+        // pow and smoothstep work on every fragment when both rim layers are off.
+        if ( rimSoftIntensity > 0.001 || rimHardIntensity > 0.001 ) {
+          // View-dependent edge term (classic fresnel rim), 0 at fully facing
+          // the camera, 1 right at the silhouette.
+          float rimEdgeRaw = 1.0 - max( dot( vRimView, rimNormal ), 0.0 );
+          // Gated so it only shows on the side of the model actually facing the
+          // key light — a shoulder catches the glow, the far/shadowed side
+          // doesn't, just like a real backlit rim highlight.
+          float ndotl = dot( rimNormal, vRimLightDir );
+          // Optional extra mask: only the horizontal side of the silhouette
+          // that faces the light's left/right direction.
+          float rimSide = 1.0;
+          if ( rimSideOnly > 0.5 ) {
+            float lightSideX = vRimLightDir.x >= 0.0 ? 1.0 : -1.0;
+            rimSide = smoothstep( -0.15, 0.15, rimNormal.x * lightSideX );
+          }
+          // Soft layer: a smooth glow. Width widens the falloff exponent.
+          float softExp = mix( 6.0, 1.0, clamp( rimSoftWidth, 0.0, 1.0 ) );
+          float edgeSoft = pow( clamp( rimEdgeRaw, 0.0, 1.0 ), softExp );
+          float litSoft = smoothstep( -0.2, 0.25, ndotl );
+          float softTerm = edgeSoft * litSoft * rimSide * rimSoftIntensity;
+          // Hard layer: a crisp thresholded line.
+          float hardLo = mix( 0.85, 0.25, clamp( rimHardWidth, 0.0, 1.0 ) );
+          float edgeHard = smoothstep( hardLo, hardLo + 0.08, rimEdgeRaw );
+          float litHard = smoothstep( -0.05, 0.05, ndotl );
+          float hardTerm = edgeHard * litHard * rimSide * rimHardIntensity;
+          gl_FragColor.rgb += rimColor * ( softTerm + hardTerm );
         }
-        // Soft layer: a smooth glow. Width widens the falloff exponent.
-        float softExp = mix( 6.0, 1.0, clamp( rimSoftWidth, 0.0, 1.0 ) );
-        float edgeSoft = pow( clamp( rimEdgeRaw, 0.0, 1.0 ), softExp );
-        float litSoft = smoothstep( -0.2, 0.25, ndotl );
-        float softTerm = edgeSoft * litSoft * rimSide * rimSoftIntensity;
-        // Hard layer: a crisp thresholded line. Width widens the band inward
-        // from the silhouette.
-        float hardLo = mix( 0.85, 0.25, clamp( rimHardWidth, 0.0, 1.0 ) );
-        float edgeHard = smoothstep( hardLo, hardLo + 0.08, rimEdgeRaw );
-        float litHard = smoothstep( -0.05, 0.05, ndotl );
-        float hardTerm = edgeHard * litHard * rimSide * rimHardIntensity;
-        gl_FragColor.rgb += rimColor * ( softTerm + hardTerm );
         float faceTerm = smoothstep(0.15, 0.85, dot(vRimView, rimNormal));
         gl_FragColor.rgb *= 1.0 - styleAmbientOcclusion * (1.0 - faceTerm) * 0.18;
         float backEdge = pow(clamp(1.0 - faceTerm, 0.0, 1.0), mix(1.0, 5.0, styleBacklightFalloff));

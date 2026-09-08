@@ -221,7 +221,7 @@ function applyShadowSettings(entry, castShadow, scale) {
   const light = entry.light
   light.castShadow = castShadow
   if (!castShadow) return
-  light.shadow.mapSize.set(1024, 1024)
+  light.shadow.mapSize.set(512, 512)
   light.shadow.bias = -0.001
   if (entry.directional) {
     const cam = light.shadow.camera

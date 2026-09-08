@@ -121,6 +121,7 @@ import {
   setViewCamera as setObjectsViewCamera,
   updateAllObjectRimLight,
   getObjectRootById,
+  getObjectRoots,
   getAllRootsForExport,
 } from './objects.js'
 import { getPose, applyPose } from './posing.js'
@@ -182,6 +183,11 @@ const state = {
   resizeObserver: null,
 }
 
+// Reserved layer used only while a draw is in progress. The main camera never
+// sees it; shadow cameras do. This lets an off-screen root remain a caster
+// without paying for its regular color pass.
+const SHADOW_ONLY_LAYER = 31
+
 export function initScene(container) {
   if (state.renderer) return // already initialised
 
@@ -215,13 +221,15 @@ export function initScene(container) {
     )
     return
   }
-  state.pixelRatio = Math.min(window.devicePixelRatio, 2)
+  // High-DPI displays multiply every lit fragment and shadow sample. Keep the
+  // viewport crisp without letting a 4K phone/laptop panel dominate the GPU.
+  state.pixelRatio = Math.min(window.devicePixelRatio, 1.5)
   renderer.setPixelRatio(state.pixelRatio) // cap DPR (memory)
   renderer.setSize(width, height)
   renderer.setClearColor(0x000000, 0) // fully transparent clear
   renderer.outputColorSpace = THREE.SRGBColorSpace
-  renderer.shadowMap.enabled = true // used only when "realistic shadows" is on
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap
+  renderer.shadowMap.enabled = false // enabled only when real shadows are on
+  renderer.shadowMap.type = THREE.PCFShadowMap
   container.appendChild(renderer.domElement)
   state.renderer = renderer
 
@@ -381,12 +389,13 @@ export function initScene(container) {
   const dirLight = new THREE.DirectionalLight(0xffffff, 2.0)
   dirLight.position.set(2, 4, 3)
   dirLight.castShadow = false // enabled only in "realistic shadows" mode
-  // 1024² keeps realistic shadows responsive: shadow rendering scales with
-  // the number of map texels, so this is one quarter of the 2048² cost.
-  dirLight.shadow.mapSize.set(1024, 1024)
+  // Real shadows are optional and expensive. Keep the explicit mode usable,
+  // but avoid spending a million texels on a small editor viewport.
+  dirLight.shadow.mapSize.set(512, 512)
   dirLight.shadow.bias = -0.0005
   scene.add(dirLight)
   scene.add(dirLight.target) // shadow camera aims at the model via this target
+  dirLight.shadow.camera.layers.enable(SHADOW_ONLY_LAYER)
   state.dirLight = dirLight
 
   const ambientLight = new THREE.AmbientLight(0xffffff, 0.6)
@@ -479,11 +488,80 @@ function renderOnce() {
   updateMeshEditHelpers() // keep the part-selection box hugging its mesh
   const camera = state.viewCamera || state.camera
   if (camera === state.camera) updateFreeCameraClipping()
-  // Route through the outline effect. When the outline is disabled it falls
-  // straight through to renderer.render, so there's no overhead when it's off.
-  const effect = getOutlineEffect()
-  if (effect) effect.render(state.scene, camera)
-  else state.renderer.render(state.scene, camera)
+  const restoreCulling = applyRenderCulling(camera)
+  try {
+    // Route through the outline effect. When the outline is disabled it falls
+    // straight through to renderer.render, so there's no overhead when it's off.
+    const effect = getOutlineEffect()
+    if (effect) effect.render(state.scene, camera)
+    else state.renderer.render(state.scene, camera)
+  } finally {
+    restoreCulling()
+  }
+}
+
+// Hide whole prop/character roots from the color pass when they are outside
+// the current view. A root is kept on the shadow camera when its bounds still
+// intersect that camera's frustum, which prevents a visible floor shadow from
+// popping merely because its caster left the screen.
+function applyRenderCulling(camera) {
+  if (!camera || !state.scene) return () => {}
+
+  camera.layers.disable(SHADOW_ONLY_LAYER)
+  const viewFrustum = makeCameraFrustum(camera)
+  const shadowCamera = state.dirLight?.shadow?.camera
+  let anotherShadowLight = false
+  state.scene.traverse((obj) => {
+    if (obj.isLight && obj.castShadow && obj !== state.dirLight) {
+      anotherShadowLight = true
+      obj.shadow?.camera?.layers.enable(SHADOW_ONLY_LAYER)
+    }
+  })
+  const shadowEnabled = state.shadowMap && (state.dirLight?.castShadow || anotherShadowLight)
+  const shadowFrustum = shadowEnabled && shadowCamera ? makeCameraFrustum(shadowCamera) : null
+  const roots = new Set([...state.characters.values()].map((model) => model.root))
+  for (const root of getObjectRoots()) roots.add(root)
+  const changed = []
+
+  for (const root of roots) {
+    if (!root || !root.visible) continue
+    root.updateMatrixWorld(true)
+    const sphere = new THREE.Sphere()
+    new THREE.Box3().setFromObject(root).getBoundingSphere(sphere)
+    const inView = viewFrustum.intersectsSphere(sphere)
+    if (inView) continue
+
+    let castsShadow = false
+    root.traverse((obj) => {
+      if (obj.isMesh && obj.castShadow) castsShadow = true
+    })
+    // Other light types may use cube or point-light shadow cameras, so their
+    // exact projected receiver region is not available here. Keeping these
+    // casters is conservative and still removes them from the color pass.
+    const canShadowView = castsShadow && (
+      shadowFrustum?.intersectsSphere(sphere) || anotherShadowLight
+    )
+    const previous = { root, visible: root.visible, mask: root.layers.mask }
+    if (canShadowView) {
+      root.layers.set(SHADOW_ONLY_LAYER)
+    } else {
+      root.visible = false
+    }
+    changed.push(previous)
+  }
+
+  return () => {
+    for (const previous of changed) {
+      previous.root.layers.mask = previous.mask
+      previous.root.visible = previous.visible
+    }
+  }
+}
+
+function makeCameraFrustum(camera) {
+  camera.updateMatrixWorld(true)
+  const matrix = new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
+  return new THREE.Frustum().setFromProjectionMatrix(matrix)
 }
 
 function updateFreeCameraClipping() {
@@ -509,6 +587,9 @@ export function setContinuousRender(on, reason = 'anim') {
   if (shouldRun === state.continuous) return
   state.continuous = shouldRun
   if (shouldRun) {
+    // Playback is already the busiest path: keep animation responsive on
+    // high-DPI displays and restore the full viewport ratio when idle.
+    state.renderer?.setPixelRatio(Math.min(state.pixelRatio, 1))
     if (state.clock) state.clock.getDelta() // reset delta so the first frame isn't a big jump
     const tick = () => {
       if (!state.continuous) return
@@ -534,6 +615,7 @@ export function setContinuousRender(on, reason = 'anim') {
     state.animId = requestAnimationFrame(tick)
   } else {
     cancelAnimationFrame(state.animId)
+    state.renderer?.setPixelRatio(state.pixelRatio)
     state.fps = 0
     requestRender()
   }
@@ -1719,6 +1801,7 @@ export function setShadowStrength(strength) {
 function applyShadowMode() {
   const blobOn = state.shadowOn && !state.shadowMap
   const realOn = state.shadowOn && state.shadowMap
+  if (state.renderer) state.renderer.shadowMap.enabled = realOn
   if (state.shadow) state.shadow.visible = blobOn
   if (state.shadowReceiver) state.shadowReceiver.visible = realOn
   if (state.dirLight) state.dirLight.castShadow = realOn
