@@ -126,6 +126,11 @@ function installRimLight(material) {
   u.rimHardIntensity = u.rimHardIntensity || 0
   u.rimHardWidth = u.rimHardWidth != null ? u.rimHardWidth : 0.35
   u.rimSideOnly = u.rimSideOnly || 0
+  u.ambientOcclusionStrength = u.ambientOcclusionStrength || 0
+  u.backlightColor = u.backlightColor || new THREE.Color(0xffffff)
+  u.backlightFalloff = u.backlightFalloff != null ? u.backlightFalloff : 0.5
+  u.colorGrading = u.colorGrading || 0
+  u.shadowStrength = u.shadowStrength != null ? u.shadowStrength : 0.15
   // Stable cache key: the injected code never changes, only the uniforms do,
   // so every toon/soft material can safely share one compiled program variant.
   material.customProgramCacheKey = () => 'charanim-rim-v4'
@@ -137,6 +142,11 @@ function installRimLight(material) {
     shader.uniforms.rimHardIntensity = { value: u.rimHardIntensity }
     shader.uniforms.rimHardWidth = { value: u.rimHardWidth }
     shader.uniforms.rimSideOnly = { value: u.rimSideOnly }
+    shader.uniforms.styleAmbientOcclusion = { value: u.ambientOcclusionStrength }
+    shader.uniforms.styleBacklightColor = { value: u.backlightColor }
+    shader.uniforms.styleBacklightFalloff = { value: u.backlightFalloff }
+    shader.uniforms.styleColorGrading = { value: u.colorGrading }
+    shader.uniforms.styleShadowStrength = { value: u.shadowStrength }
 
     shader.vertexShader = shader.vertexShader
       .replace(
@@ -163,7 +173,13 @@ function installRimLight(material) {
         uniform float rimSoftWidth;
         uniform float rimHardIntensity;
         uniform float rimHardWidth;
-        uniform float rimSideOnly;`,
+        uniform float rimSideOnly;
+        uniform float styleAmbientOcclusion;
+        uniform vec3 styleBacklightColor;
+        uniform float styleBacklightFalloff;
+        uniform float styleColorGrading;
+        uniform float styleShadowStrength;
+        `,
       )
       .replace(
         '#include <dithering_fragment>',
@@ -201,6 +217,21 @@ function installRimLight(material) {
         float litHard = smoothstep( -0.05, 0.05, ndotl );
         float hardTerm = edgeHard * litHard * rimSide * rimHardIntensity;
         gl_FragColor.rgb += rimColor * ( softTerm + hardTerm );
+        float faceTerm = smoothstep(0.15, 0.85, dot(vRimView, rimNormal));
+        gl_FragColor.rgb *= 1.0 - styleAmbientOcclusion * (1.0 - faceTerm) * 0.18;
+        float backEdge = pow(clamp(1.0 - faceTerm, 0.0, 1.0), mix(1.0, 5.0, styleBacklightFalloff));
+        gl_FragColor.rgb += styleBacklightColor * backEdge * styleBacklightFalloff * 0.35;
+        if (styleColorGrading > 0.5 && styleColorGrading < 1.5) gl_FragColor.rgb *= vec3(1.03, 0.985, 0.95);
+        if (styleColorGrading >= 1.5 && styleColorGrading < 2.5) gl_FragColor.rgb *= vec3(0.96, 0.985, 1.04);
+        if (styleColorGrading >= 2.5 && styleColorGrading < 3.5) gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(dot(gl_FragColor.rgb, vec3(0.299, 0.587, 0.114))), 0.85);
+        if (styleColorGrading >= 3.5) {
+          float gradeLuma = dot(gl_FragColor.rgb, vec3(0.299, 0.587, 0.114));
+          float shadowGrade = 1.0 - smoothstep(0.18, 0.62, gradeLuma);
+          vec3 teal = vec3(0.72, 0.90, 0.92);
+          vec3 orange = vec3(1.08, 0.78, 0.62);
+          vec3 cinematicTint = mix(orange, teal, shadowGrade * 0.72);
+          gl_FragColor.rgb = mix(gl_FragColor.rgb, gl_FragColor.rgb * cinematicTint, 0.18);
+        }
         #include <dithering_fragment>`,
       )
 
@@ -248,6 +279,68 @@ function updateRimLight(material, rim) {
       if (rim.direction) ru.rimLightDir.value = u.rimLightDir
     }
   }
+}
+
+function updateStyleControls(material, style = {}) {
+  const arr = Array.isArray(material) ? material : [material]
+  for (const m of arr) {
+    if (!m?.userData) continue
+    const u = m.userData
+    u.ambientOcclusionStrength = style.ambientOcclusionStrength || 0
+    if (!u.backlightColor) u.backlightColor = new THREE.Color()
+    u.backlightColor.set(style.backlightColor || '#ffffff')
+    u.backlightFalloff = style.backlightFalloff != null ? style.backlightFalloff : 0.5
+    u.colorGrading = gradeValue(style.colorGrading)
+    u.shadowStrength = style.shadowStrength != null ? style.shadowStrength : 0.15
+    const ru = u.rimUniforms
+    if (ru) {
+      ru.styleAmbientOcclusion.value = u.ambientOcclusionStrength
+      ru.styleBacklightColor.value = u.backlightColor
+      ru.styleBacklightFalloff.value = u.backlightFalloff
+      ru.styleColorGrading.value = u.colorGrading
+      ru.styleShadowStrength.value = u.shadowStrength
+    }
+    const su = u.styleUniforms
+    if (su) su.styleColorGrading.value = u.colorGrading
+  }
+}
+
+function installStyleGrade(material) {
+  const u = material.userData
+  u.colorGrading = u.colorGrading || 0
+  material.customProgramCacheKey = () => 'charanim-grade-v1'
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.styleColorGrading = { value: u.colorGrading }
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <common>',
+      '#include <common>\nuniform float styleColorGrading;',
+    )
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <dithering_fragment>',
+      `
+      if (styleColorGrading > 0.5 && styleColorGrading < 1.5) gl_FragColor.rgb *= vec3(1.03, 0.985, 0.95);
+      if (styleColorGrading >= 1.5 && styleColorGrading < 2.5) gl_FragColor.rgb *= vec3(0.96, 0.985, 1.04);
+      if (styleColorGrading >= 2.5 && styleColorGrading < 3.5) gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(dot(gl_FragColor.rgb, vec3(0.299, 0.587, 0.114))), 0.85);
+      if (styleColorGrading >= 3.5) {
+        float gradeLuma = dot(gl_FragColor.rgb, vec3(0.299, 0.587, 0.114));
+        float shadowGrade = 1.0 - smoothstep(0.18, 0.62, gradeLuma);
+        vec3 cinematicTint = mix(vec3(1.08, 0.78, 0.62), vec3(0.72, 0.90, 0.92), shadowGrade * 0.72);
+        gl_FragColor.rgb = mix(gl_FragColor.rgb, gl_FragColor.rgb * cinematicTint, 0.18);
+      }
+      #include <dithering_fragment>`,
+    )
+    u.styleUniforms = shader.uniforms
+  }
+  material.needsUpdate = true
+}
+
+function gradeValue(colorGrading) {
+  if (typeof colorGrading === 'number') return colorGrading
+  if (colorGrading === 'warm') return 1
+  if (colorGrading === 'cool') return 2
+  if (colorGrading === 'bleach') return 3
+  if (colorGrading === 'cinematic') return 4
+  return 0
 }
 
 // Record the as-loaded materials so mode switches stay non-destructive, and set
@@ -309,7 +402,10 @@ export function normalizeTransparency(material) {
  */
 export function applyMaterials(model, opts) {
   if (!model || !model.materials) return
-  const { mode, toonSteps = 3, soften = 0, overrides = {}, rimLight } = opts
+  const {
+    mode, toonSteps = 3, soften = 0, overrides = {}, rimLight,
+    ambientOcclusionStrength, backlightColor, backlightFalloff, colorGrading, shadowStrength,
+  } = opts
   const store = model.materials
 
   for (const mesh of model.meshes) {
@@ -322,11 +418,29 @@ export function applyMaterials(model, opts) {
 
     // 'flat' (or Unlit mode) → raw colour, no lighting.
     if (mode === 'unlit' || shading === 'flat') {
-      mesh.material = getOrBuild(store.unlit, mesh, original, buildUnlit)
+      const unlitMat = getOrBuild(store.unlit, mesh, original, (src) => {
+        const made = buildUnlit(src)
+        installStyleGrade(made)
+        return made
+      })
+      updateStyleControls(unlitMat, { colorGrading })
+      mesh.material = unlitMat
       continue
     }
     // Standard mode keeps the untouched PBR originals.
     if (mode === 'standard') {
+      const arr = Array.isArray(original) ? original : [original]
+      for (const m of arr) {
+        if (!m) continue
+        installRimLight(m)
+        updateStyleControls(m, {
+          ambientOcclusionStrength,
+          backlightColor,
+          backlightFalloff,
+          colorGrading: gradeValue(colorGrading),
+          shadowStrength,
+        })
+      }
       mesh.material = original
       continue
     }
@@ -345,6 +459,13 @@ export function applyMaterials(model, opts) {
     if (rimLight) {
       for (const m of arr) updateRimLight(m, rimLight)
     }
+    updateStyleControls(toonMat, {
+      ambientOcclusionStrength,
+      backlightColor,
+      backlightFalloff,
+      colorGrading: gradeValue(colorGrading),
+      shadowStrength,
+    })
     mesh.material = toonMat
   }
 }

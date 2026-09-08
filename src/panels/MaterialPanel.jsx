@@ -19,6 +19,13 @@ const SHADING_OPTIONS = [
   { value: 'soft', label: 'Soft' },
   { value: 'flat', label: 'Flat' },
 ]
+const GRADING_OPTIONS = [
+  { value: 'none', label: 'Neutral' },
+  { value: 'warm', label: 'Warm' },
+  { value: 'cool', label: 'Cool' },
+  { value: 'bleach', label: 'Black and white' },
+  { value: 'cinematic', label: 'Cinematic' },
+]
 
 // Friendly one-click light directions (azimuth°, elevation°).
 const LIGHT_PRESETS = [
@@ -44,6 +51,7 @@ export const STYLE_PRESETS = [
     hint: 'Exact Blender colours, no shading at all.',
     config: {
       materialMode: 'unlit',
+      colorGrading: 'none',
       outlineEnabled: false,
       softenEnabled: false,
       rimSoftEnabled: false,
@@ -56,6 +64,7 @@ export const STYLE_PRESETS = [
     hint: 'Bold 2–3 tone manga-style bands with a solid ink outline and a hard rim line.',
     config: {
       materialMode: 'toon',
+      colorGrading: 'none',
       toonSteps: 2,
       softenEnabled: false,
       outlineEnabled: true,
@@ -76,6 +85,7 @@ export const STYLE_PRESETS = [
     hint: 'Gentle, airbrushed shading with a soft glow at the edges — a good default for most anime-style models.',
     config: {
       materialMode: 'soft',
+      colorGrading: 'none',
       softenEnabled: true,
       softenAmount: 0.3,
       outlineEnabled: false,
@@ -96,6 +106,7 @@ export const STYLE_PRESETS = [
     hint: 'Clean cel shading with a hard rim line, soft edge glow, directional rim lighting, and a fine outline.',
     config: {
       materialMode: 'toon',
+      colorGrading: 'none',
       toonSteps: 3,
       softenEnabled: false,
       outlineEnabled: true,
@@ -118,6 +129,7 @@ export const STYLE_PRESETS = [
     hint: 'Very soft, almost hand-painted shading with no hard outline — good for rounder, softer character designs.',
     config: {
       materialMode: 'soft',
+      colorGrading: 'warm',
       softenEnabled: true,
       softenAmount: 0.55,
       outlineEnabled: false,
@@ -137,6 +149,7 @@ export const STYLE_PRESETS = [
     hint: 'Bright, even product-shot lighting so the model reads clearly from every angle.',
     config: {
       materialMode: 'standard',
+      colorGrading: 'none',
       envLightingEnabled: true,
       envLightingIntensity: 0.8,
       outlineEnabled: true,
@@ -151,6 +164,7 @@ export const STYLE_PRESETS = [
     hint: 'Softer key light plus all-round fill, so PBR/realistic models don\u2019t get harsh, uncanny shadows across the face.',
     config: {
       materialMode: 'standard',
+      colorGrading: 'cool',
       envLightingEnabled: true,
       envLightingIntensity: 1.0,
       outlineEnabled: false,
@@ -164,6 +178,7 @@ export const STYLE_PRESETS = [
     hint: 'Moody single-source side lighting with strong falloff, for dramatic renders and screenshots.',
     config: {
       materialMode: 'standard',
+      colorGrading: 'cinematic',
       envLightingEnabled: true,
       envLightingIntensity: 0.35,
       outlineEnabled: false,
@@ -177,6 +192,7 @@ export const STYLE_PRESETS = [
     hint: 'Flat colour with a heavy ink line and zero shading \u2014 clean manga-panel look.',
     config: {
       materialMode: 'unlit',
+      colorGrading: 'none',
       outlineEnabled: true,
       outlineWidth: 0.002,
       softenEnabled: false,
@@ -190,6 +206,7 @@ export const STYLE_PRESETS = [
     hint: 'High-contrast three-tone cel shading with a restrained ink line for comic-style poses.',
     config: {
       materialMode: 'toon',
+      colorGrading: 'none',
       toonSteps: 3,
       softenEnabled: false,
       outlineEnabled: true,
@@ -207,6 +224,7 @@ export const STYLE_PRESETS = [
     hint: 'Low-contrast painterly shading with a broad, warm edge glow and no ink line.',
     config: {
       materialMode: 'soft',
+      colorGrading: 'none',
       softenEnabled: true,
       softenAmount: 0.65,
       outlineEnabled: false,
@@ -226,6 +244,7 @@ export const STYLE_PRESETS = [
     hint: 'Deep, directional studio contrast with a subtle outline for dramatic character shots.',
     config: {
       materialMode: 'standard',
+      colorGrading: 'bleach',
       envLightingEnabled: false,
       outlineEnabled: true,
       outlineWidth: 0.0015,
@@ -240,6 +259,12 @@ export default function MaterialPanel() {
   const modelInfo = useStore((s) => s.modelInfo)
   const materialMode = useStore((s) => s.materialMode)
   const toonSteps = useStore((s) => s.toonSteps)
+  const colorGrading = useStore((s) => s.colorGrading)
+  const ambientOcclusionStrength = useStore((s) => s.ambientOcclusionStrength)
+  const backlightColor = useStore((s) => s.backlightColor)
+  const backlightFalloff = useStore((s) => s.backlightFalloff)
+  const shadowSoftness = useStore((s) => s.shadowSoftness)
+  const shadowStrength = useStore((s) => s.shadowStrength)
   const lightIntensity = useStore((s) => s.lightIntensity)
   const lightAzimuth = useStore((s) => s.lightAzimuth)
   const lightElevation = useStore((s) => s.lightElevation)
@@ -250,6 +275,8 @@ export default function MaterialPanel() {
 
   const outlineEnabled = useStore((s) => s.outlineEnabled)
   const outlineWidth = useStore((s) => s.outlineWidth)
+  const outlineColor = useStore((s) => s.outlineColor)
+  const outlineOpacity = useStore((s) => s.outlineOpacity)
   const softenEnabled = useStore((s) => s.softenEnabled)
   const softenAmount = useStore((s) => s.softenAmount)
   const meshOverrides = useStore((s) => s.meshOverrides)
@@ -264,10 +291,20 @@ export default function MaterialPanel() {
   const rimFollowLight = useStore((s) => s.rimFollowLight)
   const rimFollowLightId = useStore((s) => s.rimFollowLightId)
   const sceneLights = useStore((s) => s.sceneLights)
+  const lightLinks = useStore((s) => s.lightLinks)
+  const characterOrder = useStore((s) => s.characterOrder)
+  const characters = useStore((s) => s.characters)
+  const activeCharacterId = useStore((s) => s.activeCharacterId)
   const followedLightName = sceneLights.find((lt) => lt.id === rimFollowLightId)?.name
 
   const setMaterialMode = useStore((s) => s.setMaterialMode)
   const setToonSteps = useStore((s) => s.setToonSteps)
+  const setColorGrading = useStore((s) => s.setColorGrading)
+  const setAmbientOcclusionStrength = useStore((s) => s.setAmbientOcclusionStrength)
+  const setBacklightColor = useStore((s) => s.setBacklightColor)
+  const setBacklightFalloff = useStore((s) => s.setBacklightFalloff)
+  const setShadowSoftness = useStore((s) => s.setShadowSoftness)
+  const setShadowStrength = useStore((s) => s.setShadowStrength)
   const setLightIntensity = useStore((s) => s.setLightIntensity)
   const setLightAzimuth = useStore((s) => s.setLightAzimuth)
   const setLightElevation = useStore((s) => s.setLightElevation)
@@ -275,6 +312,8 @@ export default function MaterialPanel() {
   const setEnvLightingIntensity = useStore((s) => s.setEnvLightingIntensity)
   const setOutlineEnabled = useStore((s) => s.setOutlineEnabled)
   const setOutlineWidth = useStore((s) => s.setOutlineWidth)
+  const setOutlineColor = useStore((s) => s.setOutlineColor)
+  const setOutlineOpacity = useStore((s) => s.setOutlineOpacity)
   const setSoftenEnabled = useStore((s) => s.setSoftenEnabled)
   const setSoftenAmount = useStore((s) => s.setSoftenAmount)
   const setRimLightColor = useStore((s) => s.setRimLightColor)
@@ -290,6 +329,8 @@ export default function MaterialPanel() {
   const setMeshOutline = useStore((s) => s.setMeshOutline)
   const setMeshShading = useStore((s) => s.setMeshShading)
   const setMeshVisible = useStore((s) => s.setMeshVisible)
+  const setMeshOutlineWidth = useStore((s) => s.setMeshOutlineWidth)
+  const setLightLink = useStore((s) => s.setLightLink)
   const applyStylePreset = useStore((s) => s.applyStylePreset)
 
   const lit = materialMode !== 'unlit' // lights only matter for toon/soft/standard
@@ -355,6 +396,59 @@ export default function MaterialPanel() {
               </option>
             ))}
           </select>
+        </div>
+      )}
+
+      <div className="light-controls">
+        <div className="field-label" style={{ marginTop: 0 }}>Character finish</div>
+        <label className="field">
+          <span className="field-label">Colour grade</span>
+          <select className="select" value={colorGrading} onChange={(e) => setColorGrading(e.target.value)}>
+            {GRADING_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </label>
+        <div className="radio-hint">Use grading for a restrained shot mood without overpowering the original colours.</div>
+      </div>
+
+      <div className="light-controls">
+        <div className="field-label" style={{ marginTop: 0 }}>Depth and shadow</div>
+        <Slider label="Surface depth" min={0} max={1} step={0.05} value={ambientOcclusionStrength} onChange={setAmbientOcclusionStrength} format={(v) => Math.round(v * 100) + '%'} toInput={(v) => Math.round(v * 100)} fromInput={(v) => v / 100} />
+        <Slider label="Shadow edge softness" min={0} max={1} step={0.05} value={shadowSoftness} onChange={setShadowSoftness} format={(v) => Math.round(v * 100) + '%'} toInput={(v) => Math.round(v * 100)} fromInput={(v) => v / 100} />
+        <Slider label="Shadow darkness" min={0} max={1} step={0.05} value={shadowStrength} onChange={setShadowStrength} format={(v) => Math.round(v * 100) + '%'} toInput={(v) => Math.round(v * 100)} fromInput={(v) => v / 100} />
+        <label className="slider-row">
+          <span className="slider-label">Backlight colour</span>
+          <input type="color" value={backlightColor} onChange={(e) => setBacklightColor(e.target.value)} />
+        </label>
+        <Slider label="Edge light reach" min={0} max={1} step={0.05} value={backlightFalloff} onChange={setBacklightFalloff} format={(v) => Math.round(v * 100) + '%'} toInput={(v) => Math.round(v * 100)} fromInput={(v) => v / 100} />
+        <div className="radio-hint">A restrained edge light separates silhouettes without washing out timing or pose reads.</div>
+      </div>
+
+      {sceneLights.length > 0 && characterOrder.length > 0 && (
+        <div className="light-controls">
+          <div className="field-label" style={{ marginTop: 0 }}>Light linking</div>
+          <div className="radio-hint">Limit a placed light to selected characters. Clear every box to affect everyone.</div>
+          {sceneLights.map((light) => {
+            const linked = lightLinks[light.id] || []
+            return (
+              <div key={light.id} className="field" style={{ marginTop: 8 }}>
+                <div className="field-label">{light.name}</div>
+                {characterOrder.map((id) => {
+                  const name = id === activeCharacterId ? modelInfo?.name : characters[id]?.modelInfo?.name
+                  const checked = linked.includes(id)
+                  return (
+                    <label key={id} className="toggle-row" style={{ padding: 0 }}>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => setLightLink(light.id, checked ? linked.filter((cid) => cid !== id) : [...linked, id])}
+                      />
+                      {name || id}
+                    </label>
+                  )
+                })}
+              </div>
+            )
+          })}
         </div>
       )}
 
@@ -592,6 +686,11 @@ export default function MaterialPanel() {
           toInput={(v) => v * 1000}
           fromInput={(v) => v / 1000}
         />
+        <label className="slider-row">
+          <span className="slider-label">Ink colour</span>
+          <input type="color" value={outlineColor} disabled={!outlineEnabled} onChange={(e) => setOutlineColor(e.target.value)} />
+        </label>
+        <Slider label="Opacity" min={0} max={1} step={0.05} value={outlineOpacity} disabled={!outlineEnabled} onChange={setOutlineOpacity} format={(v) => Math.round(v * 100) + '%'} toInput={(v) => Math.round(v * 100)} fromInput={(v) => v / 100} />
       </div>
 
       <div className="light-controls">
@@ -629,6 +728,7 @@ export default function MaterialPanel() {
             <span title="Show / hide this part">Show</span>
             <span title="Outline this part">Line</span>
             <span title="Shading (Flat = no lighting)">Shade</span>
+            <span title="Override this part's outline width">Width</span>
           </div>
           <div className="mesh-list">
             {meshes.map((m) => {
@@ -669,6 +769,16 @@ export default function MaterialPanel() {
                       </option>
                     ))}
                   </select>
+                  <input
+                    type="range"
+                    min={0.0005}
+                    max={0.02}
+                    step={0.0005}
+                    value={ov.outlineWidth ?? 0.02}
+                    disabled={!visible || !outlineOn}
+                    title="Per-part outline width"
+                    onChange={(e) => setMeshOutlineWidth(m.uuid, Number(e.target.value))}
+                  />
                 </div>
               )
             })}

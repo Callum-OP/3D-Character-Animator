@@ -1,3 +1,4 @@
+import * as THREE from 'three'
 import { OutlineEffect } from 'three/examples/jsm/effects/OutlineEffect.js'
 
 // ---------------------------------------------------------------------------
@@ -44,19 +45,21 @@ export function setOutlineEnabled(on) {
 // off entirely (e.g. no outline on the face). NOTE: outline visibility is keyed
 // by material, so if two meshes share one material object (rare — usually each
 // part has its own), they can't have different outline states.
-export function applyOutlineParams(model, width, soften = 0, overrides = {}) {
+export function applyOutlineParams(model, width, soften = 0, overrides = {}, color = '#000000', opacity = 1) {
   if (!model) return
   const thickness = width * (1 - soften) // global soften thins the outline
+  const ink = new THREE.Color(color)
   for (const mesh of model.meshes) {
     const ov = overrides[mesh.uuid]
     const visible = !ov || ov.outline !== false // default on
+    const partWidth = ov && ov.outlineWidth != null ? ov.outlineWidth : width
     const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
     for (const mat of mats) {
       if (!mat) continue
       mat.userData.outlineParameters = {
-        thickness,
-        color: [0, 0, 0],
-        alpha: 1,
+        thickness: partWidth * (1 - soften),
+        color: [ink.r, ink.g, ink.b],
+        alpha: opacity,
         visible,
         keepAlive: false,
       }

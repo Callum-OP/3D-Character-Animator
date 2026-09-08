@@ -47,6 +47,7 @@ import {
   setLightIntensity,
   setLightCastShadow,
   setLightDirectional,
+  setLightLinks,
   getLightRimSource,
   getLightsData,
   applyLightsData,
@@ -1251,6 +1252,11 @@ function collectSettings() {
   return {
     materialMode: s.materialMode,
     toonSteps: s.toonSteps,
+    colorGrading: s.colorGrading,
+    ambientOcclusionStrength: s.ambientOcclusionStrength,
+    backlightColor: s.backlightColor,
+    backlightFalloff: s.backlightFalloff,
+    lightLinks: s.lightLinks,
     rimLightColor: s.rimLightColor,
     rimSideOnly: s.rimSideOnly,
     rimSoftEnabled: s.rimSoftEnabled,
@@ -1274,6 +1280,8 @@ function collectSettings() {
     envLightingIntensity: s.envLightingIntensity,
     outlineEnabled: s.outlineEnabled,
     outlineWidth: s.outlineWidth,
+    outlineColor: s.outlineColor,
+    outlineOpacity: s.outlineOpacity,
     softenEnabled: s.softenEnabled,
     softenAmount: s.softenAmount,
     showGrid: s.showGrid,
@@ -1467,13 +1475,14 @@ export async function applyProjectData(record) {
   }
   const patch = {}
   for (const k of [
-    'materialMode', 'toonSteps',
+    'materialMode', 'toonSteps', 'colorGrading',
+    'ambientOcclusionStrength', 'backlightColor', 'backlightFalloff', 'lightLinks',
     'rimLightColor', 'rimSideOnly',
     'rimSoftEnabled', 'rimSoftIntensity', 'rimSoftWidth',
     'rimHardEnabled', 'rimHardIntensity', 'rimHardWidth',
     'lightIntensity', 'lightAzimuth', 'lightElevation', 'defaultLightingEnabled',
     'envLightingEnabled', 'envLightingIntensity',
-    'outlineEnabled', 'outlineWidth', 'softenEnabled', 'softenAmount',
+    'outlineEnabled', 'outlineWidth', 'outlineColor', 'outlineOpacity', 'softenEnabled', 'softenAmount',
     'showGrid', 'showGround', 'limbLimits', 'solidBackground', 'backgroundColor', 'showShadow', 'shadowMapping',
     'shadowSoftness', 'shadowStrength', 'autoDecimate',
     'animFps', 'animDuration',
@@ -1756,6 +1765,7 @@ export function setBackground(solid, color) {
 // (mode, toon steps, soften, per-mesh overrides). No-op if nothing is loaded.
 export function applyModelMaterials() {
   const s = useStore.getState()
+  applyCharacterLightLinks(s)
   const soften = s.softenEnabled ? s.softenAmount : 0
   // Rim colour/direction normally come from the manual picker + key light —
   // but if "follow a scene light" is on and that light still exists, use its
@@ -1770,8 +1780,15 @@ export function applyModelMaterials() {
     mode: s.materialMode,
     toonSteps: s.toonSteps,
     soften,
+    colorGrading: s.colorGrading,
+    ambientOcclusionStrength: s.ambientOcclusionStrength,
+    backlightColor: s.backlightColor,
+    backlightFalloff: s.backlightFalloff,
+    shadowStrength: s.shadowStrength,
     rimLight,
     outlineWidth: s.outlineWidth,
+    outlineColor: s.outlineColor,
+    outlineOpacity: s.outlineOpacity,
     overrides: s.meshOverrides, // per-part visibility (H key / eye icon) — same map the character uses
   })
   if (!state.currentModel) return
@@ -1779,6 +1796,11 @@ export function applyModelMaterials() {
     mode: s.materialMode,
     toonSteps: s.toonSteps,
     soften,
+    colorGrading: s.colorGrading,
+    ambientOcclusionStrength: s.ambientOcclusionStrength,
+    backlightColor: s.backlightColor,
+    backlightFalloff: s.backlightFalloff,
+    shadowStrength: s.shadowStrength,
     overrides: s.meshOverrides,
     rimLight,
   })
@@ -1796,7 +1818,14 @@ export function applyModelMaterials() {
     if (isClothEnabled(mesh.uuid)) mesh.visible = false
   }
   // Materials may have been swapped; re-stamp outline params onto the live ones.
-  applyOutlineParams(state.currentModel, s.outlineWidth, soften, s.meshOverrides)
+  applyOutlineParams(
+    state.currentModel,
+    s.outlineWidth,
+    soften,
+    s.meshOverrides,
+    s.outlineColor,
+    s.outlineOpacity,
+  )
   requestRender()
 }
 
@@ -1967,4 +1996,21 @@ function prepareModelTextures(model) {
       }
     }
   }
+}
+
+function applyCharacterLightLinks(s) {
+  const ids = s.characterOrder || []
+  for (const [index, id] of ids.entries()) {
+    const model = state.characters.get(id)
+    if (!model?.root) continue
+    model.root.layers.enable(0)
+    if (index + 1 < 32) model.root.layers.enable(index + 1)
+  }
+  if (state.camera) {
+    state.camera.layers.enable(0)
+    ids.forEach((_, index) => {
+      if (index + 1 < 32) state.camera.layers.enable(index + 1)
+    })
+  }
+  setLightLinks(s.lightLinks || {}, ids)
 }

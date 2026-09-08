@@ -230,8 +230,8 @@ export const useStore = create((set) => ({
   backgroundColor: '#202127',
   showShadow: true, // ground shadow on/off
   shadowMapping: true, // true = real cast shadows; false = cheap blob
-  shadowSoftness: 0.4, // 0 = crisp/hard edge, 1 = very soft/blurred (realistic shadows only)
-  shadowStrength: 0.35, // 0 = barely visible, 1 = solid black (realistic shadows only)
+  shadowSoftness: 0.15, // 0 = crisp/hard edge, 1 = very soft/blurred
+  shadowStrength: 0.15, // 0 = barely visible, 1 = solid black
   showStats: false, // FPS / memory readout overlay
   showHelp: false, // help & shortcuts overlay
 
@@ -264,9 +264,20 @@ export const useStore = create((set) => ({
   // flat colours exactly and side-steps FBX lighting artifacts.
   materialMode: 'unlit', // 'unlit' | 'toon' | 'soft' | 'standard'
   toonSteps: 3, // number of shadow bands in toon (Cartoon) mode
+  colorGrading: 'none', // 'none' | 'warm' | 'cool' | 'bleach' | 'cinematic'
+  ambientOcclusionStrength: 0.15,
+  backlightColor: '#ffffff',
+  backlightFalloff: 0.15,
+  lightLinks: {}, // light id -> character id[]; empty means every character
 
   setMaterialMode: (materialMode) => set({ materialMode }),
   setToonSteps: (toonSteps) => set({ toonSteps }),
+  setColorGrading: (colorGrading) => set({ colorGrading }),
+  setAmbientOcclusionStrength: (ambientOcclusionStrength) => set({ ambientOcclusionStrength }),
+  setBacklightColor: (backlightColor) => set({ backlightColor }),
+  setBacklightFalloff: (backlightFalloff) => set({ backlightFalloff }),
+  setLightLink: (lightId, characterIds) =>
+    set((s) => ({ lightLinks: { ...s.lightLinks, [lightId]: characterIds } })),
 
   // ---- Rim (edge) light — Cartoon / Soft Anime modes only ----
   // Soft and Hard are independent layers that can both be on at once, each
@@ -325,9 +336,13 @@ export const useStore = create((set) => ({
   // ---- Outline (inverted-hull, works in every material mode) ----
   outlineEnabled: false,
   outlineWidth: 0.003, // screen-space thickness; starts very thin
+  outlineColor: '#11131a',
+  outlineOpacity: 1,
 
   setOutlineEnabled: (outlineEnabled) => set({ outlineEnabled }),
   setOutlineWidth: (outlineWidth) => set({ outlineWidth }),
+  setOutlineColor: (outlineColor) => set({ outlineColor }),
+  setOutlineOpacity: (outlineOpacity) => set({ outlineOpacity }),
 
   // ---- Shading softening ----
   // Global: lifts toon shadows (flatter) and thins the outline everywhere.
@@ -361,6 +376,13 @@ export const useStore = create((set) => ({
       meshOverrides: {
         ...s.meshOverrides,
         [uuid]: { outline: true, ...s.meshOverrides[uuid], shading },
+      },
+    })),
+  setMeshOutlineWidth: (uuid, outlineWidth) =>
+    set((s) => ({
+      meshOverrides: {
+        ...s.meshOverrides,
+        [uuid]: { outline: true, ...s.meshOverrides[uuid], outlineWidth },
       },
     })),
   setMeshVisible: (uuid, visible) =>

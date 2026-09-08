@@ -424,3 +424,22 @@ function excludeFromOutline(obj3d) {
     for (const mat of mats) mat.userData.outlineParameters = { visible: false }
   })
 }
+
+// Restrict placed lights to character layers. Layer 0 remains the global
+// channel; character layers start at 1 so existing lights stay compatible.
+export function setLightLinks(links = {}, characterOrder = []) {
+  const layerByCharacter = new Map(characterOrder.map((id, index) => [id, index + 1]))
+  for (const entry of l.lights) {
+    const ids = links[entry.id]
+    entry.light.layers.disableAll()
+    if (!ids || ids.length === 0) {
+      entry.light.layers.enable(0)
+      continue
+    }
+    for (const id of ids) {
+      const layer = layerByCharacter.get(id)
+      if (layer != null && layer < 32) entry.light.layers.enable(layer)
+    }
+  }
+  l.requestRender()
+}

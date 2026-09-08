@@ -71,7 +71,7 @@ export default function ViewPanel() {
       {showShadow && shadowMapping && (
         <div style={{ paddingLeft: 22 }}>
           <label className="slider-row" title="How blurred the shadow's edge is — 0 is a crisp cut, higher is soft and diffused">
-            <span className="slider-label">Softness</span>
+            <span className="slider-label">Ground shadow edge softness</span>
             <input
               type="range"
               min={0}

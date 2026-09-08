@@ -47,7 +47,7 @@ const o = {
   dragBefore: null, // selected root's TRS at gizmo-drag start (single-select path)
   onMoveCommit: null, // (root) => void — fired after a gizmo drag actually changes a root's TRS
   gizmoGrabbed: false, // true once per interaction that actually grabbed a gizmo handle
-  lastStyleOpts: { mode: 'unlit', toonSteps: 3, soften: 0, rimLight: null, overrides: {} }, // last scene-wide style, for 'auto' objects
+  lastStyleOpts: { mode: 'unlit', toonSteps: 3, soften: 0, colorGrading: 'none', overrides: {} }, // last scene-wide style, for 'auto' objects
 
   // --- Multi-select (shift/ctrl-click several objects to move/rotate/resize
   // them together) --- TransformControls can only attach to one Object3D, so
@@ -390,6 +390,11 @@ function applyObjectStyle(entry, opts) {
       mode,
       toonSteps: use.toonSteps,
       soften: use.soften,
+      colorGrading: use.colorGrading,
+      ambientOcclusionStrength: use.ambientOcclusionStrength,
+      backlightColor: use.backlightColor,
+      backlightFalloff: use.backlightFalloff,
+      shadowStrength: use.shadowStrength,
       rimLight: use.rimLight,
       // Per-part visibility (H key / eye icon in the Parts panel) — same
       // meshOverrides map the character uses, keyed by mesh.uuid, which is

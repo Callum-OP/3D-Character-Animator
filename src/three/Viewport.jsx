@@ -127,10 +127,18 @@ export default function Viewport() {
   // All material/shading/outline-width state funnels through applyModelMaterials.
   const materialMode = useStore((s) => s.materialMode)
   const toonSteps = useStore((s) => s.toonSteps)
+  const colorGrading = useStore((s) => s.colorGrading)
+  const ambientOcclusionStrength = useStore((s) => s.ambientOcclusionStrength)
+  const backlightColor = useStore((s) => s.backlightColor)
+  const backlightFalloff = useStore((s) => s.backlightFalloff)
+  const lightLinks = useStore((s) => s.lightLinks)
+  const characterOrder = useStore((s) => s.characterOrder)
   const softenEnabled = useStore((s) => s.softenEnabled)
   const softenAmount = useStore((s) => s.softenAmount)
   const meshOverrides = useStore((s) => s.meshOverrides)
   const outlineWidth = useStore((s) => s.outlineWidth)
+  const outlineColor = useStore((s) => s.outlineColor)
+  const outlineOpacity = useStore((s) => s.outlineOpacity)
   const rimLightColor = useStore((s) => s.rimLightColor)
   const rimSideOnly = useStore((s) => s.rimSideOnly)
   const rimSoftEnabled = useStore((s) => s.rimSoftEnabled)
@@ -145,10 +153,18 @@ export default function Viewport() {
   }, [
     materialMode,
     toonSteps,
+    colorGrading,
+    ambientOcclusionStrength,
+    backlightColor,
+    backlightFalloff,
+    lightLinks,
+    characterOrder,
     softenEnabled,
     softenAmount,
     meshOverrides,
     outlineWidth,
+    outlineColor,
+    outlineOpacity,
     rimLightColor,
     rimSideOnly,
     rimSoftEnabled,
