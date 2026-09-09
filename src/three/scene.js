@@ -178,6 +178,13 @@ const state = {
   animId: 0,
   clock: null, // THREE.Clock for per-frame deltas while playing
   fps: 0, // smoothed frames-per-second while playing (for the stats readout)
+  lastRenderAt: 0,
+  performanceMode: false,
+  performanceBackgroundObjects: false,
+  performanceLowPoly: false,
+  performanceResolution: 0.5,
+  performanceEffects: false,
+  outlineBeforePerformance: false,
   recorder: null, // MediaRecorder while capturing a video
   recordedChunks: [],
   resizeObserver: null,
@@ -272,7 +279,7 @@ export function initScene(container) {
     if (state.pixelRatio > 1.25) renderer.setPixelRatio(1.25)
   })
   controls.addEventListener('end', () => {
-    renderer.setPixelRatio(state.pixelRatio)
+    renderer.setPixelRatio(getPerformancePixelRatio())
     requestRender()
   })
   controls.addEventListener('change', requestRender)
@@ -483,6 +490,12 @@ export function requestRender() {
 
 function renderOnce() {
   if (!state.renderer) return
+  const now = typeof performance !== 'undefined' ? performance.now() : 0
+  if (state.lastRenderAt > 0 && now > state.lastRenderAt) {
+    const frameRate = 1000 / (now - state.lastRenderAt)
+    state.fps = state.fps ? state.fps * 0.9 + frameRate * 0.1 : frameRate
+  }
+  state.lastRenderAt = now
   followIdleClothPose() // keep enabled-but-not-draping cloth tracking the body/gizmo, not frozen
   updateBoneHelpers() // park bone dots on their (possibly just-moved) bones
   updateMeshEditHelpers() // keep the part-selection box hugging its mesh
@@ -519,8 +532,10 @@ function applyRenderCulling(camera) {
   })
   const shadowEnabled = state.shadowMap && (state.dirLight?.castShadow || anotherShadowLight)
   const shadowFrustum = shadowEnabled && shadowCamera ? makeCameraFrustum(shadowCamera) : null
+  const objectRoots = getObjectRoots()
+  const objectRootSet = new Set(objectRoots)
   const roots = new Set([...state.characters.values()].map((model) => model.root))
-  for (const root of getObjectRoots()) roots.add(root)
+  for (const root of objectRoots) roots.add(root)
   const changed = []
 
   for (const root of roots) {
@@ -529,7 +544,9 @@ function applyRenderCulling(camera) {
     const sphere = new THREE.Sphere()
     new THREE.Box3().setFromObject(root).getBoundingSphere(sphere)
     const inView = viewFrustum.intersectsSphere(sphere)
-    if (inView) continue
+    const distantBackground = state.performanceMode && state.performanceBackgroundObjects &&
+      objectRootSet.has(root) && camera.position.distanceTo(sphere.center) > Math.max(6, state.modelRadius * 4)
+    if (inView && !distantBackground) continue
 
     let castsShadow = false
     root.traverse((obj) => {
@@ -538,7 +555,7 @@ function applyRenderCulling(camera) {
     // Other light types may use cube or point-light shadow cameras, so their
     // exact projected receiver region is not available here. Keeping these
     // casters is conservative and still removes them from the color pass.
-    const canShadowView = castsShadow && (
+    const canShadowView = !distantBackground && castsShadow && (
       shadowFrustum?.intersectsSphere(sphere) || anotherShadowLight
     )
     const previous = { root, visible: root.visible, mask: root.layers.mask }
@@ -589,7 +606,7 @@ export function setContinuousRender(on, reason = 'anim') {
   if (shouldRun) {
     // Playback is already the busiest path: keep animation responsive on
     // high-DPI displays and restore the full viewport ratio when idle.
-    state.renderer?.setPixelRatio(Math.min(state.pixelRatio, 1))
+    state.renderer?.setPixelRatio(getPerformancePixelRatio())
     if (state.clock) state.clock.getDelta() // reset delta so the first frame isn't a big jump
     const tick = () => {
       if (!state.continuous) return
@@ -615,7 +632,7 @@ export function setContinuousRender(on, reason = 'anim') {
     state.animId = requestAnimationFrame(tick)
   } else {
     cancelAnimationFrame(state.animId)
-    state.renderer?.setPixelRatio(state.pixelRatio)
+    state.renderer?.setPixelRatio(getPerformancePixelRatio())
     state.fps = 0
     requestRender()
   }
@@ -1383,6 +1400,11 @@ function collectSettings() {
     shadowMapping: s.shadowMapping,
     shadowSoftness: s.shadowSoftness,
     shadowStrength: s.shadowStrength,
+    performanceMode: s.performanceMode,
+    performanceBackgroundObjects: s.performanceBackgroundObjects,
+    performanceLowPoly: s.performanceLowPoly,
+    performanceResolution: s.performanceResolution,
+    performanceEffects: s.performanceEffects,
     autoDecimate: s.autoDecimate,
     animFps: s.animFps,
     animDuration: s.animDuration,
@@ -1502,6 +1524,21 @@ export async function applyProjectData(record) {
   // parsed; the rest of the saved settings can safely be restored afterward.
   if (record.settings?.autoDecimate !== undefined) {
     useStore.setState({ autoDecimate: record.settings.autoDecimate })
+  }
+  if (record.settings?.performanceMode !== undefined) {
+    useStore.setState({ performanceMode: record.settings.performanceMode })
+  }
+  if (record.settings?.performanceBackgroundObjects !== undefined) {
+    useStore.setState({ performanceBackgroundObjects: record.settings.performanceBackgroundObjects })
+  }
+  if (record.settings?.performanceLowPoly !== undefined) {
+    useStore.setState({ performanceLowPoly: record.settings.performanceLowPoly })
+  }
+  if (record.settings?.performanceResolution !== undefined) {
+    useStore.setState({ performanceResolution: record.settings.performanceResolution })
+  }
+  if (record.settings?.performanceEffects !== undefined) {
+    useStore.setState({ performanceEffects: record.settings.performanceEffects })
   }
 
   let activeIdToRestore = null
@@ -1775,6 +1812,52 @@ export function setShadowMapping(on) {
   applyShadowMode()
 }
 
+function getPerformancePixelRatio() {
+  return state.performanceLowPoly
+    ? Math.min(state.pixelRatio, state.performanceResolution)
+    : state.pixelRatio
+}
+
+function applyPerformanceSettings() {
+  if (state.renderer) state.renderer.setPixelRatio(getPerformancePixelRatio())
+  applyShadowMode()
+  requestRender()
+}
+
+export function setPerformanceMode(on) {
+  state.performanceMode = !!on
+}
+
+export function setPerformanceBackgroundObjects(on) {
+  state.performanceBackgroundObjects = !!on
+  requestRender()
+}
+
+export function setPerformanceLowPoly(on) {
+  state.performanceLowPoly = !!on
+  if (state.renderer) state.renderer.setPixelRatio(getPerformancePixelRatio())
+  requestRender()
+}
+
+export function setPerformanceResolution(resolution) {
+  state.performanceResolution = Math.min(1, Math.max(0.25, Number(resolution) || 0.5))
+  if (state.renderer) state.renderer.setPixelRatio(getPerformancePixelRatio())
+  requestRender()
+}
+
+export function setPerformanceEffects(on) {
+  const enabled = !!on
+  const outline = getOutlineEffect()
+  if (outline && enabled && state.performanceMode) {
+    state.outlineBeforePerformance = outline.enabled
+    outline.enabled = false
+  } else if (outline && !enabled && state.performanceMode) {
+    outline.enabled = state.outlineBeforePerformance
+  }
+  state.performanceEffects = enabled
+  applyPerformanceSettings()
+}
+
 // Blur amount for the real cast shadow's edge, 0 (crisp/hard) – 1 (very soft).
 // Maps onto the light's shadow.radius (PCF sample spread) and blurSamples (how
 // many taps go into that spread) — more samples keeps a wide blur from looking
@@ -1800,7 +1883,7 @@ export function setShadowStrength(strength) {
 // on but shadow-mapping is off; real shadows when both are on.
 function applyShadowMode() {
   const blobOn = state.shadowOn && !state.shadowMap
-  const realOn = state.shadowOn && state.shadowMap
+  const realOn = !(state.performanceMode && state.performanceEffects) && state.shadowOn && state.shadowMap
   if (state.renderer) state.renderer.shadowMap.enabled = realOn
   if (state.shadow) state.shadow.visible = blobOn
   if (state.shadowReceiver) state.shadowReceiver.visible = realOn
@@ -1831,7 +1914,7 @@ export function getStats() {
   const info = state.renderer.info
   const mem = typeof performance !== 'undefined' && performance.memory
   return {
-    fps: state.continuous ? Math.round(state.fps) : null,
+    fps: state.fps > 0 ? Math.round(state.fps) : 0,
     triangles: info.render.triangles,
     calls: info.render.calls,
     geometries: info.memory.geometries,
@@ -1956,7 +2039,7 @@ function updateFollowedRimLight() {
 
 // Toggle the outline pass on/off (width/visibility come from applyModelMaterials).
 export function setOutlineToggle(enabled) {
-  setOutlineEnabled(enabled)
+  setOutlineEnabled(state.performanceMode && state.performanceEffects ? false : enabled)
   requestRender()
 }
 

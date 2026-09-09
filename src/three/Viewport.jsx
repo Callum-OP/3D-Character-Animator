@@ -10,6 +10,11 @@ import {
   setShadowMapping,
   setShadowSoftness,
   setShadowStrength,
+  setPerformanceMode,
+  setPerformanceBackgroundObjects,
+  setPerformanceLowPoly,
+  setPerformanceResolution,
+  setPerformanceEffects,
   applyModelMaterials,
   setLightSettings,
   setDefaultLightingEnabled,
@@ -111,6 +116,11 @@ export default function Viewport() {
   const shadowMapping = useStore((s) => s.shadowMapping)
   const shadowSoftness = useStore((s) => s.shadowSoftness)
   const shadowStrength = useStore((s) => s.shadowStrength)
+  const performanceMode = useStore((s) => s.performanceMode)
+  const performanceBackgroundObjects = useStore((s) => s.performanceBackgroundObjects)
+  const performanceLowPoly = useStore((s) => s.performanceLowPoly)
+  const performanceResolution = useStore((s) => s.performanceResolution)
+  const performanceEffects = useStore((s) => s.performanceEffects)
   useEffect(() => {
     setShadowVisible(showShadow)
   }, [showShadow])
@@ -123,6 +133,21 @@ export default function Viewport() {
   useEffect(() => {
     setShadowStrength(shadowStrength)
   }, [shadowStrength])
+  useEffect(() => {
+    setPerformanceMode(performanceMode)
+  }, [performanceMode])
+  useEffect(() => {
+    setPerformanceBackgroundObjects(performanceBackgroundObjects)
+  }, [performanceBackgroundObjects])
+  useEffect(() => {
+    setPerformanceLowPoly(performanceLowPoly)
+  }, [performanceLowPoly])
+  useEffect(() => {
+    setPerformanceResolution(performanceResolution)
+  }, [performanceResolution])
+  useEffect(() => {
+    setPerformanceEffects(performanceEffects)
+  }, [performanceEffects])
 
   // All material/shading/outline-width state funnels through applyModelMaterials.
   const materialMode = useStore((s) => s.materialMode)

@@ -233,6 +233,11 @@ export const useStore = create((set) => ({
   shadowSoftness: 0.15, // 0 = crisp/hard edge, 1 = very soft/blurred
   shadowStrength: 0.15, // 0 = barely visible, 1 = solid black
   showStats: false, // FPS / memory readout overlay
+  performanceMode: false, // reserved master for performance controls
+  performanceBackgroundObjects: false, // hide distant props from the viewport; characters are unaffected
+  performanceLowPoly: false, // stronger global viewport resolution reduction
+  performanceResolution: 0.5, // viewport scale used by lower resolution mode
+  performanceEffects: false, // disable expensive outline and shadow passes
   showHelp: false, // help & shortcuts overlay
 
   setShowGrid: (showGrid) => set({ showGrid }),
@@ -244,6 +249,11 @@ export const useStore = create((set) => ({
   setShadowSoftness: (shadowSoftness) => set({ shadowSoftness }),
   setShadowStrength: (shadowStrength) => set({ shadowStrength }),
   setShowStats: (showStats) => set({ showStats }),
+  setPerformanceMode: (performanceMode) => set({ performanceMode }),
+  setPerformanceBackgroundObjects: (performanceBackgroundObjects) => set({ performanceBackgroundObjects }),
+  setPerformanceLowPoly: (performanceLowPoly) => set({ performanceLowPoly }),
+  setPerformanceResolution: (performanceResolution) => set({ performanceResolution }),
+  setPerformanceEffects: (performanceEffects) => set({ performanceEffects }),
   setShowHelp: (showHelp) => set({ showHelp }),
   toggleHelp: () => set((s) => ({ showHelp: !s.showHelp })),
 

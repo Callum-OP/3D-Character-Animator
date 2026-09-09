@@ -772,9 +772,9 @@ export default function MaterialPanel() {
                   <input
                     type="range"
                     min={0.0005}
-                    max={0.02}
+                    max={outlineWidth}
                     step={0.0005}
-                    value={ov.outlineWidth ?? 0.02}
+                    value={Math.min(ov.outlineWidth ?? outlineWidth, outlineWidth)}
                     disabled={!visible || !outlineOn}
                     title="Per-part outline width"
                     onChange={(e) => setMeshOutlineWidth(m.uuid, Number(e.target.value))}

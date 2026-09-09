@@ -52,7 +52,7 @@ export function applyOutlineParams(model, width, soften = 0, overrides = {}, col
   for (const mesh of model.meshes) {
     const ov = overrides[mesh.uuid]
     const visible = !ov || ov.outline !== false // default on
-    const partWidth = ov && ov.outlineWidth != null ? ov.outlineWidth : width
+    const partWidth = Math.min(ov && ov.outlineWidth != null ? ov.outlineWidth : width, width)
     const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
     for (const mat of mats) {
       if (!mat) continue
