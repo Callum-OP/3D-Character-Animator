@@ -399,29 +399,49 @@ export default function MaterialPanel() {
         </div>
       )}
 
-      <div className="light-controls">
-        <div className="field-label" style={{ marginTop: 0 }}>Character finish</div>
-        <label className="field">
-          <span className="field-label">Colour grade</span>
-          <select className="select" value={colorGrading} onChange={(e) => setColorGrading(e.target.value)}>
-            {GRADING_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-          </select>
-        </label>
-        <div className="radio-hint">Use grading for a restrained shot mood without overpowering the original colours.</div>
-      </div>
+      <label className="field standalone-control">
+        <span className="field-label">Colour grade</span>
+        <select className="select" value={colorGrading} onChange={(e) => setColorGrading(e.target.value)}>
+          {GRADING_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+        <span className="radio-hint">Use grading for a restrained shot mood without overpowering the original colours.</span>
+      </label>
 
-      <div className="light-controls">
-        <div className="field-label" style={{ marginTop: 0 }}>Depth and shadow</div>
-        <Slider label="Surface depth" min={0} max={1} step={0.05} value={ambientOcclusionStrength} onChange={setAmbientOcclusionStrength} format={(v) => Math.round(v * 100) + '%'} toInput={(v) => Math.round(v * 100)} fromInput={(v) => v / 100} />
-        <Slider label="Shadow edge softness" min={0} max={1} step={0.05} value={shadowSoftness} onChange={setShadowSoftness} format={(v) => Math.round(v * 100) + '%'} toInput={(v) => Math.round(v * 100)} fromInput={(v) => v / 100} />
-        <Slider label="Shadow darkness" min={0} max={1} step={0.05} value={shadowStrength} onChange={setShadowStrength} format={(v) => Math.round(v * 100) + '%'} toInput={(v) => Math.round(v * 100)} fromInput={(v) => v / 100} />
-        <label className="slider-row">
-          <span className="slider-label">Backlight colour</span>
-          <input type="color" value={backlightColor} onChange={(e) => setBacklightColor(e.target.value)} />
-        </label>
-        <Slider label="Edge light reach" min={0} max={1} step={0.05} value={backlightFalloff} onChange={setBacklightFalloff} format={(v) => Math.round(v * 100) + '%'} toInput={(v) => Math.round(v * 100)} fromInput={(v) => v / 100} />
-        <div className="radio-hint">A restrained edge light separates silhouettes without washing out timing or pose reads.</div>
-      </div>
+      <details className="look-disclosure">
+        <summary>Depth, shadow &amp; softness</summary>
+        <div className="light-controls">
+          <Slider label="Surface depth" min={0} max={1} step={0.05} value={ambientOcclusionStrength} onChange={setAmbientOcclusionStrength} format={(v) => Math.round(v * 100) + '%'} toInput={(v) => Math.round(v * 100)} fromInput={(v) => v / 100} />
+          <Slider label="Shadow edge softness" min={0} max={1} step={0.05} value={shadowSoftness} onChange={setShadowSoftness} format={(v) => Math.round(v * 100) + '%'} toInput={(v) => Math.round(v * 100)} fromInput={(v) => v / 100} />
+          <Slider label="Shadow darkness" min={0} max={1} step={0.05} value={shadowStrength} onChange={setShadowStrength} format={(v) => Math.round(v * 100) + '%'} toInput={(v) => Math.round(v * 100)} fromInput={(v) => v / 100} />
+          <label className="slider-row">
+            <span className="slider-label">Backlight colour</span>
+            <input type="color" value={backlightColor} onChange={(e) => setBacklightColor(e.target.value)} />
+          </label>
+          <Slider label="Edge light reach" min={0} max={1} step={0.05} value={backlightFalloff} onChange={setBacklightFalloff} format={(v) => Math.round(v * 100) + '%'} toInput={(v) => Math.round(v * 100)} fromInput={(v) => v / 100} />
+          <div className="radio-hint">A restrained edge light separates silhouettes without washing out timing or pose reads.</div>
+          <label className="toggle-row" style={{ padding: 0, marginTop: 8 }}>
+            <input
+              type="checkbox"
+              checked={softenEnabled}
+              onChange={(e) => setSoftenEnabled(e.target.checked)}
+            />
+            Soften shading
+          </label>
+          <Slider
+            label="Softness amount"
+            min={0}
+            max={1}
+            step={0.05}
+            value={softenAmount}
+            disabled={!softenEnabled}
+            onChange={setSoftenAmount}
+            format={(v) => Math.round(v * 100) + '%'}
+            toInput={(v) => Math.round(v * 100)}
+            fromInput={(v) => v / 100}
+          />
+          <div className="radio-hint">Lifts toon shadows and thins the outline everywhere.</div>
+        </div>
+      </details>
 
       {sceneLights.length > 0 && characterOrder.length > 0 && (
         <div className="light-controls">
@@ -452,10 +472,13 @@ export default function MaterialPanel() {
         </div>
       )}
 
-      <div className={'light-controls' + (rimCapable ? '' : ' disabled')}>
-        <div className="field-label" style={{ marginTop: 0 }}>
-          Rim light {rimCapable ? '' : '(only affects Cartoon / Soft Anime)'}
-        </div>
+      <details className="look-disclosure">
+        <summary>Studio, environment &amp; rim lighting</summary>
+        <div className="look-disclosure-group">
+        <div className={'light-controls' + (rimCapable ? '' : ' disabled')}>
+          <div className="field-label" style={{ marginTop: 0 }}>
+            Rim light {rimCapable ? '' : '(only affects Cartoon / Soft Anime)'}
+          </div>
 
         <label className="toggle-row" style={{ padding: 0 }}>
           <input
@@ -569,12 +592,11 @@ export default function MaterialPanel() {
             ? 'Soft and Hard are independent \u2014 turn on either, or both. Width controls how far each reaches in from the silhouette. Directional limits the glow to just the side of the character the key light is coming from (e.g. a light from the right only lights the right edge), which reads as calmer than the default all-round rim. To use a placed light instead of the key light, mark it "drive the rim light" in the Lights panel.'
             : 'Only affects Cartoon / Soft Anime modes.'}
         </div>
-      </div>
-
-      <div className={'light-controls' + (lit ? '' : ' disabled')}>
-        <div className="field-label" style={{ marginTop: 4 }}>
-          Light {lit ? '' : '(only affects Cartoon / Soft Anime / Realistic)'}
         </div>
+        <div className={'light-controls' + (lit ? '' : ' disabled')}>
+          <div className="field-label" style={{ marginTop: 4 }}>
+            Light {lit ? '' : '(only affects Cartoon / Soft Anime / Realistic)'}
+          </div>
 
         <label className="toggle-row" style={{ padding: 0, marginBottom: 4 }} title="Turn off the built-in key + ambient light, e.g. to light the scene only with placed lights or the studio environment map">
           <input
@@ -631,10 +653,9 @@ export default function MaterialPanel() {
           format={(v) => v + '°'}
         />
         </div>
-      </div>
-
-      <div className={'light-controls' + (materialMode === 'standard' ? '' : ' disabled')}>
-        <label className="toggle-row" style={{ padding: 0 }}>
+        </div>
+        <div className={'light-controls' + (materialMode === 'standard' ? '' : ' disabled')}>
+          <label className="toggle-row" style={{ padding: 0 }}>
           <input
             type="checkbox"
             checked={envLightingEnabled}
@@ -659,10 +680,14 @@ export default function MaterialPanel() {
             ? 'Soft all-round studio fill (like Blender\u2019s Material Preview) so the character reads well from every angle, even without extra lights.'
             : 'Only affects Realistic mode.'}
         </div>
-      </div>
+        </div>
+        </div>
+      </details>
 
-      <div className="light-controls">
-        <label className="toggle-row" style={{ padding: 0 }}>
+      <details className="look-disclosure">
+        <summary>Outline</summary>
+        <div className="light-controls">
+          <label className="toggle-row" style={{ padding: 0 }}>
           <input
             type="checkbox"
             checked={outlineEnabled}
@@ -691,38 +716,14 @@ export default function MaterialPanel() {
           <input type="color" value={outlineColor} disabled={!outlineEnabled} onChange={(e) => setOutlineColor(e.target.value)} />
         </label>
         <Slider label="Opacity" min={0} max={1} step={0.05} value={outlineOpacity} disabled={!outlineEnabled} onChange={setOutlineOpacity} format={(v) => Math.round(v * 100) + '%'} toInput={(v) => Math.round(v * 100)} fromInput={(v) => v / 100} />
-      </div>
-
-      <div className="light-controls">
-        <label className="toggle-row" style={{ padding: 0 }}>
-          <input
-            type="checkbox"
-            checked={softenEnabled}
-            onChange={(e) => setSoftenEnabled(e.target.checked)}
-          />
-          Soften shading
-        </label>
-
-        <Slider
-          label="Amount"
-          min={0}
-          max={1}
-          step={0.05}
-          value={softenAmount}
-          disabled={!softenEnabled}
-          onChange={setSoftenAmount}
-          format={(v) => Math.round(v * 100) + '%'}
-          toInput={(v) => Math.round(v * 100)}
-          fromInput={(v) => v / 100}
-        />
-        <div className="radio-hint" style={{ marginTop: 2 }}>
-          Lifts toon shadows and thins the outline everywhere.
         </div>
-      </div>
+      </details>
 
       {meshes.length > 0 && (
-        <div className="light-controls">
-          <div className="field-label">Parts (hide, outline or flatten the face, etc.)</div>
+        <details className="look-disclosure">
+          <summary>Mesh parts</summary>
+          <div className="light-controls">
+            <div className="field-label">Parts (hide, outline or flatten the face, etc.)</div>
           <div className="mesh-row mesh-head">
             <span>Part</span>
             <span title="Show / hide this part">Show</span>
@@ -783,7 +784,8 @@ export default function MaterialPanel() {
               )
             })}
           </div>
-        </div>
+          </div>
+        </details>
       )}
     </div>
   )

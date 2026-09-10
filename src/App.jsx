@@ -13,6 +13,7 @@ import HelpOverlay from './panels/HelpOverlay.jsx'
 import Accordion from './panels/Accordion.jsx'
 import TabGroup from './panels/TabGroup.jsx'
 import { useStore } from './store.js'
+import { useState } from 'react'
 
 // Top-level layout: 3D viewport on the left, control sidebar on the right.
 //
@@ -24,6 +25,7 @@ import { useStore } from './store.js'
 // rest expand on demand and remember their open/closed state for the
 // session.
 export default function App() {
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const toggleHelp = useStore((s) => s.toggleHelp)
   const mode = useStore((s) => s.mode)
   const sceneObjects = useStore((s) => s.sceneObjects)
@@ -31,17 +33,34 @@ export default function App() {
   const sceneLights = useStore((s) => s.sceneLights)
 
   return (
-    <div className="app">
+    <div className={'app' + (settingsOpen ? ' settings-is-open' : '')}>
       <Viewport />
       <aside className="sidebar">
         <div className="app-header">
-          <div>
-            <h1 className="app-title">3D Animator</h1>
-            <div className="app-tagline">Pose &amp; animate characters or scenes</div>
+          <div className="brand-lockup">
+            <div>
+              <h1 className="app-title">3D Animator</h1>
+            </div>
           </div>
-          <button className="help-btn" title="Help & shortcuts (?)" onClick={toggleHelp}>
-            ?
-          </button>
+          <div className="header-actions">
+            <button
+              className={'icon-btn' + (settingsOpen ? ' active' : '')}
+              title="Open display and performance settings"
+              aria-label="Open display and performance settings"
+              aria-expanded={settingsOpen}
+              onClick={() => setSettingsOpen((open) => !open)}
+            >
+              ⚙
+            </button>
+            <button className="icon-btn" title="Help & shortcuts (?)" aria-label="Help and shortcuts" onClick={toggleHelp}>
+              ?
+            </button>
+          </div>
+        </div>
+
+        <div className="sidebar-intro">
+          <span className="eyebrow">Workspace</span>
+          <span className="intro-copy">Create your scene.</span>
         </div>
 
         <Accordion id="character" icon="🧍" title="Character" subtitle="Load or save a project" defaultOpen>
@@ -85,7 +104,6 @@ export default function App() {
             defaultTab="material"
             tabs={[
               { key: 'material', label: 'Material', icon: '🎨', render: () => <MaterialPanel /> },
-              { key: 'view', label: 'View', icon: '🖥️', render: () => <ViewPanel /> },
             ]}
           />
         </Accordion>
@@ -94,6 +112,24 @@ export default function App() {
           <ExportPanel />
         </Accordion>
       </aside>
+      {settingsOpen && (
+        <>
+          <button className="settings-scrim" aria-label="Close settings" onClick={() => setSettingsOpen(false)} />
+          <aside className="settings-drawer" aria-label="Display and performance settings">
+            <div className="drawer-header">
+              <div>
+                <span className="eyebrow">Preferences</span>
+                <h2>Viewport settings</h2>
+              </div>
+              <button className="icon-btn" title="Close settings" aria-label="Close settings" onClick={() => setSettingsOpen(false)}>
+                ×
+              </button>
+            </div>
+            <p className="drawer-copy">Tune the stage around your scene. These choices affect the viewport and exports.</p>
+            <ViewPanel />
+          </aside>
+        </>
+      )}
       <HelpOverlay />
     </div>
   )

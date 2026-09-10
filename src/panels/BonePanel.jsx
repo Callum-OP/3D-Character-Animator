@@ -7,7 +7,6 @@ import {
   getPose,
   undo,
   redo,
-  mirrorPose,
   getBoneEulerDelta,
   setBoneEulerDelta,
   beginBoneAdjust,
@@ -135,11 +134,6 @@ export default function BonePanel() {
     setPoseMsg(`Pasted ${applied} bone(s)` + (missing.length ? `, ${missing.length} skipped.` : '.'))
   }
 
-  function onMirror() {
-    const changed = mirrorPose()
-    setPoseMsg(changed ? 'Pose flipped left ↔ right.' : 'Nothing to mirror — pose a joint first.')
-  }
-
   const bones = modelInfo?.bones || []
   // Offer the helper-bone toggle only when the rig actually has both kinds.
   const hasHelpers = bones.some((b) => b.deform) && bones.some((b) => !b.deform)
@@ -219,13 +213,6 @@ export default function BonePanel() {
         </button>
         <button className="btn secondary" onClick={() => redo()} title="Redo an undone pose change (Ctrl+Shift+Z)">
           Redo
-        </button>
-        <button
-          className="btn secondary"
-          onClick={onMirror}
-          title="Flip the whole pose left ↔ right (great for walk cycles)"
-        >
-          Mirror
         </button>
         <button className="btn secondary" onClick={onCopy} title="Copy the current pose">
           Copy

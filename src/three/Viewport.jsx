@@ -34,6 +34,8 @@ import {
   setBoneGizmoMode,
   undo,
   redo,
+  mirrorPose,
+  symmetrisePose,
 } from './posing.js'
 import {
   selectMesh,
@@ -86,6 +88,7 @@ const TRANSFORM_BUTTONS = [
 export default function Viewport() {
   const containerRef = useRef(null)
   const [dragOver, setDragOver] = useState(false)
+  const [symmetriseOpen, setSymmetriseOpen] = useState(false)
 
   // Create the scene once on mount, tear it down on unmount.
   useEffect(() => {
@@ -503,6 +506,32 @@ export default function Viewport() {
               {b.label}
             </button>
           ))}
+        </div>
+      )}
+
+      {hasCharacter && (
+        <div className="pose-toolbar" aria-label="Whole pose actions">
+          <button
+            className="pose-toolbar-btn"
+            title="Swap the character's left and right pose, including arms and legs"
+            onClick={() => mirrorPose()}
+          >
+            Mirror
+          </button>
+          <button
+            className="pose-toolbar-btn"
+            title="Make the whole character symmetrical, including centre bones like the chest"
+            onClick={() => setSymmetriseOpen((open) => !open)}
+          >
+            Symmetrise
+          </button>
+          {symmetriseOpen && (
+            <div className="symmetrise-menu" role="menu" aria-label="Symmetrise options">
+              <button onClick={() => { symmetrisePose('left'); setSymmetriseOpen(false) }}>Copy from left</button>
+              <button onClick={() => { symmetrisePose('right'); setSymmetriseOpen(false) }}>Copy from right</button>
+              <button onClick={() => { symmetrisePose('average'); setSymmetriseOpen(false) }}>Meet in middle</button>
+            </div>
+          )}
         </div>
       )}
 

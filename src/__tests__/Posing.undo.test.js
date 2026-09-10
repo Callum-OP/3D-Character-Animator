@@ -9,6 +9,8 @@ import {
   beginBoneAdjust,
   endBoneAdjust,
   resetBone,
+  mirrorPose,
+  symmetrisePose,
   undo,
   redo,
 } from '../three/posing.js'
@@ -22,8 +24,14 @@ function makeRig() {
   const spine = new THREE.Bone()
   spine.name = 'Spine'
   root.add(spine)
+  const leftArm = new THREE.Bone()
+  leftArm.name = 'LeftArm'
+  const rightArm = new THREE.Bone()
+  rightArm.name = 'RightArm'
+  spine.add(leftArm)
+  spine.add(rightArm)
   root.updateMatrixWorld(true)
-  return { root, bones: [root, spine] }
+  return { root, bones: [root, spine, leftArm, rightArm] }
 }
 
 describe('bone posing: undo/redo and rest-relative editing', () => {
@@ -97,5 +105,51 @@ describe('bone posing: undo/redo and rest-relative editing', () => {
 
     undo()
     expect(getBoneEulerDelta('Spine').x).toBeCloseTo(0, 0)
+  })
+
+  it('symmetrisePose averages opposite-side rotations and is undoable', () => {
+    setBoneEulerDelta('LeftArm', { x: 0, y: 30, z: 0 })
+    setBoneEulerDelta('RightArm', { x: 0, y: -10, z: 0 })
+    setBoneEulerDelta('Spine', { x: 0, y: 30, z: 0 })
+    symmetrisePose()
+
+    expect(getBoneEulerDelta('LeftArm').y).toBeCloseTo(10, 0)
+    expect(getBoneEulerDelta('RightArm').y).toBeCloseTo(10, 0)
+    expect(getBoneEulerDelta('Spine').y).toBeCloseTo(15, 0)
+    undo()
+    expect(getBoneEulerDelta('LeftArm').y).toBeCloseTo(30, 0)
+    expect(getBoneEulerDelta('RightArm').y).toBeCloseTo(-10, 0)
+    expect(getBoneEulerDelta('Spine').y).toBeCloseTo(30, 0)
+  })
+
+  it('mirrorPose swaps only verified left/right pairs', () => {
+    setBoneEulerDelta('LeftArm', { x: 0, y: 25, z: 0 })
+    setBoneEulerDelta('RightArm', { x: 0, y: -5, z: 0 })
+    setBoneEulerDelta('Spine', { x: 0, y: 15, z: 0 })
+    mirrorPose()
+
+    expect(getBoneEulerDelta('LeftArm').y).toBeCloseTo(-5, 0)
+    expect(getBoneEulerDelta('RightArm').y).toBeCloseTo(25, 0)
+    expect(getBoneEulerDelta('Spine').y).toBeCloseTo(15, 0)
+  })
+
+  it('pairs exporter side names even when numeric suffixes differ', () => {
+    const root = new THREE.Bone()
+    root.name = '_rootJoint'
+    const left = new THREE.Bone()
+    left.name = 'upperarm_l_012'
+    const right = new THREE.Bone()
+    right.name = 'upperarm_r_064'
+    root.add(left)
+    root.add(right)
+    root.updateMatrixWorld(true)
+    setPoseModel({ root, bones: [root, left, right] })
+
+    setBoneEulerDelta(left.name, { x: 0, y: 35, z: 0 })
+    setBoneEulerDelta(right.name, { x: 0, y: -5, z: 0 })
+    mirrorPose()
+
+    expect(getBoneEulerDelta(left.name).y).toBeCloseTo(-5, 0)
+    expect(getBoneEulerDelta(right.name).y).toBeCloseTo(35, 0)
   })
 })

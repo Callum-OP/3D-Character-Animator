@@ -510,32 +510,97 @@ export function resetPose() {
   p.requestRender()
 }
 
-// Flip the pose left ↔ right as one undoable batch. Each bone takes its
-// mirrored counterpart's rest-relative rotation (found by the usual L/R naming
-// conventions), reflected across the character's centre plane; bones with no
-// counterpart (spine, head…) mirror in place. Works on the mirrored-rig
-// conventions Mixamo/Rigify-style skeletons follow.
+// Flip the left/right pose as one undoable batch. Only bones with a verified
+// opposite-side counterpart are changed; centre bones are intentionally left
+// alone.
 export function mirrorPose() {
   if (!p.model || p.bones.length === 0) return 0
   const snapshot = new Map(p.bones.map((b) => [b, b.quaternion.clone()]))
+  const processed = new Set()
   const changes = []
   for (const bone of p.bones) {
+    if (processed.has(bone)) continue
     const restDst = p.restQuats.get(bone)
     if (!restDst) continue
     const counterpart = mirrorBoneName(bone.name)
-    const src = counterpart ? p.boneMap.get(counterpart) : bone
+    const src = counterpart ? p.boneMap.get(counterpart) : null
+    if (!src || src === bone) continue
+    processed.add(bone)
+    processed.add(src)
     const restSrc = p.restQuats.get(src)
     if (!restSrc) continue
-    // Rest-relative rotation of the source side…
-    const delta = restSrc.clone().invert().multiply(snapshot.get(src))
-    // …reflected across the YZ plane: axis x flips, so (x,y,z,w) → (x,-y,-z,w).
-    delta.set(delta.x, -delta.y, -delta.z, delta.w)
-    const after = restDst.clone().multiply(delta)
-    if (!bone.quaternion.equals(after)) {
-      changes.push({ bone, before: bone.quaternion.clone(), after: after.clone() })
-      bone.quaternion.copy(after)
+      for (const [target, source, targetRest, sourceRest] of [
+        [bone, src, restDst, restSrc],
+        [src, bone, restSrc, restDst],
+      ]) {
+        // Transfer local motion relative to each bone's own rest pose. A global
+        // mirror axis is not reliable because exported rigs use different local bases.
+        const delta = sourceRest.clone().invert().multiply(snapshot.get(source))
+      const after = targetRest.clone().multiply(delta)
+      if (!target.quaternion.equals(after)) {
+        changes.push({ bone: target, before: target.quaternion.clone(), after: after.clone() })
+        target.quaternion.copy(after)
+      }
     }
   }
+  if (changes.length) pushUndo(changes)
+  updateBoneHelpers()
+  notifyPoseChange()
+  p.requestRender()
+  return changes.length
+}
+
+// Average each pair's rest-relative rotation, reflected across the centre
+// plane, then apply that shared result to both sides. Centre bones are averaged
+// with their own reflection so the entire character becomes symmetrical.
+export function symmetrisePose(strategy = 'average') {
+  if (!p.model || p.bones.length === 0) return 0
+  const snapshot = new Map(p.bones.map((b) => [b, b.quaternion.clone()]))
+  const processed = new Set()
+  const changes = []
+
+  for (const bone of p.bones) {
+    if (processed.has(bone)) continue
+    const counterpartName = mirrorBoneName(bone.name)
+    const counterpart = counterpartName ? p.boneMap.get(counterpartName) : null
+    if (!counterpart || counterpart === bone) {
+      const rest = p.restQuats.get(bone)
+      const current = snapshot.get(bone)
+      if (!rest || !current) continue
+      processed.add(bone)
+      const delta = rest.clone().invert().multiply(current)
+      const target = strategy === 'average' ? delta.clone().slerp(new THREE.Quaternion(), 0.5) : new THREE.Quaternion()
+      const after = rest.clone().multiply(target)
+      if (!bone.quaternion.equals(after)) {
+        changes.push({ bone, before: bone.quaternion.clone(), after })
+        bone.quaternion.copy(after)
+      }
+      continue
+    }
+    processed.add(bone)
+    processed.add(counterpart)
+
+    const restA = p.restQuats.get(bone)
+    const restB = p.restQuats.get(counterpart)
+    if (!restA || !restB) continue
+    const deltaA = restA.clone().invert().multiply(snapshot.get(bone))
+    const deltaB = restB.clone().invert().multiply(snapshot.get(counterpart))
+    const sharedA = strategy === 'left'
+      ? deltaA
+      : strategy === 'right'
+        ? deltaB
+        : deltaA.clone().slerp(deltaB, 0.5)
+    const afterA = restA.clone().multiply(sharedA)
+    const afterB = restB.clone().multiply(sharedA)
+
+    for (const [target, after] of [[bone, afterA], [counterpart, afterB]]) {
+      if (!target.quaternion.equals(after)) {
+        changes.push({ bone: target, before: target.quaternion.clone(), after })
+        target.quaternion.copy(after)
+      }
+    }
+  }
+
   if (changes.length) pushUndo(changes)
   updateBoneHelpers()
   notifyPoseChange()
@@ -644,33 +709,33 @@ function applyRotationSnap() {
   p.transform.setRotationSnap(snapOn ? THREE.MathUtils.degToRad(p.snapDeg || SNAP_DEG) : null)
 }
 
-// Find a bone's opposite-side counterpart by the common L/R naming schemes
-// (Left/Right words, .L/.R, _l/_r, l_/r_ affixes). Returns a name that actually
-// exists in this rig, or null for centre bones.
-const SIDE_PATTERNS = [
-  [/Left/g, 'Right'],
-  [/Right/g, 'Left'],
-  [/left/g, 'right'],
-  [/right/g, 'left'],
-  [/LEFT/g, 'RIGHT'],
-  [/RIGHT/g, 'LEFT'],
-  [/([._-])L($|[._-])/g, '$1R$2'],
-  [/([._-])R($|[._-])/g, '$1L$2'],
-  [/([._-])l($|[._-])/g, '$1r$2'],
-  [/([._-])r($|[._-])/g, '$1l$2'],
-  [/^L([._-])/, 'R$1'],
-  [/^R([._-])/, 'L$1'],
-  [/^l([._-])/, 'r$1'],
-  [/^r([._-])/, 'l$1'],
-]
-
 function mirrorBoneName(name) {
-  for (const [re, sub] of SIDE_PATTERNS) {
-    re.lastIndex = 0
-    const swapped = name.replace(re, sub)
-    if (swapped !== name && p.boneMap.has(swapped)) return swapped
+  const info = sideKey(name)
+  if (!info) return null
+  for (const candidate of p.bones) {
+    const other = sideKey(candidate.name)
+    if (other && other.side !== info.side && other.key === info.key) return candidate.name
   }
   return null
+}
+
+function sideKey(name) {
+  let normalized = name.toLowerCase()
+  let side = null
+  if (/left/.test(normalized)) {
+    side = 'left'
+    normalized = normalized.replace(/left/g, '{side}')
+  } else if (/right/.test(normalized)) {
+    side = 'right'
+    normalized = normalized.replace(/right/g, '{side}')
+  } else {
+    const marker = /(^|[._-])([lr])(?=$|[._-])/.exec(normalized)
+    if (!marker) return null
+    side = marker[2] === 'l' ? 'left' : 'right'
+    normalized = normalized.replace(marker[0], `${marker[1]}{side}`)
+  }
+  normalized = normalized.replace(/([._-])\d+$/g, '')
+  return { side, key: normalized }
 }
 
 // Exposed mainly so the IK solve can be exercised directly (drag simulation

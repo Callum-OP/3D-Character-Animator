@@ -1,5 +1,26 @@
 import { create } from 'zustand'
 
+// These are app-wide preferences rather than project content. They are kept
+// in their own local-storage record so opening a project cannot overwrite the
+// user's preferred viewport and look defaults.
+const APP_SETTINGS_FIELDS = [
+  'showGrid', 'showGround', 'solidBackground', 'backgroundColor', 'showShadow',
+  'shadowMapping', 'shadowSoftness', 'shadowStrength', 'showStats',
+  'performanceMode', 'performanceBackgroundObjects', 'performanceLowPoly',
+  'performanceResolution', 'performanceEffects', 'autoDecimate',
+  'materialMode', 'toonSteps', 'colorGrading', 'ambientOcclusionStrength',
+  'backlightColor', 'backlightFalloff', 'rimLightColor', 'rimSideOnly',
+  'rimSoftEnabled', 'rimSoftIntensity', 'rimSoftWidth', 'rimHardEnabled',
+  'rimHardIntensity', 'rimHardWidth', 'rimFollowLight', 'rimFollowLightId',
+  'lightIntensity', 'lightAzimuth', 'lightElevation', 'defaultLightingEnabled',
+  'envLightingEnabled', 'envLightingIntensity', 'outlineEnabled', 'outlineWidth',
+  'outlineColor', 'outlineOpacity', 'softenEnabled', 'softenAmount',
+]
+
+function appSettingsOnly(state) {
+  return Object.fromEntries(APP_SETTINGS_FIELDS.map((key) => [key, state[key]]))
+}
+
 // Linear-interpolate a character root-motion track's position at time `t`,
 // as it stood BEFORE the edit being applied — used by addRootKeyframe's
 // ripple mode to work out how far the character actually moved so it can
@@ -957,3 +978,18 @@ export const useStore = create((set) => ({
       return { animData: { ...s.animData, morphs: existingMorphs } }
     }),
 }))
+
+// Hydrate and save only app-wide preferences. Keeping this separate from the
+// project store means opening a project never replaces the user's defaults.
+const APP_SETTINGS_STORAGE_KEY = '3d-animator-app-settings'
+if (typeof localStorage !== 'undefined') {
+  try {
+    const saved = JSON.parse(localStorage.getItem(APP_SETTINGS_STORAGE_KEY) || 'null')
+    if (saved && typeof saved === 'object') useStore.setState(saved)
+  } catch {
+    // Ignore malformed preferences and continue with the built-in defaults.
+  }
+  useStore.subscribe((state) => {
+    localStorage.setItem(APP_SETTINGS_STORAGE_KEY, JSON.stringify(appSettingsOnly(state)))
+  })
+}
