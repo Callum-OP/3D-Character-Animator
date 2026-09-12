@@ -46,7 +46,8 @@ const o = {
   redoStack: [],
   dragBefore: null, // selected root's TRS at gizmo-drag start (single-select path)
   onMoveCommit: null, // (root) => void — fired after a gizmo drag actually changes a root's TRS
-  gizmoGrabbed: false, // true once per interaction that actually grabbed a gizmo handle
+  gizmoGrabbed: false, // true once per interaction that actually MOVED something via the gizmo (see objectChange)
+  draggingViaGizmo: false, // true between dragging-changed(true) and (false) — not by itself proof of an actual move
   lastStyleOpts: { mode: 'unlit', toonSteps: 3, soften: 0, colorGrading: 'none', overrides: {} }, // last scene-wide style, for 'auto' objects
 
   // --- Multi-select (shift/ctrl-click several objects to move/rotate/resize
@@ -84,9 +85,17 @@ export function initObjects(refs) {
   transform.addEventListener('dragging-changed', (e) => {
     // Don't orbit while dragging; stay locked if a camera view has orbit off.
     o.controls.enabled = !e.value && !o.controls.locked
-    if (e.value) o.gizmoGrabbed = true // consumed by Viewport's empty-click deselect
+    o.draggingViaGizmo = e.value
+    // gizmoGrabbed itself is set from objectChange below, once something has
+    // actually moved — see the comment there for why.
   })
   transform.addEventListener('objectChange', () => {
+    // The gizmo's handles have generous invisible pick padding so they're
+    // easy to grab, which also means a click aimed at a nearby object can
+    // land on that padding instead. Only mark the interaction as "grabbed"
+    // once it actually moved something; a press-and-release that hits the
+    // padding but produces no motion falls through to normal object picking.
+    if (o.draggingViaGizmo) o.gizmoGrabbed = true
     if (o.pivotRoots.length > 1 && o.pivotStartMatrix) applyPivotDelta()
     o.requestRender()
   })
@@ -626,6 +635,18 @@ export function consumeObjectGizmoGrab() {
   const grabbed = o.gizmoGrabbed
   o.gizmoGrabbed = false
   return grabbed
+}
+
+// Test hook: replay a press → (optional) move → release on the real
+// TransformControls instance, the same events a genuine drag fires, without
+// needing a full DOM/raycaster harness. Lets tests cover the
+// press-on-the-padding-but-nothing-moved case that consumeObjectGizmoGrab()
+// exists to handle.
+export function simulateGizmoDragForTest(actuallyMoved) {
+  if (!o.transform) return
+  o.transform.dispatchEvent({ type: 'dragging-changed', value: true })
+  if (actuallyMoved) o.transform.dispatchEvent({ type: 'objectChange' })
+  o.transform.dispatchEvent({ type: 'dragging-changed', value: false })
 }
 
 // Swap the camera the gizmo works against (view-through-camera mode).

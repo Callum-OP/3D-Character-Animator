@@ -189,6 +189,7 @@ const p = {
   dragBefore: null, // selected bone's quaternion at drag start
   adjustBefore: null, // { bone, quat } captured by beginBoneAdjust (slider drags)
   pointerDown: null, // { x, y, axis } for click-vs-drag discrimination
+  gizmoMovedDuringDrag: false, // true once an axis-grab actually rotates/moves something (see onPointerDown/Up)
   suspended: false, // true while animation playback drives the bones
   snapDeg: null, // rotation snap increment in degrees (null = free rotate)
   shiftHeld: false, // Shift temporarily inverts the snap setting
@@ -216,6 +217,7 @@ export function initPosing(refs) {
     p.controls.enabled = !e.value && !p.controls.locked
   })
   transform.addEventListener('objectChange', () => {
+    p.gizmoMovedDuringDrag = true // a real drag happened, not just a press on the handle's pick padding
     if (p.gizmoMode === 'translate') {
       solveIk() // drag the proxy → CCD-solve the ancestor chain toward it
     } else if (p.selected) {
@@ -1183,10 +1185,25 @@ function commitIkDragUndo() {
   if (changes.length) pushUndo(changes)
 }
 
+// Test hooks: TransformControls' own axis hit-testing needs real WebGL
+// raycasting to exercise from a unit test, so tests instead set the axis
+// directly and replay the dragging-changed/objectChange events a real drag
+// would fire — exactly what onPointerUp's click-vs-drag logic reacts to.
+export function setGizmoAxisForTest(axis) {
+  if (p.transform) p.transform.axis = axis
+}
+export function simulateGizmoDragForTest(actuallyMoved) {
+  if (!p.transform) return
+  p.transform.dispatchEvent({ type: 'dragging-changed', value: true })
+  if (actuallyMoved) p.transform.dispatchEvent({ type: 'objectChange' })
+  p.transform.dispatchEvent({ type: 'dragging-changed', value: false })
+}
+
 function onPointerDown(e) {
   // Record where the press started and whether it landed on a gizmo axis, so
   // pointerup can tell a bone-pick from a gizmo-drag or an orbit-drag.
   p.pointerDown = { x: e.clientX, y: e.clientY, axis: p.transform ? p.transform.axis : null }
+  p.gizmoMovedDuringDrag = false
 }
 
 function onPointerUp(e) {
@@ -1194,7 +1211,14 @@ function onPointerUp(e) {
   p.pointerDown = null
   if (p.suspended || !p.enabled) return // no picking while animation plays or mode is off
   if (!down || e.button !== 0) return
-  if (down.axis !== null) return // was dragging the gizmo
+  // TransformControls' handles have a generous invisible pick region (bigger
+  // than what's actually drawn) so they're easy to grab — but that padding
+  // also swallows clicks aimed at a bone dot or region that merely sits near
+  // the gizmo, not on it. A real drag always moves something (that's what
+  // dragging IS), so only treat the click as "gizmo, not a pick" once
+  // objectChange has actually fired; a press-and-release with no resulting
+  // rotation/move falls through to the normal bone/region pick below.
+  if (down.axis !== null && p.gizmoMovedDuringDrag) return // was actually dragging the gizmo
   if (Math.abs(e.clientX - down.x) + Math.abs(e.clientY - down.y) > DRAG_SLOP_PX) return // orbit-drag
 
   if (p.viewMode === 'parts') {

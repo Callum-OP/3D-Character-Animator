@@ -69,6 +69,7 @@ const m = {
   redoStack: [],
   dragBefore: null, // selected part's pivot TRS at gizmo-drag start
   pointerDown: null, // { x, y, axis } for click-vs-drag discrimination
+  gizmoMovedDuringDrag: false, // true once an axis-grab actually moves something (see onPointerDown/Up)
   raycaster: new THREE.Raycaster(),
   posedProxies: new Map(), // SkinnedMesh -> { proxy, geometry } — see getPosedLocalPositions()
 }
@@ -93,6 +94,7 @@ export function initMeshEdit(refs) {
     m.controls.enabled = !e.value && !m.controls.locked
   })
   transform.addEventListener('objectChange', () => {
+    m.gizmoMovedDuringDrag = true // a real drag happened, not just a press on the handle's pick padding
     notifyChange()
     m.requestRender()
   })
@@ -911,6 +913,7 @@ function isMeshEffectivelyVisible(mesh) {
 
 function onPointerDown(e) {
   m.pointerDown = { x: e.clientX, y: e.clientY, axis: m.transform ? m.transform.axis : null }
+  m.gizmoMovedDuringDrag = false
 }
 
 function onPointerUp(e) {
@@ -919,7 +922,11 @@ function onPointerUp(e) {
   if (m.suspended) return
   const pickable = m.meshes.length || m.objectMeshes.length
   if (!m.enabled || !down || e.button !== 0 || !pickable) return
-  if (down.axis !== null) return
+  // See the matching comment in posing.js: the gizmo's invisible pick padding
+  // is bigger than what's drawn, so only treat this as "gizmo, not a pick"
+  // once it actually moved something — a press-and-release on the padding
+  // with no resulting move falls through to the normal mesh pick below.
+  if (down.axis !== null && m.gizmoMovedDuringDrag) return
   if (Math.abs(e.clientX - down.x) + Math.abs(e.clientY - down.y) > DRAG_SLOP_PX) return
 
   const rect = m.renderer.domElement.getBoundingClientRect()

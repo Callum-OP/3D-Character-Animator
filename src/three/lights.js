@@ -30,7 +30,8 @@ const l = {
   helper: null,
   lights: [], // { id, name, light, bulb, directional }
   selected: null, // selected light (THREE.PointLight | THREE.DirectionalLight) or null
-  gizmoGrabbed: false,
+  gizmoGrabbed: false, // true once per interaction that actually MOVED something via the gizmo (see objectChange)
+  draggingViaGizmo: false, // true between dragging-changed(true) and (false) — not by itself proof of an actual move
   onChange: null, // called after anything a rim-follow could care about changes (colour/position/type)
 }
 
@@ -48,9 +49,13 @@ export function initLights(refs) {
   transform.setSize(0.8)
   transform.addEventListener('dragging-changed', (e) => {
     l.controls.enabled = !e.value && !l.controls.locked
-    if (e.value) l.gizmoGrabbed = true
+    l.draggingViaGizmo = e.value
   })
   transform.addEventListener('objectChange', () => {
+    // Only count as "grabbed" once the gizmo has actually moved the light —
+    // its handles have pick padding wider than what's drawn, so a click near
+    // (not on) the gizmo can otherwise be swallowed with no resulting move.
+    if (l.draggingViaGizmo) l.gizmoGrabbed = true
     l.requestRender()
     if (l.onChange) l.onChange() // a followed light's direction may have moved
   })
