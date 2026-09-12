@@ -434,7 +434,7 @@ export const useStore = create((set) => ({
   // 'parts' highlights whole body-part regions (arm, leg, torso…) instead —
   // click a region to select and move its whole limb via IK, without having
   // to find and click the exact joint dot.
-  boneViewMode: 'bones',
+  boneViewMode: 'parts', // default to the Body Parts overlay; saved/restored per-project (see getProjectData/applyProjectData)
   setBoneViewMode: (boneViewMode) => set({ boneViewMode }),
   showAllPartHighlights: false, // Parts view: tint every region faintly, not just hover/selected
   setShowAllPartHighlights: (showAllPartHighlights) => set({ showAllPartHighlights }),

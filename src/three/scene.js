@@ -26,6 +26,7 @@ import {
   resumePosing,
   getBoneByName,
   setViewCamera as setPosingViewCamera,
+  refreshPoseOverlays,
 } from './posing.js'
 import {
   initCameras,
@@ -1411,6 +1412,7 @@ function collectSettings() {
     autoDecimate: s.autoDecimate,
     animFps: s.animFps,
     animDuration: s.animDuration,
+    boneViewMode: s.boneViewMode, // 'bones' or 'parts' — which Pose overlay was showing
   }
 }
 
@@ -1615,7 +1617,7 @@ export async function applyProjectData(record) {
     'outlineEnabled', 'outlineWidth', 'outlineColor', 'outlineOpacity', 'softenEnabled', 'softenAmount',
     'showGrid', 'showGround', 'limbLimits', 'solidBackground', 'backgroundColor', 'showShadow', 'shadowMapping',
     'shadowSoftness', 'shadowStrength', 'autoDecimate',
-    'animFps', 'animDuration',
+    'animFps', 'animDuration', 'boneViewMode',
   ]) {
     if (st[k] !== undefined) patch[k] = st[k]
   }
@@ -1686,6 +1688,12 @@ export async function applyProjectData(record) {
   // Falls back to whatever auto-frame already did if the project predates
   // this field (older saves simply won't have `viewportCamera`).
   if (record.viewportCamera) applyViewportCameraData(record.viewportCamera)
+
+  // 7. Re-sync the Body Parts overlay now that pose, mesh edits and materials
+  // have all finished being restored — see refreshPoseOverlays for why this
+  // needs to happen after everything else, not just once inside the load
+  // loop above.
+  refreshPoseOverlays()
 
   requestRender()
 }

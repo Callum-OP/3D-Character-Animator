@@ -160,7 +160,11 @@ const p = {
   model: null,
   bones: [],
   boneMap: new Map(), // name -> Bone
-  restQuats: new Map(), // Bone -> THREE.Quaternion (rotation at load)
+  // Bone -> THREE.Quaternion, the TRUE bind pose. This is captured exactly
+  // once per model (see setPoseModel) and cached on the model object itself
+  // so it survives re-activation — it must NEVER be re-derived from the
+  // bones' current rotation after the first capture (see setPoseModel).
+  restQuats: new Map(),
   pickable: [], // bones shown as dots / clickable (subset of bones)
   pickableNames: null, // Set of names restricting pickable, or null = all
 
@@ -168,7 +172,7 @@ const p = {
   pointsGeom: null,
   pointsMat: null,
 
-  viewMode: 'bones', // 'bones' (dot overlay) | 'parts' (body-part regions)
+  viewMode: 'parts', // 'bones' (dot overlay) | 'parts' (body-part regions) — default matches store.boneViewMode
   showAllHighlights: false, // Parts view: tint every region faintly, not just hover/selected
   boneRegionMap: new Map(), // Bone -> region key (or null), built per model
   regionControl: new Map(), // region key -> control bone name, built per model
@@ -273,18 +277,40 @@ export function initPosing(refs) {
   window.addEventListener('keyup', p._onKeyChange)
 }
 
-// Bind the posing system to a freshly loaded model: capture rest rotations and
-// build the pickable bone-dot overlay.
+// Bind the posing system to a model: capture (or reuse) its rest rotations
+// and build the pickable bone-dot overlay.
+//
+// setActiveCharacter calls this every time a character becomes the active
+// one — including when it's merely being RE-activated (switching between
+// already-loaded characters, or re-selecting a character after a project
+// finishes loading and re-applying its saved pose). Only the very FIRST
+// call for a given model instance happens at that model's true bind pose;
+// every later call happens with the bones already sitting in whatever pose
+// they were last left in.
+//
+// The old code re-derived p.restQuats from the bones' CURRENT rotation on
+// every call. That meant re-activating a posed character (which is exactly
+// what happens right after a project load re-applies its saved pose) reset
+// "rest" to that saved pose — so Mirror/Symmetrise, which both work by
+// comparing the current pose against rest, would see zero deflection on
+// every limb and treat an already-lopsided pose as perfectly symmetrical.
+//
+// Fix: capture the rest map once per model instance and cache it ON the
+// model object (model.__poseRestQuats), then reuse that cached map on every
+// subsequent activation instead of re-sampling live bone rotations. A newly
+// loaded/replaced model is a new object with no cache yet, so it still gets
+// captured fresh at its actual bind pose.
 export function setPoseModel(model) {
   clearPoseModel()
   p.model = model
   p.bones = model.bones || []
   p.boneMap = new Map()
-  p.restQuats = new Map()
-  for (const b of p.bones) {
-    p.boneMap.set(b.name, b)
-    p.restQuats.set(b, b.quaternion.clone())
+  if (!model.__poseRestQuats) {
+    model.__poseRestQuats = new Map()
+    for (const b of p.bones) model.__poseRestQuats.set(b, b.quaternion.clone())
   }
+  p.restQuats = model.__poseRestQuats
+  for (const b of p.bones) p.boneMap.set(b.name, b)
   setLimitsModel(model) // measure the limb limits against this rest pose
   p.boneRegionMap = buildBoneRegionMap()
   buildPartOverlays(model)
@@ -315,6 +341,22 @@ export function setPoseModel(model) {
   applyPickableFilter()
   applyOverlayVisibility()
   updateBoneHelpers()
+}
+
+// Rebuild the Body Parts overlay for whichever model is currently active,
+// without touching rest pose, selection, or anything else setPoseModel would
+// reset. Cheap defensive re-sync for callers that finish mutating a
+// character's pose/mesh/materials well after it was activated — a project
+// load restores pose, mesh edits and materials in several steps AFTER the
+// character was first made active, and while none of those steps are
+// supposed to invalidate the overlay, calling this once everything has
+// settled guarantees Body Parts hover-picking is correct from the first
+// hover instead of depending on every one of those steps behaving exactly
+// as expected. No-op if no model is currently set.
+export function refreshPoseOverlays() {
+  if (!p.model) return
+  p.boneRegionMap = buildBoneRegionMap()
+  buildPartOverlays(p.model)
 }
 
 // Restrict the dot overlay and click-picking to the named bones (null = all).
@@ -1212,6 +1254,17 @@ function pickPartRegion(e) {
   _partNdc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1
   _partRaycaster.setFromCamera(_partNdc, p.camera)
   const meshes = p.partMeshes.map((pm) => pm.mesh)
+  // THREE.SkinnedMesh#raycast only computes its bounding sphere/box lazily,
+  // the FIRST time it's ever raycast against, and then caches it forever —
+  // it never re-derives it as the pose changes. Since these overlays get
+  // posed continuously (dragging limbs, mirror/symmetrise, project loads),
+  // a cached volume from any one moment is wrong for every other pose. Force
+  // a fresh compute against the CURRENT pose before every pick instead of
+  // relying on that cache.
+  for (const mesh of meshes) {
+    mesh.boundingSphere = null
+    mesh.boundingBox = null
+  }
   const hits = _partRaycaster.intersectObjects(meshes, false)
   if (!hits.length) return null
   const found = p.partMeshes.find((pm) => pm.mesh === hits[0].object)
