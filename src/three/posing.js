@@ -777,18 +777,47 @@ function computeRootRelativeWorldQuats(localQuatMap) {
   return result
 }
 
+// Each mirrored/symmetrised bone's "current" world rotation needs to be
+// measured in the SAME basis as its "rest" world rotation (rest-relative,
+// via computeRootRelativeWorldQuats(p.restQuats)) — otherwise comparing them
+// bakes in whatever an unrelated, un-mirrored ANCESTOR happens to be doing
+// right now. A twisted spine sitting between the root and a pair of mirrored
+// arms would otherwise leak its live rotation into the arms' delta (since
+// "current" walked the live hierarchy while "rest" didn't), corrupting the
+// mirror for every descendant of that ancestor even though the ancestor
+// itself was never touched. Composing the bone's own CURRENT local rotation
+// onto its parent's fixed REST world orientation (instead of the parent's
+// live one) isolates exactly this bone's own contribution, regardless of
+// what any ancestor is currently doing.
+function isolatedCurrentWorldQuats(snapshot, restWorld) {
+  const result = new Map()
+  for (const b of p.bones) {
+    const parent = b.parent
+    const restParentQuat =
+      parent && parent.isBone && p.boneMap.has(parent.name)
+        ? restWorld.get(parent) || new THREE.Quaternion()
+        : new THREE.Quaternion()
+    result.set(b, restParentQuat.clone().multiply(snapshot.get(b)))
+  }
+  return result
+}
+
 // Resolves the local quaternion for every bone in `newWorldMap` at once.
 // Looks up a parent's NEW world rotation when the parent is itself part of
 // the mirrored/symmetrised set (e.g. lowerArm under a mirrored upperArm), or
-// its unchanged current world rotation otherwise (e.g. an unsided chest) —
-// so chain order doesn't matter, only map contents.
-function resolveLocalsFromWorld(newWorldMap, currentWorld) {
+// its fixed REST world rotation otherwise (e.g. an unsided chest, whatever
+// pose it currently happens to be in) — so chain order doesn't matter, only
+// map contents, and — same reasoning as isolatedCurrentWorldQuats above —
+// converting back to local space stays consistent with the rest-relative
+// basis newWorldMap's targets were built in, rather than reintroducing the
+// ancestor's live rotation on the way back out.
+function resolveLocalsFromWorld(newWorldMap, restWorld) {
   const changes = []
   for (const [target, newWorld] of newWorldMap) {
     const parent = target.parent
     const parentQuat =
       parent && parent.isBone && p.boneMap.has(parent.name)
-        ? newWorldMap.get(parent) || currentWorld.get(parent) || new THREE.Quaternion()
+        ? newWorldMap.get(parent) || restWorld.get(parent) || new THREE.Quaternion()
         : new THREE.Quaternion()
     const after = parentQuat.clone().invert().multiply(newWorld)
     if (!target.quaternion.equals(after)) {
@@ -809,7 +838,7 @@ export function mirrorPose() {
   if (!p.model || p.bones.length === 0) return 0
   const snapshot = new Map(p.bones.map((b) => [b, b.quaternion.clone()]))
   const restWorld = computeRootRelativeWorldQuats(p.restQuats)
-  const currentWorld = computeRootRelativeWorldQuats(snapshot)
+  const currentWorld = isolatedCurrentWorldQuats(snapshot, restWorld)
 
   const processed = new Set()
   const pairs = []
@@ -839,7 +868,7 @@ export function mirrorPose() {
     }
   }
 
-  const changes = resolveLocalsFromWorld(newWorldMap, currentWorld)
+  const changes = resolveLocalsFromWorld(newWorldMap, restWorld)
   if (changes.length) pushUndo(changes)
   updateBoneHelpers()
   notifyPoseChange()
@@ -856,7 +885,7 @@ export function symmetrisePose(strategy = 'average') {
   if (!p.model || p.bones.length === 0) return 0
   const snapshot = new Map(p.bones.map((b) => [b, b.quaternion.clone()]))
   const restWorld = computeRootRelativeWorldQuats(p.restQuats)
-  const currentWorld = computeRootRelativeWorldQuats(snapshot)
+  const currentWorld = isolatedCurrentWorldQuats(snapshot, restWorld)
 
   const processed = new Set()
   const changes = []
@@ -913,7 +942,7 @@ export function symmetrisePose(strategy = 'average') {
     newWorldMap.set(right, mirrorQuatAcrossX(shared).multiply(restRightW))
   }
 
-  changes.push(...resolveLocalsFromWorld(newWorldMap, currentWorld))
+  changes.push(...resolveLocalsFromWorld(newWorldMap, restWorld))
 
   if (changes.length) pushUndo(changes)
   updateBoneHelpers()

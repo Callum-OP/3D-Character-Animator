@@ -107,14 +107,22 @@ describe('bone posing: undo/redo and rest-relative editing', () => {
     expect(getBoneEulerDelta('Spine').x).toBeCloseTo(0, 0)
   })
 
+  // Mirroring/symmetrising happen in WORLD space, reflected across the
+  // character's X=0 plane (see posing.js's mirrorQuatAcrossX) — that's what
+  // makes them correct regardless of a bone's own local axis conventions,
+  // rather than just copying one side's local rotation value onto the
+  // other. This rig's Left/RightArm bones share an identical (unmirrored)
+  // local axis, which is exactly the case that reflection matters for: a
+  // pure Y-axis rotation reflected across X comes out with its sign
+  // flipped, not just its value copied across.
   it('symmetrisePose averages opposite-side rotations and is undoable', () => {
     setBoneEulerDelta('LeftArm', { x: 0, y: 30, z: 0 })
     setBoneEulerDelta('RightArm', { x: 0, y: -10, z: 0 })
     setBoneEulerDelta('Spine', { x: 0, y: 30, z: 0 })
     symmetrisePose()
 
-    expect(getBoneEulerDelta('LeftArm').y).toBeCloseTo(10, 0)
-    expect(getBoneEulerDelta('RightArm').y).toBeCloseTo(10, 0)
+    expect(getBoneEulerDelta('LeftArm').y).toBeCloseTo(20, 0)
+    expect(getBoneEulerDelta('RightArm').y).toBeCloseTo(-20, 0)
     expect(getBoneEulerDelta('Spine').y).toBeCloseTo(15, 0)
     undo()
     expect(getBoneEulerDelta('LeftArm').y).toBeCloseTo(30, 0)
@@ -122,14 +130,14 @@ describe('bone posing: undo/redo and rest-relative editing', () => {
     expect(getBoneEulerDelta('Spine').y).toBeCloseTo(30, 0)
   })
 
-  it('mirrorPose swaps only verified left/right pairs', () => {
+  it('mirrorPose reflects only verified left/right pairs across the centre plane', () => {
     setBoneEulerDelta('LeftArm', { x: 0, y: 25, z: 0 })
     setBoneEulerDelta('RightArm', { x: 0, y: -5, z: 0 })
     setBoneEulerDelta('Spine', { x: 0, y: 15, z: 0 })
     mirrorPose()
 
-    expect(getBoneEulerDelta('LeftArm').y).toBeCloseTo(-5, 0)
-    expect(getBoneEulerDelta('RightArm').y).toBeCloseTo(25, 0)
+    expect(getBoneEulerDelta('LeftArm').y).toBeCloseTo(5, 0)
+    expect(getBoneEulerDelta('RightArm').y).toBeCloseTo(-25, 0)
     expect(getBoneEulerDelta('Spine').y).toBeCloseTo(15, 0)
   })
 
@@ -149,7 +157,7 @@ describe('bone posing: undo/redo and rest-relative editing', () => {
     setBoneEulerDelta(right.name, { x: 0, y: -5, z: 0 })
     mirrorPose()
 
-    expect(getBoneEulerDelta(left.name).y).toBeCloseTo(-5, 0)
-    expect(getBoneEulerDelta(right.name).y).toBeCloseTo(35, 0)
+    expect(getBoneEulerDelta(left.name).y).toBeCloseTo(5, 0)
+    expect(getBoneEulerDelta(right.name).y).toBeCloseTo(-35, 0)
   })
 })

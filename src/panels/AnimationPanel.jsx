@@ -22,6 +22,7 @@ import {
   exportClipJSON,
   importClipJSON,
   renameClip,
+  describeClipBoneMismatch,
 } from '../three/animation.js'
 import {
   listRecentClips,
@@ -165,6 +166,7 @@ export default function AnimationPanel() {
   const bvhRef = useRef(null)
   const clipFileRef = useRef(null)
   const [bvhMsg, setBvhMsg] = useState(null)
+  const [clipBoneWarning, setClipBoneWarning] = useState(null) // set when a selected/imported clip doesn't match this model's bones
   const [recentClips, setRecentClips] = useState([])
   const [trimOpen, setTrimOpen] = useState(false)
   const [trimRange, setTrimRange] = useState([0, 0]) // [start, end] seconds
@@ -249,6 +251,7 @@ export default function AnimationPanel() {
       const d = selectClip(activeClipName, { loop, speed }, animData)
       st().setDuration(d)
       st().setPlayback('paused')
+      setClipBoneWarning(describeClipBoneMismatch(activeClipName))
     } else if (next === 'edit') {
       st().setDuration(animDuration)
     }
@@ -260,12 +263,14 @@ export default function AnimationPanel() {
     if (!name) {
       st().setPlayback('stopped')
       st().setDuration(0)
+      setClipBoneWarning(null)
       return
     }
     const d = selectClip(name, { loop, speed }, animData)
     st().setDuration(d)
     st().setCurrentTime(0)
     st().setPlayback('paused')
+    setClipBoneWarning(describeClipBoneMismatch(name))
   }
 
   function onPlay() {
@@ -593,6 +598,7 @@ export default function AnimationPanel() {
     st().setDuration(d)
     st().setCurrentTime(0)
     st().setPlayback('paused')
+    setClipBoneWarning(describeClipBoneMismatch(name))
   }
 
   async function refreshRecentClips() {
@@ -786,6 +792,10 @@ export default function AnimationPanel() {
                 </option>
               ))}
             </select>
+          )}
+
+          {clipBoneWarning && activeClipName && (
+            <div className="pose-msg pose-msg-warn">⚠ {clipBoneWarning}</div>
           )}
 
           {activeClipName && importedClipNames.includes(activeClipName) && !renameOpen && (

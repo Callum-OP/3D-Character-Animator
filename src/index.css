@@ -705,6 +705,10 @@ body {
   margin-top: 8px;
 }
 
+.pose-msg-warn {
+  color: #e0a262;
+}
+
 .pose-toggles {
   display: grid;
   grid-template-columns: 1fr 1fr; /* two per row — a single row overflows */

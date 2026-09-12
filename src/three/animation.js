@@ -353,6 +353,81 @@ export function importClipJSON(json) {
   return addGeneratedClip(clip)
 }
 
+// ---------------------------------------------------------------------------
+// Clip/model bone compatibility
+//
+// A clip's tracks are bone-name-keyed (see the note at the top of this
+// file), which is exactly what makes clips portable across models sharing
+// the SAME rig — but silently wrong on a model with a DIFFERENT one: three.js's
+// PropertyBinding just skips any track whose target node isn't found, so an
+// incompatible clip "plays" without error and the character simply doesn't
+// move (or only partially moves, if a few bone names happen to coincide).
+// There's no automatic retargeting for arbitrary clips (only BVH mocap
+// import has that, via bvh.js's slot mapping) — so the best we can do here
+// is catch the mismatch and say so, rather than let it fail silently.
+// ---------------------------------------------------------------------------
+
+const TRACK_PROPERTY_RE = /\.(quaternion|position|scale|morphTargetInfluences\[\d+\])$/
+
+// Pull the bone/node name a track targets, or '' for an unqualified root
+// track (".position"/".quaternion" with no node — see buildEditClip above),
+// or null if the property suffix isn't one we recognise.
+function trackNodeName(trackName) {
+  const m = trackName.match(TRACK_PROPERTY_RE)
+  if (!m) return null
+  let node = trackName.slice(0, trackName.length - m[0].length)
+  const slash = node.lastIndexOf('/')
+  if (slash >= 0) node = node.slice(slash + 1)
+  return node
+}
+
+// Compare a clip's bone tracks against the currently loaded model's actual
+// bones. Returns null if there's no such clip or no model loaded to check
+// against; otherwise { matched, total, missing, compatible }, where
+// total/matched count only bone-targeting tracks (root-motion and morph
+// tracks are excluded — they don't depend on the rig) and `missing` is the
+// de-duplicated list of bone names the clip needs that this model lacks.
+export function getClipBoneCompatibility(name) {
+  const clip = findClip(name)
+  if (!clip || !a.model) return null
+  const boneNames = new Set((a.model.bones || []).map((b) => b.name))
+  const meshUUIDs = new Set((a.model.meshes || []).map((m) => m.uuid))
+  let total = 0
+  let matched = 0
+  const missing = []
+  const seenMissing = new Set()
+  for (const track of clip.tracks) {
+    const node = trackNodeName(track.name)
+    if (node === null || node === '' || meshUUIDs.has(node)) continue // root motion / morph track — not bone-specific
+    total++
+    if (boneNames.has(node)) {
+      matched++
+    } else if (!seenMissing.has(node)) {
+      seenMissing.add(node)
+      missing.push(node)
+    }
+  }
+  return { matched, total, missing, compatible: total === 0 || matched === total }
+}
+
+// Human-readable warning for the UI, or null if the clip checks out fine (or
+// has nothing bone-specific to check). This never blocks anything — the
+// clip still gets imported/selected — it just surfaces the otherwise-silent
+// partial failure instead of leaving the user wondering why the character
+// isn't moving right.
+export function describeClipBoneMismatch(name) {
+  const info = getClipBoneCompatibility(name)
+  if (!info || info.compatible) return null
+  const pct = info.total ? Math.round((info.matched / info.total) * 100) : 0
+  const shown = info.missing.slice(0, 3).join(', ')
+  const more = info.missing.length > 3 ? `, +${info.missing.length - 3} more` : ''
+  return (
+    `"${name}" doesn't match this model's skeleton — only ${info.matched} of ${info.total} ` +
+    `bone tracks matched (${pct}%). It was likely made for a different rig and won't retarget ` +
+    `automatically, so the missing bones (${shown}${more}) will just stay in their rest pose.`
+  )
+}
+
 // Concatenate several clips end-to-end into one new playable clip (e.g. "walk"
 // then "wave"), sampled at `fps`. Order follows `names`. Returns the new
 // clip's name, or null.
