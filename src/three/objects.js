@@ -468,6 +468,13 @@ export function pickObjectId(ndcX, ndcY) {
   return null
 }
 
+// Whether `id` refers to a loaded character (as opposed to a prop). Used by
+// the viewport's click handler to tell "clicked a character" apart from
+// "clicked a prop" so it knows when to switch the active character.
+export function isCharacterId(id) {
+  return id != null && o.characterRoots.has(id)
+}
+
 // Resolve an id (numeric prop id or a character id) to its root object.
 function rootFor(id) {
   if (id == null) return null

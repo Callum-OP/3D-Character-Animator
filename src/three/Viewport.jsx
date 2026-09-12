@@ -21,6 +21,7 @@ import {
   setEnvironmentLighting,
   setOutlineToggle,
   setViewCameraById,
+  setActiveCharacter,
 } from './scene.js'
 import { useStore } from '../store.js'
 import { SUPPORTED_EXTENSION_RE, SUPPORTED_EXTENSIONS } from './loadModel.js'
@@ -56,6 +57,7 @@ import {
   redo as redoObject,
   consumeObjectGizmoGrab,
   pickObjectId,
+  isCharacterId,
 } from './objects.js'
 import { resolveUndoTarget } from './undoPriority.js'
 import { selectCamera, setCameraGizmoMode, consumeCameraGizmoGrab } from './cameras.js'
@@ -369,17 +371,39 @@ export default function Viewport() {
 
       const s = useStore.getState()
 
-      // Object mode: clicking a prop/image selects it directly — gizmo and
-      // all — without needing to find it in the Objects panel first.
-      // Shift/Ctrl-click adds it to the current selection, same as the panel.
-      // (Plain 'view' mode intentionally falls through to here and does
-      // nothing — it's look-only, no picking.)
-      if (s.mode === 'object' && s.viewCameraId == null) {
+      // Clicking any loaded character — in ANY mode, not just Object mode —
+      // makes it the active character (the one posing/mesh-edit/the gizmo
+      // operate on), mirroring the "activate" button next to it in the
+      // character roster. This only fires when the click lands on a
+      // character that ISN'T already active; clicking the already-active
+      // character falls through to that mode's normal picking behaviour
+      // (bone-pick, mesh-pick, object-select, etc) exactly as before.
+      // Skipped while looking through a scene camera, same as object-mode
+      // picking below.
+      if (s.viewCameraId == null) {
         const rect = el.getBoundingClientRect()
         const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1
         const ndcY = -((e.clientY - rect.top) / rect.height) * 2 + 1
         const hitId = pickObjectId(ndcX, ndcY)
-        if (hitId != null) {
+
+        if (hitId != null && isCharacterId(hitId) && hitId !== s.activeCharacterId) {
+          setActiveCharacter(hitId)
+          // In Object mode, also select it as an object so the move/rotate/
+          // resize gizmo attaches to it right away, same as clicking any
+          // other object there.
+          if (s.mode === 'object') {
+            if (e.shiftKey || e.ctrlKey || e.metaKey) s.toggleObjectSelection(hitId, true)
+            else s.setSelectedObjectId(hitId)
+          }
+          return
+        }
+
+        // Object mode: clicking a prop/image selects it directly — gizmo and
+        // all — without needing to find it in the Objects panel first.
+        // Shift/Ctrl-click adds it to the current selection, same as the panel.
+        // (Plain 'view' mode intentionally falls through to here and does
+        // nothing — it's look-only, no picking.)
+        if (s.mode === 'object' && hitId != null) {
           if (e.shiftKey || e.ctrlKey || e.metaKey) s.toggleObjectSelection(hitId, true)
           else s.setSelectedObjectId(hitId)
           return
