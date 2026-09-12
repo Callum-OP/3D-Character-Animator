@@ -102,8 +102,7 @@ export default function LightsPanel() {
     <div className="panel">
       <h2>Lights</h2>
       <p className="panel-hint">
-        Add extra light sources and move them around the scene, on top of the
-        main key light in the Material panel.
+        Add and position extra lights alongside the main key light.
       </p>
 
       <button className="btn" onClick={onAdd} title="Place a light near the character">

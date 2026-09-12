@@ -60,7 +60,7 @@ import {
   isCharacterId,
 } from './objects.js'
 import { resolveUndoTarget } from './undoPriority.js'
-import { selectCamera, setCameraGizmoMode, consumeCameraGizmoGrab } from './cameras.js'
+import { selectCamera, setCameraGizmoMode, consumeCameraGizmoGrab, pickCameraId } from './cameras.js'
 import { selectLight, consumeLightGizmoGrab } from './lights.js'
 import StatsOverlay from '../panels/StatsOverlay.jsx'
 
@@ -384,7 +384,13 @@ export default function Viewport() {
         const rect = el.getBoundingClientRect()
         const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1
         const ndcY = -((e.clientY - rect.top) / rect.height) * 2 + 1
+        const cameraHitId = s.mode === 'object' ? pickCameraId(ndcX, ndcY) : null
         const hitId = pickObjectId(ndcX, ndcY)
+
+        if (cameraHitId != null) {
+          s.setSelectedCameraId(cameraHitId)
+          return
+        }
 
         if (hitId != null && isCharacterId(hitId) && hitId !== s.activeCharacterId) {
           setActiveCharacter(hitId)
@@ -571,15 +577,22 @@ export default function Viewport() {
         </div>
       )}
 
-      {modelInfo && mode !== 'view' && (
+      {(modelInfo || selectedCameraId != null) && mode !== 'view' && (
         <div className="transform-widget-strip" title="What dragging the gizmo does">
           {TRANSFORM_BUTTONS.map((b) => {
             // Bone mode has Move (IK: drag the joint, its ancestor chain
             // follows within its reach and limb limits) and Rotate (FK) —
             // but no Resize, since a bone has no size of its own.
             const isBone = mode === 'bone'
-            const disabled = isBone && b.value === 'scale'
-            const activeValue = isBone ? boneGizmoMode : mode === 'mesh' ? meshGizmoMode : objectMode
+            const isCamera = mode === 'object' && selectedCameraId != null
+            const disabled = (isBone || isCamera) && b.value === 'scale'
+            const activeValue = isBone
+              ? boneGizmoMode
+              : mode === 'mesh'
+                ? meshGizmoMode
+                : isCamera
+                  ? cameraGizmoMode
+                  : objectMode
             const active = activeValue === b.value
             return (
               <button
@@ -596,6 +609,7 @@ export default function Viewport() {
                   // widget stay in sync.
                   if (mode === 'bone') useStore.getState().setBoneGizmoMode(b.value)
                   else if (mode === 'mesh') useStore.getState().setMeshGizmoMode(b.value)
+                  else if (isCamera) useStore.getState().setCameraGizmoMode(b.value)
                   else if (mode === 'object') useStore.getState().setObjectMode(b.value)
                 }}
               >

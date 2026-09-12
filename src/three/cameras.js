@@ -36,6 +36,8 @@ const c = {
 
 const _qa = new THREE.Quaternion()
 const _qb = new THREE.Quaternion()
+const _pickNdc = new THREE.Vector2()
+const _pickRaycaster = new THREE.Raycaster()
 
 export function initCameras(refs) {
   c.scene = refs.scene
@@ -110,6 +112,18 @@ export function setCameraGizmoMode(mode) {
   if (!c.transform) return
   c.transform.setMode(mode) // 'translate' | 'rotate'
   c.requestRender()
+}
+
+// Find a placed camera by its visible body in the free viewport.
+export function pickCameraId(ndcX, ndcY) {
+  if (!c.camera || !c.cameras.length) return null
+  _pickNdc.set(ndcX, ndcY)
+  _pickRaycaster.setFromCamera(_pickNdc, c.camera)
+  const bodies = c.cameras.filter((entry) => entry.body.visible).map((entry) => entry.body)
+  const hit = _pickRaycaster.intersectObjects(bodies, true)[0]
+  if (!hit) return null
+  const entry = c.cameras.find((candidate) => candidate.body === hit.object || candidate.body.getObjectById(hit.object.id))
+  return entry ? entry.id : null
 }
 
 // See consumeObjectGizmoGrab() in objects.js for what this is for.

@@ -21,6 +21,7 @@ export default function CamerasPanel() {
   const sceneCameras = useStore((s) => s.sceneCameras)
   const selectedCameraId = useStore((s) => s.selectedCameraId)
   const setSelectedCameraId = useStore((s) => s.setSelectedCameraId)
+  const setMode = useStore((s) => s.setMode)
   const cameraGizmoMode = useStore((s) => s.cameraGizmoMode)
   const setCameraGizmoMode = useStore((s) => s.setCameraGizmoMode)
   const viewCameraId = useStore((s) => s.viewCameraId)
@@ -40,6 +41,12 @@ export default function CamerasPanel() {
   function onAdd() {
     const meta = addCamera()
     st().addSceneCamera(meta)
+    setMode('object')
+  }
+
+  function onSelect(id) {
+    setSelectedCameraId(id === selectedCameraId ? null : id)
+    if (id !== selectedCameraId) setMode('object')
   }
 
   function onRemove(id) {
@@ -73,8 +80,7 @@ export default function CamerasPanel() {
     <div className="panel">
       <h2>Cameras</h2>
       <p className="panel-hint">
-        Frame the view how you like it, then add a camera to capture that shot.
-        Keyframe it at different times to move the camera during the animation.
+        Add cameras, adjust their view, and animate their position.
       </p>
 
       <button className="btn" onClick={onAdd} title="Place a camera at the current view">
@@ -101,7 +107,7 @@ export default function CamerasPanel() {
                 key={cam.id}
                 className={'obj-row' + (cam.id === selectedCameraId ? ' selected' : '')}
                 title={cam.name}
-                onClick={() => setSelectedCameraId(cam.id === selectedCameraId ? null : cam.id)}
+                onClick={() => onSelect(cam.id)}
               >
                 <span className="obj-name">
                   {cam.name}
@@ -214,16 +220,9 @@ export default function CamerasPanel() {
           </label>
 
           <div className="pose-hint">
-            📷 looks through a camera (0 toggles, Esc exits) — exports and
-            recordings always use whatever the view shows. <b>Key camera</b>{' '}
-            animates that ONE camera's own position over time (a dolly/pan
-            shot) — key it at two times and it glides between them whenever
-            it's the active view. <b>Cut here</b> switches the free view to a
-            DIFFERENT camera at a point in time, gliding across — use it to
-            hop between several fixed shots like film cuts. Both only move
-            the free view during Export's Preview/Record by default; flip{' '}
-            <b>Follow camera cuts/keys on Play</b> above if you also want
-            ordinary Play to follow them.
+            📷 Select a camera to move or rotate it. Use <b>Key camera</b> for
+            camera motion and <b>Cut here</b> to switch shots. Exports use the
+            active view; Play follows camera keys and cuts when enabled above.
           </div>
         </>
       )}

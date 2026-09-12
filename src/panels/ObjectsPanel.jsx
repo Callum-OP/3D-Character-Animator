@@ -121,9 +121,7 @@ export default function ObjectsPanel() {
     <div className="panel">
       <h2>Objects</h2>
       <p className="panel-hint">
-        Add props, backgrounds and reference images to place around your character.
-        Shift-click or Ctrl-click several in the list below to move, rotate or resize them all together.
-        Attach a prop to a bone — like a gun in a hand — to make it follow that bone through posing and animation.
+        Add and arrange props, backgrounds, and reference images around your character.
       </p>
 
       <div className="kf-actions">

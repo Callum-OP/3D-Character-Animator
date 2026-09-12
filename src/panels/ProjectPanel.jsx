@@ -324,9 +324,9 @@ export default function ProjectPanel() {
           {current && <span className="subpanel-count" title={current.name}>{current.name}</span>}
         </div>
         <p className="panel-hint">
-          A project remembers everything — model, props, images, poses and
-          style — as one file on disk. Open picks a file up, Save writes
-          straight back to it, Save As lets you pick a new spot.
+          A project saves everything including models, props, images, poses and
+          styles as one file on disk. Open picks a file up, Save writes back to it, 
+          Save As lets you choose a new name or location.
           {!fsAccess && ' Your browser can open project files but can\'t write back to the same spot automatically, so Save will ask where to put the file each time.'}
         </p>
 
