@@ -50,7 +50,7 @@ export const HUMANOID_SLOTS = [
 ]
 
 // Detect which body side a bone name refers to ('L' | 'R' | '').
-function detectSide(n) {
+export function detectSide(n) {
   if (/right/.test(n)) return 'R'
   if (/left/.test(n)) return 'L'
   // .r / _r / -r / space r  (as a delimited token), and leading "r." etc.

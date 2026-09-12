@@ -430,6 +430,14 @@ export const useStore = create((set) => ({
   deformOnly: false, // hide helper bones (_end/twist/vol/DEF- rule; set per rig on load)
   transformSpace: 'local', // gizmo rotation space: 'local' | 'world'
   showBones: true, // show the pickable bone-dot overlay + gizmo
+  // Pose mode's overlay style: 'bones' is the classic per-joint dot overlay;
+  // 'parts' highlights whole body-part regions (arm, leg, torso…) instead —
+  // click a region to select and move its whole limb via IK, without having
+  // to find and click the exact joint dot.
+  boneViewMode: 'bones',
+  setBoneViewMode: (boneViewMode) => set({ boneViewMode }),
+  showAllPartHighlights: false, // Parts view: tint every region faintly, not just hover/selected
+  setShowAllPartHighlights: (showAllPartHighlights) => set({ showAllPartHighlights }),
   rotationSnap: false, // rotate in 15° steps (hold Shift for the opposite)
   limbLimits: true, // keep new poses (and the ragdoll) inside natural joint ranges
   poseClipboard: null, // a copied pose ({ format:'pose-v1', bones:{...} }) for paste

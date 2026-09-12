@@ -104,6 +104,8 @@ export default function BonePanel() {
   const deformOnly = useStore((s) => s.deformOnly)
   const transformSpace = useStore((s) => s.transformSpace)
   const showBones = useStore((s) => s.showBones)
+  const boneViewMode = useStore((s) => s.boneViewMode)
+  const showAllPartHighlights = useStore((s) => s.showAllPartHighlights)
   const rotationSnap = useStore((s) => s.rotationSnap)
   const limbLimits = useStore((s) => s.limbLimits)
   const playback = useStore((s) => s.playback)
@@ -114,6 +116,8 @@ export default function BonePanel() {
   const setDeformOnly = useStore((s) => s.setDeformOnly)
   const setTransformSpace = useStore((s) => s.setTransformSpace)
   const setShowBones = useStore((s) => s.setShowBones)
+  const setBoneViewMode = useStore((s) => s.setBoneViewMode)
+  const setShowAllPartHighlights = useStore((s) => s.setShowAllPartHighlights)
   const setRotationSnap = useStore((s) => s.setRotationSnap)
   const setLimbLimits = useStore((s) => s.setLimbLimits)
   const setPoseClipboard = useStore((s) => s.setPoseClipboard)
@@ -200,9 +204,26 @@ export default function BonePanel() {
     <div className="panel">
       <h2>Pose</h2>
       <p className="panel-hint">
-        Click a dot on the character, then drag the coloured ring to bend that
-        joint.
+        {boneViewMode === 'parts'
+          ? 'Click a highlighted body part to select it, then use Rotate or Move to pose it.'
+          : 'Click a dot on the character, then drag the coloured ring to bend that joint.'}
       </p>
+
+      <div className="seg" style={{ marginTop: 4, marginBottom: 14 }} title="Bones: pick and bend individual joints. Body Parts: click a whole limb and move it — the joints needed adjust automatically.">
+        <button
+          className={'seg-btn' + (boneViewMode === 'bones' ? ' active' : '')}
+          onClick={() => setBoneViewMode('bones')}
+        >
+          Bones
+        </button>
+        <button
+          className={'seg-btn' + (boneViewMode === 'parts' ? ' active' : '')}
+          onClick={() => setBoneViewMode('parts')}
+        >
+          Body Parts
+        </button>
+      </div>
+
 
       <div className="pose-actions">
         <button className="btn secondary" onClick={() => resetPose()} title="Straighten every joint back to the rest pose">
@@ -243,14 +264,28 @@ export default function BonePanel() {
       {poseMsg && <div className="pose-msg">{poseMsg}</div>}
 
       <div className="pose-toggles">
-        <label className="toggle-row" style={{ padding: 0 }} title="Show the joint dots on the character">
+        <label className="toggle-row" style={{ padding: 0 }} title={boneViewMode === 'parts' ? 'Show the highlighted body-part regions on the character' : 'Show the joint dots on the character'}>
           <input
             type="checkbox"
             checked={showBones}
             onChange={(e) => setShowBones(e.target.checked)}
           />
-          Show joints
+          {boneViewMode === 'parts' ? 'Show body parts' : 'Show joints'}
         </label>
+        {boneViewMode === 'parts' && (
+          <label
+            className="toggle-row"
+            style={{ padding: 0 }}
+            title="Faintly tint every body part all the time, instead of only on hover or when selected"
+          >
+            <input
+              type="checkbox"
+              checked={showAllPartHighlights}
+              onChange={(e) => setShowAllPartHighlights(e.target.checked)}
+            />
+            Highlight all parts
+          </label>
+        )}
         <label
           className="toggle-row"
           style={{ padding: 0 }}
@@ -390,9 +425,9 @@ export default function BonePanel() {
       </div>
 
       <div className="pose-hint">
-        Click a bone dot or a name to select, then drag the ring gizmo or the
-        X/Y/Z sliders to bend it. Esc deselects · Ctrl+Z undoes · Ctrl+Shift+Z
-        redoes · hold Shift to snap.
+        {boneViewMode === 'parts'
+          ? 'Click a highlighted body part to select it, then use the Rotate/Move toggle and drag the gizmo. Esc deselects · Ctrl+Z undoes · Ctrl+Shift+Z redoes. Switch to "Bones" for fine per-joint control.'
+          : 'Click a bone dot or a name to select, then drag the ring gizmo or the X/Y/Z sliders to bend it. Esc deselects · Ctrl+Z undoes · Ctrl+Shift+Z redoes · hold Shift to snap.'}
       </div>
     </div>
   )

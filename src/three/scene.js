@@ -298,6 +298,9 @@ export function initScene(container) {
     onSelect: (name) => useStore.getState().setSelectedBoneName(name),
     // Any pose edit bumps a counter so the rotation sliders re-read the bone.
     onPoseChange: () => useStore.getState().bumpPoseVersion(),
+    // Clicking a body-part region (Parts view) can auto-switch the gizmo to
+    // Move (IK) — keep the toolbar toggle in sync when that happens.
+    onGizmoModeChange: (mode) => useStore.getState().setBoneGizmoMode(mode),
   })
 
   // --- Mesh editing (part gizmo + click-to-pick, active in Mesh mode) ---

@@ -32,6 +32,8 @@ import {
   setRotationSnapDeg,
   setPosingEnabled,
   setBoneGizmoMode,
+  setBoneViewMode,
+  setShowAllPartHighlights,
   undo,
   redo,
   mirrorPose,
@@ -272,6 +274,16 @@ export default function Viewport() {
   useEffect(() => {
     setBonesVisible(showBones)
   }, [showBones])
+
+  const boneViewMode = useStore((s) => s.boneViewMode)
+  useEffect(() => {
+    setBoneViewMode(boneViewMode)
+  }, [boneViewMode])
+
+  const showAllPartHighlights = useStore((s) => s.showAllPartHighlights)
+  useEffect(() => {
+    setShowAllPartHighlights(showAllPartHighlights)
+  }, [showAllPartHighlights])
 
   const rotationSnap = useStore((s) => s.rotationSnap)
   useEffect(() => {
