@@ -17,6 +17,14 @@ import {
   disposeOutline,
 } from './outline.js'
 import {
+  initPostFX,
+  resizePostFX,
+  setDepthOfField,
+  setBlurEffect,
+  renderPostFX,
+  disposePostFX,
+} from './postfx.js'
+import {
   initPosing,
   setPoseModel,
   clearPoseModel,
@@ -243,6 +251,10 @@ export function initScene(container) {
 
   // Wrap the renderer for the (optional) inverted-hull outline pass.
   initOutline(renderer)
+
+  // Optional camera effects: depth of field + uniform blur.
+  initPostFX(renderer)
+  resizePostFX(width, height, state.pixelRatio)
 
   // --- Scene ---
   const scene = new THREE.Scene()
@@ -473,6 +485,8 @@ export function initScene(container) {
   setShadowMapping(s.shadowMapping)
   setShadowSoftness(s.shadowSoftness)
   setShadowStrength(s.shadowStrength)
+  setDepthOfField(s.dofEnabled, s.dofFocusDistance, s.dofAperture, s.dofMaxBlur)
+  setBlurEffect(s.blurEnabled, s.blurAmount)
 
   // --- Resize handling ---
   const resizeObserver = new ResizeObserver(() => handleResize())
@@ -510,8 +524,14 @@ function renderOnce() {
     // Route through the outline effect. When the outline is disabled it falls
     // straight through to renderer.render, so there's no overhead when it's off.
     const effect = getOutlineEffect()
-    if (effect) effect.render(state.scene, camera)
-    else state.renderer.render(state.scene, camera)
+    const drawScene = () => {
+      if (effect) effect.render(state.scene, camera)
+      else state.renderer.render(state.scene, camera)
+    }
+    // Camera effects (DOF/blur) render the scene into an offscreen target and
+    // blur it; when both are off this is a no-op and we draw straight to screen.
+    const usedPostFX = renderPostFX(camera, drawScene)
+    if (!usedPostFX) drawScene()
   } finally {
     restoreCulling()
   }
@@ -659,6 +679,7 @@ function handleResize() {
     state.viewCamera.aspect = width / height
     state.viewCamera.updateProjectionMatrix()
   }
+  resizePostFX(width, height, state.pixelRatio)
   requestRender()
 }
 
@@ -1890,6 +1911,23 @@ export function setShadowStrength(strength) {
   requestRender()
 }
 
+// ---------------------------------------------------------------------------
+// Camera effects: Depth of Field + uniform Blur (see three/postfx.js)
+// ---------------------------------------------------------------------------
+
+// focusDistance/maxBlurPx are in world units / pixels; aperture (0..1) sets how
+// quickly out-of-focus areas ramp up to the max blur.
+export function setDofSettings(enabled, focusDistance, aperture, maxBlurPx) {
+  setDepthOfField(enabled, focusDistance, aperture, maxBlurPx)
+  requestRender()
+}
+
+// blurPx is a flat screen-space blur radius in pixels, independent of depth.
+export function setBlurSettings(enabled, blurPx) {
+  setBlurEffect(enabled, blurPx)
+  requestRender()
+}
+
 // The blob and the real cast-shadow are mutually exclusive: blob when shadows are
 // on but shadow-mapping is off; real shadows when both are on.
 function applyShadowMode() {
@@ -2127,6 +2165,7 @@ export function disposeScene() {
   disposePosing()
   disposeMeshEdit()
   disposeOutline()
+  disposePostFX()
 
   if (state.resizeObserver) {
     state.resizeObserver.disconnect()

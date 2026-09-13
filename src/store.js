@@ -15,6 +15,8 @@ const APP_SETTINGS_FIELDS = [
   'lightIntensity', 'lightAzimuth', 'lightElevation', 'defaultLightingEnabled',
   'envLightingEnabled', 'envLightingIntensity', 'outlineEnabled', 'outlineWidth',
   'outlineColor', 'outlineOpacity', 'softenEnabled', 'softenAmount',
+  'dofEnabled', 'dofFocusDistance', 'dofAperture', 'dofMaxBlur',
+  'blurEnabled', 'blurAmount',
 ]
 
 function appSettingsOnly(state) {
@@ -382,6 +384,21 @@ export const useStore = create((set) => ({
 
   setSoftenEnabled: (softenEnabled) => set({ softenEnabled }),
   setSoftenAmount: (softenAmount) => set({ softenAmount }),
+
+  // ---- Camera effects: Depth of Field + uniform Blur ----
+  dofEnabled: false,
+  dofFocusDistance: 5, // world units from the camera where things are sharp
+  dofAperture: 0.3, // 0..1, how quickly things blur away from focus
+  dofMaxBlur: 12, // px, blur radius at maximum defocus
+  blurEnabled: false,
+  blurAmount: 6, // px, flat screen-space blur radius
+
+  setDofEnabled: (dofEnabled) => set({ dofEnabled }),
+  setDofFocusDistance: (dofFocusDistance) => set({ dofFocusDistance }),
+  setDofAperture: (dofAperture) => set({ dofAperture }),
+  setDofMaxBlur: (dofMaxBlur) => set({ dofMaxBlur }),
+  setBlurEnabled: (blurEnabled) => set({ blurEnabled }),
+  setBlurAmount: (blurAmount) => set({ blurAmount }),
 
   // Apply a bundled "Style" preset (see STYLE_PRESETS in MaterialPanel.jsx) —
   // one atomic update covering material mode, lighting and outline, so the

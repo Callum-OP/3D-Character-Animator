@@ -15,6 +15,8 @@ import {
   setPerformanceLowPoly,
   setPerformanceResolution,
   setPerformanceEffects,
+  setDofSettings,
+  setBlurSettings,
   applyModelMaterials,
   setLightSettings,
   setDefaultLightingEnabled,
@@ -155,6 +157,19 @@ export default function Viewport() {
   useEffect(() => {
     setPerformanceEffects(performanceEffects)
   }, [performanceEffects])
+
+  const dofEnabled = useStore((s) => s.dofEnabled)
+  const dofFocusDistance = useStore((s) => s.dofFocusDistance)
+  const dofAperture = useStore((s) => s.dofAperture)
+  const dofMaxBlur = useStore((s) => s.dofMaxBlur)
+  const blurEnabled = useStore((s) => s.blurEnabled)
+  const blurAmount = useStore((s) => s.blurAmount)
+  useEffect(() => {
+    setDofSettings(dofEnabled, dofFocusDistance, dofAperture, dofMaxBlur)
+  }, [dofEnabled, dofFocusDistance, dofAperture, dofMaxBlur])
+  useEffect(() => {
+    setBlurSettings(blurEnabled, blurAmount)
+  }, [blurEnabled, blurAmount])
 
   // All material/shading/outline-width state funnels through applyModelMaterials.
   const materialMode = useStore((s) => s.materialMode)

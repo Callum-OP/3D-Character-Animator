@@ -31,6 +31,18 @@ export default function CamerasPanel() {
   const insertTime = useStore((s) => s.insertTime)
   const followCameraCuts = useStore((s) => s.followCameraCuts)
   const setFollowCameraCuts = useStore((s) => s.setFollowCameraCuts)
+  const dofEnabled = useStore((s) => s.dofEnabled)
+  const setDofEnabled = useStore((s) => s.setDofEnabled)
+  const dofFocusDistance = useStore((s) => s.dofFocusDistance)
+  const setDofFocusDistance = useStore((s) => s.setDofFocusDistance)
+  const dofAperture = useStore((s) => s.dofAperture)
+  const setDofAperture = useStore((s) => s.setDofAperture)
+  const dofMaxBlur = useStore((s) => s.dofMaxBlur)
+  const setDofMaxBlur = useStore((s) => s.setDofMaxBlur)
+  const blurEnabled = useStore((s) => s.blurEnabled)
+  const setBlurEnabled = useStore((s) => s.setBlurEnabled)
+  const blurAmount = useStore((s) => s.blurAmount)
+  const setBlurAmount = useStore((s) => s.setBlurAmount)
   const st = useStore.getState
 
   const selected = sceneCameras.find((cam) => cam.id === selectedCameraId) || null
@@ -225,6 +237,116 @@ export default function CamerasPanel() {
             active view; Play follows camera keys and cuts when enabled above.
           </div>
         </>
+      )}
+
+      <h3 style={{ marginTop: 16 }}>Camera effects</h3>
+      <p className="panel-hint">
+        Screen-space effects applied to the whole view, regardless of which
+        camera is active.
+      </p>
+
+      <label className="slider-row" title="Blur things nearer or further than the focus distance, like a shallow camera lens">
+        <input
+          type="checkbox"
+          checked={dofEnabled}
+          onChange={(e) => setDofEnabled(e.target.checked)}
+        />
+        <span className="slider-label">Depth of field</span>
+      </label>
+      {dofEnabled && (
+        <div className="joint-controls">
+          <label className="slider-row">
+            <span className="slider-label">Focus distance</span>
+            <input
+              type="range"
+              min={0.2}
+              max={30}
+              step={0.1}
+              value={dofFocusDistance}
+              onChange={(e) => setDofFocusDistance(Number(e.target.value))}
+            />
+            <EditableValue
+              value={dofFocusDistance}
+              min={0.1}
+              max={100}
+              step={0.1}
+              onChange={setDofFocusDistance}
+              format={(v) => v.toFixed(1) + 'm'}
+              label="Everything from the camera up to this distance stays sharp; only things farther away blur"
+            />
+          </label>
+          <label className="slider-row">
+            <span className="slider-label">Aperture</span>
+            <input
+              type="range"
+              min={0.05}
+              max={1}
+              step={0.01}
+              value={dofAperture}
+              onChange={(e) => setDofAperture(Number(e.target.value))}
+            />
+            <EditableValue
+              value={dofAperture}
+              min={0.01}
+              max={2}
+              step={0.01}
+              onChange={setDofAperture}
+              format={(v) => v.toFixed(2)}
+              label="How quickly out-of-focus areas blur — lower is a shallower, more dramatic focus"
+            />
+          </label>
+          <label className="slider-row">
+            <span className="slider-label">Max blur</span>
+            <input
+              type="range"
+              min={1}
+              max={30}
+              step={1}
+              value={dofMaxBlur}
+              onChange={(e) => setDofMaxBlur(Number(e.target.value))}
+            />
+            <EditableValue
+              value={dofMaxBlur}
+              min={0}
+              max={60}
+              onChange={setDofMaxBlur}
+              format={(v) => Math.round(v) + 'px'}
+              label="Blur strength at maximum defocus"
+            />
+          </label>
+        </div>
+      )}
+
+      <label className="slider-row" style={{ marginTop: 8 }} title="A flat blur over the whole view, regardless of distance">
+        <input
+          type="checkbox"
+          checked={blurEnabled}
+          onChange={(e) => setBlurEnabled(e.target.checked)}
+        />
+        <span className="slider-label">Blur</span>
+      </label>
+      {blurEnabled && (
+        <div className="joint-controls">
+          <label className="slider-row">
+            <span className="slider-label">Amount</span>
+            <input
+              type="range"
+              min={1}
+              max={30}
+              step={1}
+              value={blurAmount}
+              onChange={(e) => setBlurAmount(Number(e.target.value))}
+            />
+            <EditableValue
+              value={blurAmount}
+              min={0}
+              max={60}
+              onChange={setBlurAmount}
+              format={(v) => Math.round(v) + 'px'}
+              label="Blur radius in pixels"
+            />
+          </label>
+        </div>
       )}
     </div>
   )
