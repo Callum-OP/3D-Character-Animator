@@ -1,7 +1,6 @@
 {
-  "name": "3d-character-poser",
-  "private": true,
-  "version": "0.1.0",
+  "name": "animare-3d-animator",
+  "version": "1.0.0",
   "type": "module",
   "description": "Lightweight browser-based 3D character poser & animator (glTF), low memory overhead",
   "scripts": {
@@ -10,15 +9,28 @@
     "package:itch": "npm run build && node scripts/inline-itch.mjs && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-itch.ps1",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "tauri:build:arm64": "tauri build --target aarch64-pc-windows-msvc --no-bundle",
+    "tauri:build:x64": "tauri build --target x86_64-pc-windows-msvc --no-bundle",
+    "tauri:pack:arm64": "powershell -ExecutionPolicy Bypass -File ./src-tauri/msix/pack.ps1 -Arch arm64",
+    "tauri:pack:x64": "powershell -ExecutionPolicy Bypass -File ./src-tauri/msix/pack.ps1 -Arch x64",
+    "tauri:bundle": "powershell -ExecutionPolicy Bypass -File ./src-tauri/msix/bundle.ps1",
+    "tauri:clean": "powershell -Command \"if (Test-Path 'release') { Remove-Item -Recurse -Force 'release' }\"",
+    "sync-version": "powershell -ExecutionPolicy Bypass -File ./src-tauri/msix/sync-version.ps1",
+    "build-store": "npm run sync-version && npm run tauri:clean && npm run tauri:build:arm64 && npm run tauri:build:x64 && npm run tauri:pack:arm64 && npm run tauri:pack:x64 && npm run tauri:bundle"
   },
   "dependencies": {
+    "cargo": "^0.8.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "three": "^0.171.0",
     "zustand": "^5.0.2"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2",
     "@vitejs/plugin-react": "^4.3.4",
     "fake-indexeddb": "^6.2.5",
     "jsdom": "^30.0.1",

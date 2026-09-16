@@ -1,0 +1,22 @@
+[package]
+name = "animare-3d-animator"
+version = "0.1.0"
+description = "Lightweight browser-based 3D character poser & animator (glTF), low memory overhead"
+authors = ["Callum O'Prey"]
+edition = "2021"
+
+# The library is the shared entry point so the same app can target desktop and
+# (later) mobile via Tauri 2.
+[lib]
+name = "lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+# Opens external links in the system browser instead of an in-app webview navigation
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

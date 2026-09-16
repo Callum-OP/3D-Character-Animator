@@ -65,7 +65,7 @@ blob).
 ### Supported file formats
 
 | Format        | Extensions     | Notes                                                        |
-| ------------- | -------------- | ----------------------------------------------------------- |
+| ------------- | -------------- | ----------------------------------------------------- |
 | glTF (binary) | `.glb`         | Recommended. Rig + baked animations carry over.             |
 | glTF (JSON)   | `.gltf`        | Self-contained files; external `.bin`/textures aren't fetched. |
 | Autodesk FBX  | `.fbx`         | Loaded on demand (the FBX parser is code-split).            |
@@ -104,6 +104,45 @@ For a zip file to use in sites like itch.io run:
 npm install
 npm run package:itch
 ```
+
+### Run as a desktop app (Tauri)
+
+Requires the [Rust toolchain](https://www.rust-lang.org/tools/install).
+
+```bash
+npm run tauri:dev
+```
+
+This starts the Vite dev server and opens it in a native window. May want to clear
+`src-tauri/target` folder once finished to clear space.
+
+A plain one-off desktop build (`.msi` + NSIS `.exe` installers for your current
+platform) is:
+
+```bash
+npm run tauri:build
+
+```
+
+Create icons:
+npm run tauri icon <path-to-a-1024x1024-png>
+
+### Build for the Microsoft Store (MSIX)
+
+Build and package the desktop app for the Microsoft Store as MSIX (both arm64 and
+x64) in one command:
+
+```bash
+npm run build-store
+```
+
+This outputs `release/3DCharacterAnimator_<version>.msixbundle` — a single
+multi-architecture bundle. The individual per-architecture MSIX files are in
+`release/packages/`. See [`src-tauri/msix/README.md`](src-tauri/msix/README.md)
+for details, including generating the Store icon assets and the one-time Partner
+Center identity setup needed before the first submission.
+> The command runs: clean `release`, build arm64, build x64, pack each into an
+> MSIX, then combine them into one `.msixbundle`.
 
 ## Deployment (GitHub Pages)
 
@@ -167,6 +206,7 @@ Vite build sets `base: '/3D-Character-Animator/'` (see `vite.config.js`). Local
 - **[Vite](https://vitejs.dev/) + [React](https://react.dev/)** (JavaScript, not TypeScript)
 - **[Three.js](https://threejs.org/)** — `GLTFLoader`, `FBXLoader`, `OrbitControls`
 - **[Zustand](https://github.com/pmndrs/zustand)** for app state
+- **[Tauri](https://tauri.app/)** for the packaged Windows desktop build (MS Store)
 
 ## Project structure
 
@@ -202,30 +242,8 @@ src/
     EditableValue.jsx   # editable input field component
     TabGroup.jsx        # tab switcher component
     RadialScale.jsx     # radial scaling tool UI
-    AnimationPanel.jsx  # clip playback + in-app keyframing
-    BonePanel.jsx       # bone tree, pose save/load/reset/undo
-    CamerasPanel.jsx    # place cameras, look through, keyframe + cuts
-    ExportPanel.jsx     # PNG / video / BVH / fullscreen export
-    HelpOverlay.jsx     # ? help & shortcuts
-    LightsPanel.jsx     # lighting controls
-    MaterialPanel.jsx   # material mode + key-light controls
-    MeshPanel.jsx       # Mesh mode: part list, transform values, part keyframes
-    ObjectsPanel.jsx    # add / move / cycle props & backgrounds
-    ProjectPanel.jsx    # project management (save/load/export)
-    StatsOverlay.jsx    # optional FPS/memory readout
-    ViewPanel.jsx       # scene toggles (grid, shadow, background, stats)
-  __tests__/            # vitest unit tests for all major features
+src-tauri/               # Tauri desktop shell (Windows/MSIX packaging)
+  src/lib.rs             # Tauri app entry point
+  tauri.conf.json        # window, bundle, and frontend-build config
+  msix/                  # Microsoft Store MSIX packaging scripts (see msix/README.md)
 ```
-
-## Design principles (low overhead is the point)
-
-- **Render on demand** — no idle `requestAnimationFrame` loop; a frame is drawn
-  only when the camera moves, a model loads, or a toggle flips.
-- **Dispose everything** — geometries, materials, and textures are released when a
-  model is unloaded or replaced.
-- **One model at a time**, device pixel ratio capped at 2, transparent background
-  by default.
-
-## License
-
-Private / unpublished.
