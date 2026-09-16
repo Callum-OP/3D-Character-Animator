@@ -4,7 +4,8 @@
   --panel-border: #34363f;
   --text: #e6e7ea;
   --text-dim: #9a9ca6;
-  --accent: #4f8cff;
+  --accent: #ff5a3c;
+  --accent-2: #e5397a;
   font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
   color: var(--text);
 }
@@ -197,7 +198,7 @@ body {
 }
 
 .symmetrise-menu button:hover {
-  background: rgba(79, 140, 255, 0.22);
+  background: rgba(255, 90, 60, 0.22);
 }
 
 .mode-toolbar .seg-btn.active {
@@ -276,7 +277,7 @@ body {
 }
 
 .camera-view-banner:hover {
-  background: rgba(79, 140, 255, 0.18);
+  background: rgba(255, 90, 60, 0.18);
 }
 
 /* Drag-over highlight on the viewport */
@@ -291,7 +292,7 @@ body {
   justify-content: center;
   font-size: 18px;
   color: var(--accent);
-  background: rgba(79, 140, 255, 0.08);
+  background: rgba(255, 90, 60, 0.08);
   pointer-events: none;
 }
 
@@ -400,17 +401,19 @@ body {
   gap: 6px;
   width: 100%;
   padding: 9px 12px;
-  background: var(--accent);
+  background: linear-gradient(135deg, #d14931, #bb2e64);
   color: white;
   border: none;
   border-radius: 6px;
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
+  transition: filter 0.15s ease, box-shadow 0.15s ease;
 }
 
 .btn:hover {
-  filter: brightness(1.08);
+  filter: brightness(1.1) saturate(1.05);
+  box-shadow: 0 2px 12px rgba(187, 46, 100, 0.28);
 }
 
 .btn.secondary {
@@ -1212,8 +1215,8 @@ input.xform-value {
 .help-tip {
   margin-top: 16px;
   padding: 10px 12px;
-  background: rgba(79, 140, 255, 0.08);
-  border: 1px solid rgba(79, 140, 255, 0.25);
+  background: rgba(255, 90, 60, 0.08);
+  border: 1px solid rgba(255, 90, 60, 0.25);
   border-radius: 8px;
   font-size: 12.5px;
   color: var(--text);
@@ -1434,7 +1437,7 @@ input.xform-value {
 }
 
 .kf-list-row.active {
-  background: rgba(79, 140, 255, 0.14);
+  background: rgba(255, 90, 60, 0.14);
 }
 
 .kf-time {
@@ -1653,7 +1656,8 @@ input.xform-value {
   --panel-border: #34363f;
   --text: #e6e7ea;
   --text-dim: #9a9ca6;
-  --accent: #4f8cff;
+  --accent: #ff5a3c;
+  --accent-2: #e5397a;
   font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
 }
 
@@ -1708,22 +1712,40 @@ body {
   place-items: center;
   width: 34px;
   height: 34px;
-  border: 1px solid rgba(79, 140, 255, 0.65);
+  border: 1px solid rgba(255, 90, 60, 0.65);
   border-radius: 10px;
   color: var(--accent);
-  background: rgba(79, 140, 255, 0.12);
-  box-shadow: 0 0 22px rgba(79, 140, 255, 0.12);
+  background: rgba(255, 90, 60, 0.12);
+  box-shadow: 0 0 22px rgba(255, 90, 60, 0.12);
   font-size: 18px;
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+
+.brand-mark-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  padding: 3px;
 }
 
 .app-title {
   font-size: 16px;
+  font-weight: 700;
   letter-spacing: 0.01em;
+  margin: 0;
+  background: linear-gradient(120deg, #ffb35f, var(--accent) 55%, var(--accent-2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
 
 .app-tagline {
-  margin-top: 4px;
-  color: #718394;
+  margin-top: 1px;
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 .header-actions {
@@ -1749,7 +1771,7 @@ body {
 .icon-btn:hover,
 .icon-btn.active {
   border-color: var(--accent);
-  background: rgba(79, 140, 255, 0.2);
+  background: rgba(255, 90, 60, 0.2);
   color: var(--accent);
   transform: translateY(-1px);
 }
@@ -1761,11 +1783,11 @@ body {
   margin-bottom: 14px;
   border: 1px solid var(--panel-border);
   border-radius: 10px;
-  background: linear-gradient(120deg, rgba(79, 140, 255, 0.12), rgba(79, 140, 255, 0.02));
+  background: linear-gradient(120deg, rgba(255, 90, 60, 0.12), rgba(255, 90, 60, 0.02));
 }
 
 .eyebrow {
-  color: #8eb5ff;
+  color: #ffb37a;
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.13em;
@@ -1824,7 +1846,7 @@ body {
 }
 
 .btn {
-  background: var(--accent);
+  background: linear-gradient(135deg, #d14931, #bb2e64);
   color: white;
   font-weight: 500;
 }
@@ -1845,8 +1867,8 @@ body {
 
 .seg-btn.active,
 .mode-toolbar .seg-btn.active {
-  background: var(--accent);
-  color: var(--accent-ink);
+  background: linear-gradient(135deg, #d14931, #bb2e64);
+  color: var(--accent-ink, white);
 }
 
 .mode-toolbar,

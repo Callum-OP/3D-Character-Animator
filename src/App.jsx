@@ -38,8 +38,12 @@ export default function App() {
       <aside className="sidebar">
         <div className="app-header">
           <div className="brand-lockup">
+            <div className="brand-mark">
+              <img src="/logo.png" alt="Animare logo" className="brand-mark-img" />
+            </div>
             <div>
-              <h1 className="app-title">3D Animator</h1>
+              <h1 className="app-title">Animare</h1>
+              <div className="app-tagline">3D Animator</div>
             </div>
           </div>
           <div className="header-actions">
