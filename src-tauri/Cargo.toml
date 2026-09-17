@@ -1,6 +1,6 @@
 [package]
 name = "animare-3d-animator"
-version = "0.1.0"
+version = "1.0.0"
 description = "Lightweight browser-based 3D character poser & animator (glTF), low memory overhead"
 authors = ["Callum O'Prey"]
 edition = "2021"

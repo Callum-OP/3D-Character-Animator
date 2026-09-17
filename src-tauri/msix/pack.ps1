@@ -3,7 +3,7 @@
   Package the built Tauri exe into an MSIX for the Microsoft Store.
 
 .DESCRIPTION
-  Stages character-animator.exe + the Store logo assets next to AppxManifest.xml and
+  Stages animare-3d-animator.exe + the Store logo assets next to AppxManifest.xml and
   runs MakeAppx. By default produces an UNSIGNED MSIX (what you upload to Partner
   Center, which re-signs it). With -TestSign it self-signs with a throwaway cert so
   you can install it locally and run the Windows App Certification Kit (WACK).
@@ -37,11 +37,11 @@ if (-not $Version) { $Version = Get-AppVersion -RepoRoot (Join-Path $here "..\..
 $triple = @{ "arm64" = "aarch64-pc-windows-msvc"; "x64" = "x86_64-pc-windows-msvc" }[$Arch]
 if (-not $triple) { throw "Unsupported -Arch '$Arch' (use arm64 or x64)" }
 $exe = @(
-    (Join-Path $here "..\target\$triple\release\character-animator.exe"),
-    (Join-Path $here "..\target\release\character-animator.exe")
+    (Join-Path $here "..\target\$triple\release\animare-3d-animator.exe"),
+    (Join-Path $here "..\target\release\animare-3d-animator.exe")
 ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $exe) {
-    throw "No character-animator.exe for $Arch. Build first, e.g.: npm run tauri:build -- --target $triple"
+    throw "No animare-3d-animator.exe for $Arch. Build first, e.g.: npm run tauri:build -- --target $triple"
 }
 
 # Locate MakeAppx / signtool (prefer the native arm64 build on this host, else x64)
@@ -57,10 +57,10 @@ $makeappx = Find-Kit "makeappx.exe"
 # Stage the package payload
 $stage = Join-Path $here "..\target\msix-stage"
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
-New-Item -ItemType Directory -Force -Path $stage, (Join-Path $stage "Assets") | Out-Null
-Copy-Item $exe (Join-Path $stage "character-animator.exe")
+New-Item -ItemType Directory -Force -Path $stage, (Join-Path $stage "icons") | Out-Null
+Copy-Item $exe (Join-Path $stage "animare-3d-animator.exe")
 foreach ($a in "StoreLogo.png", "Square44x44Logo.png", "Square71x71Logo.png", "Square150x150Logo.png") {
-    Copy-Item (Join-Path $icons $a) (Join-Path $stage "Assets\$a")
+    Copy-Item (Join-Path $icons $a) (Join-Path $stage "icons\$a")
 }
 
 # Copy the manifest, adjusting arch (and publisher when test-signing, since the

@@ -32,7 +32,7 @@ function Find-Kit($name) {
 }
 $makeappx = Find-Kit "makeappx.exe"
 
-$bundle = Join-Path $release "3DCharacterAnimator_$Version.msixbundle"
+$bundle = Join-Path $release "Animare3DAnimator_$Version.msixbundle"
 & $makeappx bundle /d $pkgDir /p $bundle /bv $Version /o
 if ($LASTEXITCODE -ne 0) { throw "makeappx bundle failed (exit $LASTEXITCODE)" }
 Write-Host "MSIX bundle created: $bundle" -ForegroundColor Green
