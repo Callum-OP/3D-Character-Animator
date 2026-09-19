@@ -59,10 +59,17 @@ export function limitsEnabled() {
 
 // Bind to a freshly loaded model. Must run while the rig is in its rest pose
 // (right after load) — limits are measured relative to it.
-export function setLimitsModel(model) {
+//
+// `resolveSlot(bone)` optionally overrides the per-bone classification (the
+// default is plain classifyBone(bone.name)). posing.js passes one that falls
+// back to a hierarchy-shape guess for rigs whose bone names carry no usable
+// signal at all — otherwise such a rig gets no limits on anything, same as
+// the Body Parts overlay and IK chains would with no fallback.
+export function setLimitsModel(model, resolveSlot) {
   clearLimitsModel()
   const bones = (model && model.bones) || []
   if (!bones.length) return
+  const getSlot = resolveSlot || ((bone) => classifyBone(bone.name))
   model.root.updateWorldMatrix(true, true)
   const boneSet = new Set(bones)
   // Character facing, for hinge directions.
@@ -73,7 +80,7 @@ export function setLimitsModel(model) {
   const wp = new THREE.Vector3()
   const cp = new THREE.Vector3()
   for (const bone of bones) {
-    const slot = classifyBone(bone.name)
+    const slot = getSlot(bone)
     if (!slot) continue
     const lim = ROLE_LIMITS[slot.split('.')[0]]
     if (!lim) continue

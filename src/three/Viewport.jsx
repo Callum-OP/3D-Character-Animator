@@ -28,7 +28,7 @@ import {
 import { useStore } from '../store.js'
 import { SUPPORTED_EXTENSION_RE, SUPPORTED_EXTENSIONS } from './loadModel.js'
 import {
-  selectBone,
+  selectBones,
   setTransformSpace,
   setBonesVisible,
   setPickableBones,
@@ -271,13 +271,16 @@ export default function Viewport() {
   }, [meshGizmoMode])
 
   // --- Bone posing: push selection / gizmo space / overlay visibility ---
-  const selectedBoneName = useStore((s) => s.selectedBoneName)
+  // selectedBoneNames can hold several names (shift/ctrl-click) — selectBones()
+  // attaches the gizmo to all of them via a shared rotate pivot when there's
+  // more than one, or behaves like a plain single-select otherwise.
+  const selectedBoneNames = useStore((s) => s.selectedBoneNames)
   const transformSpace = useStore((s) => s.transformSpace)
   const showBones = useStore((s) => s.showBones)
 
   useEffect(() => {
-    selectBone(selectedBoneName)
-  }, [selectedBoneName])
+    selectBones(selectedBoneNames)
+  }, [selectedBoneNames])
 
   useEffect(() => {
     setTransformSpace(transformSpace)

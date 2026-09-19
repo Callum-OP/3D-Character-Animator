@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import { poseToJSON, validatePose } from './poses.js'
-import { classifyBone, detectSide } from './bvh.js'
+import { classifyBone, detectSide, buildSlotFallbackMap } from './bvh.js'
 import {
   setLimitsModel,
   clearLimitsModel,
@@ -160,6 +160,19 @@ const p = {
   model: null,
   bones: [],
   boneMap: new Map(), // name -> Bone
+  // bone.name -> slot, ONLY for bones classifyBone(name) can't place itself
+  // (hierarchy-shape guess — see buildSlotFallbackMap). Empty for any rig
+  // whose names carry enough signal on their own. Consult via slotFor(bone).
+  slotFallback: new Map(),
+  // True when this model's bones (name + hierarchy guess combined) resolve
+  // to too few distinct limb/torso roles to trust role-gated IK at all — some
+  // exports (certain Sketchfab/game rigs) mix cloth, breast, and other extra
+  // deform bones into the same branch level as the real skeleton, which can
+  // fool even the hierarchy guess. When true, buildIkChain() and selectBone()
+  // stop requiring IK_LIMB_ROLES and just climb real ancestor bones — Move
+  // still won't respect anatomical hinge limits for this rig, but it will
+  // actually move something, rather than silently doing nothing.
+  looseIk: false,
   // Bone -> THREE.Quaternion, the TRUE bind pose. This is captured exactly
   // once per model (see setPoseModel) and cached on the model object itself
   // so it survives re-activation — it must NEVER be re-derived from the
@@ -181,7 +194,11 @@ const p = {
   hoverRegion: null, // region key under the pointer in Parts view
   onGizmoModeChange: null, // (mode) => void — keeps the store's gizmo toggle in sync
 
-  selected: null, // selected Bone (or null)
+  selected: null, // selected Bone (or null) — the PRIMARY bone (leader) when multiple are selected
+  selectedBones: [], // full multi-selection (rotate-only group gizmo); [] or [selected] outside multi-select
+  rotatePivot: null, // shared THREE.Object3D the rotate gizmo attaches to when >1 bones are selected
+  pivotStartQuat: null, // rotatePivot's quaternion at drag start (multi-select rotate)
+  pivotBoneStarts: null, // Map<Bone, { localQuat, worldQuat, parentWorldQuat }> captured at drag start
   enabled: true, // false outside Bone mode: overlay hidden, gizmo detached, no picking
   overlayVisible: true, // the user's "Show joints" toggle (independent of mode)
   undoStack: [],
@@ -193,6 +210,19 @@ const p = {
   suspended: false, // true while animation playback drives the bones
   snapDeg: null, // rotation snap increment in degrees (null = free rotate)
   shiftHeld: false, // Shift temporarily inverts the snap setting
+}
+
+// Classify a bone into its canonical humanoid slot for the CURRENTLY BOUND
+// model: try the exact per-bone name classifier first (works for any rig with
+// a normal naming vocabulary, however it's spelled), then fall back to this
+// model's precomputed hierarchy-shape guess for rigs whose names carry no
+// usable signal at all (auto-generated hex/numeric bone names — a real export
+// artifact from some Sketchfab/game pipelines). Without the fallback such a
+// rig has literally no bone classify into anything: no Body Parts regions, no
+// IK move chains, no limb limits — everything downstream of classifyBone in
+// this module goes through this instead of calling it directly.
+function slotFor(bone) {
+  return classifyBone(bone.name) || p.slotFallback.get(bone.name) || null
 }
 
 const _v = new THREE.Vector3() // scratch, reused every helper update
@@ -218,7 +248,15 @@ export function initPosing(refs) {
   })
   transform.addEventListener('objectChange', () => {
     p.gizmoMovedDuringDrag = true // a real drag happened, not just a press on the handle's pick padding
-    if (p.gizmoMode === 'translate') {
+    // Multi-select is checked FIRST and is the only thing that can make this
+    // group-rotate — regardless of whether the user's remembered single-bone
+    // preference (p.gizmoMode) happens to be Move or Rotate. See
+    // attachGizmoToSelected(): a multi-selection always shows the rotate
+    // widget without ever touching p.gizmoMode, so that preference is still
+    // there, untouched, the next time only one bone is selected.
+    if (p.selectedBones.length > 1) {
+      applyGroupRotationDelta() // several bones selected → same delta on all of them
+    } else if (p.gizmoMode === 'translate') {
       solveIk() // drag the proxy → CCD-solve the ancestor chain toward it
     } else if (p.selected) {
       clampBoneLocal(p.selected) // keep gizmo edits inside the limb limits
@@ -228,14 +266,17 @@ export function initPosing(refs) {
   })
   transform.addEventListener('mouseDown', () => {
     if (!p.selected) return
-    if (p.gizmoMode === 'translate') {
+    if (p.selectedBones.length > 1) {
+      beginGroupRotateDrag()
+    } else if (p.gizmoMode === 'translate') {
       p.ikDragBefore = new Map(p.ikChain.map((b) => [b, b.quaternion.clone()]))
     } else {
       p.dragBefore = p.selected.quaternion.clone()
     }
   })
   transform.addEventListener('mouseUp', () => {
-    if (p.gizmoMode === 'translate') commitIkDragUndo()
+    if (p.selectedBones.length > 1) commitGroupRotateUndo()
+    else if (p.gizmoMode === 'translate') commitIkDragUndo()
     else commitDragUndo()
     p.requestRender()
   })
@@ -248,6 +289,17 @@ export function initPosing(refs) {
   ikProxy.name = '(ik target)'
   p.scene.add(ikProxy)
   p.ikProxy = ikProxy
+
+  // Shared pivot the rotate gizmo attaches to when several bones are selected
+  // at once (shift/ctrl-click) — see selectBones(). Parked at the group's
+  // average world position; dragging it applies the SAME rotation delta to
+  // every selected bone (see applyGroupRotationDelta), like a mini rigid-body
+  // rotate. Added directly to the scene (no parent transform), same as
+  // objects.js's multi-object pivot, so its own quaternion IS its world one.
+  const rotatePivot = new THREE.Object3D()
+  rotatePivot.name = '(multi-bone pivot)'
+  p.scene.add(rotatePivot)
+  p.rotatePivot = rotatePivot
 
   const helper = transform.getHelper()
   // Keep the outline pass off the gizmo itself.
@@ -313,7 +365,18 @@ export function setPoseModel(model) {
   }
   p.restQuats = model.__poseRestQuats
   for (const b of p.bones) p.boneMap.set(b.name, b)
-  setLimitsModel(model) // measure the limb limits against this rest pose
+  p.slotFallback = buildSlotFallbackMap(p.bones) // must be set before slotFor() is used below
+  const rolesFound = new Set()
+  for (const b of p.bones) {
+    const slot = slotFor(b)
+    if (slot) rolesFound.add(slot.split('.')[0])
+  }
+  // < 6 of the ~13 possible base roles (hips/spine/chest/neck/head/shoulder/
+  // upperArm/lowerArm/hand/upperLeg/lowerLeg/foot/toe) found on the whole
+  // model means classification isn't reliable enough to gate Move on — see
+  // looseIk above.
+  p.looseIk = rolesFound.size < 6
+  setLimitsModel(model, slotFor) // measure the limb limits against this rest pose
   p.boneRegionMap = buildBoneRegionMap()
   buildPartOverlays(model)
   if (p.bones.length === 0) return
@@ -383,6 +446,9 @@ function applyPickableFilter() {
 export function clearPoseModel() {
   if (p.transform) p.transform.detach()
   p.selected = null
+  p.selectedBones = []
+  p.pivotStartQuat = null
+  p.pivotBoneStarts = null
   p.dragBefore = null
   p.adjustBefore = null
   p.ikChain = []
@@ -406,6 +472,8 @@ export function clearPoseModel() {
   p.model = null
   p.bones = []
   p.boneMap = new Map()
+  p.slotFallback = new Map()
+  p.looseIk = false
   p.restQuats = new Map()
   p.pickable = []
   p.pickableNames = null
@@ -423,7 +491,7 @@ export function updateBoneHelpers() {
     const bone = p.pickable[i]
     bone.getWorldPosition(_v)
     pos.setXYZ(i, _v.x, _v.y, _v.z)
-    const c = bone === p.selected ? SELECTED_COLOR : BASE_COLOR
+    const c = (p.selectedBones.length > 1 ? p.selectedBones.includes(bone) : bone === p.selected) ? SELECTED_COLOR : BASE_COLOR
     col.setXYZ(i, c.r, c.g, c.b)
   }
   pos.needsUpdate = true
@@ -436,6 +504,7 @@ export function updateBoneHelpers() {
 export function selectBone(name) {
   const bone = name ? p.boneMap.get(name) || null : null
   p.selected = bone
+  p.selectedBones = bone ? [bone] : []
   p.ikChain = bone ? buildIkChain(bone) : []
   // A bone like an upper arm/leg with no shoulder/hip-equivalent link above
   // it (either the rig has none, or that link isn't recognisable by name)
@@ -446,11 +515,17 @@ export function selectBone(name) {
   // tip (hand/foot) instead of the bone's own position, which never moves.
   p.ikTipRef = null
   if (bone && p.ikChain.length === 0) {
-    const slot = classifyBone(bone.name)
+    const slot = slotFor(bone)
     const role = slot ? slot.split('.')[0] : null
     if (IK_LIMB_ROLES.has(role)) {
       p.ikChain = [bone]
       p.ikTipRef = findLimbTip(bone)
+    } else if (p.looseIk) {
+      // Unclassifiable rig and this bone has no ancestor bones to recruit
+      // either (it's at or near the skeleton root) — still give it a
+      // one-link "chain" of itself so Move rotates it toward the drag target
+      // instead of doing nothing.
+      p.ikChain = [bone]
     }
   }
   if (!p.suspended && p.enabled) {
@@ -463,15 +538,125 @@ export function selectBone(name) {
   p.requestRender()
 }
 
-// Attach the (already-moded) TransformControls to whatever the current gizmo
-// mode needs: the bone directly for FK rotate, or the IK proxy — parked on
-// the bone's current world position — for an IK move.
+// Select several bones at once (shift/ctrl-click) so they can be rotated
+// together with one gizmo — mirrors objects.js's selectObjects() for scene
+// objects. 0 or 1 names fall back to the plain selectBone() path unchanged
+// (same behaviour, same IK-move support, as before multi-select existed).
+// Move mode's IK solver targets one bone's own ancestor chain and has no
+// sensible generalisation to a group, so a multi-selection always drives the
+// ROTATE gizmo — the same rigid rotation delta is applied to every selected
+// bone, regardless of what gizmo mode was active before the selection grew.
+export function selectBones(names) {
+  const list = Array.isArray(names) ? names : names != null ? [names] : []
+  const bones = []
+  const seen = new Set()
+  for (const n of list) {
+    const b = n ? p.boneMap.get(n) : null
+    if (b && !seen.has(b)) {
+      seen.add(b)
+      bones.push(b)
+    }
+  }
+  if (bones.length <= 1) {
+    selectBone(bones[0] ? bones[0].name : null)
+    return
+  }
+  p.selected = bones[bones.length - 1] // "primary" — panel/slider display, parent-nav, etc.
+  p.selectedBones = bones
+  p.ikChain = []
+  p.ikTipRef = null
+  // Deliberately doesn't touch p.gizmoMode or the toolbar toggle here — see
+  // attachGizmoToSelected(), which shows the rotate widget for a multi-
+  // selection without disturbing the user's remembered single-bone
+  // preference (Rotate or Move), so it's exactly as they left it once the
+  // selection drops back to one bone.
+  const center = new THREE.Vector3()
+  for (const b of bones) center.add(b.getWorldPosition(new THREE.Vector3()))
+  center.divideScalar(bones.length)
+  p.rotatePivot.position.copy(center)
+  p.rotatePivot.quaternion.identity()
+  p.rotatePivot.updateMatrix()
+  if (!p.suspended && p.enabled) attachGizmoToSelected()
+  else if (p.transform) p.transform.detach()
+  applyOverlayVisibility()
+  updatePartMaterials()
+  p.requestRender()
+}
+
+// Capture every selected bone's starting local/world orientation (and its
+// parent's world orientation) at the start of a group-rotate drag, plus the
+// pivot's own starting orientation as the reference to diff future frames
+// against — see applyGroupRotationDelta.
+function beginGroupRotateDrag() {
+  p.pivotStartQuat = p.rotatePivot.quaternion.clone()
+  const starts = new Map()
+  for (const bone of p.selectedBones) {
+    starts.set(bone, {
+      localQuat: bone.quaternion.clone(),
+      worldQuat: bone.getWorldQuaternion(new THREE.Quaternion()),
+      parentWorldQuat:
+        bone.parent ? bone.parent.getWorldQuaternion(new THREE.Quaternion()) : new THREE.Quaternion(),
+    })
+  }
+  p.pivotBoneStarts = starts
+}
+
+// Apply the pivot's rotation delta (since beginGroupRotateDrag) to every
+// selected bone: newWorld = delta * startWorld, converted back to that
+// bone's LOCAL space via its (start-of-drag) parent world orientation — the
+// same world-delta-then-reparent approach solveIk uses per joint, just
+// applied once per bone instead of iteratively.
+const _groupDelta = new THREE.Quaternion()
+const _groupNewWorld = new THREE.Quaternion()
+function applyGroupRotationDelta() {
+  if (!p.pivotBoneStarts || !p.pivotStartQuat) return
+  _groupDelta.copy(p.rotatePivot.quaternion).multiply(p.pivotStartQuat.clone().invert())
+  for (const [bone, start] of p.pivotBoneStarts) {
+    _groupNewWorld.copy(_groupDelta).multiply(start.worldQuat)
+    bone.quaternion.copy(start.parentWorldQuat.clone().invert().multiply(_groupNewWorld))
+    clampBoneLocal(bone)
+  }
+  updateBoneHelpers()
+}
+
+// Mirrors commitDragUndo/commitIkDragUndo for the group-rotate case: every
+// bone that actually moved lands in ONE undo batch, so a single Ctrl+Z
+// undoes the whole group edit.
+function commitGroupRotateUndo() {
+  const starts = p.pivotBoneStarts
+  p.pivotBoneStarts = null
+  p.pivotStartQuat = null
+  if (!starts) return
+  const changes = []
+  for (const [bone, start] of starts) {
+    const after = bone.quaternion.clone()
+    if (!after.equals(start.localQuat)) changes.push({ bone, before: start.localQuat, after })
+  }
+  if (changes.length) pushUndo(changes)
+}
+
+// Attach the (already-moded) TransformControls to whatever the current
+// selection/gizmo mode needs: the shared pivot for a multi-bone selection
+// (always rotate — see selectBones), the bone directly for a single-bone FK
+// rotate, or the IK proxy — parked on the bone's current world position —
+// for a single-bone IK move.
 function attachGizmoToSelected() {
   if (!p.transform) return
+  if (p.selectedBones.length > 1) {
+    // Group-rotate only, regardless of the remembered single-bone gizmoMode
+    // preference — this sets the WIDGET's mode for the multi-selection's
+    // lifetime only. It deliberately never touches p.gizmoMode itself, so
+    // whatever the user last had (Rotate or Move) is exactly what comes
+    // back the next time only one bone is selected.
+    p.transform.setMode('rotate')
+    p.transform.attach(p.rotatePivot)
+    return
+  }
   if (!p.selected) {
     p.transform.detach()
     return
   }
+  p.transform.setMode(p.gizmoMode === 'translate' ? 'translate' : 'rotate')
   if (p.gizmoMode === 'translate') {
     p.selected.getWorldPosition(p.ikProxy.position)
     p.transform.attach(p.ikProxy)
@@ -514,6 +699,11 @@ export function resumePosing() {
 // capped by its reach and each joint's own limb limits). Bones have no resize
 // gizmo — there's nothing on a bone to resize.
 export function setBoneGizmoMode(mode) {
+  // Move (IK) targets one bone's own ancestor chain and has no sensible
+  // generalisation to a group — a multi-bone selection always stays on
+  // Rotate (see selectBones); ignore an attempted switch to Move until the
+  // selection is back down to one bone.
+  if (p.selectedBones.length > 1 && mode === 'translate') return
   p.gizmoMode = mode === 'translate' ? 'translate' : 'rotate'
   if (p.transform) p.transform.setMode(p.gizmoMode)
   if (p.selected) attachGizmoToSelected()
@@ -802,24 +992,27 @@ function isolatedCurrentWorldQuats(snapshot, restWorld) {
   return result
 }
 
-// Resolves the local quaternion for every bone in `newWorldMap` at once.
-// Looks up a parent's NEW world rotation when the parent is itself part of
-// the mirrored/symmetrised set (e.g. lowerArm under a mirrored upperArm), or
-// its fixed REST world rotation otherwise (e.g. an unsided chest, whatever
-// pose it currently happens to be in) — so chain order doesn't matter, only
-// map contents, and — same reasoning as isolatedCurrentWorldQuats above —
-// converting back to local space stays consistent with the rest-relative
-// basis newWorldMap's targets were built in, rather than reintroducing the
-// ancestor's live rotation on the way back out.
+// Converts every bone in `newWorldMap` back to a local quaternion. This is the
+// exact inverse of isolatedCurrentWorldQuats: those values were measured as
+// (parent's fixed REST world orientation) * (bone's own local rotation), so
+// they must be un-composed with the SAME rest-parent orientation — never with
+// the parent's NEW (mirrored) world rotation, even when the parent is itself
+// being mirrored/symmetrised. Each bone's delta already describes only its OWN
+// local motion; the parent's motion reaches the child through the normal
+// bone hierarchy when the pose is rendered. Dividing by the parent's new world
+// rotation here would subtract the parent's swing a second time (a straight
+// arm lowered at the shoulder came out with a right-angle elbow, on both the
+// mirror and symmetrise paths). Using rest parents also means chain order
+// never matters — every bone resolves independently.
 function resolveLocalsFromWorld(newWorldMap, restWorld) {
   const changes = []
   for (const [target, newWorld] of newWorldMap) {
     const parent = target.parent
-    const parentQuat =
+    const restParentQuat =
       parent && parent.isBone && p.boneMap.has(parent.name)
-        ? newWorldMap.get(parent) || restWorld.get(parent) || new THREE.Quaternion()
+        ? restWorld.get(parent) || new THREE.Quaternion()
         : new THREE.Quaternion()
-    const after = parentQuat.clone().invert().multiply(newWorld)
+    const after = restParentQuat.clone().invert().multiply(newWorld)
     if (!target.quaternion.equals(after)) {
       changes.push({ bone: target, before: target.quaternion.clone(), after })
       target.quaternion.copy(after)
@@ -1028,6 +1221,10 @@ export function disposePosing() {
     p.scene.remove(p.ikProxy)
     p.ikProxy = null
   }
+  if (p.rotatePivot) {
+    p.scene.remove(p.rotatePivot)
+    p.rotatePivot = null
+  }
   p.scene = null
   p.camera = null
   p.renderer = null
@@ -1112,9 +1309,11 @@ function buildIkChain(effector) {
   const chain = []
   let b = effector.parent
   while (b && b.isBone && p.boneMap.has(b.name) && chain.length < IK_CHAIN_LINKS) {
-    const slot = classifyBone(b.name)
-    const role = slot ? slot.split('.')[0] : null
-    if (!IK_LIMB_ROLES.has(role)) break
+    if (!p.looseIk) {
+      const slot = slotFor(b)
+      const role = slot ? slot.split('.')[0] : null
+      if (!IK_LIMB_ROLES.has(role)) break
+    }
     chain.push(b)
     b = b.parent
   }
@@ -1133,7 +1332,7 @@ function findLimbTip(bone) {
   let cur = bone
   for (let i = 0; i < 12; i++) {
     // hard cap: guards against any unusual rig producing a cycle-like walk
-    const slot = classifyBone(cur.name)
+    const slot = slotFor(cur)
     const role = slot ? slot.split('.')[0] : null
     if (role === 'hand' || role === 'foot') return cur
     const kids = cur.children.filter((c) => c.isBone && p.boneMap.has(c.name))
@@ -1258,7 +1457,8 @@ function onPointerUp(e) {
 
   if (!p.points || p.points.visible === false) return
   const name = pickBoneName(e)
-  p.onSelect(name) // null on empty-space click → deselect
+  const additive = e.shiftKey || e.ctrlKey || e.metaKey
+  p.onSelect(name, additive) // null name on empty-space click → deselect
 }
 
 // Live hover highlight for Parts view — brightens the region under the
@@ -1353,7 +1553,7 @@ function resolveBoneRegion(bone) {
 // classifyBone itself doesn't recognise (fingers, twist correctives, facial
 // bones…) — those get resolved by inheritance in buildBoneRegionMap.
 function directRegionKeyForBone(bone) {
-  const slot = classifyBone(bone.name)
+  const slot = slotFor(bone)
   if (!slot) return null
   return SLOT_TO_REGION.get(slot) || null
 }
@@ -1382,7 +1582,7 @@ function substituteChildRegion(parentRegion) {
 // Mutates `direct` in place (a plain slot->region Map, pre-inheritance).
 function assignTorsoChainRegions(direct) {
   const spineBones = p.bones.filter((b) => {
-    const slot = classifyBone(b.name)
+    const slot = slotFor(b)
     return slot === 'spine' || slot === 'chest'
   })
   if (!spineBones.length) return
@@ -1484,7 +1684,7 @@ function computeRegionControls() {
     let bestDepth = Infinity
     for (const bone of p.bones) {
       if (p.boneRegionMap.get(bone) !== def.key) continue
-      const slot = classifyBone(bone.name)
+      const slot = slotFor(bone)
       const idx = slot ? def.control.indexOf(slot) : -1
       const priority = idx === -1 ? -1 : def.control.length - idx
       const sidePenalty = centreline && detectSide(bone.name.toLowerCase()) ? 1 : 0

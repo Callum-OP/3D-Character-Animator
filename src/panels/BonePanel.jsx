@@ -112,6 +112,8 @@ export default function BonePanel() {
 
   const poseClipboard = useStore((s) => s.poseClipboard)
   const setSelectedBoneName = useStore((s) => s.setSelectedBoneName)
+  const selectedBoneNames = useStore((s) => s.selectedBoneNames)
+  const toggleBoneSelection = useStore((s) => s.toggleBoneSelection)
   const setBoneFilter = useStore((s) => s.setBoneFilter)
   const setDeformOnly = useStore((s) => s.setDeformOnly)
   const setTransformSpace = useStore((s) => s.setTransformSpace)
@@ -409,25 +411,45 @@ export default function BonePanel() {
 
       <div className="bone-tree">
         {visibleBones.length === 0 && <div className="empty">No matching bones.</div>}
-        {visibleBones.map((b) => (
-          <div
-            key={b.name}
-            className={'bone-row' + (b.name === selectedBoneName ? ' selected' : '')}
-            style={{ paddingLeft: 6 + b.depth * 12 }}
-            title={b.name}
-            onClick={() =>
-              setSelectedBoneName(b.name === selectedBoneName ? null : b.name)
-            }
-          >
-            {b.label || b.name}
-          </div>
-        ))}
+        {visibleBones.map((b) => {
+          const multiSelected = selectedBoneNames.length > 1
+          return (
+            <div
+              key={b.name}
+              className={
+                'bone-row' +
+                (selectedBoneNames.includes(b.name) ? ' selected' : '') +
+                (multiSelected && b.name === selectedBoneName ? ' bone-row-primary' : '')
+              }
+              style={{ paddingLeft: 6 + b.depth * 12 }}
+              title={multiSelected ? b.name : b.name + ' (Shift/Ctrl-click to select more)'}
+              onClick={(e) => {
+                const additive = e.shiftKey || e.ctrlKey || e.metaKey
+                if (!additive && selectedBoneNames.length <= 1) {
+                  // Plain click, nothing already multi-selected: keep the old
+                  // "click again to deselect" toggle behaviour.
+                  setSelectedBoneName(b.name === selectedBoneName ? null : b.name)
+                } else {
+                  toggleBoneSelection(b.name, additive)
+                }
+              }}
+            >
+              {b.label || b.name}
+            </div>
+          )
+        })}
       </div>
+
+      {selectedBoneNames.length > 1 && (
+        <div className="bone-count" title="Drag the rotate gizmo to bend every selected joint by the same amount">
+          {selectedBoneNames.length} joints selected — drag the gizmo to rotate them together
+        </div>
+      )}
 
       <div className="pose-hint">
         {boneViewMode === 'parts'
           ? 'Click a highlighted body part to select it, then use the Rotate/Move toggle and drag the gizmo. Esc deselects · Ctrl+Z undoes · Ctrl+Shift+Z redoes. Switch to "Bones" for fine per-joint control.'
-          : 'Click a bone dot or a name to select, then drag the ring gizmo or the X/Y/Z sliders to bend it. Esc deselects · Ctrl+Z undoes · Ctrl+Shift+Z redoes · hold Shift to snap.'}
+          : 'Click a bone dot or a name to select, then drag the ring gizmo or the X/Y/Z sliders to bend it. Shift/Ctrl-click another bone (dot or name) to rotate several joints together. Esc deselects · Ctrl+Z undoes · Ctrl+Shift+Z redoes · hold Shift while dragging the gizmo to snap.'}
       </div>
     </div>
   )

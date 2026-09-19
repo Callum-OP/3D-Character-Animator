@@ -66,6 +66,7 @@ const CHARACTER_FIELDS = [
   'modelInfo',
   'meshOverrides',
   'selectedBoneName',
+  'selectedBoneNames',
   'selectedMeshUuid',
   'boneFilter',
   'deformOnly',
@@ -91,6 +92,7 @@ function defaultCharacterFields(modelInfo) {
     modelInfo,
     meshOverrides: {},
     selectedBoneName: null,
+    selectedBoneNames: [],
     selectedMeshUuid: null,
     boneFilter: '',
     deformOnly: !!(
@@ -442,7 +444,8 @@ export const useStore = create((set) => ({
     })),
 
   // ---- Bone posing ----
-  selectedBoneName: null, // name of the bone the gizmo is attached to
+  selectedBoneName: null, // "primary" bone — last one clicked; drives the panel's single-target controls
+  selectedBoneNames: [], // full multi-selection (rotate-only group gizmo); always includes selectedBoneName when non-empty
   boneFilter: '', // text filter for the bone tree
   deformOnly: false, // hide helper bones (_end/twist/vol/DEF- rule; set per rig on load)
   transformSpace: 'local', // gizmo rotation space: 'local' | 'world'
@@ -477,9 +480,41 @@ export const useStore = create((set) => ({
     // Selecting a bone deselects any scene object/camera/light (one gizmo at a time).
     set(
       selectedBoneName != null
-        ? { selectedBoneName, selectedObjectId: null, selectedObjectIds: [], selectedCameraId: null, selectedLightId: null }
-        : { selectedBoneName },
+        ? { selectedBoneName, selectedBoneNames: [selectedBoneName], selectedObjectId: null, selectedObjectIds: [], selectedCameraId: null, selectedLightId: null }
+        : { selectedBoneName, selectedBoneNames: [] },
     ),
+  // Shift/Ctrl-click support: add or remove one bone from the current
+  // selection instead of replacing it, so several joints can be rotated
+  // together with one gizmo (rotate mode only — see posing.js's selectBones).
+  // A plain click (additive=false) behaves like setSelectedBoneName.
+  toggleBoneSelection: (name, additive) =>
+    set((s) => {
+      if (!additive) {
+        return {
+          selectedBoneName: name,
+          selectedBoneNames: name != null ? [name] : [],
+          selectedObjectId: null,
+          selectedObjectIds: [],
+          selectedCameraId: null,
+          selectedLightId: null,
+        }
+      }
+      const already = s.selectedBoneNames.includes(name)
+      const selectedBoneNames = already
+        ? s.selectedBoneNames.filter((n) => n !== name)
+        : [...s.selectedBoneNames, name]
+      const selectedBoneName = already
+        ? (s.selectedBoneName === name ? selectedBoneNames[selectedBoneNames.length - 1] ?? null : s.selectedBoneName)
+        : name
+      return {
+        selectedBoneName,
+        selectedBoneNames,
+        selectedObjectId: null,
+        selectedObjectIds: [],
+        selectedCameraId: null,
+        selectedLightId: null,
+      }
+    }),
 
   // ---- Mesh editing (Mesh mode) ----
   selectedMeshUuid: null, // uuid of the part the mesh gizmo is attached to
@@ -513,7 +548,7 @@ export const useStore = create((set) => ({
       sceneObjects: [...s.sceneObjects, { visible: true, ...obj }],
       selectedObjectId: obj.id,
       selectedObjectIds: [obj.id],
-      selectedBoneName: null, // mutually exclusive with bone/camera/light selection
+      selectedBoneName: null, selectedBoneNames: [], // mutually exclusive with bone/camera/light selection
       selectedCameraId: null,
       selectedLightId: null,
     })),
@@ -555,6 +590,7 @@ export const useStore = create((set) => ({
             selectedObjectId: id,
             selectedObjectIds: [id],
             selectedBoneName: null,
+            selectedBoneNames: [],
             selectedCameraId: null,
             selectedLightId: null,
           }
@@ -571,6 +607,7 @@ export const useStore = create((set) => ({
           selectedObjectId: id,
           selectedObjectIds: id != null ? [id] : [],
           selectedBoneName: null,
+          selectedBoneNames: [],
           selectedCameraId: null,
           selectedLightId: null,
         }
@@ -586,6 +623,7 @@ export const useStore = create((set) => ({
         selectedObjectId,
         selectedObjectIds,
         selectedBoneName: null,
+        selectedBoneNames: [],
         selectedCameraId: null,
         selectedLightId: null,
       }
@@ -605,6 +643,7 @@ export const useStore = create((set) => ({
       selectedObjectId: null, // one gizmo at a time
       selectedObjectIds: [],
       selectedBoneName: null,
+      selectedBoneNames: [],
       selectedLightId: null,
     })),
   removeSceneCamera: (id) =>
@@ -617,7 +656,7 @@ export const useStore = create((set) => ({
   setSelectedCameraId: (id) =>
     set(
       id != null
-        ? { selectedCameraId: id, selectedObjectId: null, selectedObjectIds: [], selectedBoneName: null, selectedLightId: null }
+        ? { selectedCameraId: id, selectedObjectId: null, selectedObjectIds: [], selectedBoneName: null, selectedBoneNames: [], selectedLightId: null }
         : { selectedCameraId: id },
     ),
   setCameraGizmoMode: (cameraGizmoMode) => set({ cameraGizmoMode }),
@@ -639,6 +678,7 @@ export const useStore = create((set) => ({
       selectedObjectIds: [],
       selectedCameraId: null,
       selectedBoneName: null,
+      selectedBoneNames: [],
     })),
   removeSceneLight: (id) =>
     set((s) => ({
@@ -649,7 +689,7 @@ export const useStore = create((set) => ({
   setSelectedLightId: (id) =>
     set(
       id != null
-        ? { selectedLightId: id, selectedObjectId: null, selectedObjectIds: [], selectedCameraId: null, selectedBoneName: null }
+        ? { selectedLightId: id, selectedObjectId: null, selectedObjectIds: [], selectedCameraId: null, selectedBoneName: null, selectedBoneNames: [] }
         : { selectedLightId: id },
     ),
   setLightColor: (id, color) =>

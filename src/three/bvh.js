@@ -195,7 +195,24 @@ function lateralAxis(positions) {
   return spreadZ > spreadX ? 'z' : 'x'
 }
 
-// Guess canonical humanoid slots from the SHAPE of a skeleton — its bone
+// Total number of other bones hanging off `bone` (its full subtree, not
+// just direct children). Used to tell a real limb/torso continuation apart
+// from a decorative one-off bone that happens to sit at a similar height or
+// side — a stray fringe/antenna/jiggle bone parented at the wrong level
+// might reach just as high, or just as far sideways, as the real chest or
+// arm, but it won't have anywhere near as much hanging off it.
+function countDescendants(bone, bones) {
+  let n = 0
+  const stack = bone.children.filter((c) => bones.includes(c))
+  while (stack.length) {
+    const cur = stack.pop()
+    n++
+    for (const c of cur.children) if (bones.includes(c)) stack.push(c)
+  }
+  return n
+}
+
+
 // hierarchy and rest-pose positions — rather than bone names. This is the
 // fallback used when a skeleton's bones carry no usable names at all
 // ("Bone01", "Joint_3", numeric BVH/GLTF exports, …), so retargeting still
@@ -229,7 +246,16 @@ export function guessSlotsByHierarchy(bones) {
   // those out and only reason about uniquely-named, real bones.
   const nameCount = new Map()
   for (const b of bones) nameCount.set(b.name, (nameCount.get(b.name) || 0) + 1)
-  const real = bones.filter((b) => b.name && b.name !== 'ENDSITE' && nameCount.get(b.name) === 1)
+  // Cloth/physics-sim strands ("cloth_0114_012" and the like) are real bones
+  // the model can still pose, but they're noise for figuring out the
+  // ANATOMY: a skirt or cape can easily out-number and out-branch the actual
+  // skeleton (dozens of near-identical 2-bone dangly chains), which throws
+  // off "biggest subtree" / "most children" comparisons below if they're
+  // left in the running.
+  const CLOTH_RE = /^cloth[-_]/i
+  const real = bones.filter(
+    (b) => b.name && b.name !== 'ENDSITE' && nameCount.get(b.name) === 1 && !CLOTH_RE.test(b.name),
+  )
   if (real.length === 0) return out
 
   const topRoot = real.find((b) => !b.parent || !real.includes(b.parent)) || real[0]
@@ -275,53 +301,120 @@ export function guessSlotsByHierarchy(bones) {
   }
 
   // Spine: walk up from the hips along single-child bones until a branch
-  // (the chest, where the neck and both arms split off) or a dead end. If
-  // more than one candidate "settles upward" prefer whichever reaches highest.
+  // (the chest, where the neck and both arms split off) or a dead end. When
+  // several branches "settle upward", prefer whichever has the richest
+  // subtree hanging off it (the real torso continues on to a full chest,
+  // arms, head and fingers) rather than whichever simply reaches highest —
+  // a decorative bone (a stray fringe/collar/hair bone parented straight off
+  // the hips) can easily sit higher than the real chest while having almost
+  // nothing attached to it, and picking by height alone latches onto that
+  // instead. Height only breaks a tie between two similarly-rich branches.
   if (spineCandidates.length > 0) {
-    spineCandidates.sort((a, b) => worldPos.get(chainEnd(b, real)).y - worldPos.get(chainEnd(a, real)).y)
+    spineCandidates.sort((a, b) => {
+      const byRichness = countDescendants(chainEnd(b, real), real) - countDescendants(chainEnd(a, real), real)
+      if (byRichness !== 0) return byRichness
+      return worldPos.get(chainEnd(b, real)).y - worldPos.get(chainEnd(a, real)).y
+    })
     const spineChain = singleChildChain(spineCandidates[0], real)
     assign('spine', spineChain[0])
     if (spineChain.length > 1) assign('chest', spineChain[spineChain.length - 1])
     const chest = spineChain[spineChain.length - 1]
-    const branchKids = chest.children.filter((c) => real.includes(c))
-
-    if (branchKids.length >= 2) {
-      const info = branchKids.map((k) => ({ bone: k, end: chainEnd(k, real) }))
-      const ax = lateralAxis(info.map((i) => worldPos.get(i.end)))
-      const chestLateral = worldPos.get(chest)[ax]
-      const withLateral = info.map((i) => ({ ...i, lateral: Math.abs(worldPos.get(i.end)[ax] - chestLateral) }))
-      withLateral.sort((a, b) => b.lateral - a.lateral)
-      // Arms sit noticeably off to the side; the neck continues roughly
-      // straight up. Whatever's left over is treated as part of the neck/head branch.
-      const armInfo = withLateral.slice(0, 2).filter((w) => w.lateral > 0.02)
-      const neckInfo = withLateral.find((w) => !armInfo.includes(w))
-
-      if (neckInfo) {
-        const neckChain = singleChildChain(neckInfo.bone, real)
-        assign(neckChain.length > 1 ? 'neck' : 'head', neckChain[0])
-        if (neckChain.length > 1) assign('head', neckChain[neckChain.length - 1])
-      }
-
-      const armTemplate = ['shoulder', 'upperArm', 'lowerArm', 'hand']
-      const sortedArms = armInfo
-        .map((w) => w.bone)
-        .sort((a, b) => worldPos.get(chainEnd(a, real))[ax] - worldPos.get(chainEnd(b, real))[ax])
-      if (sortedArms.length >= 1) {
-        assignChainToTemplate(singleChildChain(sortedArms[0], real), armTemplate, 'L', assign)
-      }
-      if (sortedArms.length >= 2) {
-        const right = sortedArms[sortedArms.length - 1]
-        assignChainToTemplate(singleChildChain(right, real), armTemplate, 'R', assign)
-      }
-    } else if (branchKids.length === 1) {
-      // Only one continuation past the chest, treat it as neck/head.
-      const neckChain = singleChildChain(branchKids[0], real)
-      assign(neckChain.length > 1 ? 'neck' : 'head', neckChain[0])
-      if (neckChain.length > 1) assign('head', neckChain[neckChain.length - 1])
-    }
+    resolveNeckAndArms(chest, real, worldPos, assign)
   }
 
   return out
+}
+
+// From the chest, repeatedly resolve each fork into "continues the torso
+// centrally" (neck) vs "peels off sideways" (an arm) until there's nowhere
+// left to fork — most rigs only need to do this once (chest -> neck + both
+// arms as direct siblings), but some non-standard exports attach the two
+// arms at different depths (one straight off the chest, the other a level
+// or two further up whatever the chest's "central" continuation is), so
+// this keeps going instead of assuming the first fork is the only one.
+// Ranks candidates by |lateral offset| together with how much hangs off
+// them (countDescendants), since a stray decorative bone (collar, breast,
+// hair) can have a similar sideways offset to a real arm but nowhere near
+// as much attached to it — fingers, a forearm/hand chain, etc.
+function resolveNeckAndArms(chest, real, worldPos, assign) {
+  const armTemplate = ['shoulder', 'upperArm', 'lowerArm', 'hand']
+  const foundArms = [] // up to 2: { bone, axisPos }
+  let cur = chest
+  let guard = 0
+  while (cur && guard++ < 12) {
+    const kids = cur.children.filter((c) => real.includes(c))
+    if (kids.length === 0) break
+    if (kids.length === 1) {
+      cur = kids[0] // still just a pass-through joint — keep walking
+      continue
+    }
+    const info = kids.map((k) => ({ bone: k, end: chainEnd(k, real) }))
+    const ax = lateralAxis(info.map((i) => worldPos.get(i.end)))
+    const curAxisPos = worldPos.get(cur)[ax]
+    const ranked = info
+      .map((i) => ({
+        bone: i.bone,
+        axisPos: worldPos.get(i.end)[ax],
+        lateral: Math.abs(worldPos.get(i.end)[ax] - curAxisPos),
+        richness: countDescendants(i.bone, real),
+      }))
+      .sort((a, b) => b.lateral * (1 + b.richness) - a.lateral * (1 + a.richness))
+
+    let central = null
+    for (const cand of ranked) {
+      // An arm sits off to one side; don't take a second one on the SAME
+      // side (that's almost always something else — a breast/collar bone
+      // sitting near an already-found arm, not a second limb).
+      const sameSideTaken = foundArms.some((a) => Math.sign(a.axisPos - curAxisPos || 1) === Math.sign(cand.axisPos - curAxisPos || 1))
+      if (cand.lateral > 0.02 && foundArms.length < 2 && !sameSideTaken) {
+        foundArms.push(cand)
+      } else if (!central) {
+        central = cand // whatever's left over/unclaimed continues the torso
+      }
+    }
+    if (!central) break
+    cur = central.bone
+  }
+
+  if (cur && cur !== chest) {
+    const neckChain = singleChildChain(cur, real)
+    assign(neckChain.length > 1 ? 'neck' : 'head', neckChain[0])
+    if (neckChain.length > 1) assign('head', neckChain[neckChain.length - 1])
+  }
+
+  foundArms.sort((a, b) => a.axisPos - b.axisPos)
+  if (foundArms.length >= 1) {
+    assignChainToTemplate(singleChildChain(foundArms[0].bone, real), armTemplate, 'L', assign)
+  }
+  if (foundArms.length >= 2) {
+    const right = foundArms[foundArms.length - 1]
+    assignChainToTemplate(singleChildChain(right.bone, real), armTemplate, 'R', assign)
+  }
+}
+
+// Build a bone.name -> canonical slot map from a skeleton's SHAPE alone
+// (guessSlotsByHierarchy), for callers that classify a MODEL'S OWN bones by
+// role — the Body Parts overlay, limb limits, IK chain roles — rather than
+// matching two skeletons' names against each other like retargeting does.
+// Some exports (Sketchfab/game-engine hex-named rigs — "bone_0059_0312" and
+// the like) carry no naming signal at all, so classifyBone(name) returns null
+// for literally every bone; without a fallback, such a model gets no Body
+// Parts regions and no IK move chains anywhere; a game rig with a normal Mixamo-
+// style vocabulary just fine, so this only kicks in once classifyBone already
+// found too little to work with (same "< 4 slots" threshold classifyOrGuess
+// uses below). Callers should still try classifyBone(bone.name) FIRST and only
+// consult this map for bones that come back null — it only ever names one
+// bone per canonical slot (see guessSlotsByHierarchy), while classifyBone can
+// (and for well-named rigs, should) classify many bones into the same slot
+// (every spine vertebra, say).
+export function buildSlotFallbackMap(bones) {
+  const byName = new Map()
+  if (!bones || bones.length === 0) return byName
+  const names = bones.map((b) => b.name)
+  if (Object.keys(firstBySlot(names)).length >= 4) return byName // names already carry enough signal
+  const guessed = guessSlotsByHierarchy(bones)
+  for (const [slotKey, boneName] of Object.entries(guessed)) byName.set(boneName, slotKey)
+  return byName
 }
 
 // Classify a skeleton's bones into slots by name; if that finds too few

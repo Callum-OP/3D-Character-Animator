@@ -1161,15 +1161,18 @@ function downloadBlob(blob, filename) {
 // .fbx in), so there is no in-app "Save as .fbx". The .glb this produces can
 // be opened in Blender and re-exported as .fbx in a couple of clicks if an
 // .fbx is specifically needed.
-export async function exportSceneModel(format = 'glb', name = 'scene') {
+// poseMode: 'current' (default) exports the pose on screen; 'rest' exports every
+// character in its un-posed rest pose (on the export copy only — the live
+// character is never touched). See exportPose.js.
+export async function exportSceneModel(format = 'glb', name = 'scene', poseMode = 'current') {
   const items = getAllRootsForExport()
   if (!items.length) {
     return { ok: false, message: 'Nothing to export — load a character or add an object first.' }
   }
   try {
-    const [{ GLTFExporter }, { clone: cloneSkinned }] = await Promise.all([
+    const [{ GLTFExporter }, { cloneForExport }] = await Promise.all([
       import('three/examples/jsm/exporters/GLTFExporter.js'),
-      import('three/examples/jsm/utils/SkeletonUtils.js'),
+      import('./exportPose.js'),
     ])
 
     // Fresh, transform-less parent: every child below gets its WORLD matrix
@@ -1179,7 +1182,10 @@ export async function exportSceneModel(format = 'glb', name = 'scene') {
     exportGroup.name = 'Scene'
     for (const { root, name: objName } of items) {
       root.updateWorldMatrix(true, false)
-      const dup = cloneSkinned(root) // preserves SkinnedMesh <-> skeleton/bone bindings
+      // Preserves SkinnedMesh <-> skeleton/bone bindings, keeps the model's
+      // original inverse-bind data, and (poseMode 'rest') un-poses the copy.
+      const model = [...state.characters.values()].find((c) => c.root === root)
+      const dup = cloneForExport(root, { pose: poseMode, restQuats: model?.__poseRestQuats || null })
       dup.name = objName || dup.name
       root.matrixWorld.decompose(dup.position, dup.quaternion, dup.scale)
       exportGroup.add(dup)
