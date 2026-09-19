@@ -185,7 +185,7 @@ const p = {
   pointsGeom: null,
   pointsMat: null,
 
-  viewMode: 'parts', // 'bones' (dot overlay) | 'parts' (body-part regions) — default matches store.boneViewMode
+  viewMode: 'bones', // 'bones' (dot overlay) | 'parts' (body-part regions) — default matches store.boneViewMode
   showAllHighlights: false, // Parts view: tint every region faintly, not just hover/selected
   boneRegionMap: new Map(), // Bone -> region key (or null), built per model
   regionControl: new Map(), // region key -> control bone name, built per model

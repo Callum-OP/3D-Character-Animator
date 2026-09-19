@@ -62,7 +62,9 @@ export default function ExportPanel() {
   const [msg, setMsg] = useState(null)
   const [previewing, setPreviewing] = useState(false)
   const [exportingModel, setExportingModel] = useState(false)
-  const [exportRestPose, setExportRestPose] = useState(false) // false = export the pose on screen
+  // 'baked' = pose becomes the file's bind pose (best for Blender); 'current' = skinned pose
+  // using the model's original bind data; 'rest' = un-posed. See exportPose.js.
+  const [exportPoseMode, setExportPoseMode] = useState('baked')
 
   const name = modelInfo?.name || 'render'
   const canRecord = canRecordVideo()
@@ -103,7 +105,7 @@ export default function ExportPanel() {
     if (exportingModel) return
     setExportingModel(true)
     setMsg(format === 'glb' ? 'Exporting scene as .glb…' : 'Exporting scene as .gltf…')
-    const result = await exportSceneModel(format, name, exportRestPose ? 'rest' : 'current')
+    const result = await exportSceneModel(format, name, exportPoseMode)
     setExportingModel(false)
     setMsg(result.message)
   }
@@ -296,12 +298,12 @@ export default function ExportPanel() {
           </button>
         </div>
         <label className="radio-hint" style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 4 }}>
-          <input
-            type="checkbox"
-            checked={exportRestPose}
-            onChange={(e) => setExportRestPose(e.target.checked)}
-          />
-          Export in rest pose instead of the current pose
+          Pose
+          <select value={exportPoseMode} onChange={(e) => setExportPoseMode(e.target.value)}>
+            <option value="baked">Current pose, baked (best for Blender)</option>
+            <option value="current">Current pose, skinned (original bind data)</option>
+            <option value="rest">Rest pose</option>
+          </select>
         </label>
         <div className="radio-hint" style={{ marginTop: 4 }}>
           Combines every visible character and object into one file at their
