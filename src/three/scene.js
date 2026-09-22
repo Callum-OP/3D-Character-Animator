@@ -312,9 +312,9 @@ export function initScene(container) {
   const onWheel = (e) => {
     e.preventDefault()
     let pixelDelta = e.deltaY
-    if (e.deltaMode === 1) pixelDelta *= 18 // lines -> ~px
+    if (e.deltaMode === 1) pixelDelta *= 18
     else if (e.deltaMode === 2) pixelDelta *= window.innerHeight
-    dollyViewport(pixelDelta, { smooth: true })
+    dollyViewport(-pixelDelta, { smooth: true })  // was: dollyViewport(pixelDelta, { smooth: true })
   }
   renderer.domElement.addEventListener('wheel', onWheel, { passive: false })
   state.disposeWheel = () => renderer.domElement.removeEventListener('wheel', onWheel)
