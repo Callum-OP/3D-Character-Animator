@@ -38,6 +38,8 @@ body {
   position: relative;
   flex: 1 1 auto;
   min-width: 0;
+  touch-action: none; /* Add this to protect the entire viewport area */
+  overscroll-behavior: none; /* Prevents elastic bounce effects */
   /* Checkerboard so a transparent scene background is visually obvious */
   background-color: #202127;
   background-image:
@@ -51,12 +53,14 @@ body {
 
 .viewport-wrap canvas {
   display: block;
+  touch-action: none;
 }
 
 /* Inner host for the Three.js canvas; overlays are siblings of this. */
 .viewport-canvas-host {
   position: absolute;
   inset: 0;
+  touch-action: none;
 }
 
 /* Empty-state welcome shown before a model is loaded */
@@ -169,6 +173,44 @@ body {
 .pose-toolbar-btn:hover {
   border-color: var(--accent);
   background: rgba(31, 45, 70, 0.92);
+}
+
+/* On-screen zoom in/out, for input methods (or WebView/Tauri setups) where
+   scroll-wheel or trackpad-pinch zoom doesn't reach the page. */
+.zoom-toolbar {
+  position: absolute;
+  bottom: 14px;
+  right: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  z-index: 2;
+}
+
+.zoom-toolbar-btn {
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: rgba(16, 17, 20, 0.78);
+  color: var(--text);
+  font: inherit;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.zoom-toolbar-btn:hover {
+  border-color: var(--accent);
+  background: rgba(31, 45, 70, 0.92);
+}
+
+.zoom-toolbar-btn:active {
+  background: rgba(255, 90, 60, 0.25);
 }
 
 .symmetrise-menu {

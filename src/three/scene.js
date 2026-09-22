@@ -285,10 +285,13 @@ export function initScene(container) {
   const controls = new OrbitControls(camera, renderer.domElement)
   controls.enableDamping = false
   controls.target.set(0, 1, 0)
+  // Zoom is handled entirely by our own wheel listener + dollyViewport below
+  // (shared with the on-screen +/- buttons), rather than OrbitControls' own
+  // wheel handling — this keeps wheel/trackpad and the buttons feeling
+  // identical, and sidesteps input setups where OrbitControls' built-in
+  // 'wheel' listener doesn't behave as expected.
+  controls.enableZoom = false
   controls.addEventListener('start', () => {
-    // Orbiting is fragment-bound with lit materials and the outline pass. A
-    // temporary lower DPR keeps interaction responsive; the final frame is
-    // rendered at the normal quality as soon as the drag ends.
     if (state.pixelRatio > 1.25) renderer.setPixelRatio(1.25)
   })
   controls.addEventListener('end', () => {
@@ -298,6 +301,23 @@ export function initScene(container) {
   controls.addEventListener('change', requestRender)
   controls.update()
   state.controls = controls
+
+  // --- Wheel / trackpad zoom ---
+  // Proportional to scroll distance so it feels continuous (a light trackpad
+  // scroll nudges the camera slightly, a hard mouse-wheel flick moves it a
+  // lot) rather than the fixed per-click step the on-screen buttons use.
+  // deltaMode varies by device/browser: 0 = pixels (most trackpads/precision
+  // mice), 1 = lines (many mouse wheels), 2 = pages (rare) — normalise all of
+  // them to an approximate pixel distance before scaling.
+  const onWheel = (e) => {
+    e.preventDefault()
+    let pixelDelta = e.deltaY
+    if (e.deltaMode === 1) pixelDelta *= 18 // lines -> ~px
+    else if (e.deltaMode === 2) pixelDelta *= window.innerHeight
+    dollyViewport(pixelDelta, { smooth: true })
+  }
+  renderer.domElement.addEventListener('wheel', onWheel, { passive: false })
+  state.disposeWheel = () => renderer.domElement.removeEventListener('wheel', onWheel)
 
   // --- Bone posing (gizmo + pickable bone dots) ---
   initPosing({
@@ -504,6 +524,27 @@ export function requestRender() {
     state.renderScheduled = false
     renderOnce()
   })
+}
+
+// Manual zoom fallback (on-screen +/- buttons).
+export function dollyViewport(direction, { smooth = false } = {}) {
+  const { camera, controls } = state
+  if (!camera || !controls) return
+  const offset = camera.position.clone().sub(controls.target)
+  const distance = offset.length()
+  if (distance < 1e-6) return
+  const factor = smooth
+    ? Math.pow(0.9985, direction) // ~0.15% per pixel of scroll, smooth and continuous
+    : direction < 0
+      ? 0.85
+      : 1 / 0.85
+  const minDistance = controls.minDistance ?? 0
+  const maxDistance = controls.maxDistance ?? Infinity
+  const nextDistance = Math.min(maxDistance, Math.max(minDistance, distance * factor))
+  offset.multiplyScalar(nextDistance / distance)
+  camera.position.copy(controls.target).add(offset)
+  controls.update()
+  requestRender()
 }
 
 function renderOnce() {
@@ -2176,6 +2217,10 @@ export function disposeScene() {
   if (state.resizeObserver) {
     state.resizeObserver.disconnect()
     state.resizeObserver = null
+  }
+  if (state.disposeWheel) {
+    state.disposeWheel()
+    state.disposeWheel = null
   }
   if (state.controls) {
     state.controls.removeEventListener('change', requestRender)

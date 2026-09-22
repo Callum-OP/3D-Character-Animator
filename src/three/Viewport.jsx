@@ -24,6 +24,7 @@ import {
   setOutlineToggle,
   setViewCameraById,
   setActiveCharacter,
+  dollyViewport,
 } from './scene.js'
 import { useStore } from '../store.js'
 import { SUPPORTED_EXTENSION_RE, SUPPORTED_EXTENSIONS } from './loadModel.js'
@@ -664,6 +665,17 @@ export default function Viewport() {
             )}
           </div>
           {!loadError && <div className="ve-hint">Press ? any time for help</div>}
+        </div>
+      )}
+
+      {hasSceneContent && (
+        <div className="zoom-toolbar" aria-label="Zoom the 3D view in or out">
+          <button className="zoom-toolbar-btn" title="Zoom in" aria-label="Zoom in" onClick={() => dollyViewport(-1)}>
+            +
+          </button>
+          <button className="zoom-toolbar-btn" title="Zoom out" aria-label="Zoom out" onClick={() => dollyViewport(1)}>
+            −
+          </button>
         </div>
       )}
 

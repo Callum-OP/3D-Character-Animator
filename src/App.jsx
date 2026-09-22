@@ -39,7 +39,7 @@ export default function App() {
         <div className="app-header">
           <div className="brand-lockup">
             <div className="brand-mark">
-              <img src="/logo.png" alt="Animare logo" className="brand-mark-img" />
+              <img src={`${import.meta.env.BASE_URL}logo.png`} alt="Animare logo" className="brand-mark-img" />
             </div>
             <div>
               <h1 className="app-title">Animare</h1>
