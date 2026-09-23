@@ -79,6 +79,8 @@ const CHARACTER_FIELDS = [
   'animData',
   'insertTime',
   'poseClipboard',
+  'dangleEnabled',
+  'dangleChains',
 ]
 
 function snapshotCharacterFields(s) {
@@ -110,6 +112,8 @@ function defaultCharacterFields(modelInfo) {
     animData: { tracks: {}, root: [], meshes: {}, cameras: {}, cuts: [], morphs: {}, lights: {} },
     insertTime: 0,
     poseClipboard: null,
+    dangleEnabled: true,
+    dangleChains: [],
   }
 }
 
@@ -441,6 +445,38 @@ export const useStore = create((set) => ({
         ...s.meshOverrides,
         [uuid]: { outline: true, shading: 'full', ...s.meshOverrides[uuid], visible },
       },
+    })),
+
+  // ---- Dangle bones (gravity/physics on selected bones — hair, accessories) ----
+  // dangleChains: [{ id, name, boneNames: string[], stiffness, gravity, damping }]
+  // per active character (see CHARACTER_FIELDS). boneNames is a flat set —
+  // dangle.js works out the parent/child structure from the live skeleton.
+  dangleEnabled: true,
+  dangleChains: [],
+
+  setDangleEnabled: (dangleEnabled) => set({ dangleEnabled }),
+
+  addDangleChain: (name, boneNames) =>
+    set((s) => ({
+      dangleChains: [
+        ...s.dangleChains,
+        {
+          id: `dangle_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+          name,
+          boneNames,
+          stiffness: 0.15,
+          gravity: 1,
+          damping: 0.8,
+        },
+      ],
+    })),
+
+  removeDangleChain: (id) =>
+    set((s) => ({ dangleChains: s.dangleChains.filter((c) => c.id !== id) })),
+
+  updateDangleChain: (id, patch) =>
+    set((s) => ({
+      dangleChains: s.dangleChains.map((c) => (c.id === id ? { ...c, ...patch } : c)),
     })),
 
   // ---- Bone posing ----

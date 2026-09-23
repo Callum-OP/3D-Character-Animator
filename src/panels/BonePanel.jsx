@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store.js'
 import {
   resetPose,
@@ -15,6 +15,7 @@ import {
   applyLimitsToPose,
 } from '../three/posing.js'
 import { downloadPose, readPoseFile } from '../three/poses.js'
+import { collectActiveDangleDescendants, resetActiveDangle } from '../three/scene.js'
 import EditableValue from './EditableValue.jsx'
 
 const AXES = ['x', 'y', 'z']
@@ -124,6 +125,13 @@ export default function BonePanel() {
   const setLimbLimits = useStore((s) => s.setLimbLimits)
   const setPoseClipboard = useStore((s) => s.setPoseClipboard)
 
+  const dangleEnabled = useStore((s) => s.dangleEnabled)
+  const dangleChains = useStore((s) => s.dangleChains)
+  const setDangleEnabled = useStore((s) => s.setDangleEnabled)
+  const addDangleChain = useStore((s) => s.addDangleChain)
+  const removeDangleChain = useStore((s) => s.removeDangleChain)
+  const updateDangleChain = useStore((s) => s.updateDangleChain)
+
   const fileInputRef = useRef(null)
   const [poseMsg, setPoseMsg] = useState(null)
 
@@ -139,6 +147,31 @@ export default function BonePanel() {
     const { applied, missing } = applyPose(poseClipboard)
     setPoseMsg(`Pasted ${applied} bone(s)` + (missing.length ? `, ${missing.length} skipped.` : '.'))
   }
+
+  // Turn whatever's currently selected (one or several bones) into a dangle
+  // chain — the selected bone(s) plus everything hanging off them (a hair
+  // strand's root sweeps up the whole strand, say). If several separate
+  // bones are selected they all go into the one chain, so e.g. both bunches
+  // of a pair of pigtails can swing under a single set of settings.
+  function onAddDangleChain() {
+    const roots = selectedBoneNames.length ? selectedBoneNames : selectedBoneName ? [selectedBoneName] : []
+    if (!roots.length) return
+    const boneNames = [...new Set(roots.flatMap((r) => collectActiveDangleDescendants(r)))]
+    const name = roots.length === 1 ? roots[0] : `${roots.length} bones incl. ${roots[0]}`
+    addDangleChain(name, boneNames)
+  }
+
+  // Preview of what "Add selected as dangle chain" would sweep in — one line
+  // per currently-selected root bone: just its name if it's a leaf, or
+  // "root > child1, child2, ..." if picking it also pulls in descendants.
+  const dangleSelectionPreview = useMemo(() => {
+    const roots = selectedBoneNames.length ? selectedBoneNames : selectedBoneName ? [selectedBoneName] : []
+    return roots.map((r) => {
+      const children = collectActiveDangleDescendants(r).filter((n) => n !== r)
+      return children.length ? `${r} > ${children.join(', ')}` : r
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedBoneNames, selectedBoneName, modelInfo])
 
   const bones = modelInfo?.bones || []
   // Offer the helper-bone toggle only when the rig actually has both kinds.
@@ -443,6 +476,137 @@ export default function BonePanel() {
       {selectedBoneNames.length > 1 && (
         <div className="bone-count" title="Drag the rotate gizmo to bend every selected joint by the same amount">
           {selectedBoneNames.length} joints selected — drag the gizmo to rotate them together
+        </div>
+      )}
+
+      <h2 style={{ marginTop: 18 }}>Dangle Physics</h2>
+      <p className="panel-hint">
+        Select a bone (a hair strand's root, a ponytail, an earring, a cape tie) above, then add it here — it and
+        everything hanging off it will swing under gravity and inertia instead of rigidly following the rig.
+      </p>
+
+      <label className="row" style={{ marginBottom: 10 }}>
+        <input type="checkbox" checked={dangleEnabled} onChange={(e) => setDangleEnabled(e.target.checked)} />
+        <span>Enable dangle physics</span>
+      </label>
+
+      <button
+        className="btn secondary"
+        onClick={onAddDangleChain}
+        disabled={!selectedBoneNames.length && !selectedBoneName}
+        title="Add the selected bone(s) and their children as a dangle chain"
+      >
+        Add selected as dangle chain
+      </button>
+
+      {dangleSelectionPreview.length > 0 && (
+        <details className="dangle-bone-list" style={{ marginTop: 6 }}>
+          <summary>
+            Preview: {dangleSelectionPreview.length} selected bone{dangleSelectionPreview.length === 1 ? '' : 's'}
+          </summary>
+          <ul>
+            {dangleSelectionPreview.map((line, i) => (
+              <li key={i}>{line}</li>
+            ))}
+          </ul>
+        </details>
+      )}
+
+      {dangleChains.length === 0 ? (
+        <div className="empty" style={{ marginTop: 10 }}>
+          No dangle chains yet — select a bone above and add it.
+        </div>
+      ) : (
+        <div style={{ marginTop: 10 }}>
+          {dangleChains.map((chain) => (
+            <details className="dangle-chain" key={chain.id} style={{ marginBottom: 10, paddingBottom: 8, borderBottom: '1px solid var(--border, #333)' }}>
+              <summary className="dangle-chain-summary">
+                {chain.name} ({chain.boneNames.length} bone{chain.boneNames.length === 1 ? '' : 's'})
+              </summary>
+
+              <div className="row" style={{ justifyContent: 'flex-end', marginTop: 8 }}>
+                <button className="btn secondary" onClick={() => resetActiveDangle(chain.id)} title="Snap this chain back onto the current pose">
+                  Reset
+                </button>
+                <button className="btn secondary" onClick={() => removeDangleChain(chain.id)} title="Remove this dangle chain">
+                  Remove
+                </button>
+              </div>
+
+              <details className="dangle-bone-list">
+                <summary>{chain.boneNames.length} bone{chain.boneNames.length === 1 ? '' : 's'} — view list</summary>
+                <ul>
+                  {chain.boneNames.map((n) => (
+                    <li key={n}>{n}</li>
+                  ))}
+                </ul>
+              </details>
+
+              <label className="slider-row">
+                <span className="slider-label" title="How strongly it springs back to the animated pose. Low = loose and floppy, high = barely moves.">
+                  Stiffness
+                </span>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={chain.stiffness}
+                  onChange={(e) => updateDangleChain(chain.id, { stiffness: Number(e.target.value) })}
+                />
+                <EditableValue
+                  value={chain.stiffness}
+                  min={0}
+                  max={1}
+                  onChange={(v) => updateDangleChain(chain.id, { stiffness: v })}
+                  format={(v) => v.toFixed(2)}
+                  label="Stiffness"
+                />
+              </label>
+
+              <label className="slider-row">
+                <span className="slider-label" title="How strongly gravity pulls it down">Gravity</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={3}
+                  step={0.05}
+                  value={chain.gravity}
+                  onChange={(e) => updateDangleChain(chain.id, { gravity: Number(e.target.value) })}
+                />
+                <EditableValue
+                  value={chain.gravity}
+                  min={0}
+                  max={3}
+                  onChange={(v) => updateDangleChain(chain.id, { gravity: v })}
+                  format={(v) => v.toFixed(2)}
+                  label="Gravity"
+                />
+              </label>
+
+              <label className="slider-row">
+                <span className="slider-label" title="How long it keeps swinging before settling. Low = stops fast, high = keeps swaying.">
+                  Damping
+                </span>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={chain.damping}
+                  onChange={(e) => updateDangleChain(chain.id, { damping: Number(e.target.value) })}
+                />
+                <EditableValue
+                  value={chain.damping}
+                  min={0}
+                  max={1}
+                  onChange={(v) => updateDangleChain(chain.id, { damping: v })}
+                  format={(v) => v.toFixed(2)}
+                  label="Damping"
+                />
+              </label>
+            </details>
+          ))}
         </div>
       )}
 

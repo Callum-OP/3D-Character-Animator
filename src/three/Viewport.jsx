@@ -25,6 +25,7 @@ import {
   setViewCameraById,
   setActiveCharacter,
   dollyViewport,
+  syncActiveDangleConfig,
 } from './scene.js'
 import { useStore } from '../store.js'
 import { SUPPORTED_EXTENSION_RE, SUPPORTED_EXTENSIONS } from './loadModel.js'
@@ -316,6 +317,8 @@ export default function Viewport() {
     setLimitsEnabled(limbLimits)
   }, [limbLimits])
 
+
+
   // "Hide helper bones" trims the dot overlay + picking to the primary bones.
   // (modelInfo is also a dep so a freshly loaded rig gets its filter applied.)
   const deformOnly = useStore((s) => s.deformOnly)
@@ -326,6 +329,17 @@ export default function Viewport() {
       deformOnly ? bones.filter((b) => b.deform).map((b) => b.name) : null,
     )
   }, [deformOnly, modelInfo])
+
+  // --- Dangle bones: push the active character's chains/settings into the
+  // physics engine whenever the master toggle or any chain (add/remove/
+  // slider edit) changes. modelInfo is also a dep so switching to a
+  // different loaded character re-syncs against ITS chains instead of
+  // silently keeping the previous character's.
+  const dangleEnabled = useStore((s) => s.dangleEnabled)
+  const dangleChains = useStore((s) => s.dangleChains)
+  useEffect(() => {
+    syncActiveDangleConfig(dangleEnabled, dangleChains)
+  }, [dangleEnabled, dangleChains, modelInfo])
 
   // --- Scene objects: push selection / gizmo mode into the objects manager ---
   // selectedObjectIds can hold several ids (shift/ctrl-click in the panel) —

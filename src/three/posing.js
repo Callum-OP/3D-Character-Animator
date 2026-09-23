@@ -1843,17 +1843,20 @@ function buildPartOverlays(model) {
 }
 
 // Nearest-dot-in-screen-space pick. Returns a bone name or null. When several
-// dots overlap within PICK_TIE_PX of each other (common on dense rigs), the
-// bone nearest the camera wins — you pick what you can see, not what's buried
-// inside the mesh behind it.
+// dots overlap within PICK_TIE_PX of each other (common on dense rigs, e.g. a
+// hip bone sitting right behind another joint), a plain click still resolves
+// to whichever is nearest the camera — but clicking again in (about) the same
+// spot cycles to the next-nearest overlapping bone instead of reselecting the
+// same one, so a buried bone stays reachable by clicking repeatedly.
 const PICK_TIE_PX = 4
+const PICK_CYCLE_PX = 6 // how close a repeat click must land to count as "same spot"
 
 function pickBoneName(e) {
   const rect = p.renderer.domElement.getBoundingClientRect()
   const px = e.clientX - rect.left
   const py = e.clientY - rect.top
 
-  let best = null // { name, d, z }
+  const candidates = [] // { name, d, z }, closest-and-frontmost first
   for (const bone of p.pickable) {
     bone.getWorldPosition(_v).project(p.camera)
     if (_v.z > 1) continue // behind the camera
@@ -1861,13 +1864,22 @@ function pickBoneName(e) {
     const sy = (-_v.y * 0.5 + 0.5) * rect.height
     const d = Math.hypot(sx - px, sy - py)
     if (d >= PICK_THRESHOLD_PX) continue
-    if (
-      !best ||
-      d < best.d - PICK_TIE_PX ||
-      (d < best.d + PICK_TIE_PX && _v.z < best.z)
-    ) {
-      best = { name: bone.name, d, z: _v.z }
-    }
+    candidates.push({ name: bone.name, d, z: _v.z })
   }
-  return best ? best.name : null
+  if (!candidates.length) {
+    p.lastPick = null
+    return null
+  }
+  candidates.sort((a, b) => (Math.abs(a.d - b.d) < PICK_TIE_PX ? a.z - b.z : a.d - b.d))
+
+  const last = p.lastPick
+  const samePlace = last && Math.hypot(px - last.px, py - last.py) <= PICK_CYCLE_PX
+  const sameSet =
+    samePlace &&
+    last.names.length === candidates.length &&
+    last.names.every((n, i) => n === candidates[i].name)
+  const index = sameSet ? (last.index + 1) % candidates.length : 0
+
+  p.lastPick = { px, py, names: candidates.map((c) => c.name), index }
+  return candidates[index].name
 }

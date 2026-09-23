@@ -33,7 +33,7 @@ import {
   saveClipAs,
   hasFileSystemAccess as hasClipFileSystemAccess,
 } from '../three/clipLibrary.js'
-import { getBoneQuaternion, getPosedBones, applyPose } from '../three/posing.js'
+import { getBoneQuaternion, getPosedBones, applyPose, setPosingEnabled } from '../three/posing.js'
 import { getCharacterRootTransform, getCurrentModel, getGroundY, scrubTimeline, playAllCharacters, stopAllCharacters } from '../three/scene.js'
 import * as THREE from 'three'
 import { simulateRagdollClip } from '../three/ragdoll.js'
@@ -185,6 +185,13 @@ export default function AnimationPanel() {
   // When a BVH is parsed, this holds the mapping editor state until the user
   // confirms (Retarget) or cancels: { name, sourceBones, targetBones, slots }.
   const [mapping, setMapping] = useState(null)
+  // Which mapping slot (by key) is waiting for a click on a bone dot in the
+  // viewport — set by the "Pick" button next to a slot's rig-bone dropdown.
+  // Lets generic/renamed rigs be mapped by clicking the bone you can SEE
+  // (the neck, a wrist...) instead of hunting for its name in the dropdown.
+  const [pickingSlotKey, setPickingSlotKey] = useState(null)
+  const mode = useStore((s) => s.mode)
+  const pickBaselineRef = useRef(null) // selectedBoneName at the moment picking was armed, so we don't grab a stale/already-selected bone
 
   useEffect(() => {
     refreshRecentClips()
@@ -432,6 +439,60 @@ export default function AnimationPanel() {
       slots: m.slots.map((s) => (s.key === key ? { ...s, [field]: value } : s)),
     }))
   }
+
+  // Arm "click a bone on the character" for one slot's rig-bone target — or,
+  // if a bone is already selected (e.g. the user cycled to the right one by
+  // clicking it a few times first), use that immediately instead of making
+  // them click it again. Turns on bone picking in the viewport (even if the
+  // app isn't currently in Bone/Pose mode) so the dots are visible and
+  // clickable; the effect below catches the resulting selection.
+  function onStartPickTarget(key) {
+    if (selectedBoneName) {
+      setSlot(key, 'target', selectedBoneName)
+      return
+    }
+    pickBaselineRef.current = selectedBoneName
+    setPickingSlotKey(key)
+    setPosingEnabled(true)
+  }
+
+  function onCancelPickTarget() {
+    setPickingSlotKey(null)
+    setPosingEnabled(mode === 'bone')
+  }
+
+  // While a slot is armed, a change in the picked bone (from clicking a dot
+  // in the viewport) assigns it as that slot's rig-bone target, then hands
+  // bone-picking back to whatever the app's normal mode dictates.
+  useEffect(() => {
+    if (!pickingSlotKey) return
+    if (!selectedBoneName || selectedBoneName === pickBaselineRef.current) return
+    setSlot(pickingSlotKey, 'target', selectedBoneName)
+    setPickingSlotKey(null)
+    setPosingEnabled(mode === 'bone')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedBoneName])
+
+  // Esc cancels an armed pick without assigning anything.
+  useEffect(() => {
+    if (!pickingSlotKey) return
+    function onKey(e) {
+      if (e.key === 'Escape') onCancelPickTarget()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pickingSlotKey])
+
+  // Leaving the mapping editor (Retarget/Cancel) while a pick is still armed
+  // shouldn't leave bone-picking force-enabled behind.
+  useEffect(() => {
+    if (!mapping && pickingSlotKey) {
+      setPickingSlotKey(null)
+      setPosingEnabled(mode === 'bone')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapping])
 
   async function onRetarget() {
     setBvhBusy(true)
@@ -1090,7 +1151,9 @@ export default function AnimationPanel() {
           </div>
           <div className="map-hint">
             Auto-guessed by body part. Fix any wrong rows (leave a row blank to
-            skip it), then Retarget.
+            skip it), then Retarget. If the rig has generic bone names, use{' '}
+            <strong>Pick</strong> and click the bone on the character instead
+            of hunting through the dropdown.
             {mapping.slots.some((s) => s.guessed) && (
               <>
                 {' '}Rows marked <strong>~guess</strong> have no usable bone
@@ -1100,6 +1163,16 @@ export default function AnimationPanel() {
               </>
             )}
           </div>
+
+          {pickingSlotKey && (
+            <div className="map-hint map-hint-active">
+              Click a bone dot on the character to assign it to “
+              {mapping.slots.find((s) => s.key === pickingSlotKey)?.label}”.{' '}
+              <button className="btn secondary" onClick={onCancelPickTarget}>
+                Cancel
+              </button>
+            </div>
+          )}
 
           <div className="map-list">
             {mapping.slots.map((s) => (
@@ -1112,19 +1185,28 @@ export default function AnimationPanel() {
                     </span>
                   )}
                 </span>
-                <select
-                  className="select select-sm"
-                  title="Character bone"
-                  value={s.target}
-                  onChange={(e) => setSlot(s.key, 'target', e.target.value)}
-                >
-                  <option value="">— rig —</option>
-                  {mapping.targetBones.map((b, i) => (
-                    <option key={`${b}-${i}`} value={b}>
-                      {b}
-                    </option>
-                  ))}
-                </select>
+                <span className="map-target-cell">
+                  <select
+                    className="select select-sm"
+                    title="Character bone"
+                    value={s.target}
+                    onChange={(e) => setSlot(s.key, 'target', e.target.value)}
+                  >
+                    <option value="">— rig —</option>
+                    {mapping.targetBones.map((b, i) => (
+                      <option key={`${b}-${i}`} value={b}>
+                        {b}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    className={'map-pick-btn' + (pickingSlotKey === s.key ? ' active' : '')}
+                    onClick={() => (pickingSlotKey === s.key ? onCancelPickTarget() : onStartPickTarget(s.key))}
+                    title="If a bone is already selected, assigns it. Otherwise, click here then click the bone on the character."
+                  >
+                    ⌖
+                  </button>
+                </span>
                 <select
                   className="select select-sm"
                   title="Mocap (BVH) bone"

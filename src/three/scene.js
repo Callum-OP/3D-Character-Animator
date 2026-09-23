@@ -75,6 +75,14 @@ import {
   followIdleClothPose,
 } from './clothmod.js'
 import {
+  initDangle,
+  setDangleConfig,
+  stepDangleLive,
+  clearDangle,
+  resetDangle,
+  collectDescendantBoneNames,
+} from './dangle.js'
+import {
   initAnimation,
   setAnimationModel,
   setActiveAnimationCharacter,
@@ -292,6 +300,9 @@ export function initScene(container) {
   // 'wheel' listener doesn't behave as expected.
   controls.enableZoom = false
   controls.addEventListener('start', () => {
+    // Orbiting is fragment-bound with lit materials and the outline pass. A
+    // temporary lower DPR keeps interaction responsive; the final frame is
+    // rendered at the normal quality as soon as the drag ends.
     if (state.pixelRatio > 1.25) renderer.setPixelRatio(1.25)
   })
   controls.addEventListener('end', () => {
@@ -427,6 +438,9 @@ export function initScene(container) {
     // of the two stepping out of sync or fighting over on/off state.
     setContinuousRender: (on) => setContinuousRender(on, 'cloth'),
   })
+
+  // --- Dangle bones (gravity/physics on selected bones — hair, accessories) ---
+  initDangle({ requestRender: () => requestRender() })
 
   // --- Lights (only affect Toon/Standard modes; harmless in Unlit) ---
   const dirLight = new THREE.DirectionalLight(0xffffff, 2.0)
@@ -688,6 +702,7 @@ export function setContinuousRender(on, reason = 'anim') {
       try {
         updateAnimation(delta) // advance the mixer before drawing
         stepClothLive(delta) // step any LIVE cloth sims, following the current pose
+        stepDangleLive(delta) // swing any dangle (hair/accessory) bones under gravity
         updateCamTransition(delta) // glide any in-progress camera cut
         renderOnce()
       } catch (err) {
@@ -820,6 +835,34 @@ export function setActiveCharacter(id, parsedArg, { frame = false, isNewLoad = f
   requestRender()
 }
 
+// Push the ACTIVE character's dangle-chain settings (store's dangleEnabled /
+// dangleChains) into the physics engine. Called from a Viewport effect
+// whenever either changes — toggling the master switch, adding/removing a
+// chain, or dragging a stiffness/gravity/damping slider.
+export function syncActiveDangleConfig(enabled, chains) {
+  if (!state.activeCharacterId || !state.currentModel) return
+  setDangleConfig(state.activeCharacterId, state.currentModel, enabled, chains)
+}
+
+// Snap the active character's dangle bones back onto its current pose,
+// killing any in-flight swing — used right after creating a chain (so it
+// doesn't lurch in from wherever its bones happened to be) and by a panel
+// "reset" action.
+export function resetActiveDangle(chainId) {
+  if (!state.activeCharacterId) return
+  resetDangle(state.activeCharacterId, chainId)
+  requestRender()
+}
+
+// Bone name + every bone hanging off it in the ACTIVE character's skeleton —
+// the "add this bone and its whole dangling tail" convenience the Pose
+// panel's dangle section uses so picking one hair/ponytail root bone sweeps
+// up the rest of the strand automatically.
+export function collectActiveDangleDescendants(boneName) {
+  if (!state.currentModel) return [boneName]
+  return collectDescendantBoneNames(state.currentModel, boneName)
+}
+
 // Start every loaded character playing whatever clip/edit-source IT currently
 // has selected (each character remembers its own activeClipName/playbackSource/
 // animData — see the store's per-character fields). Characters with nothing
@@ -899,6 +942,7 @@ function disposeCharacter(id) {
   clearAnimationModel(id) // only THIS character's mixer/action
   if (!isAnyPlaying()) setContinuousRender(false)
   clearClothForMeshes(model.meshes) // only THIS character's cloth, others keep simulating
+  clearDangle(id) // only THIS character's dangle chains
   // Props riding this character's bones -> back into the scene, not disposed
   // along with the skeleton (disposeObject below would otherwise free their
   // geometry too, since a bone's children are part of its subtree).
@@ -1544,6 +1588,8 @@ export function getProjectData() {
       importedClipNames: live.importedClipNames,
       activeClipName: live.activeClipName,
       playbackSource: live.playbackSource,
+      dangleEnabled: live.dangleEnabled,
+      dangleChains: live.dangleChains,
       isActive: id === originalActiveId,
     })
   }
@@ -1658,7 +1704,10 @@ export async function applyProjectData(record) {
       importedClipNames: c.importedClipNames || (c.importedClips || []).map((j) => j.name),
       activeClipName: c.activeClipName ?? null,
       playbackSource: c.playbackSource || 'edit',
+      dangleEnabled: c.dangleEnabled ?? true,
+      dangleChains: c.dangleChains || [],
     })
+    setDangleConfig(id, model, c.dangleEnabled ?? true, c.dangleChains || [])
     if (c.isActive || (record.format === 'project-v1' && i === 0)) activeIdToRestore = id
   }
   if (activeIdToRestore) setActiveCharacter(activeIdToRestore)
