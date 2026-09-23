@@ -26,6 +26,7 @@ import {
   setActiveCharacter,
   dollyViewport,
   syncActiveDangleConfig,
+  setOrbitSuspended,
 } from './scene.js'
 import { useStore } from '../store.js'
 import { SUPPORTED_EXTENSION_RE, SUPPORTED_EXTENSIONS } from './loadModel.js'
@@ -61,8 +62,10 @@ import {
   redo as redoObject,
   consumeObjectGizmoGrab,
   pickObjectId,
+  pickObjectIdsInRect,
   isCharacterId,
 } from './objects.js'
+import { showMarquee, hideMarquee } from './marquee.js'
 import { resolveUndoTarget } from './undoPriority.js'
 import { selectCamera, setCameraGizmoMode, consumeCameraGizmoGrab, pickCameraId } from './cameras.js'
 import { selectLight, consumeLightGizmoGrab } from './lights.js'
@@ -386,14 +389,47 @@ export default function Viewport() {
     const el = containerRef.current
     if (!el) return
     let down = null
+    let marquee = null // { x0, y0 } screen (client) coords while Ctrl/Cmd-dragging a box-select
 
     function onPointerDown(e) {
       down = { x: e.clientX, y: e.clientY }
+      const s = useStore.getState()
+      if (e.button === 0 && (e.ctrlKey || e.metaKey || e.shiftKey) && s.mode === 'object' && s.viewCameraId == null) {
+        marquee = { x0: e.clientX, y0: e.clientY }
+        setOrbitSuspended(true)
+      }
+    }
+
+    function onPointerMoveMarquee(e) {
+      if (!marquee) return
+      const rect = el.getBoundingClientRect()
+      showMarquee(el, marquee.x0 - rect.left, marquee.y0 - rect.top, e.clientX - rect.left, e.clientY - rect.top)
     }
 
     function onPointerUp(e) {
       const start = down
       down = null
+
+      if (marquee) {
+        const { x0, y0 } = marquee
+        marquee = null
+        hideMarquee()
+        setOrbitSuspended(false)
+        // Same metric/threshold the plain-click check below uses (dx²+dy² >
+        // 25, i.e. ~5px) — kept identical so a shaky click can't accidentally
+        // read as a tiny box-select one way and a plain click the other.
+        const mdx = e.clientX - x0
+        const mdy = e.clientY - y0
+        if (mdx * mdx + mdy * mdy > 25) {
+          const rect = el.getBoundingClientRect()
+          const ids = pickObjectIdsInRect(x0 - rect.left, y0 - rect.top, e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height)
+          useStore.getState().setObjectSelection(ids, e.shiftKey)
+          return
+        }
+        // Too small to count as a drag — fall through to the normal
+        // (Ctrl-held, so additive) click handling below.
+      }
+
       // Always consume the gizmo-grab flags so a real drag never leaks into
       // the next, unrelated click.
       const grabbed = consumeObjectGizmoGrab() || consumeCameraGizmoGrab() || consumeLightGizmoGrab()
@@ -459,9 +495,11 @@ export default function Viewport() {
 
     el.addEventListener('pointerdown', onPointerDown)
     el.addEventListener('pointerup', onPointerUp)
+    el.addEventListener('pointermove', onPointerMoveMarquee)
     return () => {
       el.removeEventListener('pointerdown', onPointerDown)
       el.removeEventListener('pointerup', onPointerUp)
+      el.removeEventListener('pointermove', onPointerMoveMarquee)
     }
   }, [])
 

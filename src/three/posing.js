@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import { poseToJSON, validatePose } from './poses.js'
 import { classifyBone, detectSide, buildSlotFallbackMap } from './bvh.js'
+import { showMarquee, hideMarquee, pointInRect } from './marquee.js'
 import {
   setLimitsModel,
   clearLimitsModel,
@@ -145,6 +146,7 @@ const p = {
   controls: null,
   requestRender: () => {},
   onSelect: null, // (boneName|null) => void — reports picks up to the store
+  onSelectMany: null, // (names[], additive) => void — reports a box/marquee-select up to the store
   onPoseChange: null, // () => void — any pose edit (drag, undo, reset…); UI resync
 
   transform: null, // TransformControls
@@ -206,6 +208,7 @@ const p = {
   dragBefore: null, // selected bone's quaternion at drag start
   adjustBefore: null, // { bone, quat } captured by beginBoneAdjust (slider drags)
   pointerDown: null, // { x, y, axis } for click-vs-drag discrimination
+  marquee: null, // { x0, y0 } screen-space start point while Ctrl/Cmd-dragging a box-select
   gizmoMovedDuringDrag: false, // true once an axis-grab actually rotates/moves something (see onPointerDown/Up)
   suspended: false, // true while animation playback drives the bones
   snapDeg: null, // rotation snap increment in degrees (null = free rotate)
@@ -234,6 +237,7 @@ export function initPosing(refs) {
   p.controls = refs.controls
   p.requestRender = refs.requestRender
   p.onSelect = refs.onSelect
+  p.onSelectMany = refs.onSelectMany || null
   p.onPoseChange = refs.onPoseChange || null
   p.onGizmoModeChange = refs.onGizmoModeChange || null
 
@@ -828,6 +832,13 @@ export function resetBone(name) {
 // Look up a live Bone Object3D by name on the currently active character —
 // used by the Objects panel to attach a prop (gun, shield, hat...) to a bone
 // so it follows posing/animation automatically via the normal scene graph.
+// Names of every bone the rotate gizmo currently drives together (length 0
+// or 1 outside a multi-selection) — used by the Pose panel's "N joints
+// selected" hint and by tests proving a multi-select actually took.
+export function getSelectedBoneNames() {
+  return p.selectedBones.map((b) => b.name)
+}
+
 export function getBoneByName(name) {
   return name ? p.boneMap.get(name) || null : null
 }
@@ -1426,17 +1437,81 @@ export function simulateGizmoDragForTest(actuallyMoved) {
   if (actuallyMoved) p.transform.dispatchEvent({ type: 'objectChange' })
   p.transform.dispatchEvent({ type: 'dragging-changed', value: false })
 }
+// Same idea as above, specifically for a multi-bone (group-rotate) drag: the
+// rotate pivot's own gizmo mouseDown/mouseUp bracket the drag (that's what
+// snapshots each bone's starting orientation and later batches the undo), so
+// unlike simulateGizmoDragForTest this fires those too, in the right order.
+export function simulateGroupRotateForTest(deltaQuat) {
+  if (!p.transform || p.selectedBones.length <= 1) return
+  p.transform.dispatchEvent({ type: 'dragging-changed', value: true })
+  p.transform.dispatchEvent({ type: 'mouseDown' })
+  p.rotatePivot.quaternion.copy(deltaQuat)
+  p.transform.dispatchEvent({ type: 'objectChange' })
+  p.transform.dispatchEvent({ type: 'mouseUp' })
+  p.transform.dispatchEvent({ type: 'dragging-changed', value: false })
+}
 
 function onPointerDown(e) {
   // Record where the press started and whether it landed on a gizmo axis, so
   // pointerup can tell a bone-pick from a gizmo-drag or an orbit-drag.
   p.pointerDown = { x: e.clientX, y: e.clientY, axis: p.transform ? p.transform.axis : null }
   p.gizmoMovedDuringDrag = false
+
+  // Ctrl/Cmd OR Shift held (and not grabbing the gizmo) arms a possible
+  // box-select — confirmed as one in onPointerUp only if the drag actually
+  // travels past DRAG_SLOP_PX (the SAME threshold/metric normal click-vs-
+  // drag detection uses below, so a shaky click can't accidentally read as
+  // a tiny box-select one way and a plain click the other); a modifier-click
+  // that barely moves still falls through to the normal single-bone
+  // "additive" pick below. Shift is
+  // included here (not just Ctrl) because on macOS, Ctrl+click/drag is the
+  // system's own "secondary click" gesture and isn't reliably delivered as a
+  // normal left-button drag in every browser — Shift+drag always works.
+  if (
+    e.button === 0 &&
+    (e.ctrlKey || e.metaKey || e.shiftKey) &&
+    p.enabled &&
+    !p.suspended &&
+    p.viewMode === 'bones' &&
+    (!p.transform || p.transform.axis === null)
+  ) {
+    p.marquee = { x0: e.clientX, y0: e.clientY }
+    if (p.controls) p.controls.enabled = false
+  }
 }
 
 function onPointerUp(e) {
   const down = p.pointerDown
   p.pointerDown = null
+
+  if (p.marquee) {
+    const { x0, y0 } = p.marquee
+    p.marquee = null
+    hideMarquee()
+    if (p.controls) p.controls.enabled = !p.controls.locked
+    if (Math.abs(e.clientX - x0) + Math.abs(e.clientY - y0) > DRAG_SLOP_PX) {
+      // A real box-select drag — resolve it and skip the normal single-pick
+      // logic below entirely.
+      const rect = p.renderer.domElement.getBoundingClientRect()
+      const rx0 = x0 - rect.left
+      const ry0 = y0 - rect.top
+      const rx1 = e.clientX - rect.left
+      const ry1 = e.clientY - rect.top
+      const names = []
+      for (const bone of p.pickable) {
+        bone.getWorldPosition(_v).project(p.camera)
+        if (_v.z > 1) continue // behind the camera
+        const sx = (_v.x * 0.5 + 0.5) * rect.width
+        const sy = (-_v.y * 0.5 + 0.5) * rect.height
+        if (pointInRect(sx, sy, rx0, ry0, rx1, ry1)) names.push(bone.name)
+      }
+      if (p.onSelectMany) p.onSelectMany(names, e.shiftKey)
+      return
+    }
+    // Too small to count as a drag — fall through and treat it as a plain
+    // (Ctrl-held, so additive) click instead.
+  }
+
   if (p.suspended || !p.enabled) return // no picking while animation plays or mode is off
   if (!down || e.button !== 0) return
   // TransformControls' handles have a generous invisible pick region (bigger
@@ -1451,7 +1526,7 @@ function onPointerUp(e) {
 
   if (p.viewMode === 'parts') {
     if (!p.overlayVisible || !p.partMeshes.length) return
-    selectRegion(pickPartRegion(e))
+    selectRegion(pickPartRegion(e), e.shiftKey || e.ctrlKey || e.metaKey)
     return
   }
 
@@ -1463,7 +1538,18 @@ function onPointerUp(e) {
 
 // Live hover highlight for Parts view — brightens the region under the
 // pointer so it's obvious what a click will select, before committing to it.
+// Also drives the box-select rectangle while a marquee drag (Ctrl/Cmd-drag)
+// is in progress.
 function onPointerMove(e) {
+  if (p.marquee) {
+    const container = p.renderer.domElement.parentElement
+    if (container) {
+      const rect = container.getBoundingClientRect()
+      showMarquee(container, p.marquee.x0 - rect.left, p.marquee.y0 - rect.top, e.clientX - rect.left, e.clientY - rect.top)
+    }
+    return
+  }
+
   if (!p.enabled || p.suspended || p.viewMode !== 'parts' || !p.overlayVisible || !p.partMeshes.length) {
     if (p.hoverRegion) {
       p.hoverRegion = null
@@ -1486,13 +1572,13 @@ function onPointerMove(e) {
 // rotating something. Move mode (IK) still works great on these bones if the
 // user switches to it themselves; see selectBone's self-inclusive-chain
 // fallback for the case where a bone has no ancestor limb joint to swing.
-function selectRegion(regionKey) {
+function selectRegion(regionKey, additive) {
   if (!regionKey) {
     p.onSelect(null)
     return
   }
   const controlName = p.regionControl.get(regionKey)
-  p.onSelect(controlName || null)
+  p.onSelect(controlName || null, additive)
 }
 
 const _partRaycaster = new THREE.Raycaster()

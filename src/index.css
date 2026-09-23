@@ -63,6 +63,14 @@ body {
   touch-action: none;
 }
 
+.marquee-select-box {
+  position: absolute;
+  border: 1px solid var(--accent, #6cf);
+  background: rgba(108, 204, 255, 0.15);
+  pointer-events: none;
+  z-index: 50;
+}
+
 /* Empty-state welcome shown before a model is loaded */
 .viewport-empty {
   position: absolute;

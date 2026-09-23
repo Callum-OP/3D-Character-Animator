@@ -477,6 +477,33 @@ export function pickObjectId(ndcX, ndcY) {
   return null
 }
 
+// Box/marquee-select (Object mode's Ctrl/Cmd-drag — see Viewport.jsx): every
+// visible prop/character whose root falls within a screen-space rectangle.
+// `rect` is in the SAME pixel space as rectW/rectH (the canvas's own
+// getBoundingClientRect() width/height) — Viewport.jsx does that conversion,
+// same as posing.js's box-select does for bone dots.
+const _boxV = new THREE.Vector3()
+export function pickObjectIdsInRect(x0, y0, x1, y1, rectW, rectH) {
+  if (!o.camera) return []
+  const minX = Math.min(x0, x1)
+  const maxX = Math.max(x0, x1)
+  const minY = Math.min(y0, y1)
+  const maxY = Math.max(y0, y1)
+  const ids = []
+  const entries = [
+    ...o.objects.filter((e) => e.root.visible).map((e) => [e.id, e.root]),
+    ...[...o.characterRoots.entries()].filter(([, e]) => e.root.visible).map(([id, e]) => [id, e.root]),
+  ]
+  for (const [id, root] of entries) {
+    root.getWorldPosition(_boxV).project(o.camera)
+    if (_boxV.z > 1) continue // behind the camera
+    const sx = (_boxV.x * 0.5 + 0.5) * rectW
+    const sy = (-_boxV.y * 0.5 + 0.5) * rectH
+    if (sx >= minX && sx <= maxX && sy >= minY && sy <= maxY) ids.push(id)
+  }
+  return ids
+}
+
 // Whether `id` refers to a loaded character (as opposed to a prop). Used by
 // the viewport's click handler to tell "clicked a character" apart from
 // "clicked a prop" so it knows when to switch the active character.

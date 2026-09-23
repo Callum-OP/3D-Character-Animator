@@ -339,7 +339,9 @@ export function initScene(container) {
     requestRender,
     // Report viewport picks up to the store; the Viewport effect then drives
     // the actual gizmo attach via selectBone (single source of truth).
-    onSelect: (name) => useStore.getState().setSelectedBoneName(name),
+    onSelect: (name, additive) => useStore.getState().toggleBoneSelection(name, additive),
+    // Box/marquee-select (Ctrl/Cmd-drag) — see posing.js's onPointerUp.
+    onSelectMany: (names, additive) => useStore.getState().setBoneSelection(names, additive),
     // Any pose edit bumps a counter so the rotation sliders re-read the bone.
     onPoseChange: () => useStore.getState().bumpPoseVersion(),
     // Clicking a body-part region (Parts view) can auto-switch the gizmo to
@@ -861,6 +863,14 @@ export function resetActiveDangle(chainId) {
 export function collectActiveDangleDescendants(boneName) {
   if (!state.currentModel) return [boneName]
   return collectDescendantBoneNames(state.currentModel, boneName)
+}
+
+// Suspend/resume orbiting for the duration of a Ctrl/Cmd-drag box-select in
+// Object mode (see Viewport.jsx) — mirrors how a TransformControls drag
+// already disables orbit while it's in progress.
+export function setOrbitSuspended(suspended) {
+  if (!state.controls) return
+  state.controls.enabled = !suspended && !state.controls.locked
 }
 
 // Start every loaded character playing whatever clip/edit-source IT currently

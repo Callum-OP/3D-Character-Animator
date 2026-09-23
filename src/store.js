@@ -512,6 +512,22 @@ export const useStore = create((set) => ({
   boneGizmoMode: 'rotate',
   setBoneGizmoMode: (boneGizmoMode) => set({ boneGizmoMode }),
 
+  // Box/marquee-select support: set the whole selection at once from
+  // everything the drag-rectangle enclosed. `additive` merges with the
+  // current selection (Shift held at release) instead of replacing it.
+  setBoneSelection: (names, additive) =>
+    set((s) => {
+      const merged = additive ? [...new Set([...s.selectedBoneNames, ...names])] : [...names]
+      return {
+        selectedBoneName: merged.length ? merged[merged.length - 1] : null,
+        selectedBoneNames: merged,
+        selectedObjectId: null,
+        selectedObjectIds: [],
+        selectedCameraId: null,
+        selectedLightId: null,
+      }
+    }),
+
   setSelectedBoneName: (selectedBoneName) =>
     // Selecting a bone deselects any scene object/camera/light (one gizmo at a time).
     set(
@@ -658,6 +674,22 @@ export const useStore = create((set) => ({
       return {
         selectedObjectId,
         selectedObjectIds,
+        selectedBoneName: null,
+        selectedBoneNames: [],
+        selectedCameraId: null,
+        selectedLightId: null,
+      }
+    }),
+
+  // Box/marquee-select support: set the whole object selection at once from
+  // everything the drag-rectangle enclosed. `additive` merges with the
+  // current selection (Shift held at release) instead of replacing it.
+  setObjectSelection: (ids, additive) =>
+    set((s) => {
+      const merged = additive ? [...new Set([...s.selectedObjectIds, ...ids])] : [...ids]
+      return {
+        selectedObjectId: merged.length ? merged[merged.length - 1] : null,
+        selectedObjectIds: merged,
         selectedBoneName: null,
         selectedBoneNames: [],
         selectedCameraId: null,
