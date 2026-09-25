@@ -6,13 +6,5 @@ dist-ssr
 .DS_Store
 references
 
-# Tauri desktop build
+# Electron packaging output
 release
-src-tauri/target
-src-tauri/gen
-
-# Rust build output
-/target
-
-# Tauri-generated files (schemas etc.)
-/gen

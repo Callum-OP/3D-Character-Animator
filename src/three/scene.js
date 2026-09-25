@@ -178,6 +178,7 @@ const state = {
   lightDir: new THREE.Vector3(0.3, 0.6, 0.7), // unit direction to the key light
   pmremGenerator: null,
   envMap: null, // baked studio-room environment texture, for IBL fill lighting
+  contextLost: false, // WebGL context currently lost (GPU reset/crash); rendering paused
   envLightingOn: false,
   modelCenter: new THREE.Vector3(0, 1, 0),
   modelRadius: 1, // ~max model dimension, for light distance + shadow camera
@@ -280,6 +281,31 @@ export function initScene(container) {
   const pmremGenerator = new THREE.PMREMGenerator(renderer)
   state.pmremGenerator = pmremGenerator
   state.envMap = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture
+
+  // --- WebGL context loss ---
+  // The GPU process can reset under heavy load (or be restarted after a driver
+  // crash). preventDefault() on 'webglcontextlost' tells the browser we want the
+  // context back; three.js re-creates its GL state and re-uploads geometry and
+  // textures itself on restore. The one thing it can't rebuild is the baked
+  // environment map (render-target contents are gone), so that is re-baked here.
+  const canvas = renderer.domElement
+  canvas.addEventListener('webglcontextlost', (e) => {
+    e.preventDefault()
+    state.contextLost = true
+  })
+  canvas.addEventListener('webglcontextrestored', () => {
+    state.contextLost = false
+    try {
+      const oldMap = state.envMap
+      state.pmremGenerator?.dispose()
+      state.pmremGenerator = new THREE.PMREMGenerator(renderer)
+      state.envMap = state.pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture
+      if (state.scene && state.scene.environment === oldMap) state.scene.environment = state.envMap
+    } catch (err) {
+      console.warn('Could not rebuild the environment map after context restore', err)
+    }
+    requestRender()
+  })
 
   // --- Camera ---
   const camera = new THREE.PerspectiveCamera(45, width / height, 0.01, 1000)
@@ -564,7 +590,7 @@ export function dollyViewport(direction, { smooth = false } = {}) {
 }
 
 function renderOnce() {
-  if (!state.renderer) return
+  if (!state.renderer || state.contextLost) return
   const now = typeof performance !== 'undefined' ? performance.now() : 0
   if (state.lastRenderAt > 0 && now > state.lastRenderAt) {
     const frameRate = 1000 / (now - state.lastRenderAt)

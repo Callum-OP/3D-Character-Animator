@@ -33,7 +33,10 @@ jobs:
           node -v
           npm -v
 
+      # The Electron binary is only needed for desktop packaging, not the Pages build.
       - name: Install dependencies
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
         run: npm ci
 
       # Run Vitest

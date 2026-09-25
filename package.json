@@ -2,7 +2,8 @@
   "name": "animare-3d-animator",
   "version": "1.0.0",
   "type": "module",
-  "description": "Lightweight browser-based 3D character poser & animator (glTF), low memory overhead",
+  "description": "Lightweight browser-based 3D scene and character animator (glTF)",
+  "author": "Callum-OP",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -10,31 +11,64 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "tauri": "tauri",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build",
-    "tauri:build:arm64": "tauri build --target aarch64-pc-windows-msvc --no-bundle",
-    "tauri:build:x64": "tauri build --target x86_64-pc-windows-msvc --no-bundle",
-    "tauri:pack:arm64": "powershell -ExecutionPolicy Bypass -File ./src-tauri/msix/pack.ps1 -Arch arm64",
-    "tauri:pack:x64": "powershell -ExecutionPolicy Bypass -File ./src-tauri/msix/pack.ps1 -Arch x64",
-    "tauri:bundle": "powershell -ExecutionPolicy Bypass -File ./src-tauri/msix/bundle.ps1",
-    "tauri:clean": "powershell -Command \"if (Test-Path 'release') { Remove-Item -Recurse -Force 'release' }\"",
-    "sync-version": "powershell -ExecutionPolicy Bypass -File ./src-tauri/msix/sync-version.ps1",
-    "build-store": "npm run sync-version && npm run tauri:clean && npm run tauri:build:arm64 && npm run tauri:build:x64 && npm run tauri:pack:arm64 && npm run tauri:pack:x64 && npm run tauri:bundle"
+    "electron:dev": "node scripts/electron-dev.mjs",
+    "electron:start": "npm run build && electron .",
+    "electron:build": "npm run build && electron-builder --win nsis --x64 --arm64",
+    "electron:clean": "node -e \"require('fs').rmSync('release',{recursive:true,force:true})\"",
+    "electron:bundle": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/store/bundle.ps1",
+    "electron:build:appx": "npm run build && electron-builder --win appx --x64 --arm64",
+    "build-store": "npm run electron:clean && npm run electron:build:appx && npm run electron:bundle"
   },
   "dependencies": {
-    "cargo": "^0.8.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "three": "^0.171.0",
     "zustand": "^5.0.2"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2",
     "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3",
     "fake-indexeddb": "^6.2.5",
     "jsdom": "^30.0.1",
     "vite": "^6.0.7",
     "vitest": "^4.1.10"
+  },
+  "main": "electron/main.cjs",
+  "build": {
+    "appId": "io.github.callumop.characteranimator",
+    "productName": "Animare 3D Animator",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "build/icon.png",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "icon": "build/icon.ico",
+      "target": ["appx"]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "appx": {
+      "identityName": "Callum-OP.Animare3DAnimator",
+      "publisher": "CN=08FEADE4-7024-438F-99AB-86942FD832C3",
+      "publisherDisplayName": "Callum-OP",
+      "applicationId": "Animare3DAnimator",
+      "displayName": "Animare 3D Animator",
+      "backgroundColor": "#202020",
+      "minVersion": "10.0.16299.0",
+      "maxVersionTested": "10.0.22621.0",
+      "languages": [
+        "en-US"
+      ]
+    }
   }
 }

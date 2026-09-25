@@ -183,8 +183,8 @@ body {
   background: rgba(31, 45, 70, 0.92);
 }
 
-/* On-screen zoom in/out, for input methods (or WebView/Tauri setups) where
-   scroll-wheel or trackpad-pinch zoom doesn't reach the page. */
+/* On-screen zoom in/out, for input methods where scroll-wheel or
+   trackpad-pinch zoom doesn't reach the page. */
 .zoom-toolbar {
   position: absolute;
   bottom: 14px;

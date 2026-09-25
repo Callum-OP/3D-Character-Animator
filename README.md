@@ -105,44 +105,41 @@ npm install
 npm run package:itch
 ```
 
-### Run as a desktop app (Tauri)
-
-Requires the [Rust toolchain](https://www.rust-lang.org/tools/install).
+### Run as a desktop app (Electron)
 
 ```bash
-npm run tauri:dev
+npm run electron:dev    # Vite dev server (HMR) + Electron window
+npm run electron:start  # production build of the frontend, opened in Electron
 ```
 
-This starts the Vite dev server and opens it in a native window. May want to clear
-`src-tauri/target` folder once finished to clear space.
-
-A plain one-off desktop build (`.msi` + NSIS `.exe` installers for your current
-platform) is:
+Windows installers (NSIS, x64 + arm64) are produced in `release/` with:
 
 ```bash
-npm run tauri:build
-
+npm run electron:build
 ```
 
-Create icons:
-npm run tauri icon <path-to-a-1024x1024-png>
+The desktop shell lives in [`electron/main.cjs`](electron/main.cjs): hardware
+acceleration stays on, page/pinch zoom is locked (the app zooms the 3D camera
+itself), and the renderer is sandboxed. WebGL context loss (GPU reset) is
+handled in `src/three/scene.js`.
 
 ### Build for the Microsoft Store (MSIX)
 
-Build and package the desktop app for the Microsoft Store as MSIX (both arm64 and
-x64) in one command:
+Build and package the desktop app for the Microsoft Store (both arm64 and x64)
+in one command:
 
 ```bash
 npm run build-store
 ```
 
-This outputs `release/3DCharacterAnimator_<version>.msixbundle` — a single
-multi-architecture bundle. The individual per-architecture MSIX files are in
-`release/packages/`. See [`src-tauri/msix/README.md`](src-tauri/msix/README.md)
-for details, including generating the Store icon assets and the one-time Partner
-Center identity setup needed before the first submission.
-> The command runs: clean `release`, build arm64, build x64, pack each into an
-> MSIX, then combine them into one `.msixbundle`.
+This outputs `release/Animare3DAnimator_<version>.msixbundle` — a single
+multi-architecture bundle to upload to Partner Center. The per-architecture
+`.appx` files electron-builder creates are alongside it in `release/`.
+The package identity (`appx` block in `package.json`) must match the identity
+Partner Center gives the listing; the Store tile images are in `build/appx/`.
+> The command runs: clean `release`, build the frontend, package x64 and arm64
+> with electron-builder, then combine them into one `.msixbundle`. Needs the
+> Windows SDK (for `makeappx`).
 
 ## Deployment (GitHub Pages)
 
@@ -206,7 +203,7 @@ Vite build sets `base: '/3D-Character-Animator/'` (see `vite.config.js`). Local
 - **[Vite](https://vitejs.dev/) + [React](https://react.dev/)** (JavaScript, not TypeScript)
 - **[Three.js](https://threejs.org/)** — `GLTFLoader`, `FBXLoader`, `OrbitControls`
 - **[Zustand](https://github.com/pmndrs/zustand)** for app state
-- **[Tauri](https://tauri.app/)** for the packaged Windows desktop build (MS Store)
+- **[Electron](https://www.electronjs.org/)** for the packaged Windows desktop build (MS Store)
 
 ## Project structure
 
@@ -242,8 +239,8 @@ src/
     EditableValue.jsx   # editable input field component
     TabGroup.jsx        # tab switcher component
     RadialScale.jsx     # radial scaling tool UI
-src-tauri/               # Tauri desktop shell (Windows/MSIX packaging)
-  src/lib.rs             # Tauri app entry point
-  tauri.conf.json        # window, bundle, and frontend-build config
-  msix/                  # Microsoft Store MSIX packaging scripts (see msix/README.md)
+electron/                # Electron desktop shell
+  main.cjs               # main process: window, app:// protocol, GPU/zoom settings
+build/                   # packaging resources (app icon, Store tile images)
+scripts/                 # itch.io packaging, Electron dev runner, Store bundling
 ```
