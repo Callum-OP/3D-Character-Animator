@@ -14,9 +14,11 @@
 //   Open Clip…     — pick a clip file from disk and bring it into the app.
 //   Save Clip As…  — write the current clip out to a file on disk.
 //
-// A small Recent Clips list (backed by IndexedDB, storing real
-// FileSystemFileHandles where the browser supports them) keeps the last
-// several clips one click away, exactly like Recent Projects.
+// A small Recent Clips list (backed by IndexedDB) keeps the last several
+// clips one click away, exactly like Recent Projects. On the Electron
+// desktop build the "handle" it stores is a plain native file path (via
+// window.animare — see projectStore.js's module note for why); elsewhere
+// it's a real FileSystemFileHandle where the browser supports one.
 // ---------------------------------------------------------------------------
 
 import { openDB, CLIPS_STORE as STORE } from './localdb.js'
@@ -25,7 +27,12 @@ const FILE_EXT = '.3dclip' // { clip: THREE.AnimationClip.toJSON(), meshTracks, 
 const MIME = 'application/json'
 const MAX_RECENTS = 10
 
+function nativeBridge() {
+  return typeof window !== 'undefined' && window.animare?.isElectron ? window.animare : null
+}
+
 export function hasFileSystemAccess() {
+  if (nativeBridge()) return true
   return typeof window !== 'undefined' && typeof window.showOpenFilePicker === 'function'
 }
 
@@ -87,8 +94,13 @@ async function upsertRecent({ name, handle }) {
   }
 }
 
+function isNativeHandle(handle) {
+  return typeof handle === 'string'
+}
+
 async function isSameEntry(a, b) {
   try {
+    if (isNativeHandle(a) || isNativeHandle(b)) return a === b
     return typeof a.isSameEntry === 'function' ? await a.isSameEntry(b) : a === b
   } catch {
     return false
@@ -110,6 +122,7 @@ export async function removeRecentClip(id) {
 }
 
 async function ensureReadPermission(handle) {
+  if (isNativeHandle(handle)) return
   const opts = { mode: 'read' }
   if ((await handle.queryPermission?.(opts)) === 'granted') return
   const result = await handle.requestPermission?.(opts)
@@ -117,6 +130,7 @@ async function ensureReadPermission(handle) {
 }
 
 async function ensureWritePermission(handle) {
+  if (isNativeHandle(handle)) return
   const opts = { mode: 'readwrite' }
   if ((await handle.queryPermission?.(opts)) === 'granted') return
   const result = await handle.requestPermission?.(opts)
@@ -143,6 +157,13 @@ export async function openRecentClip(recent) {
     throw new Error('This entry has no file handle in this browser — use "Open Clip…" instead.')
   }
   const handle = recent.handle
+  if (isNativeHandle(handle)) {
+    const text = await nativeBridge().readFile(handle)
+    const json = await readClipFile({ text: () => Promise.resolve(text) })
+    const name = await nativeBridge().baseName(handle)
+    await upsertRecent({ name, handle })
+    return { json, handle, name }
+  }
   await ensureReadPermission(handle)
   const file = await handle.getFile()
   const json = await readClipFile(file)
@@ -155,6 +176,23 @@ export async function openRecentClip(recent) {
 // ---------------------------------------------------------------------------
 
 export async function openClipFromDisk() {
+  const native = nativeBridge()
+  if (native) {
+    const filePath = await native.pickOpenFile({
+      filters: [{ name: 'Animation clip', extensions: [FILE_EXT.slice(1), 'json'] }],
+    })
+    if (!filePath) {
+      const err = new Error('Open cancelled.')
+      err.name = 'AbortError'
+      throw err
+    }
+    const text = await native.readFile(filePath)
+    const json = await readClipFile({ text: () => Promise.resolve(text) })
+    const name = await native.baseName(filePath)
+    await upsertRecent({ name, handle: filePath })
+    return { json, handle: filePath, name }
+  }
+
   if (hasFileSystemAccess()) {
     const [handle] = await window.showOpenFilePicker({
       id: 'character-animator-clip',
@@ -186,6 +224,24 @@ export async function openClipFromFileObject(file) {
 
 export async function saveClipAs(json, suggestedName) {
   const name = safeFileName(suggestedName || json?.clip?.name || json?.name || 'clip')
+  const native = nativeBridge()
+  if (native) {
+    const suggested = `${name}${FILE_EXT}`
+    const filePath = await native.pickSaveFile({
+      suggestedName: suggested,
+      filters: [{ name: 'Animation clip', extensions: [FILE_EXT.slice(1)] }],
+    })
+    if (!filePath) {
+      const err = new Error('Save cancelled.')
+      err.name = 'AbortError'
+      throw err
+    }
+    await native.writeFile(filePath, JSON.stringify(json))
+    const fileName = await native.baseName(filePath)
+    await upsertRecent({ name: fileName, handle: filePath })
+    return { handle: filePath, name: fileName }
+  }
+
   if (hasFileSystemAccess()) {
     const handle = await window.showSaveFilePicker({
       id: 'character-animator-clip',

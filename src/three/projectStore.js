@@ -13,14 +13,19 @@
 //
 // On top of that we keep a small "Recent Projects" list (à la Blender's
 // splash screen / CSP's start menu) so the last several files you touched
-// are one click away. Where the browser supports the File System Access
-// API (Chrome, Edge, Opera) we store the actual FileSystemFileHandle, so
-// re-opening a recent project doesn't need a file picker and re-saving
-// goes straight back to the same spot on disk. Where it isn't supported
-// (Firefox, Safari) we transparently fall back to classic
-// download-a-file / choose-a-file-to-upload, and the recent list just
-// remembers file names for reference (they can't be silently reopened
-// without a picker, since the browser never gave us a handle to disk).
+// are one click away.
+//
+// Three environments, three ways of remembering "the file":
+//   - Electron desktop build (window.animare present): native dialogs +
+//     plain fs, "handle" is just the absolute file path. Paths don't expire,
+//     so Recent Projects can always silently reopen them.
+//   - Browsers with the File System Access API (Chrome, Edge, Opera):
+//     "handle" is a real FileSystemFileHandle. NOTE this can still throw
+//     "not allowed" on reopen if the page/app was reloaded — see
+//     ensureReadPermission/ensureWritePermission below, which re-prompt.
+//   - Everywhere else (Firefox, Safari): no handle at all, transparent
+//     fallback to classic download-a-file / choose-a-file-to-upload; the
+//     recent list just remembers file names for reference.
 // ---------------------------------------------------------------------------
 
 import { openDB, PROJECTS_STORE as STORE } from './localdb.js'
@@ -29,7 +34,12 @@ const FILE_EXT = '.3dcp' // "3D Character Poser" project — just JSON inside
 const MIME = 'application/json'
 const MAX_RECENTS = 10
 
+function nativeBridge() {
+  return typeof window !== 'undefined' && window.animare?.isElectron ? window.animare : null
+}
+
 export function hasFileSystemAccess() {
+  if (nativeBridge()) return true
   return typeof window !== 'undefined' && typeof window.showOpenFilePicker === 'function'
 }
 
@@ -110,6 +120,7 @@ async function upsertRecent({ name, handle }) {
 
 async function isSameEntry(a, b) {
   try {
+    if (isNativeHandle(a) || isNativeHandle(b)) return a === b
     return typeof a.isSameEntry === 'function' ? await a.isSameEntry(b) : a === b
   } catch {
     return false
@@ -137,6 +148,15 @@ export async function openRecentProject(recent) {
     throw new Error('This entry has no file handle in this browser — use "Open Project…" instead.')
   }
   const handle = recent.handle
+  if (isNativeHandle(handle)) {
+    // Native path — no permission dance, no stale-handle risk (see the
+    // module note above). Read straight off disk.
+    const text = await nativeBridge().readFile(handle)
+    const record = await readProjectFile({ text: () => Promise.resolve(text) })
+    const name = await nativeBridge().baseName(handle)
+    await upsertRecent({ name, handle })
+    return { record, handle, name }
+  }
   await ensureReadPermission(handle)
   const file = await handle.getFile()
   const record = await readProjectFile(file)
@@ -144,7 +164,14 @@ export async function openRecentProject(recent) {
   return { record, handle, name: file.name }
 }
 
+// Native (Electron) handles are plain path strings — there's no browser
+// permission model to satisfy, the OS file dialog already granted access.
+function isNativeHandle(handle) {
+  return typeof handle === 'string'
+}
+
 async function ensureReadPermission(handle) {
+  if (isNativeHandle(handle)) return
   const opts = { mode: 'read' }
   if ((await handle.queryPermission?.(opts)) === 'granted') return
   const result = await handle.requestPermission?.(opts)
@@ -152,6 +179,7 @@ async function ensureReadPermission(handle) {
 }
 
 async function ensureWritePermission(handle) {
+  if (isNativeHandle(handle)) return
   const opts = { mode: 'readwrite' }
   if ((await handle.queryPermission?.(opts)) === 'granted') return
   const result = await handle.requestPermission?.(opts)
@@ -243,6 +271,23 @@ async function readProjectFile(file) {
 // File System Access API (Firefox/Safari), in which case "Save" later on
 // will have to fall back to Save As (there's no disk handle to write back to).
 export async function openProjectFromDisk() {
+  const native = nativeBridge()
+  if (native) {
+    const filePath = await native.pickOpenFile({
+      filters: [{ name: '3D Character Animator project', extensions: [FILE_EXT.slice(1)] }],
+    })
+    if (!filePath) {
+      const err = new Error('Open cancelled.')
+      err.name = 'AbortError'
+      throw err
+    }
+    const text = await native.readFile(filePath)
+    const record = await readProjectFile({ text: () => Promise.resolve(text) })
+    const name = await native.baseName(filePath)
+    await upsertRecent({ name, handle: filePath })
+    return { record, handle: filePath, name }
+  }
+
   if (hasFileSystemAccess()) {
     const [handle] = await window.showOpenFilePicker({
       id: 'character-animator-project',
@@ -274,9 +319,13 @@ export async function openProjectFromFileObject(file) {
 // ---------------------------------------------------------------------------
 
 async function writeToHandle(handle, record) {
-  await ensureWritePermission(handle)
   const portable = await replaceBlobsWithBase64(record)
   const json = JSON.stringify(portable)
+  if (isNativeHandle(handle)) {
+    await nativeBridge().writeFile(handle, json)
+    return
+  }
+  await ensureWritePermission(handle)
   const writable = await handle.createWritable()
   await writable.write(json)
   await writable.close()
@@ -286,6 +335,11 @@ async function writeToHandle(handle, record) {
 // project already has a file on disk, exactly like Ctrl+S in Blender/CSP.
 export async function saveProjectToHandle(handle, record) {
   await writeToHandle(handle, record)
+  if (isNativeHandle(handle)) {
+    const name = await nativeBridge().baseName(handle)
+    await upsertRecent({ name, handle })
+    return { handle, name }
+  }
   const file = await handle.getFile().catch(() => null)
   await upsertRecent({ name: file?.name || record.name || 'project', handle })
   return { handle, name: file?.name || record.name }
@@ -293,6 +347,24 @@ export async function saveProjectToHandle(handle, record) {
 
 // "Save As…" — always shows a picker for a new (or different) location.
 export async function saveProjectAs(record, suggestedName) {
+  const native = nativeBridge()
+  if (native) {
+    const suggested = `${safeFileName(suggestedName || record.name)}${FILE_EXT}`
+    const filePath = await native.pickSaveFile({
+      suggestedName: suggested,
+      filters: [{ name: '3D Character Animator project', extensions: [FILE_EXT.slice(1)] }],
+    })
+    if (!filePath) {
+      const err = new Error('Save cancelled.')
+      err.name = 'AbortError'
+      throw err
+    }
+    await writeToHandle(filePath, record)
+    const name = await native.baseName(filePath)
+    await upsertRecent({ name, handle: filePath })
+    return { handle: filePath, name }
+  }
+
   if (hasFileSystemAccess()) {
     const handle = await window.showSaveFilePicker({
       id: 'character-animator-project',

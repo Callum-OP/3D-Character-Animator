@@ -2,18 +2,24 @@
 // Electron shell for Animare 3D Animator.
 // The frontend is the existing Vite build in ../dist, served over a private
 // app:// scheme (a secure context, so IndexedDB, File System Access, fetch() of
-// bundled assets etc. behave like they do on the hosted site). There is no
-// native/backend surface: the renderer runs sandboxed with no preload.
+// bundled assets etc. behave like they do on the hosted site). A small preload
+// bridge (preload.cjs) exposes native Open/Save dialogs and plain fs
+// read/write over IPC as window.animare — used by projectStore.js/
+// clipLibrary.js instead of the browser's File System Access API, whose
+// FileSystemFileHandles lose their permission grant across app restarts
+// (see the "Recent Projects/Clips" re-open path).
 
-const { app, BrowserWindow, Menu, protocol, net, shell, session } = require('electron')
+const { app, BrowserWindow, Menu, protocol, net, shell, session, ipcMain, dialog } = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
+const fsp = require('node:fs/promises')
 const { pathToFileURL } = require('node:url')
 
 const DIST = path.join(__dirname, '..', 'dist')
 const DEV_URL = process.env.ELECTRON_START_URL || ''
 const APP_ORIGIN = 'app://app'
 const ICON = path.join(__dirname, '..', 'build', 'icon.png')
+const PRELOAD = path.join(__dirname, 'preload.cjs')
 
 // --- GPU -------------------------------------------------------------------
 // Hardware acceleration is left ON (never call app.disableHardwareAcceleration).
@@ -55,6 +61,40 @@ function registerAppProtocol() {
     }
     return net.fetch(pathToFileURL(file).toString())
   })
+}
+
+// --- Native file dialogs / fs, exposed to the renderer via preload.cjs -----
+// Paths (unlike FileSystemFileHandles) never go stale, so these back the
+// Open/Save/Save As and Recent Projects/Clips flows on desktop builds.
+function registerFileIpc() {
+  ipcMain.handle('animare:pick-open-file', async (_e, opts = {}) => {
+    const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openFile'],
+      filters: opts.filters || [{ name: 'All Files', extensions: ['*'] }],
+    })
+    if (canceled || !filePaths?.length) return null
+    return filePaths[0]
+  })
+
+  ipcMain.handle('animare:pick-save-file', async (_e, opts = {}) => {
+    const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+      defaultPath: opts.suggestedName || undefined,
+      filters: opts.filters || [{ name: 'All Files', extensions: ['*'] }],
+    })
+    if (canceled || !filePath) return null
+    return filePath
+  })
+
+  ipcMain.handle('animare:read-file', async (_e, filePath) => {
+    return fsp.readFile(filePath, 'utf-8')
+  })
+
+  ipcMain.handle('animare:write-file', async (_e, filePath, contents) => {
+    await fsp.writeFile(filePath, contents, 'utf-8')
+    return true
+  })
+
+  ipcMain.handle('animare:base-name', (_e, filePath) => path.basename(filePath))
 }
 
 function hardenSession() {
@@ -107,6 +147,7 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: true,
       spellcheck: false,
+      preload: PRELOAD,
     },
     //titleBarStyle: 'hidden',
     titleBarOverlay: {
@@ -172,6 +213,7 @@ app.on('child-process-gone', (_e, details) => {
 
 app.whenReady().then(() => {
   registerAppProtocol()
+  registerFileIpc()
   hardenSession()
   buildMenu()
   createWindow()
