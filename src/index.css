@@ -71,6 +71,26 @@ body {
   z-index: 50;
 }
 
+/* Fallback shown by ViewportErrorBoundary if a render crash is caught */
+.viewport-crash {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  text-align: center;
+  padding: 24px;
+  background: var(--bg, #101114);
+  color: var(--text, #fff);
+}
+.viewport-crash p {
+  color: var(--text-dim, #aaa);
+  font-size: 13px;
+  max-width: 400px;
+}
+
 /* Empty-state welcome shown before a model is loaded */
 .viewport-empty {
   position: absolute;

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import React from 'react'
 import {
   initScene,
   disposeScene,
@@ -94,9 +95,44 @@ const TRANSFORM_BUTTONS = [
   { value: 'scale', icon: '⤢', label: 'Resize', title: 'Resize (R)' },
 ]
 
+// Catches render-time crashes (e.g. while a project switch is mid-flight)
+// so one bad frame shows a recoverable error screen instead of taking the
+// whole app down to a blank white page.
+class ViewportErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props)
+    this.state = { hasError: false, error: null }
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error }
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error('Viewport error boundary caught an exception:', error, errorInfo)
+  }
+
+  handleReset = () => {
+    this.setState({ hasError: false, error: null })
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="viewport-crash">
+          <h3>3D viewer hit an error</h3>
+          <p>{this.state.error?.message || 'A rendering error occurred while loading or switching the scene.'}</p>
+          <button className="btn" onClick={this.handleReset}>Reset viewport</button>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
+
 // The 3D viewport: owns the canvas container and the scene lifecycle, and
 // handles drag-and-drop of model files onto itself.
-export default function Viewport() {
+function Viewport() {
   const containerRef = useRef(null)
   const [dragOver, setDragOver] = useState(false)
   const [symmetriseOpen, setSymmetriseOpen] = useState(false)
@@ -105,7 +141,38 @@ export default function Viewport() {
   useEffect(() => {
     const container = containerRef.current
     initScene(container)
-    return () => disposeScene()
+
+    // Handle WebGL context loss gracefully — without this Chromium shows its
+    // own "Aw, Snap" style crash surface and the app never recovers on its
+    // own; 'webglcontextlost' lets us keep the tab alive, and rebuilding the
+    // scene on 'webglcontextrestored' gets rendering going again once the GPU
+    // process comes back (see also main.cjs's child-process-gone/GPU logging
+    // and render-process-gone recovery, which handle the renderer-level case).
+    const canvas = container.querySelector('canvas')
+    const handleContextLost = (e) => {
+      e.preventDefault()
+      console.warn('WebGL context lost — waiting for restore before rebuilding the scene.')
+    }
+    const handleContextRestored = () => {
+      try {
+        disposeScene()
+        initScene(container)
+      } catch (err) {
+        console.error('Failed to rebuild the scene after WebGL context restore:', err)
+      }
+    }
+    if (canvas) {
+      canvas.addEventListener('webglcontextlost', handleContextLost, false)
+      canvas.addEventListener('webglcontextrestored', handleContextRestored, false)
+    }
+
+    return () => {
+      if (canvas) {
+        canvas.removeEventListener('webglcontextlost', handleContextLost)
+        canvas.removeEventListener('webglcontextrestored', handleContextRestored)
+      }
+      disposeScene()
+    }
   }, [])
 
   // Push relevant store changes into the (non-reactive) scene manager.
@@ -733,5 +800,13 @@ export default function Viewport() {
 
       {showStats && <StatsOverlay />}
     </div>
+  )
+}
+
+export default function ExportedViewport(props) {
+  return (
+    <ViewportErrorBoundary>
+      <Viewport {...props} />
+    </ViewportErrorBoundary>
   )
 }

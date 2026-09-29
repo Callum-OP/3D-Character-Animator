@@ -26,6 +26,12 @@ const PRELOAD = path.join(__dirname, 'preload.cjs')
 // ignore-gpu-blocklist stops Chromium silently falling back to software WebGL
 // on drivers it is over-cautious about (notably Windows-on-ARM).
 app.commandLine.appendSwitch('ignore-gpu-blocklist')
+// Raise V8's old-space ceiling so a heavy project (large meshes/textures
+// round-tripped through base64 in .3dcp saves, big undo history, several
+// loaded characters) doesn't hit the default heap limit and white-screen;
+// this only raises the ceiling; see clearProjectScene/disposeScene work
+// below for what actually keeps steady-state usage down.
+app.commandLine.appendSwitch('js-flags', '--max-old-space-size=4096')
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -181,6 +187,10 @@ function createWindow() {
   wc.on('render-process-gone', (_e, details) => {
     console.error('[renderer gone]', details.reason, details.exitCode)
     if (details.reason !== 'clean-exit') recoverRenderer(win)
+  })
+
+  wc.on('unresponsive', () => {
+    console.warn('[renderer unresponsive] UI thread is blocked; not auto-reloading (could be a long export/decimate) — will recover if it later crashes.')
   })
 
   if (!app.isPackaged) {

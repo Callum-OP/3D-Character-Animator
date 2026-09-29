@@ -7,6 +7,7 @@ import {
   removeCharacter,
   getProjectData,
   applyProjectData,
+  clearProjectScene,
 } from '../three/scene.js'
 import {
   hasFileSystemAccess,
@@ -212,6 +213,22 @@ export default function ProjectPanel() {
     }
   }
 
+  // ---- Clear (New Project) ----
+  // Same end state as the app just having been (re)launched — every
+  // character, prop/image, camera and light gone, no file "open" any more —
+  // without actually reloading the window. Handy as a manual reset when you
+  // want a blank scene, and it doubles as a quick memory-pressure release
+  // valve since it runs the exact same Three.js disposal path as opening a
+  // different project (geometries/textures/materials freed, not just
+  // detached).
+  function onClear() {
+    if (busy) return
+    if (!window.confirm('Clear the current scene? Anything unsaved will be lost.')) return
+    clearProjectScene()
+    setCurrent(null)
+    setMsg('Cleared. Starting a new, empty scene.')
+  }
+
   return (
     <div className="panel-stack">
       {/* ---- Source 1: a model file ---- */}
@@ -346,6 +363,9 @@ export default function ProjectPanel() {
           </button>
           <button className="btn secondary" onClick={onSaveAs} disabled={busy} title="Save to a new file / location">
             Save As…
+          </button>
+          <button className="btn secondary" onClick={onClear} disabled={busy} title="Empty the current scene and start a new, blank project">
+            Clear
           </button>
         </div>
 

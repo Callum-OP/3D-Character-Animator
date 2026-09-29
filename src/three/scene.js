@@ -1649,6 +1649,24 @@ export function getProjectData() {
   }
 }
 
+// Tear down everything currently in the scene — every character, every prop/
+// image, every camera and light — back to a blank session. Shared by
+// applyProjectData's "load a project" reset and the sidebar's "Clear" button
+// (New Project), so there's exactly one place that has to remember every
+// piece of state a full reset needs to touch.
+export function clearProjectScene() {
+  const store = useStore.getState()
+  for (const id of store.sceneObjects.filter((o) => !o.isCharacter).map((o) => o.id)) {
+    removeObjectById(id)
+  }
+  setViewCameraById(null)
+  clearCameras()
+  useStore.setState({ sceneCameras: [], selectedCameraId: null, viewCameraId: null })
+  clearLights()
+  useStore.setState({ sceneLights: [], selectedLightId: null })
+  disposeCurrentModel()
+}
+
 // Restore a project record: tear down the current session, then rebuild every
 // character, props/images, style settings and pose sequence from the saved
 // blobs. Async — models are re-parsed from their blobs.
@@ -1659,15 +1677,8 @@ export async function applyProjectData(record) {
   const store = useStore.getState()
 
   // 1. Clear the current props/images, cameras and every character.
-  for (const id of store.sceneObjects.filter((o) => !o.isCharacter).map((o) => o.id)) {
-    removeObjectById(id)
-  }
-  setViewCameraById(null)
-  clearCameras()
-  useStore.setState({ sceneCameras: [], selectedCameraId: null, viewCameraId: null })
-  clearLights()
-  useStore.setState({ sceneLights: [], selectedLightId: null })
-  disposeCurrentModel()
+  clearProjectScene()
+
 
   // 2. Load every saved character. Older (project-v1) saves have a single
   // `record.character` instead of a `record.characters` array — normalise.
