@@ -1013,6 +1013,27 @@ export async function addObjectFile(file) {
   return meta
 }
 
+// Import a model file (.glb/.gltf/.fbx) without the caller having to say
+// whether it's a character or a prop: parse it once just to check for a
+// skeleton, dispose that throwaway parse immediately (nothing from it is
+// added to the scene — this is purely a probe, so it must not leak), then
+// hand the file to whichever *real*, already-tested path fits — loadModelFile
+// (as a brand-new character, never replacing the active one) if it's rigged,
+// addObjectFile (a static prop) if it isn't. Used by the title bar's unified
+// "Import Model…", so a person never has to know or care which panel a given
+// file "belongs" to.
+export async function importModelAuto(file) {
+  const probe = await loadModel(file, { autoDecimate: false })
+  const isRigged = !!(probe.info?.bones?.length)
+  disposeObject(probe.root)
+  if (isRigged) {
+    const parsed = await loadModelFile(file, { addNew: true })
+    return { kind: 'character', name: parsed.info.name }
+  }
+  const meta = await addObjectFile(file)
+  return { kind: 'object', name: meta.name }
+}
+
 // Load an image file and add it as a movable reference plane. Like addObjectFile
 // it does NOT replace the character and selects the new plane so the gizmo is
 // ready. Errors propagate to the caller.

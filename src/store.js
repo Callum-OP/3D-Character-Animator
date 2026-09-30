@@ -303,9 +303,11 @@ export const useStore = create((set) => ({
   // ---- Export ----
   exportScale: 2, // PNG resolution multiplier (1× / 2× / 4×)
   recording: false, // true while capturing a video
+  previewing: false, // true while playing a shot preview (no capture)
 
   setExportScale: (exportScale) => set({ exportScale }),
   setRecording: (recording) => set({ recording }),
+  setPreviewing: (previewing) => set({ previewing }),
 
   // ---- Material mode ----
   // 'unlit' is the default: raw base colour, no lighting — matches Blender's

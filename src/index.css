@@ -98,6 +98,20 @@ body {
   z-index: 40;
 }
 
+.titlebar-brand {
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  -webkit-app-region: drag;
+}
+
+.titlebar-logo {
+  height: 18px;
+  width: 18px;
+  object-fit: contain;
+  pointer-events: none;
+}
+
 .titlebar-menu {
   display: flex;
   align-items: stretch;

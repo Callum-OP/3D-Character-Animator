@@ -4,54 +4,20 @@ import {
   exportPNG,
   exportSceneModel,
   enterFullscreen,
-  canRecordVideo,
-  startRecording,
-  stopRecordingAndDownload,
-  setViewCameraById,
-  transitionViewCameraTo,
-  playAllCharacters,
-  stopAllCharacters,
 } from '../three/scene.js'
-import { exportAnimationBVH, setForceCameraCuts } from '../three/animation.js'
-import { selectLight } from '../three/lights.js'
+import { exportAnimationBVH } from '../three/animation.js'
+import { runExportShot, resolveShotView, canRecordVideo, hideGizmosForShot } from '../three/exportShot.js'
 
 // Side-panel section: get your work out of the app — transparent PNG, a video of
 // the animation, or the in-app animation as a .bvh, plus a fullscreen view for
 // screen-recording.
 const SCALES = [1, 2, 4]
 
-// What a video (or preview) will be filmed through. Priority: camera cuts drive
-// the view themselves; then whatever camera is being looked through; then a
-// keyframed camera; then the only placed camera; else the current free view.
-// Recording something other than the camera the user carefully placed is the
-// #1 surprise — so cameras win whenever the choice is unambiguous.
-function resolveShotView(s) {
-  if (s.playbackSource === 'edit' && (s.animData.cuts || []).length) {
-    return { kind: 'cuts', label: 'your camera cuts' }
-  }
-  if (s.viewCameraId != null) {
-    const cam = s.sceneCameras.find((c) => c.id === s.viewCameraId)
-    return { kind: 'view', id: s.viewCameraId, label: `through ${cam?.name || 'the camera'}` }
-  }
-  if (s.playbackSource === 'edit') {
-    const keyedName = Object.keys(s.animData.cameras || {}).find(
-      (n) => (s.animData.cameras[n] || []).length && s.sceneCameras.some((c) => c.name === n),
-    )
-    if (keyedName) {
-      const cam = s.sceneCameras.find((c) => c.name === keyedName)
-      return { kind: 'auto', id: cam.id, label: `through ${cam.name} (it has keyframes)` }
-    }
-  }
-  if (s.sceneCameras.length === 1) {
-    return { kind: 'auto', id: s.sceneCameras[0].id, label: `through ${s.sceneCameras[0].name}` }
-  }
-  return { kind: 'free', label: 'the current view' }
-}
-
 export default function ExportPanel() {
   const modelInfo = useStore((s) => s.modelInfo)
   const exportScale = useStore((s) => s.exportScale)
   const recording = useStore((s) => s.recording)
+  const previewing = useStore((s) => s.previewing)
   const setExportScale = useStore((s) => s.setExportScale)
   // Subscribed so the "Films …" caption stays current as cameras/cuts change.
   const sceneCameras = useStore((s) => s.sceneCameras)
@@ -60,7 +26,6 @@ export default function ExportPanel() {
   const playbackSource = useStore((s) => s.playbackSource)
   const st = useStore.getState
   const [msg, setMsg] = useState(null)
-  const [previewing, setPreviewing] = useState(false)
   const [exportingModel, setExportingModel] = useState(false)
   // 'baked' = pose becomes the file's bind pose (best for Blender); 'current' = skinned pose
   // using the model's original bind data; 'rest' = un-posed. See exportPose.js.
@@ -110,113 +75,13 @@ export default function ExportPanel() {
     setMsg(result.message)
   }
 
-  // Switch the viewport into the shot's camera (returns a restore function
-  // that glides back to whatever the view was before, rather than snapping).
-  // Applied both through the store (so the banner/UI reflect it) and directly
-  // (so the very first recorded frame is already the camera view) — the arm
-  // itself stays instant on purpose, so a recording never opens with a glide
-  // from the editor's free view into the shot.
-  function armShotView(view) {
-    const prev = st().viewCameraId
-    if (view.id != null && view.id !== prev) {
-      st().setViewCameraId(view.id)
-      setViewCameraById(view.id)
-      return () => transitionViewCameraTo(prev)
-    }
-    // 'cuts' and 'free' shots don't need arming — cuts glide themselves in
-    // via sampleCuts once playback starts (forced on below), and 'free'
-    // never leaves the current view in the first place. Still restore
-    // afterwards in case cuts left the view somewhere else.
-    return () => transitionViewCameraTo(prev)
-  }
-
-  // Move/rotate/resize gizmos (props, cameras, lights, bones, mesh parts) are
-  // editing UI, not part of the shot — hide whatever's selected before a
-  // preview/recording starts, and bring it back after so the selection isn't
-  // lost. Store-driven selections (object/camera/bone/mesh) clear themselves
-  // through Viewport's reactive effects; the light gizmo is driven directly,
-  // so it's cleared here too.
-  function hideGizmosForShot() {
-    const s = st()
-    const prev = {
-      objectId: s.selectedObjectId,
-      cameraId: s.selectedCameraId,
-      lightId: s.selectedLightId,
-      boneName: s.selectedBoneName,
-      meshUuid: s.selectedMeshUuid,
-    }
-    if (prev.objectId != null) s.setSelectedObjectId(null)
-    if (prev.cameraId != null) s.setSelectedCameraId(null)
-    if (prev.boneName != null) s.setSelectedBoneName(null)
-    if (prev.meshUuid != null) s.setSelectedMeshUuid(null)
-    if (prev.lightId != null) {
-      s.setSelectedLightId(null)
-      selectLight(null)
-    }
-    return () => {
-      const s2 = st()
-      if (prev.objectId != null) s2.setSelectedObjectId(prev.objectId)
-      if (prev.cameraId != null) s2.setSelectedCameraId(prev.cameraId)
-      if (prev.boneName != null) s2.setSelectedBoneName(prev.boneName)
-      if (prev.meshUuid != null) s2.setSelectedMeshUuid(prev.meshUuid)
-      if (prev.lightId != null) {
-        s2.setSelectedLightId(prev.lightId)
-        selectLight(prev.lightId)
-      }
-    }
-  }
-
   // Play every loaded character's own selected clip/animation once from the
   // start — recording it to a file, or just previewing exactly what a
-  // recording would show. One code path so the preview can never lie about
-  // the video.
+  // recording would show. Shared with the title bar's Export As > Video item
+  // via exportShot.js, so neither can drift out of sync with the other.
   function runShot(record) {
     if (busy) return
-    stopAllCharacters() // clear any armed playback first (also restores cut-driven views)
-    const restoreGizmos = hideGizmosForShot()
-    const s = st()
-    const view = resolveShotView(s)
-    const restoreView = armShotView(view)
-    // Preview/Record always honour camera cuts/keys, regardless of the
-    // Cameras panel's "follow on Play" toggle — that's the whole point of a
-    // recorded shot.
-    setForceCameraCuts(true)
-    const { started, maxDuration: durSec } = playAllCharacters({ loop: false, speed: s.speed })
-    if (started === 0) {
-      setForceCameraCuts(false)
-      restoreView()
-      restoreGizmos()
-      setMsg(`Nothing to ${record ? 'record' : 'preview'} — pick a clip or make an animation first.`)
-      return
-    }
-    if (record && !startRecording(30)) {
-      setForceCameraCuts(false)
-      restoreView()
-      restoreGizmos()
-      stopAllCharacters()
-      setMsg('Video recording isn’t supported in this browser — use Fullscreen and screen-record instead.')
-      return
-    }
-    if (record) st().setRecording(true)
-    else setPreviewing(true)
-    setMsg(
-      `${record ? 'Recording' : 'Previewing'} ${view.label}${started > 1 ? ` (${started} characters)` : ''}…`,
-    )
-    const ms = (durSec / (s.speed || 1)) * 1000 + (record ? 400 : 100)
-    window.setTimeout(() => {
-      stopAllCharacters()
-      setForceCameraCuts(false)
-      if (record) {
-        stopRecordingAndDownload(name)
-        st().setRecording(false)
-        setMsg('Video saved (.webm).')
-      } else {
-        setPreviewing(false)
-        setMsg(null)
-      }
-      restoreView()
-      restoreGizmos()
-    }, ms)
+    runExportShot({ record, name, onStatus: setMsg })
   }
 
   return (
