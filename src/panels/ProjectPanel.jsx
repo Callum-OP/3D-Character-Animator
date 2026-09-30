@@ -53,8 +53,10 @@ export default function ProjectPanel() {
   // The project currently "open" — mirrors Blender's notion of the current
   // .blend file. `handle` is the FileSystemFileHandle to write straight
   // back to on "Save" (null until you've opened or saved-as a real file,
-  // or in browsers without File System Access support).
-  const [current, setCurrent] = useState(null) // { name, handle }
+  // or in browsers without File System Access support). Lives in the global
+  // store (not local state) so the title bar's File menu shares it.
+  const current = useStore((s) => s.currentProject)
+  const setCurrent = useStore((s) => s.setCurrentProject)
   const [recents, setRecents] = useState([])
   const [msg, setMsg] = useState(null)
   const [busy, setBusy] = useState(false)

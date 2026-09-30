@@ -28,9 +28,17 @@ body {
 }
 
 /* App layout: viewport fills the space, side panel is fixed width on the right */
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+}
+
 .app {
   display: flex;
-  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
   width: 100%;
 }
 
@@ -69,6 +77,126 @@ body {
   background: rgba(108, 204, 255, 0.15);
   pointer-events: none;
   z-index: 50;
+}
+
+/* Custom title bar (File/Help menus) — sits above the viewport/sidebar row
+   and shares the top strip with Electron's titleBarOverlay caption buttons
+   (see electron/main.cjs). Matches that overlay's configured color/height so
+   the native minimize/maximize/close controls look like part of the same
+   bar rather than floating on top of it. On the web build (no Electron) the
+   -webkit-app-region rules are simply ignored, so it's harmless there too. */
+.titlebar {
+  display: flex;
+  align-items: stretch;
+  height: 35px;
+  flex: 0 0 35px;
+  background: #1e1e1e;
+  border-bottom: 1px solid #000;
+  -webkit-app-region: drag;
+  user-select: none;
+  position: relative;
+  z-index: 40;
+}
+
+.titlebar-menu {
+  display: flex;
+  align-items: stretch;
+  -webkit-app-region: no-drag;
+}
+
+.titlebar-menu-item {
+  position: relative;
+}
+
+.titlebar-menu-btn {
+  height: 100%;
+  padding: 0 12px;
+  background: transparent;
+  border: none;
+  color: var(--text-dim, #9a9ca6);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.titlebar-menu-btn:hover,
+.titlebar-menu-btn.active {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text, #e6e7ea);
+}
+
+.titlebar-drag-fill {
+  flex: 1 1 auto;
+  -webkit-app-region: drag;
+}
+
+.titlebar-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  min-width: 200px;
+  background: #232323;
+  border: 1px solid #000;
+  border-radius: 0 0 6px 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  z-index: 41;
+  -webkit-app-region: no-drag;
+}
+
+.titlebar-dropdown button {
+  text-align: left;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text, #e6e7ea);
+  font-size: 12.5px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.titlebar-dropdown button:hover:not(:disabled) {
+  background: var(--accent, #ff5a3c);
+  color: #fff;
+}
+
+.titlebar-dropdown button:disabled {
+  color: var(--text-dim, #666);
+  cursor: default;
+}
+
+.titlebar-dropdown-sep {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.1);
+  margin: 4px 2px;
+}
+
+.titlebar-dropdown-label {
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--text-dim, #9a9ca6);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.titlebar-msg {
+  position: absolute;
+  top: 100%;
+  left: 12px;
+  margin-top: 4px;
+  background: #232323;
+  border: 1px solid #000;
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--text, #e6e7ea);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  z-index: 41;
+  max-width: 360px;
 }
 
 /* Fallback shown by ViewportErrorBoundary if a render crash is caught */

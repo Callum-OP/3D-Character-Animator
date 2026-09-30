@@ -155,7 +155,7 @@ function createWindow() {
       spellcheck: false,
       preload: PRELOAD,
     },
-    //titleBarStyle: 'hidden',
+    titleBarStyle: 'hidden',
     titleBarOverlay: {
       color: '#1e1e1e', // Background color of the title bar area
       symbolColor: '#ffffff', // Color of the minimize/maximize/close icons

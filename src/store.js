@@ -118,6 +118,15 @@ function defaultCharacterFields(modelInfo) {
 }
 
 export const useStore = create((set) => ({
+  // ---- Current project file (Open/Save/Save As target) ----
+  // { name, handle } | null — "handle" is a FileSystemFileHandle on the web,
+  // or a plain native file path on the Electron build (see projectStore.js).
+  // Lives here (not as component-local state) so both the sidebar's Project
+  // panel and the title bar's File menu act on the same open file.
+  currentProject: null,
+  setCurrentProject: (value) =>
+    set((s) => ({ currentProject: typeof value === 'function' ? value(s.currentProject) : value })),
+
   // ---- Multi-character registry ----
   // characters: { [id]: { ...CHARACTER_FIELDS } } — snapshot for every
   // character that ISN'T currently active. The active one's copy of these

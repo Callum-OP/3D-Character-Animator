@@ -1,4 +1,5 @@
 import Viewport from './three/Viewport.jsx'
+import TitleBar from './panels/TitleBar.jsx'
 import MaterialPanel from './panels/MaterialPanel.jsx'
 import BonePanel from './panels/BonePanel.jsx'
 import MeshPanel from './panels/MeshPanel.jsx'
@@ -33,8 +34,10 @@ export default function App() {
   const sceneLights = useStore((s) => s.sceneLights)
 
   return (
-    <div className={'app' + (settingsOpen ? ' settings-is-open' : '')}>
-      <Viewport />
+    <div className="app-shell">
+      <TitleBar />
+      <div className={'app' + (settingsOpen ? ' settings-is-open' : '')}>
+        <Viewport />
       <aside className="sidebar">
         <div className="app-header">
           <div className="brand-lockup">
@@ -135,6 +138,7 @@ export default function App() {
         </>
       )}
       <HelpOverlay />
+      </div>
     </div>
   )
 }
