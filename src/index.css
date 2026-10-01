@@ -143,10 +143,6 @@ body {
   -webkit-app-region: drag;
 }
 
-.titlebar-visibility-btn {
-  -webkit-app-region: no-drag;
-}
-
 .titlebar-dropdown {
   position: absolute;
   top: 100%;
@@ -2537,4 +2533,173 @@ body {
   font-size: 10.5px;
   color: var(--text-dim);
   margin-top: 2px;
+}
+
+.sidebar {
+  flex-basis: 320px;
+  padding: 16px 14px;
+  background: #202127;
+}
+
+.sidebar-intro {
+  position: relative;
+  gap: 6px;
+  padding: 12px 13px 12px 15px;
+  border-radius: 7px;
+  background: linear-gradient(110deg, rgba(255, 90, 60, 0.13), rgba(229, 57, 122, 0.035));
+}
+
+.sidebar-intro::before {
+  content: '';
+  position: absolute;
+  inset: 10px auto 10px 0;
+  width: 2px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, #ffb35f, var(--accent), var(--accent-2));
+}
+
+.intro-copy {
+  color: #c2c4ca;
+  font-size: 12px;
+}
+
+.acc {
+  background: #24252b;
+  border-radius: 6px;
+  margin-bottom: 7px;
+}
+
+.acc-head {
+  min-height: 48px;
+  padding: 9px 11px;
+}
+
+.acc.open {
+  border-color: #41434d;
+  box-shadow: inset 2px 0 0 rgba(255, 90, 60, 0.75);
+}
+
+.acc-title {
+  color: var(--text);
+}
+
+.acc.open .acc-title {
+  color: #fff;
+}
+
+.acc-subtitle {
+  color: #a0a2ac;
+  font-size: 10.5px;
+}
+
+.acc-body {
+  padding: 10px 11px 11px;
+}
+
+.mode-toolbar {
+  display: flex;
+  gap: 3px;
+  padding: 4px;
+  border: 1px solid #41434d;
+  border-radius: 7px;
+}
+
+.mode-toolbar .seg-btn {
+  min-width: 70px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.viewport-empty {
+  pointer-events: auto;
+}
+
+.viewport-empty .ve-icon {
+  width: 58px;
+  height: 58px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 5px;
+  border: 1px solid rgba(255, 90, 60, 0.4);
+  border-radius: 15px;
+  background: rgba(255, 90, 60, 0.1);
+  font-size: 32px;
+}
+
+.ve-kicker {
+  color: #ffb37a;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.viewport-empty .ve-title {
+  margin-top: 2px;
+  font-size: 21px;
+}
+
+.viewport-empty .ve-sub {
+  max-width: 330px;
+}
+
+.ve-load-btn {
+  width: auto;
+  min-width: 176px;
+  min-height: 40px;
+  margin-top: 12px;
+  padding: 9px 18px;
+}
+
+.ve-formats {
+  margin-top: 11px;
+  color: var(--text-dim);
+  font-size: 10.5px;
+}
+
+.ve-formats span {
+  padding: 0 4px;
+  color: var(--accent);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+
+.proj-save .btn {
+  flex: 1 1 calc(50% - 8px);
+  width: auto;
+  min-width: 92px;
+}
+
+@media (max-width: 760px) {
+  .app {
+    flex-direction: column;
+  }
+
+  .viewport-wrap {
+    flex: 1 1 56%;
+    min-height: 280px;
+  }
+
+  .sidebar {
+    flex: 0 1 44%;
+    min-height: 220px;
+    max-height: 44%;
+    padding: 12px 10px;
+    border-top: 1px solid var(--panel-border);
+    border-left: 0;
+    overflow-y: auto;
+  }
+
+  .mode-toolbar .seg-btn {
+    min-width: 0;
+    padding: 6px 9px;
+  }
 }

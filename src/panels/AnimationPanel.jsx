@@ -37,7 +37,14 @@ import { getBoneQuaternion, getPosedBones, applyPose, setPosingEnabled } from '.
 import { getCharacterRootTransform, getCurrentModel, getGroundY, scrubTimeline, playAllCharacters, stopAllCharacters } from '../three/scene.js'
 import * as THREE from 'three'
 import { simulateRagdollClip } from '../three/ragdoll.js'
-import { getObjectRoots } from '../three/objects.js'
+import {
+  getObjectRoots,
+  getObjectRootById,
+  startObjectAnimation,
+  pauseObjectAnimation,
+  stopObjectAnimation,
+  scrubObjectAnimation,
+} from '../three/objects.js'
 
 // Collect every keyframe time across joints, the character position, parts and
 // cameras, with a count of what's keyed at each — for the overview/manage list.
@@ -136,12 +143,140 @@ function FrameStepper({ time, duration, fps, onChange }) {
   )
 }
 
+function ObjectAnimationEditor() {
+  const allSceneObjects = useStore((s) => s.sceneObjects)
+  const selectedObjectId = useStore((s) => s.selectedObjectId)
+  const objectAnimData = useStore((s) => s.objectAnimData)
+  const duration = useStore((s) => s.objectAnimDuration)
+  const time = useStore((s) => s.objectAnimTime)
+  const playing = useStore((s) => s.objectAnimPlaying)
+  const autoKey = useStore((s) => s.objectAutoKeyMovement)
+  const fps = useStore((s) => s.animFps)
+  const loop = useStore((s) => s.loop)
+  const sceneObjects = allSceneObjects.filter((object) => !object.isCharacter)
+  const selected = sceneObjects.find((object) => object.id === selectedObjectId)
+  const keys = selected?.animationKey ? objectAnimData[selected.animationKey] || [] : []
+  const [message, setMessage] = useState('')
+  const st = useStore.getState
+
+  function onKeyframe() {
+    const root = selected && getObjectRootById(selected.id)
+    if (!root || !selected.animationKey) return
+    const keyTime = Math.round(time * fps) / fps
+    st().addObjectTransformKeyframe(selected.animationKey, keyTime, {
+      position: root.position.toArray(),
+      quaternion: root.quaternion.toArray(),
+      scale: root.scale.toArray(),
+    })
+    setMessage(`Saved ${selected.name} at ${keyTime.toFixed(2)}s. Add another key at a different time to create a smooth transition.`)
+  }
+
+  function onPlay() {
+    if (playing) {
+      pauseObjectAnimation()
+      return
+    }
+    if (!startObjectAnimation()) setMessage('Add at least one object keyframe before playing.')
+  }
+
+  return (
+    <div className="panel">
+      <h2>Create an animation</h2>
+      <p className="panel-hint">
+        Move an object in the Scene panel, set a time, and key its position. Playback smoothly transitions between keys.
+      </p>
+
+      <div className="kf-numbers">
+        <label>
+          Duration
+          <input
+            type="number"
+            min={0.1}
+            step={0.1}
+            value={duration}
+            onChange={(event) => st().setObjectAnimDuration(Math.max(0.1, Number(event.target.value)))}
+          />
+          s
+        </label>
+      </div>
+
+      <label className="slider-row">
+        <span className="slider-label">Time</span>
+        <input
+          type="range"
+          min={0}
+          max={duration}
+          step={1 / fps}
+          value={Math.min(time, duration)}
+          disabled={playing}
+          onChange={(event) => scrubObjectAnimation(Number(event.target.value))}
+        />
+        <EditableValue
+          value={time}
+          min={0}
+          max={duration}
+          onChange={scrubObjectAnimation}
+          format={(value) => value.toFixed(2) + 's'}
+          label="Animation time"
+        />
+      </label>
+
+      <div className="kf-actions">
+        <button className="btn secondary" onClick={() => scrubObjectAnimation(0)} disabled={playing}>Start</button>
+        <button className="btn secondary" onClick={() => scrubObjectAnimation(duration)} disabled={playing}>End</button>
+        <button className="btn secondary" onClick={onKeyframe} disabled={!selected || playing}>
+          Key selected object{keys.length ? ` (${keys.length})` : ''}
+        </button>
+      </div>
+
+      <div className="kf-actions" style={{ marginTop: 8 }}>
+        <button className="btn" onClick={onPlay} disabled={!playing && !Object.values(objectAnimData).some((track) => track.length)}>
+          {playing ? 'Pause' : 'Play'}
+        </button>
+        <button className="btn secondary" onClick={stopObjectAnimation}>Stop</button>
+        <label className="toggle-row" style={{ flex: '0 0 auto', margin: 0 }}>
+          <input type="checkbox" checked={loop} onChange={(event) => st().setLoop(event.target.checked)} />
+          Loop
+        </label>
+      </div>
+
+      <label className="toggle-row" style={{ marginTop: 8 }} title="Save a keyframe automatically whenever you finish moving the selected object.">
+        <input type="checkbox" checked={autoKey} onChange={(event) => st().setObjectAutoKeyMovement(event.target.checked)} />
+        Auto-key when moving objects
+      </label>
+
+      {selected ? (
+        <div className="empty" style={{ marginTop: 8 }}>
+          Keying: {selected.name}
+        </div>
+      ) : (
+        <div className="empty" style={{ marginTop: 8 }}>Select a model or image in Scene → Objects to key its movement.</div>
+      )}
+
+      {keys.length > 0 && (
+        <div className="kf-list" style={{ marginTop: 8 }}>
+          {keys.map((key) => (
+            <div key={key.time} className={'kf-list-row' + (Math.abs(key.time - time) < 1e-4 ? ' active' : '')}>
+              <button className="kf-time" onClick={() => scrubObjectAnimation(key.time)}>{key.time.toFixed(2)}s</button>
+              <span className="kf-what">{selected.name}</span>
+              <button className="kf-del" title="Delete this keyframe" onClick={() => st().deleteObjectTransformKeyframe(selected.animationKey, key.time)}>×</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {message && <div className="pose-msg">{message}</div>}
+    </div>
+  )
+}
+
 // Side-panel section: play baked clips or author a simple in-app keyframe
 // animation. Playback drives the bones, so it's mutually exclusive with posing —
 // the engine suspends the gizmo while a clip is armed and restores the rest pose
 // on Stop.
 export default function AnimationPanel() {
   const modelInfo = useStore((s) => s.modelInfo)
+  const sceneObjects = useStore((s) => s.sceneObjects)
   const selectedBoneName = useStore((s) => s.selectedBoneName)
 
   const playback = useStore((s) => s.playback)
@@ -161,6 +296,8 @@ export default function AnimationPanel() {
 
   const importedClipNames = useStore((s) => s.importedClipNames)
   const characterOrder = useStore((s) => s.characterOrder)
+  const objectAnimData = useStore((s) => s.objectAnimData)
+  const hasObjectAnimation = Object.values(objectAnimData || {}).some((keys) => keys && keys.length)
 
   const st = useStore.getState // for imperative setters inside handlers
   const bvhRef = useRef(null)
@@ -278,7 +415,8 @@ export default function AnimationPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapping])
 
-  if (!modelInfo) return null
+  const hasMovableObjects = sceneObjects.some((object) => !object.isCharacter)
+  if (!modelInfo) return hasMovableObjects ? <ObjectAnimationEditor /> : null
 
   const bakedNames = modelInfo.clipNames || []
   const clipNames = [...bakedNames, ...importedClipNames]
@@ -287,7 +425,7 @@ export default function AnimationPanel() {
   // The clip source is available if there are baked clips, imported mocap, OR a
   // skeleton to import mocap onto.
   const hasClips = clipNames.length > 0
-  if (!hasClips && !hasBones) return null
+  if (!hasClips && !hasBones) return hasMovableObjects ? <ObjectAnimationEditor /> : null
 
   const displayDuration = source === 'edit' ? animDuration : duration
   const snap = (t) => Math.round(t * animFps) / animFps // to the fps grid
@@ -358,18 +496,23 @@ export default function AnimationPanel() {
   // (this one's included) — lets several characters perform their own clips
   // at the same time.
   function onPlayAll() {
-    const { started: n } = playAllCharacters()
+    const store = useStore.getState()
+    const { started: charactersStarted } = playAllCharacters()
+    const objectTracks = Object.values(store.objectAnimData || {}).filter((keys) => keys && keys.length)
+    const objectStarted = objectTracks.length > 0 ? (startObjectAnimation() > 0 ? 1 : 0) : 0
+    const started = charactersStarted + objectStarted
     setKfMsg(
-      n > 1
-        ? `Playing ${n} characters.`
-        : n === 1
-          ? 'Only this character has a clip/animation selected — the others have nothing to play yet.'
-          : 'Nothing to play — pick a clip or make an animation on at least one character first.',
+      started > 1
+        ? `Playing ${started} active animation tracks.`
+        : started === 1
+          ? 'Playing the current scene animation.'
+          : 'Nothing to play — pick a clip or create object motion first.',
     )
   }
 
   function onStopAll() {
     stopAllCharacters()
+    stopObjectAnimation()
   }
 
   function onScrub(t) {
@@ -814,11 +957,12 @@ export default function AnimationPanel() {
   const playing = playback === 'playing'
 
   return (
+    <>
+    {hasMovableObjects && <ObjectAnimationEditor />}
     <div className="panel">
       <h2>Animate</h2>
       <p className="panel-hint">
-        Play a ready-made animation or motion file, or make your own by posing and
-        adding keyframes.
+        Play a ready-made clip, pose a character, or keyframe object movement.
       </p>
 
       {/* Source selector */}
@@ -1265,14 +1409,14 @@ export default function AnimationPanel() {
         </button>
       </div>
 
-      {characterOrder.length > 1 && (
+      {(characterOrder.length > 0 || hasObjectAnimation) && (
         <div className="transport" style={{ marginTop: 6 }}>
           <button
             className="btn secondary"
             onClick={onPlayAll}
-            title="Play every loaded character's own selected clip/animation at the same time"
+            title="Play every loaded character and any keyed object motion at the same time"
           >
-            ▶ Play all ({characterOrder.length})
+            ▶ Play all{characterOrder.length > 0 ? ` (${characterOrder.length})` : ''}
           </button>
           <button className="btn secondary" onClick={onStopAll}>
             ■ Stop all
@@ -1562,5 +1706,6 @@ export default function AnimationPanel() {
         </div>
       )}
     </div>
+    </>
   )
 }

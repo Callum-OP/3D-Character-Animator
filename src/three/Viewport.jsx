@@ -3,7 +3,7 @@ import React from 'react'
 import {
   initScene,
   disposeScene,
-  loadModelFile,
+  importModelAuto,
   setGridVisible,
   setGroundVisible,
   setBackground,
@@ -133,6 +133,7 @@ class ViewportErrorBoundary extends React.Component {
 // handles drag-and-drop of model files onto itself.
 function Viewport() {
   const containerRef = useRef(null)
+  const emptyModelInputRef = useRef(null)
   const [dragOver, setDragOver] = useState(false)
   const [symmetriseOpen, setSymmetriseOpen] = useState(false)
 
@@ -646,7 +647,7 @@ function Viewport() {
       useStore.getState().setLoadError('Unsupported file. Drop a ' + list + ' file.')
       return
     }
-    loadModelFile(file).catch(() => {}) // error is surfaced via the store
+    importModelAuto(file).catch(() => {}) // error is surfaced via the store
   }
 
   const loading = useStore((s) => s.loading)
@@ -709,7 +710,7 @@ function Viewport() {
         </div>
       )}
 
-      {(modelInfo || selectedCameraId != null) && mode !== 'view' && (
+      {(modelInfo || selectedCameraId != null || selectedObjectIds.length > 0) && mode !== 'view' && (
         <div className="transform-widget-strip" title="What dragging the gizmo does">
           {TRANSFORM_BUTTONS.map((b) => {
             // Bone mode has Move (IK: drag the joint, its ancestor chain
@@ -764,20 +765,35 @@ function Viewport() {
 
       {!hasSceneContent && !loading && (
         <div className="viewport-empty">
-          <div className="ve-icon">{loadError ? '⚠' : '⬚'}</div>
-          <div className="ve-title">{loadError ? 'Unable to start the 3D view' : 'Drop a character or object here'}</div>
+          <div className="ve-kicker">3D Viewer</div>
+          <div className="ve-title">{loadError ? 'Unable to load this model' : 'Bring an object into the scene'}</div>
           <div className="ve-sub">
             {loadError ? (
               <span>{loadError}</span>
             ) : (
-              <>
-                …or use the <b>Load</b> button in the sidebar.
-                <br />
-                Works with <b>.glb</b>, <b>.gltf</b> and <b>.fbx</b> files.
-              </>
+              <>Choose any 3D model or drop it anywhere in the viewer. Rigged models are added as characters.</>
             )}
           </div>
-          {!loadError && <div className="ve-hint">Press ? any time for help</div>}
+          <button
+            className="btn ve-load-btn"
+            onClick={() => emptyModelInputRef.current?.click()}
+            disabled={loading}
+          >
+            {loading ? 'Loading model…' : '＋ Load object'}
+          </button>
+          <input
+            ref={emptyModelInputRef}
+            className="visually-hidden"
+            type="file"
+            accept=".glb,.gltf,.fbx,model/gltf-binary,model/gltf+json"
+            aria-label="Choose a 3D model file"
+            onChange={(event) => {
+              const file = event.target.files?.[0]
+              event.target.value = ''
+              if (file) importModelAuto(file).catch(() => {})
+            }}
+          />
+          {!loadError && <div className="ve-formats">GLB · glTF · FBX <span>·</span> Press ? for help</div>}
         </div>
       )}
 

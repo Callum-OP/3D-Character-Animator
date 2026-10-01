@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store.js'
 import {
-  loadModelFile,
+  importModelAuto,
   disposeCurrentModel,
   setActiveCharacter,
   removeCharacter,
@@ -34,7 +34,6 @@ import {
 //      saved yet.
 export default function ProjectPanel() {
   const fileInputRef = useRef(null)
-  const addFileInputRef = useRef(null)
   const openProjectInputRef = useRef(null)
   const modelInfo = useStore((s) => s.modelInfo)
   const loading = useStore((s) => s.loading)
@@ -88,13 +87,7 @@ export default function ProjectPanel() {
   function onPickModel(e) {
     const file = e.target.files && e.target.files[0]
     e.target.value = ''
-    if (file) loadModelFile(file).catch(() => {})
-  }
-
-  function onPickAddModel(e) {
-    const file = e.target.files && e.target.files[0]
-    e.target.value = ''
-    if (file) loadModelFile(file, { addNew: true }).catch(() => {})
+    if (file) importModelAuto(file).catch(() => {})
   }
 
   function confirmDeleteCharacter(id) {
@@ -252,7 +245,7 @@ export default function ProjectPanel() {
           onClick={() => fileInputRef.current?.click()}
           disabled={loading}
         >
-          {loading ? 'Loading…' : modelInfo ? 'Replace active character (.glb / .gltf / .fbx)' : '＋ Load character (.glb / .gltf / .fbx)'}
+          {loading ? 'Loading…' : '＋ Load object or character (.glb / .gltf / .fbx)'}
         </button>
         <input
           ref={fileInputRef}
@@ -262,28 +255,8 @@ export default function ProjectPanel() {
           onChange={onPickModel}
         />
 
-        {modelInfo && (
-          <>
-            <button
-              className="btn"
-              style={{ marginTop: 8 }}
-              onClick={() => addFileInputRef.current?.click()}
-              disabled={loading}
-            >
-              {loading ? 'Loading…' : '＋ Add another character'}
-            </button>
-            <input
-              ref={addFileInputRef}
-              type="file"
-              accept=".glb,.gltf,.fbx,model/gltf-binary,model/gltf+json"
-              style={{ display: 'none' }}
-              onChange={onPickAddModel}
-            />
-          </>
-        )}
-
         {!modelInfo && !loadError && (
-          <div className="dropzone">…or drag a file straight onto the viewport</div>
+          <div className="dropzone">Rigged files become characters; other 3D files become movable objects.</div>
         )}
         {loadError && <div className="error">{loadError}</div>}
 
@@ -350,16 +323,20 @@ export default function ProjectPanel() {
           {current && <span className="subpanel-count" title={current.name}>{current.name}</span>}
         </div>
         <p className="panel-hint">
-          A project saves everything including models, props, images, poses and
-          styles as one file on disk. Open picks a file up, Save writes back to it, 
-          Save As lets you choose a new name or location.
+          A project stores characters, props, poses and scene settings in one file.
+          Open a project or save this workspace. Save updates the open file; Save As creates a copy.
           {!fsAccess && ' Your browser can open project files but can\'t write back to the same spot automatically, so Save will ask where to put the file each time.'}
         </p>
 
-        <div className="proj-save" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button className="btn" onClick={onOpen} disabled={busy}>
-            {loading || busy ? 'Working…' : 'Open Project…'}
-          </button>
+        <div className="proj-save" style={{ display: 'grid', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn secondary" onClick={onNewProject} disabled={busy} title="Start a new, blank project">
+              New Project
+            </button>
+            <button className="btn" onClick={onOpen} disabled={busy}>
+              {loading || busy ? 'Working…' : 'Open Project…'}
+            </button>
+          </div>
           <input
             ref={openProjectInputRef}
             type="file"
@@ -367,15 +344,14 @@ export default function ProjectPanel() {
             style={{ display: 'none' }}
             onChange={onPickOpenFile}
           />
-          <button className="btn" onClick={onSave} disabled={busy} title="Save back to the currently open file (or choose one, if none is open yet)">
-            Save
-          </button>
-          <button className="btn secondary" onClick={onSaveAs} disabled={busy} title="Save to a new file / location">
-            Save As…
-          </button>
-          <button className="btn secondary" onClick={onNewProject} disabled={busy} title="Start a new, blank project">
-            New Project
-          </button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn" onClick={onSave} disabled={busy} title="Save back to the currently open file (or choose one, if none is open yet)">
+              Save
+            </button>
+            <button className="btn secondary" onClick={onSaveAs} disabled={busy} title="Save to a new file / location">
+              Save As…
+            </button>
+          </div>
         </div>
 
         {msg && <div className="pose-msg">{msg}</div>}

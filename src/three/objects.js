@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import { disposeObject } from './loadModel.js'
 import { markHistoryAction, pushUndoBatch, registerUndoHistory } from './undoHistory.js'
+import { useStore } from '../store.js'
 import {
   recordOriginalMaterials,
   applyMaterials,
@@ -36,6 +37,7 @@ const o = {
   renderer: null,
   controls: null,
   requestRender: null,
+  setContinuousRender: null,
 
   transform: null, // TransformControls (move/rotate/scale)
   helper: null,
@@ -48,6 +50,7 @@ const o = {
   dragBefore: null, // selected root's TRS at gizmo-drag start (single-select path)
   onMoveCommit: null, // (root) => void — fired after a gizmo drag actually changes a root's TRS
   onVisibilityChange: null,
+  animationRest: null,
   gizmoGrabbed: false, // true once per interaction that actually MOVED something via the gizmo (see objectChange)
   draggingViaGizmo: false, // true between dragging-changed(true) and (false) — not by itself proof of an actual move
   lastStyleOpts: { mode: 'unlit', toonSteps: 3, soften: 0, colorGrading: 'none', overrides: {} }, // last scene-wide style, for 'auto' objects
@@ -86,6 +89,7 @@ export function initObjects(refs) {
   o.renderer = refs.renderer
   o.controls = refs.controls
   o.requestRender = refs.requestRender
+  o.setContinuousRender = refs.setContinuousRender
 
   const transform = new TransformControls(o.camera, o.renderer.domElement)
   transform.setMode('translate')
@@ -166,7 +170,11 @@ export function clearAllCharacterObjects() {
 
 // Add a loaded model as a scene object. Returns lightweight metadata for the UI.
 // `file` (the original File) is retained so the object can be saved to a project.
-export function addObject(parsed, name, format, file) {
+function makeAnimationKey() {
+  return globalThis.crypto?.randomUUID?.() || `object-${Date.now()}-${++idCounter}`
+}
+
+export function addObject(parsed, name, format, file, animationKey = null) {
   const root = parsed.root
   const meshes = []
   root.traverse((obj) => {
@@ -185,6 +193,7 @@ export function addObject(parsed, name, format, file) {
   recordOriginalMaterials(materialModel)
   const entry = {
     id,
+    animationKey: animationKey || makeAnimationKey(),
     name,
     format,
     root,
@@ -202,7 +211,7 @@ export function addObject(parsed, name, format, file) {
   o.objects.push(entry)
   applyObjectStyle(entry)
   o.requestRender()
-  return { id, name, format, kind: 'model', style: entry.style, outline: entry.outline, castShadow: true }
+  return { id, animationKey: entry.animationKey, name, format, kind: 'model', style: entry.style, outline: entry.outline, castShadow: true }
 }
 
 // Add an image as a movable reference plane. `map` is a loaded THREE.Texture;
@@ -211,7 +220,7 @@ export function addObject(parsed, name, format, file) {
 // figure out of the box; the user then moves/rotates/scales it like any object.
 // Reference images opt out of shadows and the outline — they're 2D guides, not
 // props the scene should light.
-export function addImage(map, name, aspect, file) {
+export function addImage(map, name, aspect, file, animationKey = null) {
   const h = 1.6
   const w = h * (aspect || 1)
   const geo = new THREE.PlaneGeometry(w, h)
@@ -231,8 +240,9 @@ export function addImage(map, name, aspect, file) {
   excludeFromOutline(root)
   o.scene.add(root)
   const id = ++idCounter
-  o.objects.push({
+  const entry = {
     id,
+    animationKey: animationKey || makeAnimationKey(),
     name,
     format: 'image',
     root,
@@ -241,12 +251,15 @@ export function addImage(map, name, aspect, file) {
     attachedBoneName: null,
     attachedCharacterId: null,
     attachedBone: null,
-  })
+  }
+  o.objects.push(entry)
   o.requestRender()
-  return { id, name, format: 'image', kind: 'image' }
+  return { id, animationKey: entry.animationKey, name, format, kind: 'image' }
 }
 
 // ---------------------------------------------------------------------------
+// Bone attachment — glue a prop (gun, shield, hat...) to a bone on the active
+// character so it follows posing, animation playback and ragdoll for free.
 // Bone attachment — glue a prop (gun, shield, hat...) to a bone on the active
 // character so it follows posing, animation playback and ragdoll for free.
 //
@@ -386,6 +399,7 @@ export function pasteObject() {
   }
   const entry = {
     id,
+    animationKey: makeAnimationKey(),
     name: `${source.name} Copy`,
     format: source.format,
     root,
@@ -403,7 +417,7 @@ export function pasteObject() {
   o.objects.push(entry)
   if (entry.kind === 'model') applyObjectStyle(entry)
   o.requestRender()
-  return { id, name: entry.name, format: entry.format, kind: entry.kind }
+  return { id, animationKey: entry.animationKey, name: entry.name, format: entry.format, kind: entry.kind }
 }
 
 export function hasCopiedObject() {
@@ -415,6 +429,7 @@ export function removeObject(id) {
   const idx = o.objects.findIndex((e) => e.id === id)
   if (idx < 0) return
   const entry = o.objects[idx]
+  useStore.getState().removeObjectAnimationTrack(entry.animationKey)
   if (o.selected === entry.root) {
     o.transform.detach()
     o.selected = null
@@ -936,6 +951,7 @@ export function getObjectsForSave(meshOverrides) {
     .filter((e) => e.file)
     .map((e) => ({
       kind: e.kind || 'model',
+      animationKey: e.animationKey,
       fileName: e.file.name,
       blob: e.file,
       name: e.name,
@@ -971,6 +987,101 @@ export function getObjectMeshesById(id) {
 // ragdoll to build obstacle colliders. Excludes the character itself.
 export function getObjectRoots() {
   return o.objects.map((e) => e.root)
+}
+
+export function getObjectAnimationKey(id) {
+  return o.objects.find((entry) => entry.id === id)?.animationKey || null
+}
+
+export function getObjectAnimationKeyForRoot(root) {
+  return o.objects.find((entry) => entry.root === root)?.animationKey || null
+}
+
+function sampleObjectTrack(keys, time) {
+  if (time <= keys[0].time) return keys[0]
+  const last = keys[keys.length - 1]
+  if (time >= last.time) return last
+  let index = 0
+  while (index < keys.length - 1 && keys[index + 1].time < time) index++
+  const from = keys[index]
+  const to = keys[index + 1]
+  const span = to.time - from.time
+  const amount = span > 0 ? (time - from.time) / span : 0
+  const quaternion = new THREE.Quaternion(...from.quaternion).slerp(new THREE.Quaternion(...to.quaternion), amount)
+  return {
+    position: from.position.map((value, axis) => value + (to.position[axis] - value) * amount),
+    quaternion: quaternion.toArray(),
+    scale: from.scale.map((value, axis) => value + (to.scale[axis] - value) * amount),
+  }
+}
+
+function applyObjectAnimationAt(time) {
+  const tracks = useStore.getState().objectAnimData || {}
+  for (const entry of o.objects) {
+    const keys = tracks[entry.animationKey]
+    if (!keys?.length) continue
+    const transform = sampleObjectTrack(keys, time)
+    entry.root.position.fromArray(transform.position)
+    entry.root.quaternion.fromArray(transform.quaternion)
+    entry.root.scale.fromArray(transform.scale)
+  }
+  o.requestRender?.()
+}
+
+export function startObjectAnimation() {
+  const store = useStore.getState()
+  const hasKeys = Object.values(store.objectAnimData || {}).some((keys) => keys?.length)
+  if (!hasKeys) return 0
+  const duration = Math.max(0.1, Number(store.objectAnimDuration) || 2)
+  o.animationRest = new Map(o.objects.map((entry) => [entry.animationKey, snapshot(entry.root)]))
+  store.setObjectAnimTime(0)
+  store.setObjectAnimPlaying(true)
+  applyObjectAnimationAt(0)
+  o.setContinuousRender?.(true)
+  return duration
+}
+
+export function pauseObjectAnimation() {
+  useStore.getState().setObjectAnimPlaying(false)
+  o.setContinuousRender?.(false)
+  o.requestRender?.()
+}
+
+export function stopObjectAnimation() {
+  pauseObjectAnimation()
+  if (o.animationRest) {
+    for (const entry of o.objects) {
+      const before = o.animationRest.get(entry.animationKey)
+      if (before) applySnapshot(entry.root, before)
+    }
+  }
+  o.animationRest = null
+  useStore.getState().setObjectAnimTime(0)
+  o.requestRender?.()
+}
+
+export function scrubObjectAnimation(time) {
+  const store = useStore.getState()
+  const safeTime = Math.max(0, Math.min(Number(time) || 0, store.objectAnimDuration || 0))
+  store.setObjectAnimTime(safeTime)
+  applyObjectAnimationAt(safeTime)
+}
+
+export function stepObjectAnimation(delta) {
+  const store = useStore.getState()
+  if (!store.objectAnimPlaying) return
+  const duration = Math.max(0.1, Number(store.objectAnimDuration) || 2)
+  let time = store.objectAnimTime + Math.max(0, delta) * (Number(store.speed) || 1)
+  if (time >= duration) {
+    if (store.loop) time %= duration
+    else {
+      time = duration
+      store.setObjectAnimPlaying(false)
+      o.setContinuousRender?.(false)
+    }
+  }
+  store.setObjectAnimTime(time)
+  applyObjectAnimationAt(time)
 }
 
 // Resolve a prop or character id to its live scene root for viewport commands.

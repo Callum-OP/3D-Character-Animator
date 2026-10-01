@@ -611,6 +611,41 @@ export const useStore = create((set) => ({
 
   // ---- Scene objects (props / backgrounds) ----
   sceneObjects: [], // [{ id, name, format }] — independent of the character
+  objectAnimData: {}, // { [animationKey]: [{ time, position, quaternion, scale }] }
+  objectAnimDuration: 2,
+  objectAnimTime: 0,
+  objectAnimPlaying: false,
+  objectAutoKeyMovement: false,
+  setObjectAnimDuration: (objectAnimDuration) => set({ objectAnimDuration }),
+  setObjectAnimTime: (objectAnimTime) => set({ objectAnimTime }),
+  setObjectAnimPlaying: (objectAnimPlaying) => set({ objectAnimPlaying }),
+  setObjectAutoKeyMovement: (objectAutoKeyMovement) => set({ objectAutoKeyMovement }),
+  addObjectTransformKeyframe: (animationKey, time, transform) =>
+    set((s) => {
+      const objectAnimData = { ...s.objectAnimData }
+      const keys = (objectAnimData[animationKey] || []).filter((key) => key.time !== time)
+      keys.push({ time, ...transform })
+      keys.sort((a, b) => a.time - b.time)
+      objectAnimData[animationKey] = keys
+      return { objectAnimData }
+    }),
+  deleteObjectTransformKeyframe: (animationKey, time) =>
+    set((s) => {
+      const objectAnimData = { ...s.objectAnimData }
+      const keys = (objectAnimData[animationKey] || []).filter((key) => Math.abs(key.time - time) > 1e-6)
+      if (keys.length) objectAnimData[animationKey] = keys
+      else delete objectAnimData[animationKey]
+      return { objectAnimData }
+    }),
+  removeObjectAnimationTrack: (animationKey) =>
+    set((s) => {
+      if (!animationKey || !s.objectAnimData[animationKey]) return {}
+      const objectAnimData = { ...s.objectAnimData }
+      delete objectAnimData[animationKey]
+      return { objectAnimData }
+    }),
+  clearObjectAnimation: () =>
+    set({ objectAnimData: {}, objectAnimTime: 0, objectAnimPlaying: false }),
   selectedObjectId: null, // "primary" selection — last one clicked; drives the panel's single-target controls
   selectedObjectIds: [], // full multi-selection (always includes selectedObjectId when non-empty)
   objectMode: 'translate', // gizmo mode: 'translate' | 'rotate' | 'scale'

@@ -12,6 +12,7 @@ vi.mock('../three/scene.js', () => ({
   importBVHAuto: vi.fn(),
   exportPNG: vi.fn(),
   exportSceneModel: vi.fn(),
+  setObjectVisibleById: vi.fn((id, visible) => useStore.getState().setObjectVisible(id, visible)),
   loadModelFile: vi.fn(),
   disposeCurrentModel: vi.fn(),
   setActiveCharacter: vi.fn(),
@@ -44,6 +45,7 @@ vi.mock('../three/editClipboard.js', () => ({
 
 import ProjectPanel from '../panels/ProjectPanel.jsx'
 import TitleBar from '../panels/TitleBar.jsx'
+import { setObjectVisibleById } from '../three/scene.js'
 import { saveProjectAs, saveProjectToHandle } from '../three/projectStore.js'
 import { useStore } from '../store.js'
 
@@ -110,5 +112,27 @@ describe('title-bar project saves', () => {
     await waitFor(() => expect(screen.getByText(new Date(savedAt).toLocaleString())).toBeTruthy())
     expect(useStore.getState().currentProject.name).toBe('New Scene.3dcp')
     expect(saveProjectAs).toHaveBeenCalledOnce()
+  })
+
+  it('toggles all scene objects and switches the command when any object is hidden', () => {
+    useStore.setState({
+      sceneObjects: [
+        { id: 'first', visible: true },
+        { id: 'second', visible: false },
+      ],
+    })
+    render(<TitleBar />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Unhide All' }))
+    expect(useStore.getState().sceneObjects.every((entry) => entry.visible === true)).toBe(true)
+    expect(setObjectVisibleById).toHaveBeenNthCalledWith(1, 'first', true)
+    expect(setObjectVisibleById).toHaveBeenNthCalledWith(2, 'second', true)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Hide All' }))
+    expect(useStore.getState().sceneObjects.every((entry) => entry.visible === false)).toBe(true)
+    expect(setObjectVisibleById).toHaveBeenNthCalledWith(3, 'first', false)
+    expect(setObjectVisibleById).toHaveBeenNthCalledWith(4, 'second', false)
   })
 })

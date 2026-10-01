@@ -8,6 +8,7 @@ import {
   importBVHAuto,
   exportPNG,
   exportSceneModel,
+  setObjectVisibleById,
   playAllCharacters,
   stopAllCharacters,
 } from '../three/scene.js'
@@ -26,6 +27,7 @@ import {
   applyPose,
   resetPose,
 } from '../three/posing.js'
+import { startObjectAnimation, stopObjectAnimation } from '../three/objects.js'
 import { performUndo, performRedo } from '../three/undoPriority.js'
 import {
   canCopyCurrentEdit,
@@ -63,6 +65,7 @@ export default function TitleBar({ onOpenSettings }) {
   const toggleHelp = useStore((s) => s.toggleHelp)
   const hasCharacter = useStore((s) => !!s.modelInfo)
   const sceneObjects = useStore((s) => s.sceneObjects)
+  const hasObjectAnimation = useStore((s) => Object.values(s.objectAnimData || {}).some((keys) => keys && keys.length))
   const hasSceneContent = hasCharacter || sceneObjects.length > 0
   const fsAccess = hasFileSystemAccess()
   const exportScale = useStore((s) => s.exportScale)
@@ -205,13 +208,18 @@ export default function TitleBar({ onOpenSettings }) {
 
   function onPlayAll() {
     setOpenMenu(null)
-    const { started } = playAllCharacters()
-    setMsg(started ? `Playing ${started} character${started === 1 ? '' : 's'}.` : 'Nothing to play — select a clip or create an animation first.')
+    const store = useStore.getState()
+    const { started: charactersStarted } = playAllCharacters()
+    const objectTracks = Object.values(store.objectAnimData || {}).filter((keys) => keys && keys.length)
+    const objectStarted = objectTracks.length > 0 ? (startObjectAnimation() > 0 ? 1 : 0) : 0
+    const started = charactersStarted + objectStarted
+    setMsg(started ? `Playing ${started} active animation track${started === 1 ? '' : 's'} across the scene.` : 'Nothing to play — select a clip or create object motion first.')
   }
 
   function onStopAll() {
     setOpenMenu(null)
     stopAllCharacters()
+    stopObjectAnimation()
   }
 
   // ---- File > Import As ----
@@ -342,6 +350,12 @@ export default function TitleBar({ onOpenSettings }) {
     }
   }
 
+  function onToggleAllVisibility() {
+    setOpenMenu(null)
+    const visible = anyObjectHidden
+    for (const entry of sceneObjects) setObjectVisibleById(entry.id, visible)
+  }
+
   const visibilityObject = sceneObjects.find((entry) => entry.id === selectedObjectId)
   const visibilityAvailable = mode === 'mesh'
     ? !!selectedMeshUuid
@@ -349,6 +363,7 @@ export default function TitleBar({ onOpenSettings }) {
   const currentVisible = mode === 'mesh'
     ? meshOverrides[selectedMeshUuid]?.visible !== false
     : visibilityObject?.visible !== false
+  const anyObjectHidden = sceneObjects.some((entry) => entry.visible === false)
   const editCopyAvailable = canCopyCurrentEdit()
   const editPasteAvailable = canPasteCurrentEdit()
 
@@ -460,6 +475,26 @@ export default function TitleBar({ onOpenSettings }) {
                   </button>
                 </>
               )}
+              {visibilityAvailable && (
+                <>
+                  <div className="titlebar-dropdown-sep" />
+                  <button
+                    role="menuitem"
+                    title={`${currentVisible ? 'Hide' : 'Unhide'} selected ${mode === 'mesh' ? 'mesh part' : 'object'} (H)`}
+                    onClick={() => {
+                      setOpenMenu(null)
+                      toggleCurrentVisibility()
+                    }}
+                  >
+                    {currentVisible ? 'Hide' : 'Unhide'}
+                  </button>
+                </>
+              )}
+              {sceneObjects.length > 0 && (
+                <button role="menuitem" onClick={onToggleAllVisibility}>
+                  {anyObjectHidden ? 'Unhide All' : 'Hide All'}
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -474,11 +509,11 @@ export default function TitleBar({ onOpenSettings }) {
           {openMenu === 'animation' && (
             <div className="titlebar-dropdown" role="menu">
               <button role="menuitem" onClick={onPlay} disabled={!hasCharacter}>Play</button>
-              <button role="menuitem" onClick={onPlayAll} disabled={!hasCharacter}>Play All Characters</button>
+              <button role="menuitem" onClick={onPlayAll} disabled={!hasCharacter && !hasObjectAnimation}>Play All</button>
               <button role="menuitem" onClick={onPause} disabled={!hasCharacter || playback !== 'playing'}>Pause</button>
               <button role="menuitem" onClick={onStop} disabled={!hasCharacter}>Stop</button>
               <div className="titlebar-dropdown-sep" />
-              <button role="menuitem" onClick={onStopAll} disabled={!hasCharacter}>Stop All Characters</button>
+              <button role="menuitem" onClick={onStopAll} disabled={!hasCharacter && !hasObjectAnimation}>Stop All</button>
             </div>
           )}
         </div>
@@ -499,16 +534,6 @@ export default function TitleBar({ onOpenSettings }) {
           )}
         </div>
       </div>
-
-      {visibilityAvailable && (
-        <button
-          className="titlebar-menu-btn titlebar-visibility-btn"
-          title={`${currentVisible ? 'Hide' : 'Unhide'} selected ${mode === 'mesh' ? 'mesh part' : 'object'} (H)`}
-          onClick={() => toggleCurrentVisibility()}
-        >
-          {currentVisible ? 'Hide' : 'Unhide'}
-        </button>
-      )}
 
       {/* Empty drag strip: lets the window be dragged from anywhere along the
           bar that isn't a menu button, and leaves clear space under the

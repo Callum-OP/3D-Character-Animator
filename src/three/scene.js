@@ -145,8 +145,11 @@ import {
   setViewCamera as setObjectsViewCamera,
   updateAllObjectRimLight,
   getObjectRootById,
+  getObjectAnimationKeyForRoot,
   getObjectRoots,
   getAllRootsForExport,
+  stepObjectAnimation,
+  stopObjectAnimation,
 } from './objects.js'
 import { getPose, applyPose } from './posing.js'
 import { useStore } from '../store.js'
@@ -426,16 +429,26 @@ export function initScene(container) {
   })
 
   // --- Scene objects (props / backgrounds with a move/rotate/scale gizmo) ---
-  initObjects({ scene, camera, renderer, controls, requestRender })
+  initObjects({ scene, camera, renderer, controls, requestRender, setContinuousRender: (on) => setContinuousRender(on, 'object-animation') })
   setOnObjectVisibilityChange((id, visible) => useStore.getState().setObjectVisible(id, visible))
   // "Auto-save movement": when the toggle is on and the object being dragged
   // is the active character, drop a root-motion keyframe at the playhead —
   // makes a mocap/borrowed clip "your own" without a separate manual step.
   setOnObjectMoveCommit((root) => {
     const st = useStore.getState()
-    if (!st.autoKeyMovement) return
-    if (!state.currentModel || root !== state.currentModel.root) return
     const fps = st.animFps || 24
+    const animationKey = getObjectAnimationKeyForRoot(root)
+    if (animationKey && st.objectAutoKeyMovement) {
+      const raw = st.objectAnimTime || 0
+      const t = Math.round(raw * fps) / fps
+      st.addObjectTransformKeyframe(animationKey, t, {
+        position: root.position.toArray(),
+        quaternion: root.quaternion.toArray(),
+        scale: root.scale.toArray(),
+      })
+      return
+    }
+    if (!st.autoKeyMovement || !state.currentModel || root !== state.currentModel.root) return
     const raw = st.currentTime || 0
     const t = Math.round(raw * fps) / fps
     st.addRootKeyframe(t, root.position.toArray(), root.quaternion.toArray(), st.rippleRootEdit)
@@ -738,6 +751,7 @@ export function setContinuousRender(on, reason = 'anim') {
       // gets skipped instead of freezing everything after it.
       try {
         updateAnimation(delta) // advance the mixer before drawing
+        stepObjectAnimation(delta)
         stepClothLive(delta) // step any LIVE cloth sims, following the current pose
         stepDangleLive(delta) // swing any dangle (hair/accessory) bones under gravity
         updateCamTransition(delta) // glide any in-progress camera cut
@@ -972,6 +986,8 @@ export function removeCharacter(id) {
     state.currentModel = null
     if (remaining.length) setActiveCharacter(remaining[0])
   }
+  const store = useStore.getState()
+  if (remaining.length === 0 && store.sceneObjects.some((object) => !object.isCharacter)) store.setMode('object')
   requestRender()
 }
 
@@ -1010,12 +1026,13 @@ function disposeCharacter(id) {
 
 // Load a file and add it as a movable scene object (does NOT replace the
 // character). Selects it so the gizmo is ready. Errors propagate to the caller.
-export async function addObjectFile(file) {
+export async function addObjectFile(file, { animationKey } = {}) {
   const shouldFrameInitialObject = state.characters.size === 0 && useStore.getState().sceneObjects.length === 0
   const parsed = await loadModel(file)
-  const meta = addObject(parsed, parsed.info.name, parsed.info.format, file)
+  const meta = addObject(parsed, parsed.info.name, parsed.info.format, file, animationKey)
   registerObjectMeshes(meta.id, parsed.meshes) // makes its parts pickable/editable in Mesh mode
   useStore.getState().addSceneObject(meta) // sets selectedObjectId = meta.id
+  if (state.characters.size === 0) useStore.getState().setMode('object')
   applyModelMaterials() // pick up the current Look settings immediately
   if (shouldFrameInitialObject) setCameraToObject(meta.id)
   requestRender()
@@ -1062,25 +1079,33 @@ export async function importBVHAuto(file) {
 }
 
 export async function importModelAuto(file) {
-  const probe = await loadModel(file, { autoDecimate: false })
-  const isRigged = !!(probe.info?.bones?.length)
-  disposeObject(probe.root)
-  if (isRigged) {
-    const parsed = await loadModelFile(file, { addNew: true })
-    return { kind: 'character', name: parsed.info.name }
+  useStore.getState().setLoading(true)
+  try {
+    const probe = await loadModel(file, { autoDecimate: false })
+    const isRigged = !!(probe.info?.bones?.length)
+    disposeObject(probe.root)
+    if (isRigged) {
+      const parsed = await loadModelFile(file, { addNew: true })
+      return { kind: 'character', name: parsed.info.name }
+    }
+    const meta = await addObjectFile(file)
+    return { kind: 'object', name: meta.name }
+  } catch (error) {
+    if (useStore.getState().loading) useStore.getState().setLoadError(error.message || String(error))
+    throw error
+  } finally {
+    if (useStore.getState().loading) useStore.getState().setLoading(false)
   }
-  const meta = await addObjectFile(file)
-  return { kind: 'object', name: meta.name }
 }
 
 // Load an image file and add it as a movable reference plane. Like addObjectFile
 // it does NOT replace the character and selects the new plane so the gizmo is
 // ready. Errors propagate to the caller.
-export async function addImageFile(file) {
+export async function addImageFile(file, { animationKey } = {}) {
   const shouldFrameInitialObject = state.characters.size === 0 && useStore.getState().sceneObjects.length === 0
   const { texture, aspect } = await loadImageTexture(file)
   const name = file.name.replace(/\.[^.]+$/, '')
-  const meta = addImage(texture, name, aspect, file)
+  const meta = addImage(texture, name, aspect, file, animationKey)
   useStore.getState().addSceneObject({ ...meta, kind: 'image' })
   if (shouldFrameInitialObject) setCameraToObject(meta.id)
   requestRender()
@@ -1720,6 +1745,8 @@ export function getProjectData() {
     settings: collectSettings(),
     characters,
     objects: getObjectsForSave(s.meshOverrides),
+    objectAnimData: s.objectAnimData,
+    objectAnimDuration: s.objectAnimDuration,
     cameras: getCamerasData(),
     lights: getLightsData(),
     // The orbit view itself (position/target/fov) — restored last in
@@ -1737,6 +1764,9 @@ export function getProjectData() {
 // piece of state a full reset needs to touch.
 export function clearProjectScene() {
   const store = useStore.getState()
+  stopObjectAnimation()
+  store.clearObjectAnimation()
+  store.setObjectAnimDuration(2)
   for (const id of store.sceneObjects.filter((o) => !o.isCharacter).map((o) => o.id)) {
     removeObjectById(id)
   }
@@ -1875,7 +1905,9 @@ export async function applyProjectData(record) {
   for (const obj of record.objects || []) {
     if (!obj.blob) continue
     const file = new File([obj.blob], obj.fileName)
-    const meta = obj.kind === 'image' ? await addImageFile(file) : await addObjectFile(file)
+    const meta = obj.kind === 'image'
+      ? await addImageFile(file, { animationKey: obj.animationKey })
+      : await addObjectFile(file, { animationKey: obj.animationKey })
     // Re-attach to its bone (if any) BEFORE applying the saved transform —
     // attaching reparents-and-preserves-current-world-position, which we
     // then immediately overwrite with the saved (already bone-local) TRS.
@@ -1905,6 +1937,13 @@ export async function applyProjectData(record) {
       if (obj.castShadow === false) setObjectCastShadowById(meta.id, false)
     }
   }
+
+  useStore.setState({
+    objectAnimData: record.objectAnimData || {},
+    objectAnimDuration: record.objectAnimDuration || 2,
+    objectAnimTime: 0,
+    objectAnimPlaying: false,
+  })
 
   // 4b. Recreate the placed cameras (procedural — no blobs involved).
   if (Array.isArray(record.cameras) && record.cameras.length) {
@@ -1950,6 +1989,7 @@ export function disposeCurrentModel() {
   state.activeCharacterId = null
   useStore.getState().clearModel()
   useStore.setState({ characters: {}, characterOrder: [], activeCharacterId: null })
+  if (useStore.getState().sceneObjects.some((object) => !object.isCharacter)) useStore.getState().setMode('object')
 }
 
 // Frame the camera so the whole model fits comfortably in view, and point the

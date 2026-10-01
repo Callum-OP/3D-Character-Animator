@@ -50,4 +50,39 @@ describe('AnimationPanel stays mounted across modelInfo going to null', () => {
     expect(screen.queryByText('Something went wrong')).toBeNull()
     expect(useStore.getState().modelInfo).toBeNull()
   })
+
+  it('offers object animation controls when no character model is loaded', () => {
+    useStore.setState({
+      modelInfo: null,
+      mode: 'object',
+      sceneObjects: [{ id: 11, name: 'Crate', animationKey: 'crate-track', visible: true }],
+      selectedObjectId: 11,
+      selectedObjectIds: [11],
+      objectAnimData: {},
+    })
+    render(React.createElement(App))
+    fireEvent.click(screen.getByText('Animate'))
+
+    expect(screen.getByText('Create an animation')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Key selected object/ })).toBeTruthy()
+  })
+
+  it('shows a play-all action for object-only scenes', () => {
+    useStore.setState({
+      modelInfo: null,
+      mode: 'object',
+      sceneObjects: [{ id: 11, name: 'Crate', animationKey: 'crate-track', visible: true }],
+      selectedObjectId: 11,
+      selectedObjectIds: [11],
+      objectAnimData: { 'crate-track': [{ time: 0, position: [0, 0, 0], quaternion: [0, 0, 0, 1], scale: [1, 1, 1] }] },
+      characterOrder: [],
+      objectAnimDuration: 2,
+      objectAnimPlaying: false,
+    })
+
+    render(React.createElement(App))
+    fireEvent.click(screen.getByText('Animate'))
+
+    expect(screen.getByRole('button', { name: /Play all/i })).toBeTruthy()
+  })
 })

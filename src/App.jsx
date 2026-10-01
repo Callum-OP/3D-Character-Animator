@@ -72,6 +72,7 @@ function AppInner() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const toggleHelp = useStore((s) => s.toggleHelp)
   const mode = useStore((s) => s.mode)
+  const modelInfo = useStore((s) => s.modelInfo)
   const sceneObjects = useStore((s) => s.sceneObjects)
   const sceneCameras = useStore((s) => s.sceneCameras)
   const sceneLights = useStore((s) => s.sceneLights)
@@ -109,26 +110,28 @@ function AppInner() {
         </div>
 
         <div className="sidebar-intro">
-          <span className="eyebrow">Workspace</span>
-          <span className="intro-copy">Create your scene.</span>
+          <span className="eyebrow">{modelInfo || sceneObjects.length ? 'Scene workspace' : 'Start here'}</span>
+          <span className="intro-copy">
+            {modelInfo || sceneObjects.length ? 'Pose, animate, and arrange your scene.' : 'Load any 3D model to get started.'}
+          </span>
         </div>
 
-        <Accordion id="character" icon="🧍" title="Character" subtitle="Load or save a project" defaultOpen>
+        <Accordion id="character" icon="🧍" title="Character" subtitle="Load models and manage projects" defaultOpen>
           <ProjectPanel />
         </Accordion>
 
         {mode === 'bone' && (
-          <Accordion id="pose" icon="🦴" title="Pose" subtitle="Move bones, save poses" defaultOpen>
+          <Accordion id="pose" icon="🦴" title="Pose" subtitle="Shape your character's stance" defaultOpen>
             <BonePanel />
           </Accordion>
         )}
         {mode === 'mesh' && (
-          <Accordion id="mesh" icon="🔺" title="Mesh" subtitle="Edit vertices & parts" defaultOpen>
+          <Accordion id="mesh" icon="🔺" title="Mesh" subtitle="Adjust character parts" defaultOpen>
             <MeshPanel />
           </Accordion>
         )}
 
-        <Accordion id="animate" icon="🎬" title="Animate" subtitle="Keyframes & playback">
+        <Accordion id="animate" icon="🎬" title="Animate" subtitle="Create motion with keyframes">
           <AnimationPanel />
         </Accordion>
 
@@ -136,7 +139,7 @@ function AppInner() {
           id="scene"
           icon="🗂️"
           title="Scene"
-          subtitle="Props, cameras & lights"
+          subtitle="Arrange objects, cameras and lights"
           badge={(sceneObjects.length + sceneCameras.length + sceneLights.length) || null}
         >
           <TabGroup
@@ -149,7 +152,7 @@ function AppInner() {
           />
         </Accordion>
 
-        <Accordion id="look" icon="🎨" title="Look" subtitle="Shading & viewport">
+        <Accordion id="look" icon="🎨" title="Look" subtitle="Materials and viewport style">
           <TabGroup
             defaultTab="material"
             tabs={[
@@ -158,7 +161,7 @@ function AppInner() {
           />
         </Accordion>
 
-        <Accordion id="export" icon="⬇️" title="Export" subtitle="Save images & clips">
+        <Accordion id="export" icon="⬇️" title="Export" subtitle="Render images and animation clips">
           <ExportPanel />
         </Accordion>
       </aside>
