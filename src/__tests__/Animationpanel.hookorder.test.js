@@ -19,7 +19,9 @@ import React from 'react'
 // wasn't caught by the AnimationPanel.hookorder eslint check alone; this
 // test exercises the actual mount/unmount sequence end to end.
 
-vi.mock('../three/Viewport.jsx', () => ({ default: () => <div data-testid="viewport-stub" /> }))
+vi.mock('../three/Viewport.jsx', () => ({
+  default: () => React.createElement('div', { 'data-testid': 'viewport-stub' }),
+}))
 
 import App from '../App.jsx'
 import { useStore } from '../store.js'
@@ -31,7 +33,7 @@ describe('AnimationPanel stays mounted across modelInfo going to null', () => {
       mode: 'bone',
       sceneObjects: [],
     })
-    render(<App />)
+    render(React.createElement(App))
 
     // Open the Animate accordion — its children (AnimationPanel) only mount
     // once it's open (Accordion.jsx renders `{open && children}`).
