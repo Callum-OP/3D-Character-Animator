@@ -153,6 +153,7 @@ function ObjectAnimationEditor() {
   const autoKey = useStore((s) => s.objectAutoKeyMovement)
   const fps = useStore((s) => s.animFps)
   const loop = useStore((s) => s.loop)
+  const characterOrder = useStore((s) => s.characterOrder)
   const sceneObjects = allSceneObjects.filter((object) => !object.isCharacter)
   const selected = sceneObjects.find((object) => object.id === selectedObjectId)
   const keys = selected?.animationKey ? objectAnimData[selected.animationKey] || [] : []
@@ -177,6 +178,26 @@ function ObjectAnimationEditor() {
       return
     }
     if (!startObjectAnimation()) setMessage('Add at least one object keyframe before playing.')
+  }
+
+  function onPlayAll() {
+    const store = useStore.getState()
+    const { started: charactersStarted } = playAllCharacters()
+    const objectTracks = Object.values(store.objectAnimData || {}).filter((keys) => keys && keys.length)
+    const objectStarted = objectTracks.length > 0 ? (startObjectAnimation() > 0 ? 1 : 0) : 0
+    const started = charactersStarted + objectStarted
+    setMessage(
+      started > 1
+        ? `Playing ${started} active animation tracks.`
+        : started === 1
+          ? 'Playing the current scene animation.'
+          : 'Nothing to play — pick a clip or create object motion first.',
+    )
+  }
+
+  function onStopAll() {
+    stopAllCharacters()
+    stopObjectAnimation()
   }
 
   return (
@@ -239,6 +260,15 @@ function ObjectAnimationEditor() {
           Loop
         </label>
       </div>
+
+      {(characterOrder.length > 0 || Object.values(objectAnimData || {}).some((keys) => keys && keys.length)) && (
+        <div className="kf-actions" style={{ marginTop: 8 }}>
+          <button className="btn secondary" onClick={onPlayAll}>
+            ▶ Play all{characterOrder.length > 0 ? ` (${characterOrder.length})` : ''}
+          </button>
+          <button className="btn secondary" onClick={onStopAll}>■ Stop all</button>
+        </div>
+      )}
 
       <label className="toggle-row" style={{ marginTop: 8 }} title="Save a keyframe automatically whenever you finish moving the selected object.">
         <input type="checkbox" checked={autoKey} onChange={(event) => st().setObjectAutoKeyMovement(event.target.checked)} />
