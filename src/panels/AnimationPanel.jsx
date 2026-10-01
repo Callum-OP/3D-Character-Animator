@@ -231,6 +231,53 @@ export default function AnimationPanel() {
     return () => window.removeEventListener('keydown', onKey)
   })
 
+  // While a slot is armed, a change in the picked bone (from clicking a dot
+  // in the viewport) assigns it as that slot's rig-bone target, then hands
+  // bone-picking back to whatever the app's normal mode dictates.
+  //
+  // These three effects must run on every render, even when nothing is
+  // loaded — see the comment on the early returns just below for why moving
+  // them here (above both `if (!modelInfo) return null` and `if (!hasClips
+  // && !hasBones) return null`) is not just tidiness but a correctness fix:
+  // conditionally skipping hooks after an early return is a rules-of-hooks
+  // violation (React error #300, "rendered fewer hooks than expected") the
+  // moment this component re-renders with modelInfo flipping from set to
+  // null on the SAME mounted instance — exactly what happens on Clear, and
+  // during a project reload's brief moment with no character loaded yet.
+  // AnimationPanel stays mounted across both (unlike BonePanel/MeshPanel,
+  // which unmount via their own Accordion's `mode === …` condition in
+  // App.jsx), so it's the one place in this file that previously called
+  // hooks after a conditional return. See Titlebar.blackscreen.test.js.
+  useEffect(() => {
+    if (!pickingSlotKey) return
+    if (!selectedBoneName || selectedBoneName === pickBaselineRef.current) return
+    setSlot(pickingSlotKey, 'target', selectedBoneName)
+    setPickingSlotKey(null)
+    setPosingEnabled(mode === 'bone')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedBoneName])
+
+  // Esc cancels an armed pick without assigning anything.
+  useEffect(() => {
+    if (!pickingSlotKey) return
+    function onKey(e) {
+      if (e.key === 'Escape') onCancelPickTarget()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pickingSlotKey])
+
+  // Leaving the mapping editor (Retarget/Cancel) while a pick is still armed
+  // shouldn't leave bone-picking force-enabled behind.
+  useEffect(() => {
+    if (!mapping && pickingSlotKey) {
+      setPickingSlotKey(null)
+      setPosingEnabled(mode === 'bone')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapping])
+
   if (!modelInfo) return null
 
   const bakedNames = modelInfo.clipNames || []
@@ -463,36 +510,9 @@ export default function AnimationPanel() {
 
   // While a slot is armed, a change in the picked bone (from clicking a dot
   // in the viewport) assigns it as that slot's rig-bone target, then hands
-  // bone-picking back to whatever the app's normal mode dictates.
-  useEffect(() => {
-    if (!pickingSlotKey) return
-    if (!selectedBoneName || selectedBoneName === pickBaselineRef.current) return
-    setSlot(pickingSlotKey, 'target', selectedBoneName)
-    setPickingSlotKey(null)
-    setPosingEnabled(mode === 'bone')
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedBoneName])
-
-  // Esc cancels an armed pick without assigning anything.
-  useEffect(() => {
-    if (!pickingSlotKey) return
-    function onKey(e) {
-      if (e.key === 'Escape') onCancelPickTarget()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pickingSlotKey])
-
-  // Leaving the mapping editor (Retarget/Cancel) while a pick is still armed
-  // shouldn't leave bone-picking force-enabled behind.
-  useEffect(() => {
-    if (!mapping && pickingSlotKey) {
-      setPickingSlotKey(null)
-      setPosingEnabled(mode === 'bone')
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mapping])
+  // bone-picking back to whatever the app's normal mode dictates. (Moved
+  // above the early returns near the top of the component — see the comment
+  // there for why.)
 
   async function onRetarget() {
     setBvhBusy(true)

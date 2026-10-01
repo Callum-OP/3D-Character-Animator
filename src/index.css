@@ -213,6 +213,46 @@ body {
   max-width: 360px;
 }
 
+/* App-level crash screen (AppErrorBoundary in App.jsx) — anything outside
+   the 3D viewport that throws during render lands here instead of a silent
+   black screen. */
+.app-crash {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  text-align: center;
+  padding: 32px;
+  background: var(--bg, #101114);
+  color: var(--text, #fff);
+  z-index: 1000;
+}
+.app-crash p {
+  color: var(--text-dim, #aaa);
+  font-size: 13px;
+  max-width: 480px;
+}
+.app-crash-details {
+  max-width: min(720px, 90vw);
+  max-height: 240px;
+  overflow: auto;
+  text-align: left;
+  font-size: 11px;
+  line-height: 1.5;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  padding: 12px;
+  color: var(--text-dim, #9a9ca6);
+}
+.app-crash-actions {
+  display: flex;
+  gap: 10px;
+}
+
 /* Fallback shown by ViewportErrorBoundary if a render crash is caught */
 .viewport-crash {
   position: absolute;

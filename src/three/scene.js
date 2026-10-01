@@ -96,6 +96,8 @@ import {
   stop,
   getImportedClipsData,
   restoreImportedClips,
+  beginBVHImport,
+  applyBVHRetarget,
 } from './animation.js'
 import {
   initMeshEdit,
@@ -1022,6 +1024,36 @@ export async function addObjectFile(file) {
 // addObjectFile (a static prop) if it isn't. Used by the title bar's unified
 // "Import Model…", so a person never has to know or care which panel a given
 // file "belongs" to.
+// Import a BVH file straight onto the active character, using the
+// retarget's own best-guess bone mapping — no manual mapping-review step
+// (for that, use the Animate panel's own Import BVH, which shows the
+// mapping editor before applying). This does exactly the same store
+// bookkeeping AnimationPanel's onRetarget does right after
+// applyBVHRetarget (registering the clip name, selecting it, resetting
+// playback to paused at t=0) — that bookkeeping is NOT part of
+// applyBVHRetarget itself (animation.js deliberately has no store
+// dependency), so a caller that skips it produces a clip that's retargeted
+// in memory but invisible to the Animate panel's clip list and, because
+// getProjectData saves importedClipNames from the store rather than the
+// mixer's own list, silently missing from "importedClipNames" on save
+// even though the underlying keyframe data (importedClips) is still there.
+// This one shared function is what both the title bar and any future
+// "quick BVH import" entry point should call, so that bookkeeping can't be
+// forgotten again — see Titlebar.bvhimport.test.js.
+export async function importBVHAuto(file) {
+  const guess = await beginBVHImport(file)
+  const { name, matched, total } = await applyBVHRetarget(guess.slots)
+  const s = useStore.getState()
+  s.addImportedClipName(name)
+  s.setPlaybackSource('clip')
+  s.setActiveClipName(name)
+  const duration = selectClip(name, { loop: s.loop, speed: s.speed }, s.animData)
+  s.setDuration(duration)
+  s.setCurrentTime(0)
+  s.setPlayback('paused')
+  return { name, matched, total }
+}
+
 export async function importModelAuto(file) {
   const probe = await loadModel(file, { autoDecimate: false })
   const isRigged = !!(probe.info?.bones?.length)

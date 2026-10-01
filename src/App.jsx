@@ -14,7 +14,50 @@ import HelpOverlay from './panels/HelpOverlay.jsx'
 import Accordion from './panels/Accordion.jsx'
 import TabGroup from './panels/TabGroup.jsx'
 import { useStore } from './store.js'
-import { useState } from 'react'
+import { useState, Component } from 'react'
+
+// Catches a render crash ANYWHERE in the app (outside the 3D viewport, which
+// has its own narrower ViewportErrorBoundary in Viewport.jsx) and shows an
+// actual error message + stack instead of a silent black screen — a crash
+// here previously took the whole React tree down with nothing on screen and
+// nothing to go on (see /areas/3d-character-animator.md's Sep 2026 black-
+// screen reports after a title bar Save/reopen and after Clear). "Try again"
+// just re-renders the same tree, which is fine for a one-off fluke but will
+// immediately crash again if the crash was caused by bad app state (a stale
+// selection pointing at something Clear/reload just removed, say) — "Reload"
+// does a full page reload, which resets React AND the in-memory store to a
+// clean slate and is the more reliable recovery for that case.
+class AppErrorBoundary extends Component {
+  constructor(props) {
+    super(props)
+    this.state = { error: null }
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error }
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error('App-level error boundary caught an exception:', error, errorInfo)
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="app-crash">
+          <h2>Something went wrong</h2>
+          <p>The app hit an error it couldn't recover from on its own. The details below are worth including if you report this.</p>
+          <pre className="app-crash-details">{this.state.error?.stack || this.state.error?.message || String(this.state.error)}</pre>
+          <div className="app-crash-actions">
+            <button className="btn" onClick={() => this.setState({ error: null })}>Try again</button>
+            <button className="btn secondary" onClick={() => window.location.reload()}>Reload</button>
+          </div>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
 
 // Top-level layout: 3D viewport on the left, control sidebar on the right.
 //
@@ -25,7 +68,7 @@ import { useState } from 'react'
 // "Character" and the contextual pose/mesh panel are open by default; the
 // rest expand on demand and remember their open/closed state for the
 // session.
-export default function App() {
+function AppInner() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const toggleHelp = useStore((s) => s.toggleHelp)
   const mode = useStore((s) => s.mode)
@@ -140,5 +183,13 @@ export default function App() {
       <HelpOverlay />
       </div>
     </div>
+  )
+}
+
+export default function App() {
+  return (
+    <AppErrorBoundary>
+      <AppInner />
+    </AppErrorBoundary>
   )
 }

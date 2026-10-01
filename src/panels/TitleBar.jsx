@@ -5,6 +5,7 @@ import {
   applyProjectData,
   clearProjectScene,
   importModelAuto,
+  importBVHAuto,
   exportPNG,
   exportSceneModel,
 } from '../three/scene.js'
@@ -16,7 +17,7 @@ import {
   saveProjectToHandle,
   saveProjectAs,
 } from '../three/projectStore.js'
-import { exportAnimationBVH, beginBVHImport, applyBVHRetarget } from '../three/animation.js'
+import { exportAnimationBVH } from '../three/animation.js'
 import { runExportShot, canRecordVideo } from '../three/exportShot.js'
 import {
   undo,
@@ -192,9 +193,8 @@ export default function TitleBar() {
     e.target.value = ''
     if (!file) return
     withMenuClosed(async () => {
-      const guess = await beginBVHImport(file)
-      const { name, matched, total } = await applyBVHRetarget(guess.slots)
-      setMsg(`Imported "${name}" (${matched}/${total} bones auto-matched) — Play a clip to use it.`)
+      const { name, matched, total } = await importBVHAuto(file)
+      setMsg(`Imported "${name}" (${matched}/${total} bones auto-matched) and selected it as the active clip.`)
     })
   }
 
