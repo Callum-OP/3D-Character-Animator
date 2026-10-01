@@ -1,66 +1,64 @@
 # 3D Character Poser & Animator
 
-A lightweight, browser-based tool for posing, animating, and rasterizing 3D
-characters exported from Blender — built to be **dramatically lighter on memory
-than Blender**, which is the whole point of the app.
+Animare 3D Animator is a lightweight 3D character posing, animation, and scene
+setup tool built for fast character work without the heavy overhead of full DCC
+software. It is designed to import rigged characters or objects created from other 3D tools, pose them, animate them, set up shots, add props and physics, and export
+final frames or video — all locally in the browser or as a desktop app.
 
-Load a rigged character, choose how it's shaded (keeping the flat/anime colours
-picked in Blender), pose the bones or play baked animation clips.
-
-Everything runs client-side. There is no backend, no upload, no account — files
-never leave your machine (they're parsed via `URL.createObjectURL` over the local
-blob).
+The app keeps the original material look, supports character animation and
+mocap retargeting, allows mesh-level edits for accessories and clothing, and adds
+scene staging workflows such as cameras, lighting, scene props, root motion,
+cloth, and ragdoll-style motion. Everything runs client-side: no upload, no
+backend, no account, and no file leaves your machine unless you explicitly export
+it.
 
 ## Features
 
-- **Shading modes** — **Unlit** (raw Blender colours, the default), **Toon**
-  (stepped anime shading with a selectable band count), and **Standard** (original
-  PBR), with a key-light control (intensity / direction / height) for the lit
-  modes. An optional black **outline** (screen-space width, so it stays consistent
-  across model scales) can be layered on any mode, a global **Soften** control
-  lifts toon shadows and thins the outline, and **per-mesh overrides** let you drop
-  the outline and flatten shading on specific parts (e.g. the face).
-- **Interaction modes** — a **View / Pose / Mesh** switcher at the top of the
-  viewport (keys `1`/`2`/`3`). View is navigation only; Pose is the bone workflow;
-  Mesh selects individual parts.
-- **Bone posing** — click a bone (a dot in the viewport or a name in the tree),
-  rotate it with the gizmo to build a pose, and save/load/reset poses as JSON.
-  Filterable bone tree with a deform-only toggle, local/world gizmo space, `Esc` to
-  deselect, and `Ctrl+Z` undo.
-- **Mesh editing** — in Mesh mode, click any part of the character (eyes, hair,
-  clothing…) and move / rotate / resize just that piece (`W`/`E`/`R` switch tools).
-  Parts pivot around their own centre, skinned parts keep following the skeleton
-  (an offset eye still turns with the head), typed X/Y/Z values, per-part reset,
-  and its own `Ctrl+Z` undo.
-- **Animation** — play baked glTF clips with a timeline scrubber, loop toggle, and
-  speed control, or author your own in-app keyframe animation (key the selected
-  bone or all posed bones, adjust duration/fps, scrub, and save/load as JSON).
-  Mesh parts and cameras are keyframable on the same timeline (**Key part** /
-  **Key camera**).
-- **Cameras** — place any number of cameras (each spawns framing the current
-  view), look through one (`0` toggles, `Esc` exits), adjust FOV, keyframe a
-  camera to glide between placements, and add **cuts** so the view hard-switches
-  between cameras at set times during playback — exports and video recordings
-  follow whatever the view shows.
-- **Mocap import** — import a `.bvh` motion-capture file and retarget it onto the
-  loaded rig. Bones are auto-mapped by body part and side so different naming
-  conventions (Mixamo / CMU / Rigify) line up, and a mapping editor lets you fix
-  any bone by hand before retargeting. Any clip can also be applied as a single
-  pose or baked into editable keyframes.
-- **Scene objects** — add props or backgrounds (`.glb`/`.gltf`/`.fbx`) around the
-  character, then move / rotate / resize and cycle between them. Shift-click or
-  Ctrl-click several in the list to select them as a group and move, rotate or
-  resize them all together with one gizmo. Save/load the scene layout, copy &
-  paste poses, and record **root motion** so the character can walk across the
-  scene instead of animating on the spot.
-- **Export** — save a **transparent PNG** at 1×/2×/4× the viewport resolution,
-  record the animation to a **video** (webm) that automatically films through
-  your placed camera (with a **Preview video** button to check the shot first —
-  the panel always says what it will film through), export your animation as
-  **`.bvh`**, and a **Fullscreen** view (Esc to exit) for screen-recording.
-- **Friendly by default** — one-click light presets (Front/Side/Rim/Top), a ground
-  shadow (blob or real cast shadows), per-part show/hide, an optional FPS/memory
-  readout, and a **Help & shortcuts** overlay (press `?`).
+- **Character import and viewing** — load rigged `.glb`, `.gltf`, and `.fbx`
+  characters, inspect the rig, mesh count, bone count, and animation clips, and
+  unload models to free GPU memory when switching assets.
+- **Shading and lighting** — choose **Unlit**, **Toon**, or **Standard** shading,
+  tune key-light direction/intensity/height, apply a screen-space outline,
+  soften toon shading, and override materials per mesh. Lighting presets include
+  Front, Side, Rim, and Top, with optional ground shadowing, different preset styles include flat, anime, cel shaded, realistic and noir.
+- **Pose workflow** — select bones from the viewport or the bone tree, rotate or
+  manipulate them with gizmos, save/load/reset poses as JSON, switch gizmo space,
+  filter deform bones, and undo edits with a consistent pose history.
+- **Mesh editing** — work in Mesh mode to move, rotate, and scale individual
+  parts such as eyes, hair, clothing, accessories, and facial features. Each mesh
+  part has its own transform controls, reset tools, pivot behaviour, and trackable
+  undo history.
+- **Animation** — play baked animation clips or build in-app keyframe
+  animation for bones, parts, cameras, lights, and root motion. Set duration,
+  FPS, scrub the timeline, preview playback, and save/load clips locally.
+- **Cameras and shots** — place multiple cameras from the current view, look
+  through any camera, adjust FOV, keyframe camera motion, and add cuts to switch
+  camera views at specific times. Rendering and video export follow the active
+  camera and cut timing.
+- **Mocap import and retargeting** — import BVH motion capture, auto-map bones by
+  body part and side, manually correct any mapping in the mapping editor, and
+  retarget motion onto the loaded rig. Converted clips can be applied as a pose or
+  baked into editable keyframes.
+- **Scene props and layout** — add backgrounds and props from `.glb`, `.gltf`, or
+  `.fbx`, arrange them in the scene, move/rotate/scale them, select multiple
+  objects together, and save/load scene layouts. The app also supports root
+  motion capture for characters that walk through the scene instead of staying
+  fixed in place.
+- **Cloth and secondary motion** — enable cloth simulation on selected meshes to
+  drape clothing or accessories against the character body, with live simulation
+  controls and a reset/restore workflow. Dangle-bone physics adds lightweight
+  jiggle and secondary motion for hair, accessories, and loose parts.
+- **Ragdoll and physics-based motion** — bake a ragdoll-style animation from a
+  posed character or motion clip, then reuse it as a generated clip with the same
+  timeline and export flow as other animation data.
+- **Light and camera keyframing** — animate lights as part of the same timeline,
+  giving you more control over cinematic presentation and interactive shot setups.
+- **Export pipeline** — export transparent stills at 1×/2×/4× viewport sizes,
+  record WebM video from the current camera view, export animation clips as BVH,
+  and use fullscreen capture for screen recordings and presentation work.
+- **Extra usability tools** — one-click presets, help overlays, per-part hide/
+  show controls, FPS/memory readouts, a reference grid, and a practical UI tuned
+  for quick iteration.
 
 ### Supported file formats
 
