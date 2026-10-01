@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
+import { markHistoryAction, pushUndoBatch, registerUndoHistory } from './undoHistory.js'
 
 // ---------------------------------------------------------------------------
 // Mesh editing (Mesh mode)
@@ -37,7 +38,6 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 // transform, so reset and save/load are exact.
 // ---------------------------------------------------------------------------
 
-const UNDO_LIMIT = 100
 const DRAG_SLOP_PX = 4 // pointer travel above this is an orbit-drag, not a click
 const HIGHLIGHT_COLOR = 0xffc24a // matches the selected bone-dot tint
 
@@ -50,6 +50,7 @@ const m = {
   requestRender: () => {},
   onSelect: null, // (meshUuid|null) => void — reports picks up to the store
   onChange: null, // () => void — any transform edit; the panel re-reads values
+  onVisibilityChange: null,
 
   transform: null, // TransformControls (move/rotate/scale)
   helper: null,
@@ -78,6 +79,8 @@ const _ndc = new THREE.Vector2()
 const _pos = new THREE.Vector3()
 const _quat = new THREE.Quaternion()
 
+registerUndoHistory('mesh', () => ({ undo: m.undoStack, redo: m.redoStack }))
+
 export function initMeshEdit(refs) {
   m.scene = refs.scene
   m.camera = refs.camera
@@ -86,6 +89,7 @@ export function initMeshEdit(refs) {
   m.requestRender = refs.requestRender
   m.onSelect = refs.onSelect
   m.onChange = refs.onChange || null
+  m.onVisibilityChange = refs.onVisibilityChange || null
 
   const transform = new TransformControls(m.camera, m.renderer.domElement)
   transform.setMode('translate')
@@ -406,8 +410,11 @@ export function selectMesh(uuid) {
 
 export function setMeshVisible(uuid, visible) {
   const mesh = uuid ? m.meshByUuid.get(uuid) || null : null
-  if (!mesh) return
+  if (!mesh || mesh.visible === visible) return
+  const beforeVisible = mesh.visible
   mesh.visible = visible
+  pushUndo([{ mesh, beforeVisible, afterVisible: visible }])
+  notifyChange()
   m.requestRender()
 }
 
@@ -531,7 +538,8 @@ export function hasMeshEdits() {
 export function undo() {
   const batch = m.undoStack.pop()
   if (!batch) return
-  for (const { obj, before } of batch) applySnapshot(obj, before)
+  for (const entry of batch) applyHistoryEntry(entry, 'before')
+  markHistoryAction(batch)
   m.redoStack.push(batch)
   notifyChange()
   m.requestRender()
@@ -540,7 +548,8 @@ export function undo() {
 export function redo() {
   const batch = m.redoStack.pop()
   if (!batch) return
-  for (const { obj, after } of batch) applySnapshot(obj, after)
+  for (const entry of batch) applyHistoryEntry(entry, 'after')
+  markHistoryAction(batch)
   m.undoStack.push(batch)
   notifyChange()
   m.requestRender()
@@ -691,6 +700,16 @@ function applySnapshot(obj, snap) {
   obj.scale.copy(snap.scale)
 }
 
+function applyHistoryEntry(entry, side) {
+  if (entry.mesh) {
+    const visible = entry[`${side}Visible`]
+    entry.mesh.visible = visible
+    if (m.onVisibilityChange) m.onVisibilityChange(entry.mesh.uuid, visible)
+    return
+  }
+  applySnapshot(entry.obj, entry[side])
+}
+
 function isAtRest(obj, rest) {
   return (
     obj.position.equals(rest.position) &&
@@ -704,9 +723,7 @@ function sameSnapshot(a, b) {
 }
 
 function pushUndo(batch) {
-  m.undoStack.push(batch)
-  m.redoStack = []
-  if (m.undoStack.length > UNDO_LIMIT) m.undoStack.shift()
+  pushUndoBatch('mesh', batch)
 }
 
 function pushUndoIfChanged(obj, before) {

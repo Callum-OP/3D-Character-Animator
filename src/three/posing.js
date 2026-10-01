@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
+import { markHistoryAction, pushUndoBatch, registerUndoHistory } from './undoHistory.js'
 import { poseToJSON, validatePose } from './poses.js'
 import { classifyBone, detectSide, buildSlotFallbackMap } from './bvh.js'
 import { showMarquee, hideMarquee, pointInRect } from './marquee.js'
@@ -27,7 +28,6 @@ import {
 //   cleared whenever a fresh edit lands.
 // ---------------------------------------------------------------------------
 
-const UNDO_LIMIT = 100
 const SNAP_DEG = 15 // rotation snap increment (checkbox or Shift-hold)
 const DOT_SIZE_PX = 9 // bone dot diameter in pixels (screen-constant)
 const PICK_THRESHOLD_PX = 12 // click must land within this of a dot to select
@@ -214,6 +214,8 @@ const p = {
   snapDeg: null, // rotation snap increment in degrees (null = free rotate)
   shiftHeld: false, // Shift temporarily inverts the snap setting
 }
+
+registerUndoHistory('bone', () => ({ undo: p.undoStack, redo: p.redoStack }))
 
 // Classify a bone into its canonical humanoid slot for the CURRENTLY BOUND
 // model: try the exact per-bone name classifier first (works for any rig with
@@ -1191,6 +1193,7 @@ export function undo() {
   const batch = p.undoStack.pop()
   if (!batch) return
   for (const { bone, before } of batch) bone.quaternion.copy(before)
+  markHistoryAction(batch)
   p.redoStack.push(batch)
   updateBoneHelpers()
   notifyPoseChange()
@@ -1201,6 +1204,7 @@ export function redo() {
   const batch = p.redoStack.pop()
   if (!batch) return
   for (const { bone, after } of batch) bone.quaternion.copy(after)
+  markHistoryAction(batch)
   p.undoStack.push(batch)
   updateBoneHelpers()
   notifyPoseChange()
@@ -1245,9 +1249,7 @@ export function disposePosing() {
 // --- internals ---------------------------------------------------------------
 
 function pushUndo(batch) {
-  p.undoStack.push(batch)
-  p.redoStack = [] // a fresh edit invalidates the redo history
-  if (p.undoStack.length > UNDO_LIMIT) p.undoStack.shift()
+  pushUndoBatch('bone', batch)
 }
 
 function notifyPoseChange() {

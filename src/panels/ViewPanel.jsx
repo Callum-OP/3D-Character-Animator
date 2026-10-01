@@ -20,6 +20,7 @@ export default function ViewPanel() {
   const performanceResolution = useStore((s) => s.performanceResolution)
   const performanceEffects = useStore((s) => s.performanceEffects)
   const autoDecimate = useStore((s) => s.autoDecimate)
+  const undoLimit = useStore((s) => s.undoLimit)
   const setShowGrid = useStore((s) => s.setShowGrid)
   const setShowGround = useStore((s) => s.setShowGround)
   const setShowShadow = useStore((s) => s.setShowShadow)
@@ -35,6 +36,7 @@ export default function ViewPanel() {
   const setPerformanceResolution = useStore((s) => s.setPerformanceResolution)
   const setPerformanceEffects = useStore((s) => s.setPerformanceEffects)
   const setAutoDecimate = useStore((s) => s.setAutoDecimate)
+  const setUndoLimit = useStore((s) => s.setUndoLimit)
 
   return (
     <div className="panel">
@@ -233,6 +235,19 @@ export default function ViewPanel() {
       <p className="panel-hint">
         Static meshes are reduced in stages at 150k, 500k and 1m vertices. Existing models are not changed.
       </p>
+
+      <label className="toggle-row" title="Maximum undo and redo steps retained for each editing mode">
+        <span>Undo history limit</span>
+        <input
+          type="number"
+          min="1"
+          max="1000"
+          step="1"
+          className="undo-limit-input"
+          value={undoLimit}
+          onChange={(e) => setUndoLimit(e.target.value)}
+        />
+      </label>
     </div>
   )
 }

@@ -1,5 +1,6 @@
 import { useStore } from '../store.js'
 import EditableValue from './EditableValue.jsx'
+import { setMeshVisibleByUuid } from '../three/scene.js'
 
 // Side-panel section: material mode + key-light controls.
 // Unlit shows raw Blender colours (no lighting), Cartoon adds stepped anime
@@ -328,7 +329,6 @@ export default function MaterialPanel() {
   const setRimFollowLightId = useStore((s) => s.setRimFollowLightId)
   const setMeshOutline = useStore((s) => s.setMeshOutline)
   const setMeshShading = useStore((s) => s.setMeshShading)
-  const setMeshVisible = useStore((s) => s.setMeshVisible)
   const setMeshOutlineWidth = useStore((s) => s.setMeshOutlineWidth)
   const setLightLink = useStore((s) => s.setLightLink)
   const applyStylePreset = useStore((s) => s.applyStylePreset)
@@ -746,7 +746,7 @@ export default function MaterialPanel() {
                     <input
                       type="checkbox"
                       checked={visible}
-                      onChange={(e) => setMeshVisible(m.uuid, e.target.checked)}
+                      onChange={(e) => setMeshVisibleByUuid(m.uuid, e.target.checked)}
                     />
                   </label>
                   <label className="mesh-cell" title="Draw an outline around this part">

@@ -20,15 +20,18 @@ import {
 import { exportAnimationBVH } from '../three/animation.js'
 import { runExportShot, canRecordVideo } from '../three/exportShot.js'
 import {
-  undo,
-  redo,
   getPose,
   applyPose,
   resetPose,
 } from '../three/posing.js'
-import { undo as undoObject, redo as redoObject } from '../three/objects.js'
-import { undo as undoMeshEdit, redo as redoMeshEdit } from '../three/meshedit.js'
-import { resolveUndoTarget } from '../three/undoPriority.js'
+import { performUndo, performRedo } from '../three/undoPriority.js'
+import {
+  canCopyCurrentEdit,
+  canPasteCurrentEdit,
+  copyCurrentEdit,
+  pasteCurrentEdit,
+  toggleCurrentVisibility,
+} from '../three/editClipboard.js'
 
 // A VS Code-style menu row that sits above the viewport/sidebar and shares
 // the same window-drag strip as the native minimize/maximize/close buttons
@@ -62,6 +65,9 @@ export default function TitleBar() {
   const exportScale = useStore((s) => s.exportScale)
   const exportPoseMode = 'baked' // matches the Export panel's default; adjust there for other modes
   const mode = useStore((s) => s.mode)
+  const selectedObjectId = useStore((s) => s.selectedObjectId)
+  const selectedMeshUuid = useStore((s) => s.selectedMeshUuid)
+  const meshOverrides = useStore((s) => s.meshOverrides)
   const poseClipboard = useStore((s) => s.poseClipboard)
   const setPoseClipboard = useStore((s) => s.setPoseClipboard)
   const canRecord = canRecordVideo()
@@ -237,25 +243,16 @@ export default function TitleBar() {
       runExportShot({ record: true, name, onStatus: setMsg })
     })
 
-  // ---- Edit: Undo/Redo (context-aware, same priority as Ctrl+Z in the
-  // viewport) + pose Copy/Paste/Cut. Object/mesh-level copy-paste isn't
-  // built yet — only pose copy/paste exists today (see BonePanel), so those
-  // are the ones exposed here for now. ----
+  // ---- Edit: shared undo/redo history and mode-aware copy/paste. ----
 
   function onUndo() {
     setOpenMenu(null)
-    const target = resolveUndoTarget(useStore.getState())
-    if (target === 'object') undoObject()
-    else if (target === 'mesh') undoMeshEdit()
-    else undo()
+    performUndo(useStore.getState())
   }
 
   function onRedo() {
     setOpenMenu(null)
-    const target = resolveUndoTarget(useStore.getState())
-    if (target === 'object') redoObject()
-    else if (target === 'mesh') redoMeshEdit()
-    else redo()
+    performRedo(useStore.getState())
   }
 
   function onCopyPose() {
@@ -277,6 +274,36 @@ export default function TitleBar() {
     resetPose()
     setMsg('Pose cut (copied, then reset to rest).')
   }
+
+  function onCopyCurrentEdit() {
+    setOpenMenu(null)
+    const copied = copyCurrentEdit()
+    if (copied) setMsg(`${copied === 'pose' ? 'Pose' : copied === 'mesh' ? 'Mesh transform' : 'Object'} copied.`)
+  }
+
+  function onPasteCurrentEdit() {
+    setOpenMenu(null)
+    const pasted = pasteCurrentEdit()
+    if (!pasted) return
+    if (pasted.type === 'pose') {
+      const { applied, missing } = pasted.result
+      setMsg(`Pasted ${applied} bone(s)` + (missing.length ? `, ${missing.length} skipped.` : '.'))
+    } else if (pasted.type === 'object') {
+      setMsg(`Pasted "${pasted.result.name}".`)
+    } else {
+      setMsg('Mesh transform pasted.')
+    }
+  }
+
+  const visibilityObject = sceneObjects.find((entry) => entry.id === selectedObjectId)
+  const visibilityAvailable = mode === 'mesh'
+    ? !!selectedMeshUuid
+    : mode === 'object' && !!visibilityObject
+  const currentVisible = mode === 'mesh'
+    ? meshOverrides[selectedMeshUuid]?.visible !== false
+    : visibilityObject?.visible !== false
+  const editCopyAvailable = canCopyCurrentEdit()
+  const editPasteAvailable = canPasteCurrentEdit()
 
   const poseToolsAvailable = hasCharacter && mode === 'bone'
 
@@ -367,13 +394,22 @@ export default function TitleBar() {
               <button role="menuitem" onClick={onUndo}>Undo</button>
               <button role="menuitem" onClick={onRedo}>Redo</button>
               <div className="titlebar-dropdown-sep" />
-              <button role="menuitem" onClick={onCopyPose} disabled={!poseToolsAvailable} title={poseToolsAvailable ? "Copy the active character's current pose" : 'Switch to Pose mode with a character loaded'}>
-                Copy Pose
-              </button>
-              <button role="menuitem" onClick={onCutPose} disabled={!poseToolsAvailable}>Cut Pose</button>
-              <button role="menuitem" onClick={onPastePose} disabled={!poseToolsAvailable || !poseClipboard}>Paste Pose</button>
-              <div className="titlebar-dropdown-sep" />
-              <div className="titlebar-dropdown-label">Object/mesh copy-paste isn't built yet</div>
+              {poseToolsAvailable ? (
+                <>
+                  <button role="menuitem" onClick={onCopyPose}>Copy Pose</button>
+                  <button role="menuitem" onClick={onCutPose}>Cut Pose</button>
+                  <button role="menuitem" onClick={onPastePose} disabled={!poseClipboard}>Paste Pose</button>
+                </>
+              ) : (
+                <>
+                  <button role="menuitem" onClick={onCopyCurrentEdit} disabled={!editCopyAvailable}>
+                    {mode === 'object' ? 'Copy Object' : mode === 'mesh' ? 'Copy Mesh Transform' : 'Copy'}
+                  </button>
+                  <button role="menuitem" onClick={onPasteCurrentEdit} disabled={!editPasteAvailable}>
+                    {mode === 'object' ? 'Paste Object' : mode === 'mesh' ? 'Paste Mesh Transform' : 'Paste'}
+                  </button>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -394,6 +430,16 @@ export default function TitleBar() {
           )}
         </div>
       </div>
+
+      {visibilityAvailable && (
+        <button
+          className="titlebar-menu-btn titlebar-visibility-btn"
+          title={`${currentVisible ? 'Hide' : 'Unhide'} selected ${mode === 'mesh' ? 'mesh part' : 'object'} (H)`}
+          onClick={() => toggleCurrentVisibility()}
+        >
+          {currentVisible ? 'Hide' : 'Unhide'}
+        </button>
+      )}
 
       {/* Empty drag strip: lets the window be dragged from anywhere along the
           bar that isn't a menu button, and leaves clear space under the

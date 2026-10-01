@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeAll } from 'vitest'
 import * as THREE from 'three'
+import { useStore } from '../store.js'
+import { copyCurrentEdit, pasteCurrentEdit, toggleCurrentVisibility } from '../three/editClipboard.js'
+import { performUndo, performRedo } from '../three/undoPriority.js'
 import {
   initMeshEdit,
   setMeshEditModel,
@@ -16,6 +19,7 @@ import {
 // move/resize in Mesh mode needs to actually undo.
 describe('mesh-part editing: undo/redo and reset', () => {
   let uuid
+  let meshRef
 
   beforeAll(() => {
     const scene = new THREE.Scene()
@@ -26,6 +30,7 @@ describe('mesh-part editing: undo/redo and reset', () => {
 
     const geo = new THREE.BoxGeometry(1, 1, 1)
     const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial())
+    meshRef = mesh
     mesh.name = 'Hair'
     const parent = new THREE.Group()
     parent.add(mesh)
@@ -79,5 +84,25 @@ describe('mesh-part editing: undo/redo and reset', () => {
     // if the no-op above had pushed a phantom entry, this undo would land on
     // that instead of back at rest.
     expect(hasMeshEdits()).toBe(false)
+  })
+
+  it('undoes and redoes mesh-part visibility', () => {
+    useStore.setState({ mode: 'mesh', selectedMeshUuid: uuid, meshOverrides: {} })
+    toggleCurrentVisibility()
+    expect(meshRef.visible).toBe(false)
+    performUndo(useStore.getState())
+    expect(meshRef.visible).toBe(true)
+    performRedo(useStore.getState())
+    expect(meshRef.visible).toBe(false)
+  })
+
+  it('copies a mesh transform and pastes it onto the selected part', () => {
+    useStore.setState({ mode: 'mesh', selectedMeshUuid: uuid })
+    setMeshDelta(uuid, { offset: [0.35, 0, 0], scale: [1.5, 1.5, 1.5] })
+    expect(copyCurrentEdit()).toBe('mesh')
+    resetMesh(uuid)
+    expect(pasteCurrentEdit().type).toBe('mesh')
+    expect(getMeshDelta(uuid).offset[0]).toBeCloseTo(0.35)
+    expect(getMeshDelta(uuid).scale).toEqual([1.5, 1.5, 1.5])
   })
 })

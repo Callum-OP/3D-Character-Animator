@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import { disposeObject } from './loadModel.js'
+import { markHistoryAction, pushUndoBatch, registerUndoHistory } from './undoHistory.js'
 import {
   recordOriginalMaterials,
   applyMaterials,
@@ -46,6 +47,7 @@ const o = {
   redoStack: [],
   dragBefore: null, // selected root's TRS at gizmo-drag start (single-select path)
   onMoveCommit: null, // (root) => void — fired after a gizmo drag actually changes a root's TRS
+  onVisibilityChange: null,
   gizmoGrabbed: false, // true once per interaction that actually MOVED something via the gizmo (see objectChange)
   draggingViaGizmo: false, // true between dragging-changed(true) and (false) — not by itself proof of an actual move
   lastStyleOpts: { mode: 'unlit', toonSteps: 3, soften: 0, colorGrading: 'none', overrides: {} }, // last scene-wide style, for 'auto' objects
@@ -63,6 +65,8 @@ const o = {
   multiDragBefore: null, // [{root, before}] snapshots at drag start, for undo
 }
 
+let objectClipboard = null
+
 // Register a callback fired whenever a move/rotate/scale drag finishes having
 // actually changed something. Used for "auto-key movement" — automatically
 // saving a root-motion keyframe when the character is dragged mid-clip.
@@ -70,7 +74,11 @@ export function setOnObjectMoveCommit(fn) {
   o.onMoveCommit = fn || null
 }
 
-const UNDO_LIMIT = 100
+export function setOnObjectVisibilityChange(fn) {
+  o.onVisibilityChange = fn || null
+}
+
+registerUndoHistory('object', () => ({ undo: o.undoStack, redo: o.redoStack }))
 
 export function initObjects(refs) {
   o.scene = refs.scene
@@ -324,11 +332,82 @@ export function detachObjectsForCharacter(characterId) {
 }
 
 // Show or hide an object (prop, image, or the character) without removing it.
-export function setObjectVisible(id, visible) {
+export function setObjectVisible(id, visible, recordHistory = true) {
   const root = rootFor(id)
   if (!root) return
+  const before = recordHistory ? snapshot(root) : null
   root.visible = visible
+  if (before) pushUndoIfChanged(root, before)
   o.requestRender()
+}
+
+export function copyObject(id) {
+  const entry = o.objects.find((candidate) => candidate.id === id)
+  if (!entry) return false
+  if (objectClipboard) disposeObject(objectClipboard.root)
+  const originalMaterials = entry.materials
+    ? entry.meshes.map((mesh) => entry.materials.originals.get(mesh))
+    : null
+  const root = cloneObjectRoot(entry.root, originalMaterials)
+  entry.root.updateWorldMatrix(true, false)
+  entry.root.matrixWorld.decompose(root.position, root.quaternion, root.scale)
+  objectClipboard = {
+    root,
+    name: entry.name,
+    format: entry.format,
+    kind: entry.kind,
+    file: entry.file,
+    style: entry.style,
+    outline: entry.outline,
+    castShadow: entry.kind === 'image' ? false : entry.castShadow !== false,
+  }
+  return true
+}
+
+export function pasteObject() {
+  if (!objectClipboard || !o.scene) return null
+  const source = objectClipboard
+  const root = cloneObjectRoot(source.root)
+  root.position.x += 0.25
+  const meshes = []
+  root.traverse((obj) => {
+    if (!obj.isMesh) return
+    meshes.push(obj)
+    obj.castShadow = source.kind === 'image' ? false : source.castShadow !== false
+    obj.receiveShadow = source.kind !== 'image'
+  })
+  o.scene.add(root)
+  const id = ++idCounter
+  let materials = null
+  if (source.kind !== 'image') {
+    const materialModel = { meshes }
+    recordOriginalMaterials(materialModel)
+    materials = materialModel.materials
+  }
+  const entry = {
+    id,
+    name: `${source.name} Copy`,
+    format: source.format,
+    root,
+    kind: source.kind,
+    file: source.file || null,
+    meshes,
+    materials,
+    style: source.style || 'auto',
+    outline: !!source.outline,
+    castShadow: source.kind === 'image' ? false : source.castShadow !== false,
+    attachedBoneName: null,
+    attachedCharacterId: null,
+    attachedBone: null,
+  }
+  o.objects.push(entry)
+  if (entry.kind === 'model') applyObjectStyle(entry)
+  o.requestRender()
+  return { id, name: entry.name, format: entry.format, kind: entry.kind }
+}
+
+export function hasCopiedObject() {
+  return !!objectClipboard
 }
 
 export function removeObject(id) {
@@ -445,6 +524,29 @@ function disposePropMaterials(entry) {
   if (!entry.materials) return
   restoreOriginalMaterials({ meshes: entry.meshes, materials: entry.materials })
   disposeGeneratedMaterials({ meshes: entry.meshes, materials: entry.materials })
+}
+
+function cloneObjectRoot(source, originalMaterials = null) {
+  const root = source.clone(true)
+  let meshIndex = 0
+  root.traverse((obj) => {
+    if (!obj.isMesh) return
+    const sourceMaterial = originalMaterials?.[meshIndex] || obj.material
+    meshIndex++
+    if (obj.geometry) obj.geometry = obj.geometry.clone()
+    const cloneMaterial = (material) => {
+      if (!material) return material
+      const copy = material.clone()
+      for (const key of Object.keys(copy)) {
+        if (copy[key]?.isTexture) copy[key] = copy[key].clone()
+      }
+      return copy
+    }
+    obj.material = Array.isArray(sourceMaterial)
+      ? sourceMaterial.map(cloneMaterial)
+      : cloneMaterial(sourceMaterial)
+  })
+  return root
 }
 
 // --- Object-mode click-to-pick --------------------------------------------
@@ -641,9 +743,7 @@ function commitMultiDragUndo() {
     .map(({ root, before }) => ({ root, before, after: snapshot(root) }))
     .filter(({ before, after }) => !sameSnapshot(before, after))
   if (!entries.length) return
-  o.undoStack.push({ entries })
-  o.redoStack = []
-  if (o.undoStack.length > UNDO_LIMIT) o.undoStack.shift()
+  pushUndoBatch('object', { entries })
   if (o.onMoveCommit) {
     for (const { root } of entries) o.onMoveCommit(root)
   }
@@ -744,6 +844,7 @@ export function undo() {
   const batch = o.undoStack.pop()
   if (!batch) return
   for (const e of batch.entries) applySnapshot(e.root, e.before)
+  markHistoryAction(batch)
   o.redoStack.push(batch)
   o.requestRender()
 }
@@ -752,6 +853,7 @@ export function redo() {
   const batch = o.redoStack.pop()
   if (!batch) return
   for (const e of batch.entries) applySnapshot(e.root, e.after)
+  markHistoryAction(batch)
   o.undoStack.push(batch)
   o.requestRender()
 }
@@ -761,6 +863,7 @@ function snapshot(root) {
     position: root.position.clone(),
     quaternion: root.quaternion.clone(),
     scale: root.scale.clone(),
+    visible: root.visible,
   }
 }
 
@@ -768,18 +871,31 @@ function applySnapshot(root, snap) {
   root.position.copy(snap.position)
   root.quaternion.copy(snap.quaternion)
   root.scale.copy(snap.scale)
+  if (snap.visible != null && root.visible !== snap.visible) {
+    root.visible = snap.visible
+    const id = idForRoot(root)
+    if (id != null && o.onVisibilityChange) o.onVisibilityChange(id, snap.visible)
+  }
 }
 
 function sameSnapshot(a, b) {
-  return a.position.equals(b.position) && a.quaternion.equals(b.quaternion) && a.scale.equals(b.scale)
+  return a.position.equals(b.position) && a.quaternion.equals(b.quaternion) &&
+    a.scale.equals(b.scale) && a.visible === b.visible
+}
+
+function idForRoot(root) {
+  const object = o.objects.find((entry) => entry.root === root)
+  if (object) return object.id
+  for (const [id, entry] of o.characterRoots) {
+    if (entry.root === root) return id
+  }
+  return null
 }
 
 function pushUndoIfChanged(root, before) {
   const after = snapshot(root)
   if (sameSnapshot(before, after)) return
-  o.undoStack.push({ entries: [{ root, before, after }] })
-  o.redoStack = [] // a fresh edit invalidates any redo history
-  if (o.undoStack.length > UNDO_LIMIT) o.undoStack.shift()
+  pushUndoBatch('object', { entries: [{ root, before, after }] })
 }
 
 function commitDragUndo() {

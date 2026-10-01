@@ -41,33 +41,32 @@ import {
   setBoneGizmoMode,
   setBoneViewMode,
   setShowAllPartHighlights,
-  undo,
-  redo,
   mirrorPose,
   symmetrisePose,
 } from './posing.js'
 import {
   selectMesh,
-  setMeshVisible as setMeshVisibleInScene,
   setMeshEditEnabled,
   setMeshGizmoMode,
-  undo as undoMeshEdit,
-  redo as redoMeshEdit,
 } from './meshedit.js'
 import { setLimitsEnabled } from './limits.js'
 import {
   selectObjects,
   setObjectMode,
   setObjectsEnabled,
-  undo as undoObject,
-  redo as redoObject,
   consumeObjectGizmoGrab,
   pickObjectId,
   pickObjectIdsInRect,
   isCharacterId,
 } from './objects.js'
 import { showMarquee, hideMarquee } from './marquee.js'
-import { resolveUndoTarget } from './undoPriority.js'
+import { performUndo, performRedo } from './undoPriority.js'
+import {
+  copyCurrentEdit,
+  pasteCurrentEdit,
+  cutCurrentEdit,
+  toggleCurrentVisibility,
+} from './editClipboard.js'
 import { selectCamera, setCameraGizmoMode, consumeCameraGizmoGrab, pickCameraId } from './cameras.js'
 import { selectLight, consumeLightGizmoGrab } from './lights.js'
 import StatsOverlay from '../panels/StatsOverlay.jsx'
@@ -577,8 +576,8 @@ function Viewport() {
   // Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y redoes it. Ignored while typing in an input.
   useEffect(() => {
     function onKeyDown(e) {
-      const tag = e.target.tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      const tag = e.target?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target?.isContentEditable) return
       const s = useStore.getState()
       const plainKey = !e.ctrlKey && !e.metaKey && !e.altKey
       if (e.key === '?') {
@@ -601,28 +600,23 @@ function Viewport() {
         s.setMeshGizmoMode(GIZMO_KEYS[e.key.toLowerCase()])
       } else if (plainKey && s.mode === 'object' && GIZMO_KEYS[e.key.toLowerCase()]) {
         s.setObjectMode(GIZMO_KEYS[e.key.toLowerCase()])
-      } else if (plainKey && s.mode === 'mesh' && e.key.toLowerCase() === 'h' && s.selectedMeshUuid) {
-        // H hides the selected part (Blender-style); pressing it again on the
-        // same part (re-selected from the list, since a hidden mesh can't be
-        // clicked in the viewport) shows it again.
-        const hidden = s.meshOverrides[s.selectedMeshUuid]?.visible === false
-        s.setMeshVisible(s.selectedMeshUuid, hidden)
-        setMeshVisibleInScene(s.selectedMeshUuid, hidden)
+      } else if (plainKey && e.key.toLowerCase() === 'h') {
+        toggleCurrentVisibility(s)
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
+        if (copyCurrentEdit(s)) e.preventDefault()
+      } else if ((e.ctrlKey || e.metaKey) && ['v', 'V', 'p', 'P'].includes(e.key)) {
+        if (pasteCurrentEdit(s)) e.preventDefault()
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === 'x' || e.key === 'X')) {
+        if (cutCurrentEdit(s)) e.preventDefault()
       } else if (
         (e.ctrlKey || e.metaKey) &&
         (e.key === 'y' || e.key === 'Y' || ((e.key === 'z' || e.key === 'Z') && e.shiftKey))
       ) {
         e.preventDefault()
-        const redoTarget = resolveUndoTarget(s)
-        if (redoTarget === 'object') redoObject()
-        else if (redoTarget === 'mesh') redoMeshEdit()
-        else redo()
+        performRedo(s)
       } else if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
         e.preventDefault()
-        const undoTarget = resolveUndoTarget(s)
-        if (undoTarget === 'object') undoObject()
-        else if (undoTarget === 'mesh') undoMeshEdit()
-        else undo()
+        performUndo(s)
       }
     }
     window.addEventListener('keydown', onKeyDown)
@@ -689,7 +683,7 @@ function Viewport() {
         </div>
       )}
 
-      {hasCharacter && (
+      {hasCharacter && mode === 'bone' && (
         <div className="pose-toolbar" aria-label="Whole pose actions">
           <button
             className="pose-toolbar-btn"

@@ -5,8 +5,6 @@ import {
   resetBone,
   applyPose,
   getPose,
-  undo,
-  redo,
   getBoneEulerDelta,
   setBoneEulerDelta,
   beginBoneAdjust,
@@ -16,6 +14,7 @@ import {
 } from '../three/posing.js'
 import { downloadPose, readPoseFile } from '../three/poses.js'
 import { collectActiveDangleDescendants, resetActiveDangle } from '../three/scene.js'
+import { performUndo, performRedo } from '../three/undoPriority.js'
 import EditableValue from './EditableValue.jsx'
 
 const AXES = ['x', 'y', 'z']
@@ -264,10 +263,10 @@ export default function BonePanel() {
         <button className="btn secondary" onClick={() => resetPose()} title="Straighten every joint back to the rest pose">
           Reset
         </button>
-        <button className="btn secondary" onClick={() => undo()} title="Undo the last pose change (Ctrl+Z)">
+        <button className="btn secondary" onClick={() => performUndo(useStore.getState())} title="Undo the latest edit (Ctrl+Z)">
           Undo
         </button>
-        <button className="btn secondary" onClick={() => redo()} title="Redo an undone pose change (Ctrl+Shift+Z)">
+        <button className="btn secondary" onClick={() => performRedo(useStore.getState())} title="Redo the latest undone edit (Ctrl+Shift+Z)">
           Redo
         </button>
         <button className="btn secondary" onClick={onCopy} title="Copy the current pose">

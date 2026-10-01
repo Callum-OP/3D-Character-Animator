@@ -111,12 +111,16 @@ import {
   resumeMeshEdit,
   registerObjectMeshes,
   unregisterObjectMeshes,
+  setMeshVisible as setMeshVisibleInScene,
   setViewCamera as setMeshEditViewCamera,
 } from './meshedit.js'
 import {
   initObjects,
   addObject,
   addImage,
+  copyObject,
+  pasteObject,
+  hasCopiedObject,
   setObjectVisible,
   setObjectTransform,
   setObjectStyle,
@@ -128,6 +132,7 @@ import {
   disposeObjects,
   setCharacterObject,
   setOnObjectMoveCommit,
+  setOnObjectVisibilityChange,
   clearCharacterObject,
   getObjectsData,
   applyObjectsData,
@@ -386,6 +391,7 @@ export function initScene(container) {
     requestRender,
     onSelect: (uuid) => useStore.getState().setSelectedMeshUuid(uuid),
     onChange: () => useStore.getState().bumpMeshVersion(),
+    onVisibilityChange: (uuid, visible) => useStore.getState().setMeshVisible(uuid, visible),
   })
 
   // --- Animation (baked clips + in-app keyframing) ---
@@ -421,6 +427,7 @@ export function initScene(container) {
 
   // --- Scene objects (props / backgrounds with a move/rotate/scale gizmo) ---
   initObjects({ scene, camera, renderer, controls, requestRender })
+  setOnObjectVisibilityChange((id, visible) => useStore.getState().setObjectVisible(id, visible))
   // "Auto-save movement": when the toggle is on and the object being dragged
   // is the active character, drop a root-motion keyframe at the playhead —
   // makes a mocap/borrowed clip "your own" without a separate manual step.
@@ -1110,9 +1117,30 @@ export function removeObjectById(id) {
 }
 
 // Show/hide a prop, image, or the character (updates the scene + the store).
-export function setObjectVisibleById(id, visible) {
-  setObjectVisible(id, visible)
+export function setObjectVisibleById(id, visible, recordHistory = true) {
+  setObjectVisible(id, visible, recordHistory)
   useStore.getState().setObjectVisible(id, visible)
+}
+
+export function setMeshVisibleByUuid(uuid, visible) {
+  setMeshVisibleInScene(uuid, visible)
+  useStore.getState().setMeshVisible(uuid, visible)
+}
+
+export function copyObjectById(id) {
+  return copyObject(id)
+}
+
+export function pasteCopiedObject() {
+  const meta = pasteObject()
+  if (!meta) return null
+  useStore.getState().addSceneObject(meta)
+  registerObjectMeshes(meta.id, getObjectMeshesById(meta.id))
+  return meta
+}
+
+export function hasCopiedObjectData() {
+  return hasCopiedObject()
 }
 
 // Style/outline a prop (updates the scene + the store). 'auto' matches the
@@ -1853,7 +1881,7 @@ export async function applyProjectData(record) {
     // then immediately overwrite with the saved (already bone-local) TRS.
     if (obj.attachedBoneName) setObjectAttachmentById(meta.id, obj.attachedBoneName)
     setObjectTransform(meta.id, obj.transform)
-    setObjectVisibleById(meta.id, obj.visible !== false)
+    setObjectVisibleById(meta.id, obj.visible !== false, false)
     // Restore this prop's per-part (mesh) overrides — saved keyed by mesh
     // INDEX (see objectMeshOverridesByIndex in objects.js), remapped here
     // onto whatever fresh uuids this load just gave its meshes.

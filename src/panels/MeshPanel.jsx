@@ -6,8 +6,6 @@ import {
   getMeshKeyValue,
   resetMesh,
   resetAllMeshes,
-  undo,
-  redo,
   getLinkedMorphTargets,
   getMeshIndex,
   getMeshByUuid,
@@ -16,8 +14,10 @@ import {
 import {
   getCurrentModel,
   requestRender,
+  setMeshVisibleByUuid,
 } from '../three/scene.js'
 import { getObjectMeshesInfo } from '../three/objects.js'
+import { performUndo, performRedo } from '../three/undoPriority.js'
 import {
   FABRIC_PRESETS,
   isClothEnabled,
@@ -56,7 +56,6 @@ export default function MeshPanel() {
   const meshGizmoMode = useStore((s) => s.meshGizmoMode)
   const setMeshGizmoMode = useStore((s) => s.setMeshGizmoMode)
   const meshOverrides = useStore((s) => s.meshOverrides)
-  const setMeshVisible = useStore((s) => s.setMeshVisible)
   const linkedShapeKeys = useStore((s) => s.linkedShapeKeys)
   const setLinkedShapeKeys = useStore((s) => s.setLinkedShapeKeys)
   const animData = useStore((s) => s.animData)
@@ -209,10 +208,10 @@ export default function MeshPanel() {
       </div>
 
       <div className="kf-actions" style={{ marginTop: 8 }}>
-        <button className="btn secondary" onClick={undo} title="Undo the last part edit (Ctrl+Z)">
+        <button className="btn secondary" onClick={() => performUndo(useStore.getState())} title="Undo the latest edit (Ctrl+Z)">
           Undo
         </button>
-        <button className="btn secondary" onClick={redo} title="Redo it (Ctrl+Shift+Z)">
+        <button className="btn secondary" onClick={() => performRedo(useStore.getState())} title="Redo the latest undone edit (Ctrl+Shift+Z)">
           Redo
         </button>
         <button
@@ -492,7 +491,7 @@ export default function MeshPanel() {
                 title={hidden ? 'Show this part' : 'Hide this part'}
                 onClick={(e) => {
                   e.stopPropagation()
-                  setMeshVisible(mesh.uuid, hidden)
+                  setMeshVisibleByUuid(mesh.uuid, hidden)
                 }}
               >
                 {hidden ? '🙈' : '👁'}
@@ -526,7 +525,7 @@ export default function MeshPanel() {
                   title={hidden ? 'Show this part' : 'Hide this part'}
                   onClick={(e) => {
                     e.stopPropagation()
-                    setMeshVisible(part.uuid, hidden)
+                    setMeshVisibleByUuid(part.uuid, hidden)
                   }}
                 >
                   {hidden ? '🙈' : '👁'}

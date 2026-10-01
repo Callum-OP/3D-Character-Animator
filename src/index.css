@@ -143,6 +143,10 @@ body {
   -webkit-app-region: drag;
 }
 
+.titlebar-visibility-btn {
+  -webkit-app-region: no-drag;
+}
+
 .titlebar-dropdown {
   position: absolute;
   top: 100%;
@@ -736,6 +740,11 @@ body {
 
 .toggle-row input {
   accent-color: var(--accent);
+}
+
+.undo-limit-input {
+  width: 72px;
+  margin-left: auto;
 }
 
 .error {

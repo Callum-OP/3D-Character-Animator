@@ -95,7 +95,13 @@ export default function HelpOverlay() {
                 <b>W / E / R</b> — move, rotate or resize (Object &amp; Mesh mode)
               </li>
               <li>
-                <b>H</b> — hide / show the selected part (Mesh mode)
+                <b>H</b> — hide / show the selected object, character or mesh part
+              </li>
+              <li>
+                <b>Ctrl / Cmd + C</b> — copy the selected pose, object or mesh transform
+              </li>
+              <li>
+                <b>Ctrl / Cmd + P or V</b> — paste into the current mode
               </li>
               <li>
                 <b>0</b> — look through a camera / back to the free view
@@ -104,10 +110,10 @@ export default function HelpOverlay() {
                 <b>Esc</b> — deselect / close
               </li>
               <li>
-                <b>Ctrl / Cmd + Z</b> — undo a pose or part change
+                <b>Ctrl / Cmd + Z</b> — undo the latest edit across modes
               </li>
               <li>
-                <b>Ctrl / Cmd + Shift + Z</b> — redo it
+                <b>Ctrl / Cmd + Shift + Z</b> — redo the latest undone edit
               </li>
               <li>
                 <b>Shift</b> (while rotating) — snap to 15° steps

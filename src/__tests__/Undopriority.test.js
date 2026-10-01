@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import { resolveUndoTarget } from '../three/undoPriority.js'
+import {
+  markHistoryAction,
+  pushUndoBatch,
+  registerUndoHistory,
+  setUndoHistoryLimit,
+} from '../three/undoHistory.js'
+import { useStore } from '../store.js'
 
 // Regression coverage for "object movements or resize don't undo". The root
 // cause: mode defaults to 'bone' and stays there for most sessions (people
@@ -22,5 +29,36 @@ describe('resolveUndoTarget', () => {
 
   it('defaults to bone history for any other/unknown mode with nothing selected', () => {
     expect(resolveUndoTarget({ selectedObjectId: null, mode: 'view' })).toBe('bone')
+  })
+
+  it('routes interleaved undo and redo by latest history and applies the cap', () => {
+    const bone = { undo: [], redo: [] }
+    const mesh = { undo: [], redo: [] }
+    registerUndoHistory('bone', () => bone)
+    registerUndoHistory('mesh', () => mesh)
+    setUndoHistoryLimit(2)
+
+    pushUndoBatch('bone', { id: 'pose' })
+    pushUndoBatch('mesh', { id: 'mesh-edit' })
+    expect(resolveUndoTarget({ mode: 'bone' })).toBe('mesh')
+
+    const undoneMeshEdit = mesh.undo.pop()
+    markHistoryAction(undoneMeshEdit)
+    mesh.redo.push(undoneMeshEdit)
+    expect(resolveUndoTarget({ mode: 'bone' })).toBe('bone')
+    expect(resolveUndoTarget({ mode: 'bone' }, 'redo')).toBe('mesh')
+
+    pushUndoBatch('bone', { id: 'pose-2' })
+    expect(mesh.redo).toHaveLength(0)
+    pushUndoBatch('bone', { id: 'pose-3' })
+    expect(bone.undo.map((batch) => batch.id)).toEqual(['pose-2', 'pose-3'])
+    setUndoHistoryLimit(100)
+  })
+
+  it('persists the history limit as an app-wide preference', () => {
+    useStore.getState().setUndoLimit(18)
+    expect(useStore.getState().undoLimit).toBe(18)
+    expect(JSON.parse(localStorage.getItem('3d-animator-app-settings')).undoLimit).toBe(18)
+    useStore.getState().setUndoLimit(100)
   })
 })

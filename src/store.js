@@ -1,9 +1,11 @@
 import { create } from 'zustand'
+import { setUndoHistoryLimit } from './three/undoHistory.js'
 
 // These are app-wide preferences rather than project content. They are kept
 // in their own local-storage record so opening a project cannot overwrite the
 // user's preferred viewport and look defaults.
 const APP_SETTINGS_FIELDS = [
+  'undoLimit',
   'showGrid', 'showGround', 'solidBackground', 'backgroundColor', 'showShadow',
   'shadowMapping', 'shadowSoftness', 'shadowStrength', 'showStats',
   'performanceMode', 'performanceBackgroundObjects', 'performanceLowPoly',
@@ -271,6 +273,7 @@ export const useStore = create((set) => ({
   shadowSoftness: 0.15, // 0 = crisp/hard edge, 1 = very soft/blurred
   shadowStrength: 0.15, // 0 = barely visible, 1 = solid black
   showStats: false, // FPS / memory readout overlay
+  undoLimit: 100,
   performanceMode: false, // reserved master for performance controls
   performanceBackgroundObjects: false, // hide distant props from the viewport; characters are unaffected
   performanceLowPoly: false, // stronger global viewport resolution reduction
@@ -287,6 +290,10 @@ export const useStore = create((set) => ({
   setShadowSoftness: (shadowSoftness) => set({ shadowSoftness }),
   setShadowStrength: (shadowStrength) => set({ shadowStrength }),
   setShowStats: (showStats) => set({ showStats }),
+  setUndoLimit: (undoLimit) => {
+    const normalized = setUndoHistoryLimit(undoLimit)
+    set({ undoLimit: normalized })
+  },
   setPerformanceMode: (performanceMode) => set({ performanceMode }),
   setPerformanceBackgroundObjects: (performanceBackgroundObjects) => set({ performanceBackgroundObjects }),
   setPerformanceLowPoly: (performanceLowPoly) => set({ performanceLowPoly }),
@@ -1130,6 +1137,8 @@ if (typeof localStorage !== 'undefined') {
   try {
     const saved = JSON.parse(localStorage.getItem(APP_SETTINGS_STORAGE_KEY) || 'null')
     if (saved && typeof saved === 'object') useStore.setState(saved)
+    const undoLimit = setUndoHistoryLimit(useStore.getState().undoLimit)
+    useStore.setState({ undoLimit })
   } catch {
     // Ignore malformed preferences and continue with the built-in defaults.
   }
