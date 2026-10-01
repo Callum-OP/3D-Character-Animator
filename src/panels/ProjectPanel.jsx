@@ -57,6 +57,7 @@ export default function ProjectPanel() {
   // store (not local state) so the title bar's File menu shares it.
   const current = useStore((s) => s.currentProject)
   const setCurrent = useStore((s) => s.setCurrentProject)
+  const lastProjectSave = useStore((s) => s.lastProjectSave)
   const [recents, setRecents] = useState([])
   const [msg, setMsg] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -77,6 +78,12 @@ export default function ProjectPanel() {
     // projectStore.js.
     requestPersistentStorage()
   }, [])
+
+  useEffect(() => {
+    if (!lastProjectSave) return
+    setMsg(`Saved “${lastProjectSave.name}”.`)
+    refreshRecents()
+  }, [lastProjectSave])
 
   function onPickModel(e) {
     const file = e.target.files && e.target.files[0]
@@ -215,7 +222,7 @@ export default function ProjectPanel() {
     }
   }
 
-  // ---- Clear (New Project) ----
+  // ---- New Project ----
   // Same end state as the app just having been (re)launched — every
   // character, prop/image, camera and light gone, no file "open" any more —
   // without actually reloading the window. Handy as a manual reset when you
@@ -223,12 +230,12 @@ export default function ProjectPanel() {
   // valve since it runs the exact same Three.js disposal path as opening a
   // different project (geometries/textures/materials freed, not just
   // detached).
-  function onClear() {
+  function onNewProject() {
     if (busy) return
-    if (!window.confirm('Clear the current scene? Anything unsaved will be lost.')) return
+    if (!window.confirm('Start a new project? Anything unsaved will be lost.')) return
     clearProjectScene()
     setCurrent(null)
-    setMsg('Cleared. Starting a new, empty scene.')
+    setMsg('Starting a new, empty project.')
   }
 
   return (
@@ -366,8 +373,8 @@ export default function ProjectPanel() {
           <button className="btn secondary" onClick={onSaveAs} disabled={busy} title="Save to a new file / location">
             Save As…
           </button>
-          <button className="btn secondary" onClick={onClear} disabled={busy} title="Empty the current scene and start a new, blank project">
-            Clear
+          <button className="btn secondary" onClick={onNewProject} disabled={busy} title="Start a new, blank project">
+            New Project
           </button>
         </div>
 

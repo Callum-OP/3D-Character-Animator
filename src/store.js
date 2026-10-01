@@ -128,6 +128,8 @@ export const useStore = create((set) => ({
   currentProject: null,
   setCurrentProject: (value) =>
     set((s) => ({ currentProject: typeof value === 'function' ? value(s.currentProject) : value })),
+  lastProjectSave: null,
+  setLastProjectSave: (value) => set({ lastProjectSave: value }),
 
   // ---- Multi-character registry ----
   // characters: { [id]: { ...CHARACTER_FIELDS } } — snapshot for every

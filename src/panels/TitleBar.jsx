@@ -8,6 +8,8 @@ import {
   importBVHAuto,
   exportPNG,
   exportSceneModel,
+  playAllCharacters,
+  stopAllCharacters,
 } from '../three/scene.js'
 import {
   hasFileSystemAccess,
@@ -17,7 +19,7 @@ import {
   saveProjectToHandle,
   saveProjectAs,
 } from '../three/projectStore.js'
-import { exportAnimationBVH } from '../three/animation.js'
+import { exportAnimationBVH, play, pause, stop, selectClip, selectEdit } from '../three/animation.js'
 import { runExportShot, canRecordVideo } from '../three/exportShot.js'
 import {
   getPose,
@@ -45,8 +47,8 @@ import {
 // opening from here and saving from the sidebar (or vice versa) stay in
 // sync — there's only one place that actually owns the file I/O. Likewise
 // video export shares exportShot.js with the Export panel.
-export default function TitleBar() {
-  const [openMenu, setOpenMenu] = useState(null) // 'file' | 'edit' | 'help' | null
+export default function TitleBar({ onOpenSettings }) {
+  const [openMenu, setOpenMenu] = useState(null) // 'file' | 'edit' | 'animation' | 'help' | null
   const [fileView, setFileView] = useState('root') // 'root' | 'import' | 'export'
   const [recents, setRecents] = useState([])
   const [busy, setBusy] = useState(false)
@@ -57,6 +59,7 @@ export default function TitleBar() {
 
   const current = useStore((s) => s.currentProject)
   const setCurrent = useStore((s) => s.setCurrentProject)
+  const setLastProjectSave = useStore((s) => s.setLastProjectSave)
   const toggleHelp = useStore((s) => s.toggleHelp)
   const hasCharacter = useStore((s) => !!s.modelInfo)
   const sceneObjects = useStore((s) => s.sceneObjects)
@@ -70,6 +73,11 @@ export default function TitleBar() {
   const meshOverrides = useStore((s) => s.meshOverrides)
   const poseClipboard = useStore((s) => s.poseClipboard)
   const setPoseClipboard = useStore((s) => s.setPoseClipboard)
+  const playback = useStore((s) => s.playback)
+  const playbackSource = useStore((s) => s.playbackSource)
+  const activeClipName = useStore((s) => s.activeClipName)
+  const loop = useStore((s) => s.loop)
+  const speed = useStore((s) => s.speed)
   const canRecord = canRecordVideo()
 
   useEffect(() => {
@@ -121,7 +129,7 @@ export default function TitleBar() {
     }
   }
 
-  // ---- File: Open / Save / Save As / Clear / Recent ----
+  // ---- File: New Project / Open / Save / Save As / Recent ----
 
   const onOpen = () =>
     withMenuClosed(async () => {
@@ -145,27 +153,66 @@ export default function TitleBar() {
     withMenuClosed(async () => {
       const data = getProjectData()
       if (current?.handle) {
-        const { name } = await saveProjectToHandle(current.handle, { name: current.name, ...data })
+        const { name, savedAt } = await saveProjectToHandle(current.handle, { name: current.name, ...data })
         setCurrent((c) => ({ ...c, name }))
+        setLastProjectSave({ name, savedAt })
       } else {
-        const { handle, name } = await saveProjectAs({ name: current?.name || 'Untitled', ...data }, current?.name)
+        const { handle, name, savedAt } = await saveProjectAs({ name: current?.name || 'Untitled', ...data }, current?.name)
         setCurrent({ name, handle })
+        setLastProjectSave({ name, savedAt })
       }
     })
 
   const onSaveAs = () =>
     withMenuClosed(async () => {
       const data = getProjectData()
-      const { handle, name } = await saveProjectAs({ name: current?.name || 'Untitled', ...data }, current?.name)
+      const { handle, name, savedAt } = await saveProjectAs({ name: current?.name || 'Untitled', ...data }, current?.name)
       setCurrent({ name, handle })
+      setLastProjectSave({ name, savedAt })
     })
 
-  const onClear = () =>
+  const onNewProject = () =>
     withMenuClosed(async () => {
-      if (!window.confirm('Clear the current scene? Anything unsaved will be lost.')) return
+      if (!window.confirm('Start a new project? Anything unsaved will be lost.')) return
       clearProjectScene()
       setCurrent(null)
     })
+
+  function onPlay() {
+    setOpenMenu(null)
+    const s = useStore.getState()
+    if (playbackSource === 'edit') {
+      s.setDuration(selectEdit(s.animData, s.animDuration, { loop, speed }))
+    } else if (playback === 'stopped' && activeClipName) {
+      s.setDuration(selectClip(activeClipName, { loop, speed }, s.animData))
+    }
+    play()
+    s.setPlayback('playing')
+  }
+
+  function onPause() {
+    setOpenMenu(null)
+    pause()
+    useStore.getState().setPlayback('paused')
+  }
+
+  function onStop() {
+    setOpenMenu(null)
+    stop()
+    useStore.getState().setPlayback('stopped')
+    useStore.getState().setCurrentTime(0)
+  }
+
+  function onPlayAll() {
+    setOpenMenu(null)
+    const { started } = playAllCharacters()
+    setMsg(started ? `Playing ${started} character${started === 1 ? '' : 's'}.` : 'Nothing to play — select a clip or create an animation first.')
+  }
+
+  function onStopAll() {
+    setOpenMenu(null)
+    stopAllCharacters()
+  }
 
   // ---- File > Import As ----
   // One picker for models: whichever file is chosen, importModelAuto (in
@@ -327,10 +374,11 @@ export default function TitleBar() {
           </button>
           {openMenu === 'file' && fileView === 'root' && (
             <div className="titlebar-dropdown" role="menu">
+              <button role="menuitem" onClick={onNewProject} disabled={!hasSceneContent && !current}>New Project</button>
+              <div className="titlebar-dropdown-sep" />
               <button role="menuitem" onClick={onOpen}>Open Project…</button>
               <button role="menuitem" onClick={onSave} disabled={!hasSceneContent && !current}>Save</button>
               <button role="menuitem" onClick={onSaveAs} disabled={!hasSceneContent && !current}>Save As…</button>
-              <button role="menuitem" onClick={onClear} disabled={!hasSceneContent}>Clear</button>
               <div className="titlebar-dropdown-sep" />
               <button role="menuitem" onClick={() => setFileView('import')}>Import As… ▸</button>
               <button role="menuitem" onClick={() => setFileView('export')} disabled={!hasSceneContent}>Export As… ▸</button>
@@ -351,6 +399,8 @@ export default function TitleBar() {
                   ))}
                 </>
               )}
+              <div className="titlebar-dropdown-sep" />
+              <button role="menuitem" onClick={() => { setOpenMenu(null); onOpenSettings?.() }}>Settings</button>
             </div>
           )}
           {openMenu === 'file' && fileView === 'import' && (
@@ -410,6 +460,25 @@ export default function TitleBar() {
                   </button>
                 </>
               )}
+            </div>
+          )}
+        </div>
+        
+        <div className="titlebar-menu-item">
+          <button
+            className={'titlebar-menu-btn' + (openMenu === 'animation' ? ' active' : '')}
+            onClick={() => toggleMenu('animation')}
+          >
+            Animation
+          </button>
+          {openMenu === 'animation' && (
+            <div className="titlebar-dropdown" role="menu">
+              <button role="menuitem" onClick={onPlay} disabled={!hasCharacter}>Play</button>
+              <button role="menuitem" onClick={onPlayAll} disabled={!hasCharacter}>Play All Characters</button>
+              <button role="menuitem" onClick={onPause} disabled={!hasCharacter || playback !== 'playing'}>Pause</button>
+              <button role="menuitem" onClick={onStop} disabled={!hasCharacter}>Stop</button>
+              <div className="titlebar-dropdown-sep" />
+              <button role="menuitem" onClick={onStopAll} disabled={!hasCharacter}>Stop All Characters</button>
             </div>
           )}
         </div>

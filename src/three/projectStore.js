@@ -337,12 +337,13 @@ export async function saveProjectToHandle(handle, record) {
   await writeToHandle(handle, record)
   if (isNativeHandle(handle)) {
     const name = await nativeBridge().baseName(handle)
-    await upsertRecent({ name, handle })
-    return { handle, name }
+    const recent = await upsertRecent({ name, handle })
+    return { handle, name, savedAt: recent.savedAt }
   }
   const file = await handle.getFile().catch(() => null)
-  await upsertRecent({ name: file?.name || record.name || 'project', handle })
-  return { handle, name: file?.name || record.name }
+  const name = file?.name || record.name || 'project'
+  const recent = await upsertRecent({ name, handle })
+  return { handle, name, savedAt: recent.savedAt }
 }
 
 // "Save As…" — always shows a picker for a new (or different) location.
@@ -361,8 +362,8 @@ export async function saveProjectAs(record, suggestedName) {
     }
     await writeToHandle(filePath, record)
     const name = await native.baseName(filePath)
-    await upsertRecent({ name, handle: filePath })
-    return { handle: filePath, name }
+    const recent = await upsertRecent({ name, handle: filePath })
+    return { handle: filePath, name, savedAt: recent.savedAt }
   }
 
   if (hasFileSystemAccess()) {
@@ -372,8 +373,8 @@ export async function saveProjectAs(record, suggestedName) {
       types: [{ description: '3D Character Animator project', accept: { [MIME]: [FILE_EXT] } }],
     })
     await writeToHandle(handle, record)
-    await upsertRecent({ name: handle.name, handle })
-    return { handle, name: handle.name }
+    const recent = await upsertRecent({ name: handle.name, handle })
+    return { handle, name: handle.name, savedAt: recent.savedAt }
   }
 
   // Fallback: classic forced download. There's no handle to remember, so
@@ -389,6 +390,6 @@ export async function saveProjectAs(record, suggestedName) {
   a.download = name
   a.click()
   URL.revokeObjectURL(url)
-  await upsertRecent({ name, handle: null })
-  return { handle: null, name }
+  const recent = await upsertRecent({ name, handle: null })
+  return { handle: null, name, savedAt: recent.savedAt }
 }

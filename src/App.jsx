@@ -78,7 +78,7 @@ function AppInner() {
 
   return (
     <div className="app-shell">
-      <TitleBar />
+      <TitleBar onOpenSettings={() => setSettingsOpen(true)} />
       <div className={'app' + (settingsOpen ? ' settings-is-open' : '')}>
         <Viewport />
       <aside className="sidebar">

@@ -39,10 +39,13 @@ describe('projectStore recents list (IndexedDB)', () => {
     // System Access API (as in jsdom) — that still exercises the base64
     // blob-embedding path, it just can't be read back without a handle, so
     // we only assert it doesn't throw and does register a recent entry.
-    await expect(saveProjectAs(original, 'Beta')).resolves.toMatchObject({ handle: null })
+    const saved = await saveProjectAs(original, 'Beta')
+    expect(saved).toMatchObject({ handle: null, name: 'Beta.3dcp' })
 
     const recents = await listRecentProjects()
-    expect(recents.some((r) => r.name.startsWith('Beta'))).toBe(true)
+    const recent = recents.find((r) => r.name.startsWith('Beta'))
+    expect(recent).toBeTruthy()
+    expect(saved.savedAt).toBe(recent.savedAt)
   })
 
   it('lists recents newest-first', async () => {
