@@ -390,7 +390,7 @@ function trackNodeName(trackName) {
 export function getClipBoneCompatibility(name) {
   const clip = findClip(name)
   if (!clip || !a.model) return null
-  const boneNames = new Set((a.model.bones || []).map((b) => b.name))
+  const boneNames = new Set((a.model.bones || []).flatMap((b) => [b.name, b.uuid]))
   const meshUUIDs = new Set((a.model.meshes || []).map((m) => m.uuid))
   let total = 0
   let matched = 0

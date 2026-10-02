@@ -1,17 +1,17 @@
 import { describe, it, expect } from 'vitest'
-import { classifyBone } from '../three/bvh.js'
+import { buildNameMatch, buildSlotMapping, classifyBone } from '../three/bvh.js'
 
 // classifyBone is the single point of truth for matching mocap/rig bone
 // names across incompatible naming schemes onto the app's canonical
 // humanoid slots. It's grown several special cases by hand over time
 // (Rigify DEF- prefixes, MCH-/ORG- exclusions, dot-stripping quirks from
-// GLTFLoader, sided "Hip" vs. unsided "Hips", plain "Leg" meaning shin in
-// Mixamo…) — exactly the kind of logic where a future tweak for one rig can
+// GLTFLoader, sided "Hip" vs. unsided "Hips", plain "Leg" meaning shin…) —
+// exactly the kind of logic where a future tweak for one rig can
 // silently break another. Table-driven so adding a new rig's names later is
 // a one-line addition, not a new test.
 describe('classifyBone', () => {
   const cases = [
-    // --- Mixamo ---
+    // --- Common humanoid rig names ---
     ['Hips', 'hips'],
     ['Spine', 'spine'],
     ['Spine1', 'spine'],
@@ -26,7 +26,7 @@ describe('classifyBone', () => {
     ['RightForeArm', 'lowerArm.R'],
     ['RightHand', 'hand.R'],
     ['LeftUpLeg', 'upperLeg.L'],
-    ['LeftLeg', 'lowerLeg.L'], // plain "Leg" == shin in Mixamo
+    ['LeftLeg', 'lowerLeg.L'], // plain "Leg" == shin
     ['LeftFoot', 'foot.L'],
     ['LeftToeBase', 'toe.L'],
     ['RightUpLeg', 'upperLeg.R'],
@@ -93,5 +93,66 @@ describe('classifyBone', () => {
     // "Collar" contains "l" but isn't a left-sided anything on its own —
     // guards against an over-eager side-detection regex.
     expect(classifyBone('Collar')).not.toBe('shoulder.L')
+  })
+
+  it('does not map side-specific chest joints as the central chest slot', () => {
+    expect(classifyBone('right_chest_aux')).toBeNull()
+    expect(classifyBone('left_chest_aux')).toBeNull()
+  })
+
+  it('prefers anatomical bones over corrective joints when building slots', () => {
+    const targetNames = [
+      'root_joint',
+      'pelvis_main',
+      'spine_main_01',
+      'spine_main_02',
+      'spine_main_03',
+      'spine_main_04',
+      'spine_main_05',
+      'right_chest_aux',
+      'left_chest_aux',
+      'left_spine_fix_1',
+      'right_spine_fix_1',
+      'left_ankle_fix_1',
+      'left_foot',
+    ]
+    const sourceNames = ['Hips', 'Spine', 'Chest', 'LeftAnkle']
+    const slots = buildSlotMapping(targetNames, sourceNames)
+    const selected = Object.fromEntries(slots.map(({ key, target }) => [key, target]))
+
+    expect(selected.hips).toBe('pelvis_main')
+    expect(selected.spine).toBe('spine_main_01')
+    expect(selected.chest).toBe('spine_main_05')
+    expect(selected['foot.L']).toBe('left_foot')
+  })
+
+  it('matches finger segments across naming conventions', () => {
+    const targetBones = [
+      'left_arm',
+      'thumb_01_l',
+      'thumb_02_l',
+      'thumb_03_l',
+      'index_metacarpal_l',
+      'index_01_l',
+      'thumb_01_r',
+      'thumb_01_l_end',
+    ]
+    const sourceBones = [
+      'source:LeftArm',
+      'source:LeftHandThumb1',
+      'source:LeftHandThumb2',
+      'source:LeftHandThumb3',
+      'source:LeftHandIndex1',
+      'source:RightHandThumb1',
+    ]
+
+    expect(buildNameMatch(targetBones, sourceBones)).toEqual({
+      left_arm: 'source:LeftArm',
+      thumb_01_l: 'source:LeftHandThumb1',
+      thumb_02_l: 'source:LeftHandThumb2',
+      thumb_03_l: 'source:LeftHandThumb3',
+      index_01_l: 'source:LeftHandIndex1',
+      thumb_01_r: 'source:RightHandThumb1',
+    })
   })
 })

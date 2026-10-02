@@ -1922,7 +1922,7 @@ function buildPartOverlays(model) {
   if (p.partMeshes.length === 0) {
     console.warn(
       '[posing] Body Parts view: no regions could be built for this model — its bone names may not ' +
-        'match any recognised naming convention (Mixamo/Rigify/CMU/etc.), or its mesh has no skinning ' +
+        'match any recognised bone naming convention, or its mesh has no skinning ' +
         'weights. The classic Bones (dot) view is unaffected.',
     )
   }

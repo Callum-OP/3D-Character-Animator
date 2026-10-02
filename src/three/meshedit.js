@@ -301,7 +301,7 @@ export function getMeshIndex(mesh) {
 // rig/base mesh, or just conventionally named "Head", "Body", …).
 //
 // Names are only trusted when they're UNIQUE on the character. Exporters
-// (Blender/Mixamo GLTF especially) routinely leave several parts sharing the
+// (some glTF exporters especially) routinely leave several parts sharing the
 // same name, or no name at all — matching by a non-unique name would collapse
 // two different meshes' data onto one key, or send an edit to the wrong part
 // entirely (e.g. a moving keyframe meant for a hat pivot silently landing on

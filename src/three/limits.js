@@ -14,7 +14,7 @@ import { classifyBone } from './bvh.js'
 // swing = how far the bone's own axis may tip away from its rest direction
 // (a cone, or an asymmetric cone for hinge joints), twist = how far it may
 // roll around that axis. Hinge direction comes from the character's facing
-// (+Z of the model root — the glTF/Mixamo convention): knees bend backward,
+// (+Z of the model root — the common glTF humanoid convention): knees bend backward,
 // elbows bend forward.
 //
 // This module only CHECKS and CLAMPS rotations — deciding when to apply them

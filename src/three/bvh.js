@@ -14,8 +14,8 @@ import * as THREE from 'three'
 // snaps limbs to the mocap skeleton's axes and makes them point the wrong way.
 //
 // The hard part is the bone-name map. Different pipelines share no substrings
-// (Mixamo "LeftForeArm", CMU "LeftElbow", Rigify "DEF-forearm.L"), so plain
-// string matching fails. Instead we classify every bone into a canonical
+// (for example "LeftForeArm", "LeftElbow", "DEF-forearm.L"), so plain string
+// matching fails. Instead we classify every bone into a canonical
 // HUMANOID SLOT (by keyword + side) and join the two skeletons on those slots.
 // The user can then fix any slot by hand before retargeting.
 //
@@ -86,7 +86,7 @@ export function classifyBone(rawName) {
   // unsided Hips/pelvis is the root (handled far below).
   if (side && /hip/.test(c)) return sided('upperLeg')
   if (/lowerleg|shin|calf|knee/.test(c)) return sided('lowerLeg')
-  if (/leg/.test(c)) return sided('lowerLeg') // plain "leg" (e.g. Mixamo LeftLeg = shin)
+  if (/leg/.test(c)) return sided('lowerLeg') // plain "leg" (e.g. LeftLeg = shin)
 
   // Arms & hands.
   if (/forearm|lowerarm|elbow/.test(c)) return sided('lowerArm')
@@ -97,7 +97,7 @@ export function classifyBone(rawName) {
   // Torso / head (usually unsided).
   if (/head/.test(c)) return 'head'
   if (/neck/.test(c)) return 'neck'
-  if (/chest|upperchest/.test(c)) return 'chest'
+  if (!side && /chest|upperchest/.test(c)) return 'chest'
   if (/spine|torso|abdomen/.test(c)) return 'spine'
   if (/hip|pelvis|root/.test(c)) return 'hips'
 
@@ -110,13 +110,14 @@ export function classifyBone(rawName) {
 // mocap applied there swings the whole body around the wrong pivot.
 function slotQuality(key, name) {
   const def = /^def-/i.test(name) ? 2 : 0
-  if (key === 'hips') return def + (/hip|pelvis/i.test(name) ? 2 : 1)
-  return def + 2
+  const corrective = /(?:^|[_-])(?:fix|armor)(?:[_-]|\d|$)/i.test(name) ? -2 : 0
+  if (key === 'hips') return def + corrective + (/hip|pelvis/i.test(name) ? 2 : 1)
+  return def + corrective + 2
 }
 
 // Best bone per slot, keyed by slot. Multi-bone spine chains are resolved by
 // hierarchy order: the first spine bone fills 'spine' and (when the rig has no
-// explicit chest bone) the last one fills 'chest' — Mixamo's Spine/Spine1/Spine2
+// explicit chest bone) the last one fills 'chest' — Spine/Spine1/Spine2
 // and game rigs' spine_01..spine_05 both land sensibly.
 function firstBySlot(names) {
   const out = {}
@@ -132,8 +133,9 @@ function firstBySlot(names) {
       quality[key] = q
     }
   }
-  const defSpines = spines.filter((s) => /^def-/i.test(s))
-  const chain = defSpines.length ? defSpines : spines
+  const anatomicalSpines = spines.filter((s) => !/(?:^|[_-])(?:fix|armor)(?:[_-]|\d|$)/i.test(s))
+  const defSpines = anatomicalSpines.filter((s) => /^def-/i.test(s))
+  const chain = defSpines.length ? defSpines : anatomicalSpines.length ? anatomicalSpines : spines
   if (chain.length) {
     out.spine = chain[0] // names arrive parent-first, so [0] is the lowest
     if (!out.chest && chain.length > 1) out.chest = chain[chain.length - 1]
@@ -184,7 +186,7 @@ function chainEnd(start, bones) {
 }
 
 // Pick whichever of X or Z shows the bigger spread across a set of world
-// positions. Left/right isn't always on the same axis — BVH/Mixamo-style
+// positions. Left/right isn't always on the same axis — BVH-style
 // rigs conventionally split on X, but plenty of others (this function was
 // hardened against a Minecraft-style rig that does) split on Z instead.
 function lateralAxis(positions) {
@@ -399,8 +401,8 @@ function resolveNeckAndArms(chest, real, worldPos, assign) {
 // Some exports (Sketchfab/game-engine hex-named rigs — "bone_0059_0312" and
 // the like) carry no naming signal at all, so classifyBone(name) returns null
 // for literally every bone; without a fallback, such a model gets no Body
-// Parts regions and no IK move chains anywhere; a game rig with a normal Mixamo-
-// style vocabulary just fine, so this only kicks in once classifyBone already
+// Parts regions and no IK move chains anywhere; a rig with recognizable bone
+// names works fine, so this only kicks in once classifyBone already
 // found too little to work with (same "< 4 slots" threshold classifyOrGuess
 // uses below). Callers should still try classifyBone(bone.name) FIRST and only
 // consult this map for bones that come back null — it only ever names one
@@ -465,22 +467,32 @@ export function buildSlotMapping(targetNames, sourceNames, targetBones, sourceBo
 }
 
 // Normalize a bone name for direct matching across conventions: drop case, the
-// DEF-/mixamorig prefixes, separators, and a trailing "bb" marker (this rig's
-// "_bb_" suffix). So "spine2_bb_" ~ "Spine2", "lefthandindex1_bb_" ~
-// "LeftHandIndex1", "mixamorig:LeftArm" ~ "leftarm".
+// DEF- and namespace prefixes, separators, and a trailing "bb" marker. So
+// "spine2_bb_" ~ "Spine2", "lefthandindex1_bb_" ~ "LeftHandIndex1", and
+// "rig:LeftArm" ~ "leftarm".
 function normBoneName(n) {
   return n
     .toLowerCase()
-    .replace(/^mixamorig:?/, '')
+    .replace(/^[^:]+:/, '')
     .replace(/^def-/, '')
     .replace(/[ _.:-]/g, '')
     .replace(/bb$/, '')
 }
 
-// Sketchfab's FBX→glTF pipeline appends "_0NN" uniquifying suffixes to every
-// bone ("mixamorig:LeftArm_09"); strip them so those rigs still name-match.
+// Some FBX→glTF pipelines append "_0NN" uniquifying suffixes to bone names;
+// strip them so those rigs still name-match.
 function stripUniqueSuffix(n) {
   return n.replace(/_0\d+$/, '')
+}
+
+function fingerSlot(name) {
+  const n = name.toLowerCase()
+  if (/metacarpal|palm|_end/.test(n)) return null
+  const side = detectSide(n)
+  const finger = /(thumb|index|middle|ring|pinky|little)/.exec(n)
+  if (!side || !finger) return null
+  const segment = new RegExp(`${finger[0]}[^0-9]*0?([1-4])(?:[^0-9]|$)`).exec(n)?.[1] || '1'
+  return `${finger[0]}.${side}.${segment}`
 }
 
 // Direct name match across the whole skeleton (exact, then normalized, then
@@ -489,9 +501,12 @@ function stripUniqueSuffix(n) {
 // chains the 21 canonical slots can't represent.
 export function buildNameMatch(targetBones, sourceBones) {
   const byNorm = new Map()
+  const byFinger = new Map()
   for (const sb of sourceBones) {
     const k = normBoneName(sb)
     if (!byNorm.has(k)) byNorm.set(k, sb)
+    const finger = fingerSlot(sb)
+    if (finger && !byFinger.has(finger)) byFinger.set(finger, sb)
   }
   const names = {}
   for (const tb of targetBones) {
@@ -499,7 +514,10 @@ export function buildNameMatch(targetBones, sourceBones) {
       names[tb] = tb
       continue
     }
-    const m = byNorm.get(normBoneName(tb)) || byNorm.get(normBoneName(stripUniqueSuffix(tb)))
+    const m =
+      byNorm.get(normBoneName(tb)) ||
+      byNorm.get(normBoneName(stripUniqueSuffix(tb))) ||
+      byFinger.get(fingerSlot(tb))
     if (m) names[tb] = m
   }
   return names
@@ -560,7 +578,7 @@ export function retargetParsed(parsed, model, names, hip, clipName) {
 
   const srcBones = parsed.skeleton.bones
   const srcByName = new Map(srcBones.map((b) => [b.name, b]))
-  const tgtBones = target.skeleton.bones
+  const tgtBones = model.bones && model.bones.length ? model.bones : target.skeleton.bones
 
   // Source rotation tracks (BVH shares one time array across channels).
   const srcTracks = []
@@ -585,10 +603,9 @@ export function retargetParsed(parsed, model, names, hip, clipName) {
   // BVHLoader's default identity quaternion. Those are only the same thing
   // for BVH files whose joints happen to use clean, untwisted local axes
   // (true for most hand-authored/mocap-house files) — but BVH's OFFSET field
-  // is translation-only, so any rig with non-standard joint axes (Mixamo's
-  // thigh bones are a well-known example, and so is any BVH — including ones
-  // this app itself exports — round-tripped from such a rig) has to bake a
-  // constant per-bone rest-twist into EVERY frame's rotation channel just to
+  // is translation-only, so any rig with non-standard joint axes (including
+  // BVH files this app itself exports when round-tripped from such a rig) has
+  // to bake a constant per-bone rest-twist into EVERY frame's rotation channel just to
   // play back correctly. Treating identity as "rest" then means that
   // constant twist gets read as if it were motion, subtracted out of the
   // delta, and re-added on the target side on top of the target's OWN rest
@@ -826,10 +843,14 @@ export function retargetParsed(parsed, model, names, hip, clipName) {
   const outTimes = Array.from(times)
   const tracks = []
   for (const [b, values] of out) {
-    tracks.push(new THREE.QuaternionKeyframeTrack(b.name + '.quaternion', outTimes, Array.from(values)))
+    // FBX rigs can contain multiple same-named bone nodes; bind to the exact
+    // skeleton bone whenever name lookup would resolve to a different object.
+    const nodeName = model.root.getObjectByName(b.name) === b ? b.name : b.uuid
+    tracks.push(new THREE.QuaternionKeyframeTrack(nodeName + '.quaternion', outTimes, Array.from(values)))
   }
   if (hipPos) {
-    tracks.push(new THREE.VectorKeyframeTrack(tgtHip.name + '.position', outTimes, Array.from(hipPos)))
+    const nodeName = model.root.getObjectByName(tgtHip.name) === tgtHip ? tgtHip.name : tgtHip.uuid
+    tracks.push(new THREE.VectorKeyframeTrack(nodeName + '.position', outTimes, Array.from(hipPos)))
   }
   const clip = new THREE.AnimationClip(clipName || parsed.name, times[numFrames - 1], tracks)
   return { clip, matched: mapped.length, total: tgtBones.length }

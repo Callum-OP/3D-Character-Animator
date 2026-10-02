@@ -204,7 +204,7 @@ function parseRoot(root, animations, fileName, format, source) {
     if (obj.isBone) boneSet.add(obj)
   })
 
-  const bones = Array.from(boneSet)
+  const bones = collapseNestedBoneDuplicates(Array.from(boneSet))
   const clips = animations || []
 
   const info = {
@@ -224,9 +224,22 @@ function parseRoot(root, animations, fileName, format, source) {
   return { source, root, skinnedMeshes, meshes, skeleton, bones, clips, info }
 }
 
+// Some FBX exports nest same-named skin joints below the bones that control
+// them. Keep the outer controls so posing and animation retain FK inheritance.
+export function collapseNestedBoneDuplicates(bones) {
+  const boneSet = new Set(bones)
+  return bones.filter((bone) => {
+    if (!bone.name) return true
+    for (let parent = bone.parent; parent; parent = parent.parent) {
+      if (parent.isBone && parent.name && parent.name === bone.name && boneSet.has(parent)) return false
+    }
+    return true
+  })
+}
+
 // --- Bone classification -----------------------------------------------------
 //
-// Dense game rigs (Mixamo, Unreal/Marvel-Rivals-style exports) carry hundreds of
+// Dense game rigs carry hundreds of
 // bones nobody poses by hand: auto-generated "_end" tail bones, twist/volume/
 // roll correctives, weapon sockets. Flag those as deform=false so the UI can
 // hide their dots and rows. Two schemes:
@@ -253,7 +266,7 @@ function classifyBones(bones) {
   }))
 }
 
-// Human-friendly display names: drop "mixamorig:"-style namespace prefixes and
+// Human-friendly display names: drop namespace prefixes and
 // the "_0NN" uniquifying suffixes Sketchfab's FBX→glTF pipeline appends — but
 // only when the stripped names stay unique across the whole rig, so we never
 // show two bones with the same label. Selection/pose files always use the real

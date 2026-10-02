@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import * as THREE from 'three'
 import { retargetParsed } from '../three/bvh.js'
+import { collapseNestedBoneDuplicates } from '../three/loadModel.js'
 
 // Build a simple 3-bone leg chain: Hips -> UpLeg -> Foot, either with a
 // "clean" rest orientation (identity local quaternion, BVH-style) or with a
-// constant baked-in rest TWIST on UpLeg (Mixamo-style — the exact situation
+// constant baked-in rest TWIST on UpLeg (a common rig convention — the exact situation
 // this app's own BVH exporter has to produce, since BVH's OFFSET field can't
 // carry rotation and a rig with non-standard joint axes has no other place
 // to put that twist).
@@ -116,7 +117,7 @@ describe('retargetParsed rest-reference handling', () => {
     expect(Math.abs(Math.abs(deltaXDeg) - 30)).toBeLessThan(5)
   })
 
-  it('does not double-count a baked-in rest twist from a Mixamo-style BVH source', () => {
+  it('does not double-count a baked-in rest twist from a BVH source', () => {
     // The target ALSO has a baked twist on UpLeg (its own rig quirk) —
     // mirroring the real scenario: retargeting our own exported BVH (which
     // necessarily bakes the same kind of twist to round-trip faithfully)
@@ -151,5 +152,72 @@ describe('retargetParsed rest-reference handling', () => {
     expect(matched).toBeGreaterThan(0)
     const errorDeg = (targetRestQuat.angleTo(quat) * 180) / Math.PI
     expect(errorDeg).toBeLessThan(2)
+  })
+
+  it('binds animation to the actual bone when a duplicate name appears first', () => {
+    const model = buildLeg()
+    const hips = model.bones.find((b) => b.name === 'Hips')
+    const upLeg = model.bones.find((b) => b.name === 'UpLeg')
+    const duplicate = new THREE.Bone()
+    duplicate.name = upLeg.name
+    model.root.remove(hips)
+    model.root.add(duplicate)
+    model.root.add(hips)
+
+    const parsed = buildParsedSource({ liftDeg: 30 })
+    const result = retargetParsed(
+      parsed,
+      model,
+      { Hips: 'Hips', UpLeg: 'UpLeg', Foot: 'Foot' },
+      'Hips',
+      'test',
+    )
+    expect(result.clip.tracks.some((track) => track.name === `${upLeg.uuid}.quaternion`)).toBe(true)
+
+    const mixer = new THREE.AnimationMixer(model.root)
+    const action = mixer.clipAction(result.clip)
+    action.loop = THREE.LoopOnce
+    action.clampWhenFinished = true
+    action.play()
+    mixer.setTime(0.5)
+
+    expect(upLeg.quaternion.angleTo(new THREE.Quaternion())).toBeGreaterThan(0.05)
+    expect(duplicate.quaternion.angleTo(new THREE.Quaternion())).toBeLessThan(1e-5)
+  })
+
+  it('retargets onto parent controls instead of nested skin-joint duplicates', () => {
+    const model = buildLeg()
+    const controls = model.bones.slice()
+    const skinBones = controls.map((control) => {
+      const skinBone = new THREE.Bone()
+      skinBone.name = control.name
+      control.add(skinBone)
+      return skinBone
+    })
+    model.skinnedMeshes[0].bind(new THREE.Skeleton(skinBones))
+    model.bones = collapseNestedBoneDuplicates([...skinBones, ...controls])
+
+    const parsed = buildParsedSource({ liftDeg: 30 })
+    const result = retargetParsed(
+      parsed,
+      model,
+      { Hips: 'Hips', UpLeg: 'UpLeg', Foot: 'Foot' },
+      'Hips',
+      'test',
+    )
+    expect(model.bones).toEqual(controls)
+    expect(result.clip.tracks.some((track) => track.name === 'UpLeg.quaternion')).toBe(true)
+
+    const mixer = new THREE.AnimationMixer(model.root)
+    const action = mixer.clipAction(result.clip)
+    action.loop = THREE.LoopOnce
+    action.clampWhenFinished = true
+    action.play()
+    const foot = model.bones.find((bone) => bone.name === 'Foot')
+    mixer.setTime(0)
+    const restPosition = foot.getWorldPosition(new THREE.Vector3())
+    mixer.setTime(1)
+    const animatedPosition = foot.getWorldPosition(new THREE.Vector3())
+    expect(animatedPosition.distanceTo(restPosition)).toBeGreaterThan(0.05)
   })
 })
