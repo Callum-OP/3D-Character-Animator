@@ -423,6 +423,11 @@ body {
   background: rgba(255, 90, 60, 0.25);
 }
 
+.zoom-toolbar-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .symmetrise-menu {
   position: absolute;
   top: calc(100% + 6px);

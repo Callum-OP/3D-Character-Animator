@@ -24,6 +24,7 @@ import {
   setEnvironmentLighting,
   setOutlineToggle,
   setViewCameraById,
+  setCameraToObject,
   setActiveCharacter,
   dollyViewport,
   syncActiveDangleConfig,
@@ -654,6 +655,7 @@ function Viewport() {
   const loadError = useStore((s) => s.loadError)
   const showStats = useStore((s) => s.showStats)
   const sceneObjects = useStore((s) => s.sceneObjects)
+  const selectedObjectId = useStore((s) => s.selectedObjectId)
   const hasCharacter = Boolean(modelInfo)
   const hasSceneContent = hasCharacter || sceneObjects.length > 0
   const modeButtons = hasCharacter ? MODE_BUTTONS : MODE_BUTTONS.filter((b) => b.value === 'view' || b.value === 'object' || b.value === 'mesh')
@@ -798,7 +800,20 @@ function Viewport() {
       )}
 
       {hasSceneContent && (
-        <div className="zoom-toolbar" aria-label="Zoom the 3D view in or out">
+        <div className="zoom-toolbar" aria-label="Viewport camera controls">
+          <button
+            className="zoom-toolbar-btn"
+            title={selectedObjectId != null ? 'Frame selected object and orbit around it' : 'Select an object to frame it'}
+            aria-label="Frame selected object"
+            disabled={selectedObjectId == null}
+            onClick={() => setCameraToObject(selectedObjectId)}
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden="true">
+              <path d="M4 7h3l1.5-2h7L17 7h3v12H4z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+              <circle cx="12" cy="13" r="3.5" stroke="currentColor" strokeWidth="1.7" />
+              <path d="M12 8v2m0 6v2m-5-5h2m6 0h2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+            </svg>
+          </button>
           <button className="zoom-toolbar-btn" title="Zoom in" aria-label="Zoom in" onClick={() => dollyViewport(-1)}>
             +
           </button>
