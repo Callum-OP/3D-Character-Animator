@@ -23,6 +23,7 @@ import {
   importClipJSON,
   renameClip,
   describeClipBoneMismatch,
+  updateRootMotionTrack,
 } from '../three/animation.js'
 import {
   listRecentClips,
@@ -34,7 +35,7 @@ import {
   hasFileSystemAccess as hasClipFileSystemAccess,
 } from '../three/clipLibrary.js'
 import { getBoneQuaternion, getPosedBones, applyPose, setPosingEnabled } from '../three/posing.js'
-import { getCharacterRootTransform, getCurrentModel, getGroundY, scrubTimeline, playAllCharacters, stopAllCharacters } from '../three/scene.js'
+import { getCurrentModel, getGroundY, scrubTimeline, playAllCharacters, stopAllCharacters } from '../three/scene.js'
 import * as THREE from 'three'
 import { simulateRagdollClip } from '../three/ragdoll.js'
 import {
@@ -60,6 +61,51 @@ function rootTravels(keys) {
     if (d > maxDist) maxDist = d
   }
   return maxDist > 0.01
+}
+
+function sampleRootKey(keys, time) {
+  if (!keys?.length) return null
+  if (time <= keys[0].time) return keys[0]
+  if (time >= keys[keys.length - 1].time) return keys[keys.length - 1]
+  let index = 0
+  while (index < keys.length - 1 && keys[index + 1].time < time) index++
+  const first = keys[index]
+  const second = keys[index + 1]
+  const alpha = (time - first.time) / (second.time - first.time || 1)
+  const quat = new THREE.Quaternion(...first.quat).slerp(new THREE.Quaternion(...second.quat), alpha)
+  return {
+    time,
+    pos: first.pos.map((value, axis) => value + (second.pos[axis] - value) * alpha),
+    quat: quat.toArray(),
+  }
+}
+
+function mergeRootMotionTracks(existing, baked) {
+  if (!baked?.length) return existing || []
+  const bakedKeys = [...baked].sort((a, b) => a.time - b.time)
+  if (!existing?.length) return bakedKeys
+  const existingKeys = [...existing].sort((a, b) => a.time - b.time)
+  const times = [...new Set([...existingKeys, ...bakedKeys].map((key) => key.time))].sort((a, b) => a - b)
+  const bakedStart = bakedKeys[0].pos
+  return times.map((time) => {
+    const original = sampleRootKey(existingKeys, time)
+    const motion = sampleRootKey(bakedKeys, time)
+    return {
+      time,
+      pos: original
+        ? original.pos.map((value, axis) => value + motion.pos[axis] - bakedStart[axis])
+        : motion.pos,
+      quat: original?.quat || motion.quat,
+    }
+  })
+}
+
+function captureCurrentPose() {
+  return (getCurrentModel()?.bones || []).map((bone) => ({
+    name: bone.name,
+    quat: bone.quaternion.toArray(),
+    pos: bone.position.toArray(),
+  }))
 }
 
 // True if a mesh/morph track map has at least one non-empty entry.
@@ -143,9 +189,10 @@ function FrameStepper({ time, duration, fps, onChange }) {
   )
 }
 
-function ObjectAnimationEditor() {
+function ObjectMovementEditor({ onScrub, onCharacterKeyframe, onCharacterTrackChange }) {
   const allSceneObjects = useStore((s) => s.sceneObjects)
   const selectedObjectId = useStore((s) => s.selectedObjectId)
+  const activeCharacterId = useStore((s) => s.activeCharacterId)
   const objectAnimData = useStore((s) => s.objectAnimData)
   const duration = useStore((s) => s.objectAnimDuration)
   const time = useStore((s) => s.objectAnimTime)
@@ -153,17 +200,43 @@ function ObjectAnimationEditor() {
   const autoKey = useStore((s) => s.objectAutoKeyMovement)
   const fps = useStore((s) => s.animFps)
   const loop = useStore((s) => s.loop)
-  const characterOrder = useStore((s) => s.characterOrder)
-  const sceneObjects = allSceneObjects.filter((object) => !object.isCharacter)
-  const selected = sceneObjects.find((object) => object.id === selectedObjectId)
+  const modelInfo = useStore((s) => s.modelInfo)
+  const animData = useStore((s) => s.animData)
+  const currentTime = useStore((s) => s.currentTime)
+  const playback = useStore((s) => s.playback)
+  const source = useStore((s) => s.playbackSource)
+  const animDuration = useStore((s) => s.animDuration)
+  const autoKeyMovement = useStore((s) => s.autoKeyMovement)
+  const rippleRootEdit = useStore((s) => s.rippleRootEdit)
+  const selected =
+    allSceneObjects.find((object) => object.id === selectedObjectId) ||
+    (!selectedObjectId && modelInfo
+      ? allSceneObjects.find((object) => object.isCharacter && object.characterId === activeCharacterId)
+      : null)
+  const isCharacter = !!selected?.isCharacter
   const keys = selected?.animationKey ? objectAnimData[selected.animationKey] || [] : []
+  const characterKeys = animData.root || []
+  const characterTime = Math.min(currentTime, source === 'edit' ? animDuration : duration)
+  const characterPlaying = playback === 'playing'
   const [message, setMessage] = useState('')
   const st = useStore.getState
 
   function onKeyframe() {
     const root = selected && getObjectRootById(selected.id)
-    if (!root || !selected.animationKey) return
-    const keyTime = Math.round(time * fps) / fps
+    if (!root) return
+    const keyTime = Math.round((isCharacter ? characterTime : time) * fps) / fps
+    if (isCharacter) {
+      const key = {
+        time: keyTime,
+        pos: root.position.toArray(),
+        quat: root.quaternion.toArray(),
+      }
+      if (onCharacterKeyframe) onCharacterKeyframe(key)
+      else st().addRootKeyframe(keyTime, key.pos, key.quat, rippleRootEdit)
+      setMessage(`Saved ${selected.name}'s position at ${keyTime.toFixed(2)}s.`)
+      return
+    }
+    if (!selected.animationKey) return
     st().addObjectTransformKeyframe(selected.animationKey, keyTime, {
       position: root.position.toArray(),
       quaternion: root.quaternion.toArray(),
@@ -180,31 +253,96 @@ function ObjectAnimationEditor() {
     if (!startObjectAnimation()) setMessage('Add at least one object keyframe before playing.')
   }
 
-  function onPlayAll() {
-    const store = useStore.getState()
-    const { started: charactersStarted } = playAllCharacters()
-    const objectTracks = Object.values(store.objectAnimData || {}).filter((keys) => keys && keys.length)
-    const objectStarted = objectTracks.length > 0 ? (startObjectAnimation() > 0 ? 1 : 0) : 0
-    const started = charactersStarted + objectStarted
-    setMessage(
-      started > 1
-        ? `Playing ${started} active animation tracks.`
-        : started === 1
-          ? 'Playing the current scene animation.'
-          : 'Nothing to play — pick a clip or create object motion first.',
+  if (isCharacter) {
+    return (
+      <div className="movement-track">
+        <div className="movement-heading">Character movement</div>
+        <p className="panel-hint">
+          Move the character in the scene and key its position at the current character playhead.
+        </p>
+
+        <div className="kf-actions">
+          <button className="btn secondary" onClick={onKeyframe} disabled={!selected || characterPlaying}>
+            Key position{characterKeys.length ? ` (${characterKeys.length})` : ''}
+          </button>
+          <button
+            className="btn secondary"
+            onClick={() => st().setRippleRootEdit(!rippleRootEdit)}
+            aria-pressed={rippleRootEdit}
+            title="When you change a position key, carry that change forward to later position keys."
+          >
+            {rippleRootEdit ? '✓ ' : ''}Carry edits forward
+          </button>
+        </div>
+
+        <label className="toggle-row" style={{ marginTop: 8 }}>
+          <input
+            type="checkbox"
+            checked={autoKeyMovement}
+            onChange={(event) => st().setAutoKeyMovement(event.target.checked)}
+          />
+          Auto-key when moving the character
+        </label>
+
+        {characterKeys.length > 0 && (
+          <div className="kf-list" style={{ marginTop: 8 }}>
+            {characterKeys.map((key) => (
+              <div
+                key={key.time}
+                className={'kf-list-row' + (Math.abs(key.time - characterTime) < 1e-4 ? ' active' : '')}
+                title="Select this position on the timeline"
+                role="button"
+                tabIndex={0}
+                onClick={() => onScrub(key.time)}
+                onKeyDown={(event) => {
+                  if (event.target !== event.currentTarget) return
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault()
+                    onScrub(key.time)
+                  }
+                }}
+              >
+                <span onClick={(event) => event.stopPropagation()}>
+                  <EditableValue
+                    value={key.time}
+                    min={0}
+                    max={source === 'edit' ? animDuration : duration}
+                    onChange={(nextTime) => {
+                      const snappedTime = Math.round(nextTime * fps) / fps
+                      st().moveRootKeyframe(key.time, snappedTime)
+                      onCharacterTrackChange?.(snappedTime)
+                    }}
+                    format={(value) => `${value.toFixed(2)}s`}
+                    className="kf-time"
+                    label={`Position key time, currently ${key.time.toFixed(2)} seconds`}
+                  />
+                </span>
+                <span className="kf-what">{selected.name} position</span>
+                <button
+                  className="kf-del"
+                  title="Delete this position keyframe"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    st().deleteRootKeyframe(key.time)
+                    onCharacterTrackChange?.(characterTime)
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        {message && <div className="pose-msg">{message}</div>}
+      </div>
     )
   }
 
-  function onStopAll() {
-    stopAllCharacters()
-    stopObjectAnimation()
-  }
-
   return (
-    <div className="panel">
-      <h2>Create an animation</h2>
+    <div className="panel movement-panel">
+      <div className="movement-heading">Object movement</div>
       <p className="panel-hint">
-        Move an object in the Scene panel, set a time, and key its position. Playback smoothly transitions between keys.
+        Move the selected object, set a time, and key its position. Playback smoothly transitions between keys.
       </p>
 
       <div className="kf-numbers">
@@ -261,27 +399,10 @@ function ObjectAnimationEditor() {
         </label>
       </div>
 
-      {(characterOrder.length > 0 || Object.values(objectAnimData || {}).some((keys) => keys && keys.length)) && (
-        <div className="kf-actions" style={{ marginTop: 8 }}>
-          <button className="btn secondary" onClick={onPlayAll}>
-            ▶ Play all{characterOrder.length > 0 ? ` (${characterOrder.length})` : ''}
-          </button>
-          <button className="btn secondary" onClick={onStopAll}>■ Stop all</button>
-        </div>
-      )}
-
       <label className="toggle-row" style={{ marginTop: 8 }} title="Save a keyframe automatically whenever you finish moving the selected object.">
         <input type="checkbox" checked={autoKey} onChange={(event) => st().setObjectAutoKeyMovement(event.target.checked)} />
         Auto-key when moving objects
       </label>
-
-      {selected ? (
-        <div className="empty" style={{ marginTop: 8 }}>
-          Keying: {selected.name}
-        </div>
-      ) : (
-        <div className="empty" style={{ marginTop: 8 }}>Select a model or image in Scene → Objects to key its movement.</div>
-      )}
 
       {keys.length > 0 && (
         <div className="kf-list" style={{ marginTop: 8 }}>
@@ -307,6 +428,8 @@ function ObjectAnimationEditor() {
 export default function AnimationPanel() {
   const modelInfo = useStore((s) => s.modelInfo)
   const sceneObjects = useStore((s) => s.sceneObjects)
+  const selectedObjectId = useStore((s) => s.selectedObjectId)
+  const activeCharacterId = useStore((s) => s.activeCharacterId)
   const selectedBoneName = useStore((s) => s.selectedBoneName)
 
   const playback = useStore((s) => s.playback)
@@ -314,8 +437,6 @@ export default function AnimationPanel() {
   const activeClipName = useStore((s) => s.activeClipName)
   const loop = useStore((s) => s.loop)
   const speed = useStore((s) => s.speed)
-  const rippleRootEdit = useStore((s) => s.rippleRootEdit)
-  const autoKeyMovement = useStore((s) => s.autoKeyMovement)
   const duration = useStore((s) => s.duration)
   const currentTime = useStore((s) => s.currentTime)
 
@@ -359,21 +480,26 @@ export default function AnimationPanel() {
   const [pickingSlotKey, setPickingSlotKey] = useState(null)
   const mode = useStore((s) => s.mode)
   const pickBaselineRef = useRef(null) // selectedBoneName at the moment picking was armed, so we don't grab a stale/already-selected bone
+  const selectedSceneObject =
+    sceneObjects.find((object) => object.id === selectedObjectId) ||
+    (!selectedObjectId && modelInfo
+      ? sceneObjects.find((object) => object.isCharacter && object.characterId === activeCharacterId)
+      : null)
+  const hasCharacterSelected = selectedSceneObject ? !!selectedSceneObject.isCharacter : !!modelInfo
 
   useEffect(() => {
     refreshRecentClips()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Space = play/pause, ←/→ = step one frame (the insert time while authoring
-  // keyframes, otherwise the playhead). Re-registered every render so the
+  // Space = play/pause, ←/→ = step the shared character playhead. Re-registered every render so the
   // handler always closes over fresh state; ignored while typing in a field.
   useEffect(() => {
     function onKey(e) {
       const tag = e.target.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target.isContentEditable)
         return
-      if (!modelInfo) return
+      if (!modelInfo || !hasCharacterSelected) return
       if (e.key === ' ') {
         // Space is the transport toggle everywhere outside text fields — a
         // clicked button keeps focus, so blur it or its native Space activation
@@ -387,7 +513,7 @@ export default function AnimationPanel() {
           Math.min(Math.max((Math.round(t * animFps) + dir) / animFps, 0), dur)
         if (source === 'edit' && playback === 'stopped') {
           e.preventDefault()
-          st().setInsertTime(step(insertTime, animDuration))
+          onScrub(step(currentTime, animDuration))
         } else if (source === 'edit' || activeClipName) {
           e.preventDefault()
           onScrub(step(currentTime, source === 'edit' ? animDuration : duration))
@@ -445,8 +571,23 @@ export default function AnimationPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapping])
 
-  const hasMovableObjects = sceneObjects.some((object) => !object.isCharacter)
-  if (!modelInfo) return hasMovableObjects ? <ObjectAnimationEditor /> : null
+  useEffect(() => {
+    if (!modelInfo || !hasCharacterSelected || source !== 'edit' || Math.abs(insertTime - currentTime) <= 1e-6) return
+    if (playback === 'playing') {
+      st().setInsertTime(currentTime)
+    } else {
+      if (playback === 'stopped') {
+        const editDuration = selectEdit(animData, animDuration, { loop, speed })
+        st().setDuration(editDuration)
+        st().setPlayback('paused')
+      }
+      scrubTimeline(insertTime)
+      st().setCurrentTime(insertTime)
+    }
+  }, [currentTime, insertTime, playback, source, st, modelInfo, hasCharacterSelected, animData, animDuration, loop, speed])
+  if (!modelInfo || !hasCharacterSelected) {
+    return selectedSceneObject ? <ObjectMovementEditor onScrub={onScrub} /> : null
+  }
 
   const bakedNames = modelInfo.clipNames || []
   const clipNames = [...bakedNames, ...importedClipNames]
@@ -455,7 +596,9 @@ export default function AnimationPanel() {
   // The clip source is available if there are baked clips, imported mocap, OR a
   // skeleton to import mocap onto.
   const hasClips = clipNames.length > 0
-  if (!hasClips && !hasBones) return hasMovableObjects ? <ObjectAnimationEditor /> : null
+  if (!hasClips && !hasBones) {
+    return selectedSceneObject ? <ObjectMovementEditor onScrub={onScrub} /> : null
+  }
 
   const displayDuration = source === 'edit' ? animDuration : duration
   const snap = (t) => Math.round(t * animFps) / animFps // to the fps grid
@@ -468,6 +611,7 @@ export default function AnimationPanel() {
     stop()
     st().setPlayback('stopped')
     st().setCurrentTime(0)
+    if (next === 'edit') st().setInsertTime(0)
     st().setPlaybackSource(next)
     if (next === 'clip' && activeClipName) {
       const d = selectClip(activeClipName, { loop, speed }, animData)
@@ -483,11 +627,13 @@ export default function AnimationPanel() {
     st().setActiveClipName(name || null)
     stop()
     if (!name) {
+      st().setPlaybackSource('clip')
       st().setPlayback('stopped')
       st().setDuration(0)
       setClipBoneWarning(null)
       return
     }
+    st().setPlaybackSource('clip')
     const d = selectClip(name, { loop, speed }, animData)
     st().setDuration(d)
     st().setCurrentTime(0)
@@ -499,7 +645,9 @@ export default function AnimationPanel() {
     if (source === 'edit') {
       const d = selectEdit(animData, animDuration, { loop, speed })
       st().setDuration(d)
-    } else if (playback === 'stopped' && activeClipName) {
+    } else if (!activeClipName) {
+      return
+    } else if (playback === 'stopped') {
       const d = selectClip(activeClipName, { loop, speed }, animData)
       st().setDuration(d)
     }
@@ -520,6 +668,7 @@ export default function AnimationPanel() {
     stop()
     st().setPlayback('stopped')
     st().setCurrentTime(0)
+    st().setInsertTime(0)
   }
 
   // Start every loaded character playing whatever it currently has selected
@@ -561,6 +710,51 @@ export default function AnimationPanel() {
     }
     scrubTimeline(t)
     st().setCurrentTime(t)
+    if (source === 'edit') st().setInsertTime(t)
+  }
+
+  function refreshCharacterAtTime(time) {
+    const store = st()
+    if (source === 'edit') {
+      selectEdit(store.animData, store.animDuration, { loop, speed })
+    } else if (activeClipName) {
+      selectClip(activeClipName, { loop, speed }, store.animData)
+    } else {
+      return
+    }
+    scrubTimeline(time)
+    store.setCurrentTime(time)
+    store.setPlayback('paused')
+  }
+
+  function onCharacterKeyframe({ time, pos, quat }) {
+    if (source === 'clip' && activeClipName) {
+      onBake({ keyPosition: { time, pos, quat }, time })
+      return
+    }
+    st().addRootKeyframe(time, pos, quat, st().rippleRootEdit)
+    st().addKeyframesAtTime(captureCurrentPose(), time)
+    updateRootMotionTrack(st().animData.root)
+    refreshCharacterAtTime(time)
+  }
+
+  function onCharacterTrackChange(time) {
+    if (st().playback === 'playing') {
+      pause()
+      st().setPlayback('paused')
+    }
+    if (st().playback === 'stopped') {
+      if (source === 'edit') {
+        selectEdit(st().animData, st().animDuration, { loop, speed })
+      } else if (activeClipName) {
+        selectClip(activeClipName, { loop, speed }, st().animData)
+      }
+      st().setPlayback('paused')
+    }
+    updateRootMotionTrack(st().animData.root)
+    scrubTimeline(time)
+    st().setCurrentTime(time)
+    if (source === 'edit') st().setInsertTime(time)
   }
 
   function onLoop(v) {
@@ -607,21 +801,6 @@ export default function AnimationPanel() {
     st().insertBlankFrames(t, n)
     setKfMsg(
       `Inserted ${n} blank frame${n === 1 ? '' : 's'} (${(n / animFps).toFixed(2)}s) at ${t.toFixed(2)}s — everything after that time shifted later.`,
-    )
-  }
-
-  // Keyframe the character's world placement (for root motion — walking toward a
-  // wall, etc.). Move the character (Objects → the character entry), then key it.
-  function onKeyPosition() {
-    const tr = getCharacterRootTransform()
-    if (!tr) return
-    const t = snap(insertTime)
-    st().addRootKeyframe(t, tr.pos, tr.quat, rippleRootEdit)
-    const n = (animData.root ? animData.root.filter((k) => k.time !== t).length : 0) + 1
-    setKfMsg(
-      rippleRootEdit
-        ? `Saved the character's position at ${t.toFixed(2)}s (${n} total) and carried that same shift onto every later position key.`
-        : `Saved the character's position at ${t.toFixed(2)}s (${n} total). Move the character in Objects at a different time and save again — it'll glide between them on Play.`,
     )
   }
 
@@ -761,7 +940,7 @@ export default function AnimationPanel() {
     setRagdollMsg(`Flop! Saved as the clip “${name}” — replay it any time from the clip list.`)
   }
 
-  function onBake() {
+  function onBake({ keyPosition = null, time = currentTime } = {}) {
     if (!activeClipName) return
     const res = bakeClipToTracks(activeClipName, animFps, duration || undefined, preserveMotion)
     if (!res) return
@@ -770,20 +949,74 @@ export default function AnimationPanel() {
     // already set up by hand — only treat the bake as "kept the movement"
     // when it actually moved by a meaningful amount.
     const gotRoot = preserveMotion && res.root && res.root.length > 1 && rootTravels(res.root)
-    // Only replace the bone tracks (and, if captured, root motion) —
-    // setAnimData does a full replace, so passing just { tracks } would
-    // silently wipe mesh/morph keys and any camera keys/cuts already set up
-    // on this timeline.
-    st().setAnimData({ ...animData, tracks: res.tracks, root: gotRoot ? res.root : animData.root })
-    st().setAnimDuration(res.duration)
-    onSourceChange('edit')
+    // Layer clip travel over authored character placement rather than
+    // replacing the user's position keys with the baked clip's path.
+    const nextData = {
+      ...animData,
+      tracks: res.tracks,
+      root: gotRoot ? mergeRootMotionTracks(animData.root, res.root) : animData.root,
+    }
+    const editDuration = Math.max(res.duration, ...collectKeyframes(nextData).map((key) => key.time))
+    const editTime = Math.min(time, editDuration)
+    stop()
+    st().setAnimData(nextData)
+    st().setAnimDuration(editDuration)
+    st().setPlaybackSource('edit')
+    st().setPlayback('stopped')
+    const editClipDuration = selectEdit(nextData, editDuration, { loop, speed })
+    st().setDuration(editClipDuration)
+    st().setPlayback('paused')
+    scrubTimeline(editTime)
+    st().setCurrentTime(editTime)
+    st().setInsertTime(editTime)
+
+    if (keyPosition) {
+      st().addRootKeyframe(keyPosition.time, keyPosition.pos, keyPosition.quat, st().rippleRootEdit)
+      st().addKeyframesAtTime(captureCurrentPose(), keyPosition.time)
+      const keyedData = st().animData
+      updateRootMotionTrack(keyedData.root)
+      selectEdit(keyedData, editDuration, { loop, speed })
+      scrubTimeline(keyPosition.time)
+      st().setCurrentTime(keyPosition.time)
+      st().setInsertTime(keyPosition.time)
+    }
+
     setBvhMsg(
-      gotRoot
+      keyPosition
+        ? `Baked the clip and saved its current pose and character position at ${keyPosition.time.toFixed(2)}s.`
+        : gotRoot
         ? `Baked ${Object.keys(res.tracks).length} moving track(s) to keyframes, plus its original movement (${res.root.length} root key(s)) — it'll still walk forward.`
         : preserveMotion
           ? `Baked ${Object.keys(res.tracks).length} moving track(s) to keyframes. No root/hip travel was found in this clip to carry over.`
           : `Baked ${Object.keys(res.tracks).length} moving track(s) to keyframes.`,
     )
+  }
+
+  function onEditKeyframes() {
+    if (source === 'edit') return
+    if (activeClipName) {
+      onBake()
+      return
+    }
+    onSourceChange('edit')
+  }
+
+  function onNewAnimation() {
+    if (allKeyframes.length && !window.confirm('Start a new animation? This clears the current editable keyframes but keeps your clips.')) {
+      return
+    }
+    if (playback !== 'stopped') stop()
+    st().clearAnim()
+    st().setPlaybackSource('edit')
+    st().setActiveClipName(null)
+    st().setAnimDuration(2)
+    st().setCurrentTime(0)
+    st().setInsertTime(0)
+    const emptyData = useStore.getState().animData
+    const d = selectEdit(emptyData, 2, { loop, speed })
+    st().setDuration(d)
+    st().setPlayback('paused')
+    setKfMsg('New animation ready. Pose the character at the playhead, then add a keyframe.')
   }
 
   // Bridge back the other way: turn what you've keyframed in "Make your own"
@@ -988,137 +1221,81 @@ export default function AnimationPanel() {
 
   return (
     <>
-    {hasMovableObjects && <ObjectAnimationEditor />}
     <div className="panel">
-      <h2>Animate</h2>
+      <h2>Character animation</h2>
       <p className="panel-hint">
-        Play a ready-made clip, pose a character, or keyframe object movement.
+        Play a clip as-is, edit its poses, or start a new animation. Character movement is a separate track on the same playhead.
       </p>
 
-      {/* Source selector */}
       <div className="seg">
         <button
           className={'seg-btn' + (source === 'clip' ? ' active' : '')}
-          disabled={!hasClips && !hasBones}
+          disabled={!hasClips}
           onClick={() => onSourceChange('clip')}
-          title="Play a built-in animation or an imported motion file"
+          title="Choose and play a built-in or imported motion clip"
         >
           Play a clip
         </button>
         <button
           className={'seg-btn' + (source === 'edit' ? ' active' : '')}
-          disabled={!hasBones}
-          onClick={() => onSourceChange('edit')}
-          title="Build your own animation from keyframes"
+          disabled={!hasBones || (source === 'clip' && playing)}
+          onClick={onEditKeyframes}
+          title={activeClipName ? 'Convert the selected clip to editable keyframes; the original clip remains available' : 'Create or edit motion using keyframes'}
         >
-          Make your own
+          Edit keyframes
         </button>
       </div>
 
-      {/* Ragdoll: drop the character limply and keep the fall as a clip */}
-      {hasBones && !mapping && (
-        <>
-          <div className="kf-actions" style={{ marginTop: 8 }}>
-            <button
-              className="btn secondary"
-              onClick={onRagdoll}
-              title="Let the character fall limply to the ground from its current pose — the fall is saved as a clip"
-            >
-              💥 Ragdoll to ground
-            </button>
-          </div>
-          {ragdollMsg && <div className="pose-msg">{ragdollMsg}</div>}
-        </>
+      <div className="clip-source-row">
+        <select
+          className="select"
+          value={activeClipName || ''}
+          onChange={(e) => onClipChange(e.target.value)}
+          aria-label="Character motion clip"
+        >
+          <option value="">Choose a motion clip…</option>
+          {clipNames.map((name, i) => (
+            <option key={i} value={name}>
+              {name || `(clip ${i + 1})`}
+            </option>
+          ))}
+        </select>
+        {hasBones && (
+          <button className="btn secondary" onClick={() => bvhRef.current?.click()} disabled={bvhBusy}>
+            {bvhBusy ? 'Importing…' : 'Import BVH…'}
+          </button>
+        )}
+        <button className="btn secondary" onClick={onOpenClip}>Open clip…</button>
+        <input ref={bvhRef} type="file" accept=".bvh" style={{ display: 'none' }} onChange={onPickBVH} />
+        <input
+          ref={clipFileRef}
+          type="file"
+          accept=".3dclip,.json,application/json"
+          style={{ display: 'none' }}
+          onChange={onImportClipFile}
+        />
+      </div>
+
+      {source === 'edit' && hasBones && (
+        <div className="kf-actions" style={{ marginTop: 8 }}>
+          <button className="btn secondary" onClick={onNewAnimation}>
+            New animation
+          </button>
+        </div>
+      )}
+
+      {selectedSceneObject && (
+        <ObjectMovementEditor
+          onScrub={onScrub}
+          onCharacterKeyframe={onCharacterKeyframe}
+          onCharacterTrackChange={onCharacterTrackChange}
+        />
       )}
 
       {source === 'clip' && !mapping && (
         <>
-          {clipNames.length > 0 && (
-            <select
-              className="select"
-              style={{ width: '100%', marginTop: 8 }}
-              value={activeClipName || ''}
-              onChange={(e) => onClipChange(e.target.value)}
-            >
-              <option value="">Select a clip…</option>
-              {clipNames.map((name, i) => (
-                <option key={i} value={name}>
-                  {name || `(clip ${i + 1})`}
-                </option>
-              ))}
-            </select>
-          )}
-
           {clipBoneWarning && activeClipName && (
             <div className="pose-msg pose-msg-warn">⚠ {clipBoneWarning}</div>
-          )}
-
-          {activeClipName && importedClipNames.includes(activeClipName) && !renameOpen && (
-            <button
-              className="btn secondary"
-              style={{ marginTop: 6 }}
-              onClick={onOpenRename}
-              title="Rename this clip"
-            >
-              ✏️ Rename
-            </button>
-          )}
-
-          {renameOpen && (
-            <div style={{ marginTop: 6 }}>
-              <input
-                className="select"
-                style={{ width: '100%', fontSize: 13, padding: '8px 10px' }}
-                value={renameText}
-                autoFocus
-                onFocus={(e) => e.target.select()}
-                onChange={(e) => setRenameText(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') onConfirmRename()
-                  if (e.key === 'Escape') setRenameOpen(false)
-                }}
-              />
-              <div className="kf-actions" style={{ marginTop: 6 }}>
-                <button className="btn" onClick={onConfirmRename}>
-                  Save
-                </button>
-                <button className="btn secondary" onClick={() => setRenameOpen(false)}>
-                  Cancel
-                </button>
-              </div>
-            </div>
-          )}
-
-          {activeClipName && hasBones && (
-            <div className="kf-actions" style={{ marginTop: 6 }}>
-              <button
-                className="btn secondary"
-                onClick={onApplyFrameAsPose}
-                title="Freeze the current frame as an editable pose"
-              >
-                Use as pose
-              </button>
-              <button
-                className="btn secondary"
-                onClick={onBake}
-                title="Turn this clip into editable keyframes"
-              >
-                Edit keyframes
-              </button>
-            </div>
-          )}
-          {activeClipName && hasBones && (
-            <label
-              style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, fontSize: 12 }}
-              title="Also carry over the clip's original forward/side movement (e.g. a walk's steps) as root-motion keyframes, so it doesn't walk on the spot once it's editable. Turn off to bake rotation only, in place."
-            >
-              <input
-                type="checkbox"
-                checked={preserveMotion}
-                onChange={(e) => setPreserveMotion(e.target.checked)}
-              />
-              Keep original movement when editing
-            </label>
           )}
 
           <button
@@ -1126,27 +1303,35 @@ export default function AnimationPanel() {
             style={{ marginTop: 8, width: '100%' }}
             onClick={() => setToolsOpen((v) => !v)}
           >
-            🛠 Clip tools {toolsOpen ? '▲' : '▼'}
+            🛠 Manage clips {toolsOpen ? '▲' : '▼'}
           </button>
 
           {toolsOpen && (
             <div style={{ marginTop: 4 }}>
-              {hasBones && (
-                <div className="kf-actions" style={{ marginTop: 8 }}>
-                  <button
-                    className="btn secondary"
-                    onClick={() => bvhRef.current?.click()}
-                    disabled={bvhBusy}
-                  >
-                    {bvhBusy ? 'Parsing…' : 'Import motion (.bvh)'}
-                  </button>
+              {activeClipName && importedClipNames.includes(activeClipName) && !renameOpen && (
+                <button className="btn secondary" style={{ marginTop: 6 }} onClick={onOpenRename} title="Rename this clip">
+                  ✏️ Rename
+                </button>
+              )}
+
+              {renameOpen && (
+                <div style={{ marginTop: 6 }}>
                   <input
-                    ref={bvhRef}
-                    type="file"
-                    accept=".bvh"
-                    style={{ display: 'none' }}
-                    onChange={onPickBVH}
+                    className="select"
+                    style={{ width: '100%', fontSize: 13, padding: '8px 10px' }}
+                    value={renameText}
+                    autoFocus
+                    onFocus={(e) => e.target.select()}
+                    onChange={(e) => setRenameText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') onConfirmRename()
+                      if (e.key === 'Escape') setRenameOpen(false)
+                    }}
                   />
+                  <div className="kf-actions" style={{ marginTop: 6 }}>
+                    <button className="btn" onClick={onConfirmRename}>Save</button>
+                    <button className="btn secondary" onClick={() => setRenameOpen(false)}>Cancel</button>
+                  </div>
                 </div>
               )}
 
@@ -1238,23 +1423,6 @@ export default function AnimationPanel() {
                 </div>
               )}
 
-              <div className="kf-actions" style={{ marginTop: 6 }}>
-                <button
-                  className="btn secondary"
-                  onClick={onOpenClip}
-                  title="Open a clip file from disk — pick one exported from here (or by someone else)"
-                >
-                  📂 Open Clip…
-                </button>
-                <input
-                  ref={clipFileRef}
-                  type="file"
-                  accept=".3dclip,.json,application/json"
-                  style={{ display: 'none' }}
-                  onChange={onImportClipFile}
-                />
-              </div>
-
               {clipNames.length > 1 && (
                 <>
                   <div className="field-label" style={{ marginTop: 10 }}>
@@ -1335,6 +1503,45 @@ export default function AnimationPanel() {
 
           {bvhMsg && <div className="pose-msg">{bvhMsg}</div>}
         </>
+      )}
+
+      {hasBones && !mapping && (
+        <details className="anim-disclosure" style={{ marginTop: 8 }}>
+          <summary>More character tools</summary>
+          <div className="anim-disclosure-content">
+            {source === 'clip' && activeClipName && (
+              <>
+                <button className="btn secondary" style={{ marginTop: 6 }} onClick={onApplyFrameAsPose} title="Freeze the current frame as an editable pose">
+                  Use as pose
+                </button>
+                <label
+                  style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, fontSize: 12 }}
+                  title="Also carry over the clip's original forward/side movement as position keyframes when editing."
+                >
+                  <input
+                    type="checkbox"
+                    checked={preserveMotion}
+                    onChange={(e) => setPreserveMotion(e.target.checked)}
+                  />
+                  Keep original movement when editing
+                </label>
+              </>
+            )}
+            {!mapping && (
+              <>
+                <button
+                  className="btn secondary"
+                  style={{ marginTop: 8 }}
+                  onClick={onRagdoll}
+                  title="Let the character fall limply to the ground from its current pose — the fall is saved as a clip"
+                >
+                  💥 Ragdoll to ground
+                </button>
+                {ragdollMsg && <div className="pose-msg">{ragdollMsg}</div>}
+              </>
+            )}
+          </div>
+        </details>
       )}
 
       {/* Mocap bone-mapping editor */}
@@ -1431,7 +1638,7 @@ export default function AnimationPanel() {
 
       {/* Transport */}
       <div className="transport">
-        <button className="btn" onClick={onPauseToggle}>
+        <button className="btn" onClick={onPauseToggle} disabled={source === 'clip' && !activeClipName}>
           {playing ? '❚❚ Pause' : '▶ Play'}
         </button>
         <button className="btn secondary" onClick={onStop} disabled={playback === 'stopped'}>
@@ -1533,63 +1740,6 @@ export default function AnimationPanel() {
               />
               s
             </label>
-            <label>
-              FPS
-              <input
-                type="number"
-                min={1}
-                step={1}
-                value={animFps}
-                onChange={(e) => st().setAnimFps(Math.max(1, Math.round(Number(e.target.value))))}
-              />
-            </label>
-          </div>
-
-          <label className="slider-row">
-            <span className="slider-label">Insert at</span>
-            <input
-              type="range"
-              min={0}
-              max={animDuration}
-              step={1 / animFps}
-              value={insertTime}
-              onChange={(e) => st().setInsertTime(Number(e.target.value))}
-            />
-            <EditableValue
-              value={insertTime}
-              min={0}
-              max={animDuration}
-              onChange={(v) => st().setInsertTime(v)}
-              format={(v) => v.toFixed(2) + 's'}
-              label="Insert keyframe at (seconds)"
-            />
-          </label>
-
-          <FrameStepper
-            time={insertTime}
-            duration={animDuration}
-            fps={animFps}
-            onChange={(t) => st().setInsertTime(t)}
-          />
-
-          <div className="kf-actions" style={{ alignItems: 'center' }}>
-            <input
-              type="number"
-              min={1}
-              step={1}
-              value={blankFrames}
-              onChange={(e) => setBlankFrames(Math.max(1, Math.round(Number(e.target.value))))}
-              className="text-input"
-              style={{ width: 60 }}
-              title="How many blank frames to insert"
-            />
-            <button
-              className="btn secondary"
-              onClick={onInsertBlank}
-              title="Push every keyframe at or after the insert time later by this many frames, opening a hold/gap"
-            >
-              Insert blank frames
-            </button>
           </div>
 
           <div className="kf-actions">
@@ -1612,127 +1762,134 @@ export default function AnimationPanel() {
 
           <button
             className="btn secondary"
-            style={{ marginTop: 6 }}
-            onClick={onKeyPosition}
-            title="Save the character's world position at this time (move it in Objects first)"
+            style={{ marginTop: 8 }}
+            onClick={onSaveAsClip}
+            title="Save the animation you created or edited as a new reusable clip."
           >
-            Keyframe position {animData.root && animData.root.length ? `(${animData.root.length})` : ''}
+            Save as clip…
           </button>
 
-          <label
-            style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, fontSize: 12 }}
-            title="When saving a position keyframe, shift every LATER position key by the same amount — so moving the character mid-clip carries the rest of the movement along with it instead of leaving it behind."
-          >
-            <input
-              type="checkbox"
-              checked={rippleRootEdit}
-              onChange={(e) => st().setRippleRootEdit(e.target.checked)}
-            />
-            Carry this move onto later frames
-          </label>
+          <details className="anim-disclosure">
+            <summary>Advanced keyframe tools</summary>
+            <div className="anim-disclosure-content">
+              <label className="anim-fps-field">
+                Frames per second
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={animFps}
+                  onChange={(e) => st().setAnimFps(Math.max(1, Math.round(Number(e.target.value))))}
+                />
+              </label>
 
-          <label
-            style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, fontSize: 12 }}
-            title="Automatically save a position keyframe whenever you drag the character with the move gizmo, at whatever time the playhead is on — makes the clip's movement your own without needing to press Keyframe position every time."
-          >
-            <input
-              type="checkbox"
-              checked={autoKeyMovement}
-              onChange={(e) => st().setAutoKeyMovement(e.target.checked)}
-            />
-            Auto-save movement when I move the character
-          </label>
-
-          {kfMsg && <div className="pose-msg">{kfMsg}</div>}
-
-          {/* All keyframes: click a row to jump there (re-pose + re-key to edit),
-              or delete it. The dot marks whichever the selected joint is keyed at. */}
-          <div className="field-label" style={{ marginTop: 10 }}>
-            All keyframes ({allKeyframes.length})
-          </div>
-          <div className="kf-list">
-            {allKeyframes.length === 0 && (
-              <div className="empty" style={{ padding: '6px 8px' }}>
-                None yet — add keyframes above, then Play.
-              </div>
-            )}
-            {allKeyframes.map((k) => {
-              const hasSelBone =
-                selectedBoneName &&
-                (animData.tracks[selectedBoneName] || []).some(
-                  (b) => Math.abs(b.time - k.time) < 1e-6,
-                )
-              return (
-                <div
-                  key={k.time}
-                  className={'kf-list-row' + (Math.abs(k.time - insertTime) < 1e-4 ? ' active' : '')}
-                  title="Jump here (then re-pose and re-key to edit)"
-                  onClick={() => st().setInsertTime(k.time)}
+              <div className="kf-actions" style={{ alignItems: 'center', marginTop: 8 }}>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={blankFrames}
+                  onChange={(e) => setBlankFrames(Math.max(1, Math.round(Number(e.target.value))))}
+                  className="text-input"
+                  style={{ width: 60 }}
+                  title="How many blank frames to insert"
+                  aria-label="Blank frames to insert"
+                />
+                <button
+                  className="btn secondary"
+                  onClick={onInsertBlank}
+                  title="Push every keyframe at or after the insert time later by this many frames, opening a hold/gap"
                 >
-                  <span className="kf-time">{k.time.toFixed(2)}s</span>
-                  <span className="kf-what">
-                    {k.joints > 0 && (
-                      <span className={'kf-tag' + (hasSelBone ? ' sel' : '')}>
-                        {k.joints} joint{k.joints > 1 ? 's' : ''}
-                      </span>
-                    )}
-                    {k.pos && <span className="kf-tag pos">position</span>}
-                    {k.parts > 0 && (
-                      <span className="kf-tag">
-                        {k.parts} part{k.parts > 1 ? 's' : ''}
-                      </span>
-                    )}
-                    {k.cameras > 0 && (
-                      <span className="kf-tag pos">
-                        {k.cameras} camera{k.cameras > 1 ? 's' : ''}
-                      </span>
-                    )}
-                    {k.lights > 0 && (
-                      <span className="kf-tag pos">
-                        {k.lights} light{k.lights > 1 ? 's' : ''}
-                      </span>
-                    )}
-                    {k.morphs > 0 && <span className="kf-tag">{k.morphs} shape key{k.morphs > 1 ? 's' : ''}</span>}
-                    {k.cut && <span className="kf-tag pos">✂ {k.cut}</span>}
-                  </span>
-                  <button
-                    className="kf-del"
-                    title="Delete all keyframes at this time"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      st().deleteAllAtTime(k.time)
-                    }}
-                  >
-                    ×
-                  </button>
-                </div>
-              )
-            })}
-          </div>
+                  Insert blank frames
+                </button>
+              </div>
 
-          {selectedBoneName && boneKeys.length > 0 && (
-            <button
-              className="btn secondary"
-              style={{ marginTop: 6 }}
-              onClick={() => st().deleteKeyframe(selectedBoneName, snap(insertTime))}
-              title={`Remove only ${selectedBoneName}'s keyframe at the current time`}
-            >
-              Delete “{selectedBoneName}” key here
-            </button>
-          )}
+              {kfMsg && <div className="pose-msg">{kfMsg}</div>}
 
-          <div className="kf-actions" style={{ marginTop: 8 }}>
-            <button
-              className="btn secondary"
-              onClick={onSaveAsClip}
-              title="Turn what you've keyframed into a playable clip, usable anywhere clips are — Play a clip, Save, Export, Trim, Combine"
-            >
-              🎬 Save as clip
-            </button>
-            <button className="btn secondary" onClick={() => st().clearAnim()}>
-              Clear
-            </button>
-          </div>
+              {/* All keyframes: click a row to jump there (re-pose + re-key to edit),
+                  or delete it. The dot marks whichever the selected joint is keyed at. */}
+              <div className="field-label" style={{ marginTop: 10 }}>
+                All keyframes ({allKeyframes.length})
+              </div>
+              <div className="kf-list">
+                {allKeyframes.length === 0 && (
+                  <div className="empty" style={{ padding: '6px 8px' }}>
+                    None yet — add keyframes above, then Play.
+                  </div>
+                )}
+                {allKeyframes.map((k) => {
+                  const hasSelBone =
+                    selectedBoneName &&
+                    (animData.tracks[selectedBoneName] || []).some(
+                      (b) => Math.abs(b.time - k.time) < 1e-6,
+                    )
+                  return (
+                    <div
+                      key={k.time}
+                      className={'kf-list-row' + (Math.abs(k.time - currentTime) < 1e-4 ? ' active' : '')}
+                      title="Jump here (then re-pose and re-key to edit)"
+                      onClick={() => onScrub(k.time)}
+                    >
+                      <span className="kf-time">{k.time.toFixed(2)}s</span>
+                      <span className="kf-what">
+                        {k.joints > 0 && (
+                          <span className={'kf-tag' + (hasSelBone ? ' sel' : '')}>
+                            {k.joints} joint{k.joints > 1 ? 's' : ''}
+                          </span>
+                        )}
+                        {k.pos && <span className="kf-tag pos">position</span>}
+                        {k.parts > 0 && (
+                          <span className="kf-tag">
+                            {k.parts} part{k.parts > 1 ? 's' : ''}
+                          </span>
+                        )}
+                        {k.cameras > 0 && (
+                          <span className="kf-tag pos">
+                            {k.cameras} camera{k.cameras > 1 ? 's' : ''}
+                          </span>
+                        )}
+                        {k.lights > 0 && (
+                          <span className="kf-tag pos">
+                            {k.lights} light{k.lights > 1 ? 's' : ''}
+                          </span>
+                        )}
+                        {k.morphs > 0 && <span className="kf-tag">{k.morphs} shape key{k.morphs > 1 ? 's' : ''}</span>}
+                        {k.cut && <span className="kf-tag pos">✂ {k.cut}</span>}
+                      </span>
+                      <button
+                        className="kf-del"
+                        title="Delete all keyframes at this time"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          st().deleteAllAtTime(k.time)
+                          onCharacterTrackChange(st().currentTime)
+                        }}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+
+              {selectedBoneName && boneKeys.length > 0 && (
+                <button
+                  className="btn secondary"
+                  style={{ marginTop: 6 }}
+                  onClick={() => st().deleteKeyframe(selectedBoneName, snap(currentTime))}
+                  title={`Remove only ${selectedBoneName}'s keyframe at the current time`}
+                >
+                  Delete “{selectedBoneName}” key here
+                </button>
+              )}
+
+              <div className="kf-actions" style={{ marginTop: 8 }}>
+                <button className="btn secondary" onClick={() => st().clearAnim()}>
+                  Clear
+                </button>
+              </div>
+            </div>
+          </details>
         </div>
       )}
     </div>

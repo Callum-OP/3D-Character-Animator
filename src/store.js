@@ -985,10 +985,44 @@ export const useStore = create((set) => ({
       root.sort((a, b) => a.time - b.time)
       return { animData: { ...s.animData, root } }
     }),
+  // A position key is saved together with a full-body pose key at the same time
+  // (see onCharacterKeyframe), and moveRootKeyframe carries that pose along — so
+  // deleting the position key has to remove the pose with it, otherwise the
+  // animation still runs on to (and ends on) the deleted key's pose.
   deleteRootKeyframe: (time) =>
-    set((s) => ({
-      animData: { ...s.animData, root: (s.animData.root || []).filter((k) => k.time !== time) },
-    })),
+    set((s) => {
+      const near = (k) => Math.abs(k.time - time) <= 1e-6
+      const tracks = {}
+      for (const [name, keys] of Object.entries(s.animData.tracks || {})) {
+        const kept = keys.filter((k) => !near(k))
+        if (kept.length) tracks[name] = kept
+      }
+      return {
+        animData: { ...s.animData, root: (s.animData.root || []).filter((k) => !near(k)), tracks },
+      }
+    }),
+  moveRootKeyframe: (fromTime, toTime) =>
+    set((s) => {
+      if (fromTime === toTime) return s
+      const near = (time) => Math.abs(time - fromTime) <= 1e-6
+      const root = (s.animData.root || []).filter((key) =>
+        !near(key.time) && Math.abs(key.time - toTime) > 1e-6,
+      )
+      const movingRoot = (s.animData.root || []).find((key) => near(key.time))
+      if (movingRoot) {
+        root.push({ ...movingRoot, time: toTime })
+        root.sort((a, b) => a.time - b.time)
+      }
+
+      const tracks = { ...s.animData.tracks }
+      for (const [name, keys] of Object.entries(tracks)) {
+        const moving = keys.filter((key) => near(key.time)).map((key) => ({ ...key, time: toTime }))
+        if (!moving.length) continue
+        const kept = keys.filter((key) => !near(key.time) && Math.abs(key.time - toTime) > 1e-6)
+        tracks[name] = [...kept, ...moving].sort((a, b) => a.time - b.time)
+      }
+      return { animData: { ...s.animData, root, tracks } }
+    }),
 
   // Remove every keyframe (joints, position, parts, cameras, lights) at a given time.
   deleteAllAtTime: (time) =>
@@ -1041,9 +1075,12 @@ export const useStore = create((set) => ({
   addKeyframesAtTime: (list, time) =>
     set((s) => {
       const tracks = { ...s.animData.tracks }
-      for (const { name, quat } of list) {
+      for (const { name, quat, pos } of list) {
         const keys = (tracks[name] || []).filter((k) => k.time !== time)
-        keys.push({ time, quat })
+        const existingPos = (tracks[name] || []).find((k) => k.time === time)?.pos
+        const key = { time, quat }
+        if (pos || existingPos) key.pos = pos || existingPos
+        keys.push(key)
         keys.sort((a, b) => a.time - b.time)
         tracks[name] = keys
       }

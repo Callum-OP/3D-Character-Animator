@@ -75,6 +75,7 @@ describe('mirrorClip', () => {
     initAnimation({
       requestRender: () => {},
       suspendPosing: () => {},
+      resumePosing: () => {},
       onTime: () => {},
       setContinuousRender: () => {},
       onEnded: () => {},
@@ -101,6 +102,7 @@ describe('mirrorClip', () => {
     initAnimation({
       requestRender: () => {},
       suspendPosing: () => {},
+      resumePosing: () => {},
       onTime: () => {},
       setContinuousRender: () => {},
       onEnded: () => {},

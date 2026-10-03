@@ -54,6 +54,7 @@ export default function EditableValue({
         ref={inputRef}
         type="number"
         className={`${className} editable-value-input`}
+        aria-label={label}
         min={min != null ? toInput(min) : undefined}
         max={max != null ? toInput(max) : undefined}
         step="any"

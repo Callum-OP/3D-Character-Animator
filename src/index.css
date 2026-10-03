@@ -1270,10 +1270,97 @@ input.xform-value {
   margin-top: 10px;
 }
 
+.movement-heading {
+  padding-bottom: 6px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--panel-border);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.movement-track {
+  margin: 10px 0;
+  padding: 10px;
+  border: 1px solid var(--panel-border);
+  border-radius: 7px;
+  background: var(--panel-bg);
+}
+
+.clip-source-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.clip-source-row .select {
+  grid-column: 1 / -1;
+  width: 100%;
+}
+
 .keyframe-editor {
   margin-top: 12px;
   border-top: 1px solid var(--panel-border);
   padding-top: 8px;
+}
+
+.anim-disclosure {
+  margin-top: 10px;
+  border: 1px solid var(--panel-border);
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+.anim-disclosure summary {
+  padding: 8px 10px;
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.anim-disclosure summary::-webkit-details-marker {
+  display: none;
+}
+
+.anim-disclosure summary::after {
+  content: '▸';
+  float: right;
+  color: var(--text-dim);
+  transition: transform 0.12s ease, color 0.12s ease;
+}
+
+.anim-disclosure[open] summary::after {
+  transform: rotate(90deg);
+  color: var(--accent);
+}
+
+.anim-disclosure summary:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.anim-disclosure-content {
+  padding: 8px;
+  border-top: 1px solid var(--panel-border);
+}
+
+.anim-fps-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.anim-fps-field input {
+  width: 64px;
+  padding: 4px 6px;
+  background: var(--panel-bg);
+  color: var(--text);
+  border: 1px solid var(--panel-border);
+  border-radius: 5px;
+  font-size: 12px;
 }
 
 .kf-numbers {

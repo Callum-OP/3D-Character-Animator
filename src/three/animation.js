@@ -741,6 +741,7 @@ export function clipFromTracks(tracks, duration, name, root, meshes = null, morp
   if (!a.model) return null
   const clip = buildEditClip(tracks, duration, {}, root)
   clip.name = name || 'My clip'
+  if (root && root.length) clip.rootFromKeys = true // baked copy of animData.root — see rebakeClipRoot
   // Stash the active character's mesh-transform/shape-key edits on the clip
   // itself (name-keyed — see namifyMeshTracks/namifyMorphTracks) so they
   // travel with it through Save Clip As / Open Clip and project save/load,
@@ -878,6 +879,64 @@ function setupOverlayTracks(animData) {
     a.hasViewRest = true
     a.lastCut = undefined
   }
+}
+
+// Root-travel tracks for the AnimationMixer's own root object (an unqualified
+// ".position"/".quaternion" name binds to a.model.root — see buildEditClip).
+function makeRootTracks(root) {
+  const sorted = [...root].sort((x, y) => x.time - y.time)
+  const times = sorted.map((k) => k.time)
+  const posValues = []
+  const quatValues = []
+  for (const k of sorted) {
+    posValues.push(k.pos[0], k.pos[1], k.pos[2])
+    quatValues.push(k.quat[0], k.quat[1], k.quat[2], k.quat[3])
+  }
+  return [
+    new THREE.VectorKeyframeTrack('.position', times, posValues),
+    new THREE.QuaternionKeyframeTrack('.quaternion', times, quatValues),
+  ]
+}
+
+// A clip made with "Save as clip" carries a COPY of the position keys baked
+// into its own tracks (clipFromTracks), on top of the live animData.root
+// overlay the panel edits. Deleting/moving a position key only touched the
+// overlay, so once the overlay was empty the stale baked copy took over again
+// and playback kept following the deleted keys. Keep the baked copy in step
+// with the keys instead (and keep the playhead/loop/speed untouched).
+function rebakeClipRoot(keys) {
+  const clip = a.clip
+  if (!clip || !clip.rootFromKeys || !a.mixer || !a.action) return
+  const { time, paused, timeScale, clampWhenFinished, loop } = a.action
+  clip.tracks = clip.tracks.filter((t) => t.name !== '.position' && t.name !== '.quaternion')
+  if (keys && keys.length) clip.tracks.push(...makeRootTracks(keys))
+  a.mixer.uncacheClip(clip) // drop the old bindings (and the old action with them)
+  const action = a.mixer.clipAction(clip)
+  action.reset()
+  action.setLoop(loop, Infinity)
+  action.clampWhenFinished = clampWhenFinished
+  action.timeScale = timeScale
+  action.play()
+  action.time = time
+  action.paused = paused
+  a.action = action
+  a.mixer.update(0)
+}
+
+// Refresh only the separately-authored character placement keys while the
+// active clip is running. This lets auto-keying update root motion without
+// rebuilding or interrupting the pose animation.
+export function updateRootMotionTrack(keys) {
+  a.editRoot = keys && keys.length ? [...keys].sort((x, y) => x.time - y.time) : null
+  if (!a.model || !a.action) return
+  rebakeClipRoot(keys)
+  if (a.editRoot) {
+    sampleRoot(a.action.time)
+  } else if (a.rootRest) {
+    a.model.root.position.fromArray(a.rootRest.pos)
+    a.model.root.quaternion.fromArray(a.rootRest.quat)
+  }
+  a.refs.requestRender()
 }
 
 export function selectEdit(animData, duration, opts = {}) {
@@ -1039,6 +1098,7 @@ export function stop() {
   if (!anyPlaying()) a.refs.setContinuousRender(false)
   restoreRest()
   restoreRootRest()
+  if (a.editRoot?.length && a.editRoot[0].time <= 1e-6) sampleRoot(0)
   applyMeshPlaybackSnapshot(a.meshRest)
   a.meshRest = null
   applyMorphPlaybackSnapshot(a.morphRest)
@@ -1384,6 +1444,11 @@ function sampleRoot(t) {
   const keys = a.editRoot
   if (!keys || keys.length === 0 || !a.model) return
   const root = a.model.root
+  if (t < keys[0].time && a.rootRest) {
+    root.position.fromArray(a.rootRest.pos)
+    root.quaternion.fromArray(a.rootRest.quat)
+    return
+  }
   if (t <= keys[0].time) return applyRootKey(root, keys[0])
   if (t >= keys[keys.length - 1].time) return applyRootKey(root, keys[keys.length - 1])
   let i = 0
@@ -1419,8 +1484,9 @@ function activate(clip, opts) {
   if (!a.mixer) return
   a.mixer.stopAllAction()
   a.clip = clip
-  // Remember where the character is placed now, so Stop returns it there.
-  if (a.model) {
+  // Keep the original placement when rebuilding/reselecting an active
+  // timeline; otherwise a scrubbed root key becomes the new "rest" position.
+  if (a.model && !a.rootRest) {
     a.rootRest = { pos: a.model.root.position.toArray(), quat: a.model.root.quaternion.toArray() }
   }
   const action = a.mixer.clipAction(clip)
@@ -1431,7 +1497,13 @@ function activate(clip, opts) {
   action.paused = true
   action.play() // activate so the mixer evaluates it (stays put while paused)
   a.action = action
-  a.refs.suspendPosing() // a source is armed; posing steps aside
+  // Arming leaves the action PAUSED, and a paused timeline is one you can pose
+  // on (pause() hands control back for the same reason) — so posing only steps
+  // aside while something is actually playing. Suspending here left the gizmo
+  // gone after keying a position, New animation, scrubbing from Stop, etc.,
+  // because those paths just flag the UI "paused" without ever resuming.
+  if (anyPlaying()) a.refs.suspendPosing()
+  else a.refs.resumePosing()
   a.mixer.update(0) // show frame 0
   a.refs.onTime(0)
   a.refs.requestRender()
@@ -1445,18 +1517,7 @@ function buildEditClip(tracks, duration, morphs = {}, root = null) {
   // mixer this app creates — rather than to any particular bone. That's what
   // lets this ride along in a perfectly normal, serializable AnimationClip
   // instead of needing the separate live "root" overlay to be present.
-  if (root && root.length) {
-    const sorted = [...root].sort((x, y) => x.time - y.time)
-    const times = sorted.map((k) => k.time)
-    const posValues = []
-    const quatValues = []
-    for (const k of sorted) {
-      posValues.push(k.pos[0], k.pos[1], k.pos[2])
-      quatValues.push(k.quat[0], k.quat[1], k.quat[2], k.quat[3])
-    }
-    kfTracks.push(new THREE.VectorKeyframeTrack('.position', times, posValues))
-    kfTracks.push(new THREE.QuaternionKeyframeTrack('.quaternion', times, quatValues))
-  }
+  if (root && root.length) kfTracks.push(...makeRootTracks(root))
   for (const [name, keys] of Object.entries(tracks)) {
     if (!keys || keys.length === 0) continue
     const sorted = [...keys].sort((x, y) => x.time - y.time)
@@ -1511,6 +1572,8 @@ function onFinished(id) {
   if (id === activeId) globalRefs.onEnded() // only the edited character's UI needs telling
   if (!anyPlaying()) {
     globalRefs.setContinuousRender(false)
+    // The clip ran out and the UI now reads "paused" — give posing back, same as pause().
+    globalRefs.resumePosing()
     globalRefs.requestRender()
   }
 }

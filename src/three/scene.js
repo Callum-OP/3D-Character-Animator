@@ -92,6 +92,7 @@ import {
   scrub,
   selectClip,
   selectEdit,
+  updateRootMotionTrack,
   play,
   stop,
   getImportedClipsData,
@@ -448,10 +449,15 @@ export function initScene(container) {
       })
       return
     }
-    if (!st.autoKeyMovement || !state.currentModel || root !== state.currentModel.root) return
+    if (
+      !st.autoKeyMovement ||
+      !state.currentModel ||
+      root !== state.currentModel.root
+    ) return
     const raw = st.currentTime || 0
     const t = Math.round(raw * fps) / fps
     st.addRootKeyframe(t, root.position.toArray(), root.quaternion.toArray(), st.rippleRootEdit)
+    updateRootMotionTrack(useStore.getState().animData.root)
   })
 
   // --- Placeable cameras (frame shots, look through them, keyframe them) ---

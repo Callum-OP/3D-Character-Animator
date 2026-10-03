@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import * as THREE from 'three'
-import { initAnimation, setAnimationModel, selectClip, play, pause, stop } from '../three/animation.js'
+import { initAnimation, setAnimationModel, selectClip, play, pause, stop, scrub, updateRootMotionTrack } from '../three/animation.js'
 
 // Regression test for: "clicking a mesh/bone does nothing while a clip is
 // PAUSED (not stopped)". play() suspends posing/mesh-edit (suspendPosing()
@@ -49,26 +49,96 @@ describe('play/pause/stop hand-off to posing + mesh-edit', () => {
     const { refs, calls } = makeRefs()
     initAnimation(refs)
     setAnimationModel(buildFakeModel(), 'char-pause')
-    selectClip('Walk') // activating a clip already suspends (arms it, paused at frame 0)
+    selectClip('Walk') // arming leaves the clip paused at frame 0, so posing stays usable
+    expect(calls.suspend).toBe(0)
+    expect(calls.resume).toBe(1)
+
+    play()
     expect(calls.suspend).toBe(1)
 
-    play()
-    expect(calls.resume).toBe(0)
-
     pause()
-    expect(calls.resume).toBe(1) // <- this is the fix; used to stay 0
+    expect(calls.resume).toBe(2) // <- pause() hands posing back (used to stay put)
 
     play()
-    expect(calls.suspend).toBe(3) // resuming playback re-suspends as before
+    expect(calls.suspend).toBe(2) // resuming playback re-suspends as before
   })
 
   it('stop() still resumes exactly as it did before', () => {
     const { refs, calls } = makeRefs()
     initAnimation(refs)
     setAnimationModel(buildFakeModel(), 'char-stop')
-    selectClip('Walk') // suspends once already
+    selectClip('Walk')
     play()
+    const beforeStop = calls.resume
     stop()
-    expect(calls.resume).toBe(1)
+    expect(calls.resume).toBe(beforeStop + 1)
+  })
+
+  it('stop() follows the updated root track instead of a stale activation position', () => {
+    const { refs } = makeRefs()
+    initAnimation(refs)
+    const model = buildFakeModel()
+    model.root.position.set(4, 0, 0)
+    setAnimationModel(model, 'char-root-stop')
+    selectClip('Walk', {}, {
+      root: [
+        { time: 0, pos: [1, 0, 0], quat: [0, 0, 0, 1] },
+        { time: 1, pos: [8, 0, 0], quat: [0, 0, 0, 1] },
+      ],
+    })
+
+    scrub(1)
+    expect(model.root.position.x).toBe(8)
+    updateRootMotionTrack([{ time: 0, pos: [2, 0, 0], quat: [0, 0, 0, 1] }])
+    scrub(1)
+    expect(model.root.position.x).toBe(2)
+    stop()
+    expect(model.root.position.x).toBe(2)
+  })
+
+  it('keeps the original placement when rebuilding a root track after scrubbing', () => {
+    const { refs } = makeRefs()
+    initAnimation(refs)
+    const model = buildFakeModel()
+    model.root.position.set(4, 0, 0)
+    setAnimationModel(model, 'char-root-rebuild')
+    selectClip('Walk', {}, {
+      root: [{ time: 1, pos: [8, 0, 0], quat: [0, 0, 0, 1] }],
+    })
+    scrub(1)
+    expect(model.root.position.x).toBe(8)
+
+    selectClip('Walk', {}, {
+      root: [{ time: 1, pos: [9, 0, 0], quat: [0, 0, 0, 1] }],
+    })
+    scrub(0)
+    expect(model.root.position.x).toBe(4)
+    stop()
+    expect(model.root.position.x).toBe(4)
+  })
+
+  it('applies deleted root keys immediately and does not replay them after stopping', () => {
+    const { refs } = makeRefs()
+    initAnimation(refs)
+    const model = buildFakeModel()
+    model.root.position.set(4, 0, 0)
+    setAnimationModel(model, 'char-root-delete')
+    selectClip('Walk', {}, {
+      root: [
+        { time: 0, pos: [4, 0, 0], quat: [0, 0, 0, 1] },
+        { time: 1, pos: [8, 0, 0], quat: [0, 0, 0, 1] },
+      ],
+    })
+
+    scrub(1)
+    expect(model.root.position.x).toBe(8)
+    updateRootMotionTrack([{ time: 0, pos: [4, 0, 0], quat: [0, 0, 0, 1] }])
+    expect(model.root.position.x).toBe(4)
+
+    stop()
+    expect(model.root.position.x).toBe(4)
+    selectClip('Walk', {}, { root: [{ time: 0, pos: [4, 0, 0], quat: [0, 0, 0, 1] }] })
+    scrub(1)
+    expect(model.root.position.x).toBe(4)
   })
 })
