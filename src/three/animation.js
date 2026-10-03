@@ -322,6 +322,7 @@ function wrapClipJSON(clip) {
     clip: clip.toJSON(),
     meshTracks: clip.charMeshTracks || null,
     morphTracks: clip.charMorphTracks || null,
+    editKeys: clip.editKeys || null, // the keyframes this clip was made from — see clipFromTracks
   }
 }
 
@@ -335,6 +336,10 @@ function unwrapClipJSON(json) {
   const clip = THREE.AnimationClip.parse(clipJSON)
   clip.charMeshTracks = isWrapped ? json.meshTracks || null : null
   clip.charMorphTracks = isWrapped ? json.morphTracks || null : null
+  clip.editKeys = isWrapped ? json.editKeys || null : null
+  // The baked position track is a copy of the remembered position keys, and
+  // is only kept in step with them (see rebakeClipRoot) when this is set.
+  if (clip.editKeys?.root?.length) clip.rootFromKeys = true
   return clip
 }
 
@@ -762,11 +767,89 @@ function withClipOverlay(animData, clip) {
   return { ...(animData || {}), meshes, morphs }
 }
 
+function cloneKeys(value) {
+  return JSON.parse(JSON.stringify(value ?? null))
+}
+
+// The keyframes remembered by a clip made with "Save as clip" (or reopened from
+// its file): { tracks, root, duration } as copies, or null for clips that are
+// pure baked motion (BVH imports, clips built into the model, trims, …).
+export function getClipEditKeys(name) {
+  const clip = findClip(name)
+  return clip && clip.editKeys ? cloneKeys(clip.editKeys) : null
+}
+
+// Record that the active character's editable keyframes (animData) now mirror
+// the keys remembered by clip `name` (or pass null once they no longer do).
+// Edits then rebuild that clip; see rebakeClipFromKeys.
+export function markClipKeysAdopted(name) {
+  a.adoptedClip = name || null
+}
+
+export function isClipKeysAdopted(name) {
+  return !!name && a.adoptedClip === name
+}
+
+// Rebuild a remembered-keys clip from edited keys (after a key was deleted,
+// moved or added), swapping the new curves into the clip IN PLACE so its name,
+// place in the clip list and — if it's the one on screen — playhead, pause
+// state, loop and speed are all kept. Returns false if `name` isn't such a clip.
+export function rebakeClipFromKeys(name, keys) {
+  const clip = findClip(name)
+  if (!clip || !clip.editKeys || !keys) return false
+  // Only when the editing keys ARE this clip's keys (adopted) — otherwise the
+  // store could hold an unrelated unsaved animation and overwrite the clip.
+  if (a.adoptedClip !== name) return false
+  const duration = Math.max(0.1, Number(keys.duration) || clip.editKeys.duration || 0.1)
+  const root = keys.root || []
+  const fresh = buildEditClip(keys.tracks || {}, duration, {}, root)
+  clip.tracks = fresh.tracks
+  clip.duration = duration
+  clip.rootFromKeys = root.length > 0
+  clip.editKeys = { tracks: cloneKeys(keys.tracks || {}), root: cloneKeys(root), duration }
+  if (!a.mixer) return true
+  // The live placement overlay mirrors the position keys too (see
+  // updateRootMotionTrack); keep it in step so nothing keeps following a
+  // deleted key no matter which caller remembers to refresh it.
+  if (a.clip === clip) a.editRoot = root.length ? [...root].sort((x, y) => x.time - y.time) : null
+  const live = a.clip === clip && a.action
+  const saved = live
+    ? {
+        time: a.action.time,
+        paused: a.action.paused,
+        timeScale: a.action.timeScale,
+        clampWhenFinished: a.action.clampWhenFinished,
+        loop: a.action.loop,
+      }
+    : null
+  a.mixer.uncacheClip(clip) // drop the old bindings (and the old action with them)
+  if (saved) {
+    const action = a.mixer.clipAction(clip)
+    action.reset()
+    action.setLoop(saved.loop, Infinity)
+    action.clampWhenFinished = saved.clampWhenFinished
+    action.timeScale = saved.timeScale
+    action.play()
+    action.time = Math.min(saved.time, duration)
+    action.paused = saved.paused
+    a.action = action
+    a.mixer.update(0)
+    a.refs.requestRender()
+  }
+  return true
+}
+
 export function clipFromTracks(tracks, duration, name, root, meshes = null, morphs = null) {
   if (!a.model) return null
   const clip = buildEditClip(tracks, duration, {}, root)
   clip.name = name || 'My clip'
   if (root && root.length) clip.rootFromKeys = true // baked copy of animData.root — see rebakeClipRoot
+  // Remember the keyframes this clip was built from. A saved clip is otherwise
+  // just baked rotation curves — deleting or moving a key afterwards could only
+  // touch the live editing data while the clip kept playing the old pose.
+  // With the keys stored on the clip (and in its file), selecting it brings
+  // them back and edits rebuild the clip from them (rebakeClipFromKeys).
+  clip.editKeys = { tracks: cloneKeys(tracks), root: cloneKeys(root || []), duration }
   // Stash the active character's mesh-transform/shape-key edits on the clip
   // itself (name-keyed — see namifyMeshTracks/namifyMorphTracks) so they
   // travel with it through Save Clip As / Open Clip and project save/load,

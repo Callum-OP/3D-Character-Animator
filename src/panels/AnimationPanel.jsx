@@ -24,7 +24,12 @@ import {
   renameClip,
   describeClipBoneMismatch,
   updateRootMotionTrack,
+  getClipEditKeys,
+  rebakeClipFromKeys,
+  markClipKeysAdopted,
+  isClipKeysAdopted,
 } from '../three/animation.js'
+import { runWithoutHistoryCapture } from '../three/undoHistory.js'
 import {
   listRecentClips,
   removeRecentClip,
@@ -614,6 +619,53 @@ export default function AnimationPanel() {
 
   // --- transport handlers ---------------------------------------------------
 
+  // A clip made with "Save as clip" remembers the keyframes it was built from.
+  // Selecting it loads those keys back into the editor (position keys list,
+  // delete/move/add) so edits rebuild the clip rather than only touching a
+  // live overlay while the baked clip keeps its old pose. Returns true when the
+  // editor now mirrors the clip's keys. Never silently throws away unsaved
+  // keyframes: if the editor holds different ones, it asks first.
+  function adoptClipKeys(name) {
+    const keys = name ? getClipEditKeys(name) : null
+    if (!keys) {
+      markClipKeysAdopted(null)
+      return false
+    }
+    const cur = st().animData
+    const fingerprint = (tracks, root) => JSON.stringify([tracks || {}, root || []])
+    if (fingerprint(cur.tracks, cur.root) !== fingerprint(keys.tracks, keys.root)) {
+      const hasCurrent = Object.keys(cur.tracks || {}).length > 0 || (cur.root || []).length > 0
+      if (
+        hasCurrent &&
+        !window.confirm(
+          `“${name}” remembers its own keyframes. Load them into the editor? This replaces the keyframes currently in “Edit keyframes” (they are not saved as a clip).`,
+        )
+      ) {
+        markClipKeysAdopted(null)
+        return false
+      }
+      runWithoutHistoryCapture(() => {
+        st().setAnimData({ ...cur, tracks: keys.tracks, root: keys.root })
+      })
+    }
+    markClipKeysAdopted(name)
+    return true
+  }
+
+  // Rebuild the selected (remembered-keys) clip from the editor's current keys.
+  function rebakeAdoptedClip(minDuration = 0) {
+    if (!activeClipName || !isClipKeysAdopted(activeClipName)) return false
+    const store = st()
+    const duration = Math.max(getClipEditKeys(activeClipName)?.duration || 0, minDuration)
+    const ok = rebakeClipFromKeys(activeClipName, {
+      tracks: store.animData.tracks,
+      root: store.animData.root,
+      duration,
+    })
+    if (ok) store.setDuration(duration)
+    return ok
+  }
+
   function onSourceChange(next) {
     stop()
     st().setPlayback('stopped')
@@ -621,7 +673,8 @@ export default function AnimationPanel() {
     if (next === 'edit') st().setInsertTime(0)
     st().setPlaybackSource(next)
     if (next === 'clip' && activeClipName) {
-      const d = selectClip(activeClipName, { loop, speed }, animData)
+      adoptClipKeys(activeClipName)
+      const d = selectClip(activeClipName, { loop, speed }, st().animData)
       st().setDuration(d)
       st().setPlayback('paused')
       setClipBoneWarning(describeClipBoneMismatch(activeClipName))
@@ -641,7 +694,8 @@ export default function AnimationPanel() {
       return
     }
     st().setPlaybackSource('clip')
-    const d = selectClip(name, { loop, speed }, animData)
+    adoptClipKeys(name)
+    const d = selectClip(name, { loop, speed }, st().animData)
     st().setDuration(d)
     st().setCurrentTime(0)
     st().setPlayback('paused')
@@ -750,6 +804,16 @@ export default function AnimationPanel() {
 
   function onCharacterKeyframe({ time, pos, quat }) {
     if (source === 'clip' && activeClipName) {
+      if (isClipKeysAdopted(activeClipName)) {
+        // The clip remembers its keys: add to them and rebuild the clip (a key
+        // past the end lengthens it) instead of converting it to a bake.
+        st().addRootKeyframe(time, pos, quat, st().rippleRootEdit)
+        st().addKeyframesAtTime(captureCurrentPose(), time)
+        rebakeAdoptedClip(time)
+        updateRootMotionTrack(st().animData.root)
+        refreshCharacterAtTime(time)
+        return
+      }
       onBake({ keyPosition: { time, pos, quat }, time })
       return
     }
@@ -773,7 +837,11 @@ export default function AnimationPanel() {
     if (source === 'edit') {
       selectEdit(store.animData, store.animDuration, { loop, speed })
     } else if (activeClipName) {
-      selectClip(activeClipName, { loop, speed }, store.animData)
+      // A saved clip bakes its poses into the clip itself, so the clip has to
+      // be rebuilt from the edited keys — re-selecting the old one would keep
+      // the deleted pose.
+      rebakeAdoptedClip()
+      selectClip(activeClipName, { loop, speed }, st().animData)
     }
     store.setPlayback('paused')
     updateRootMotionTrack(st().animData.root)
@@ -1106,7 +1174,8 @@ export default function AnimationPanel() {
     st().addImportedClipName(name)
     st().setPlaybackSource('clip')
     st().setActiveClipName(name)
-    const d = selectClip(name, { loop, speed }, animData)
+    adoptClipKeys(name)
+    const d = selectClip(name, { loop, speed }, st().animData)
     st().setDuration(d)
     st().setCurrentTime(0)
     st().setPlayback('paused')

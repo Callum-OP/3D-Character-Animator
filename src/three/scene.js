@@ -95,6 +95,8 @@ import {
   scrub,
   selectClip,
   selectEdit,
+  getClipEditKeys,
+  rebakeClipFromKeys,
   updateRootMotionTrack,
   play,
   pause,
@@ -794,8 +796,25 @@ export function scrubTimeline(t) {
 // Leaves playback paused at the same time; does nothing when stopped (rest pose).
 export function refreshEditPlayback() {
   const s = useStore.getState()
-  if (!state.activeCharacterId || s.playbackSource !== 'edit' || s.playback === 'stopped') return
+  if (!state.activeCharacterId || s.playback === 'stopped') return
   const t = s.currentTime
+  if (s.playbackSource === 'clip') {
+    // A saved clip that remembers its keys: rebuild it from the restored keys.
+    const keys = s.activeClipName ? getClipEditKeys(s.activeClipName) : null
+    if (!keys) return
+    const ok = rebakeClipFromKeys(s.activeClipName, {
+      tracks: s.animData.tracks,
+      root: s.animData.root,
+      duration: keys.duration,
+    })
+    if (!ok) return
+    updateRootMotionTrack(s.animData.root)
+    s.setPlayback('paused')
+    scrub(Math.min(t, keys.duration))
+    requestRender()
+    return
+  }
+  if (s.playbackSource !== 'edit') return
   const d = selectEdit(s.animData, s.animDuration, { loop: s.loop, speed: s.speed })
   s.setDuration(d)
   s.setPlayback('paused')
