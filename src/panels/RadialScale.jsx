@@ -50,7 +50,7 @@ export function turnsToFactor(turns, startValue) {
 // (the gizmo/UI widget) between drags wouldn't be visible yet on the next
 // render, and starting a new drag from the dial would silently discard that
 // change and resume from the stale number instead.
-export default function RadialScale({ value, getValue, onChange, onDragStart, onCommit, label = 'Scale' }) {
+export default function RadialScale({ value, getValue, onChange, onDragStart, onCommit, label = 'Scale', compact = false }) {
   const dialRef = useRef(null)
   const [dragging, setDragging] = useState(false)
   // turns: total accumulated rotation (in full turns) since the drag began —
@@ -104,7 +104,7 @@ export default function RadialScale({ value, getValue, onChange, onDragStart, on
   const hy = 28 + r * Math.sin(knobAngle)
 
   return (
-    <div className="radial-scale">
+    <div className={'radial-scale' + (compact ? ' compact' : '')}>
       <div
         ref={dialRef}
         className="radial-scale-dial"
@@ -119,7 +119,7 @@ export default function RadialScale({ value, getValue, onChange, onDragStart, on
       </div>
       <div className="radial-scale-info">
         <div className="radial-scale-value">{value.toFixed(2)}×</div>
-        <div className="radial-scale-label">{label} — drag the ring</div>
+        {!compact && <div className="radial-scale-label">{label} — drag the ring</div>}
       </div>
     </div>
   )

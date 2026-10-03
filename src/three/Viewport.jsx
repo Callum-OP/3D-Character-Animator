@@ -29,7 +29,10 @@ import {
   dollyViewport,
   syncActiveDangleConfig,
   setOrbitSuspended,
+  getObjectScreenPosition,
 } from './scene.js'
+import RadialScale from '../panels/RadialScale.jsx'
+import { getSelectedUniformScale, setSelectedUniformScale, commitUniformScale, snapshotObject } from './objects.js'
 import { useStore } from '../store.js'
 import { SUPPORTED_EXTENSION_RE, SUPPORTED_EXTENSIONS } from './loadModel.js'
 import {
@@ -132,6 +135,63 @@ class ViewportErrorBoundary extends React.Component {
 
 // The 3D viewport: owns the canvas container and the scene lifecycle, and
 // handles drag-and-drop of model files onto itself.
+// Precise resize dial that floats at the top-right of the selected object's
+// resize gizmo, in the 3D view itself. Same uniform-scale API (and single undo
+// step per drag) as the Objects panel's dial; it follows the object on screen.
+function ViewportScaleDial({ id }) {
+  const ref = useRef(null)
+  const beforeRef = useRef(null)
+  const [dragging, setDragging] = useState(false)
+  const [value, setValue] = useState(() => getSelectedUniformScale(id))
+
+  useEffect(() => {
+    let raf = 0
+    const SIZE = 84
+    const tick = () => {
+      const el = ref.current
+      const pos = getObjectScreenPosition(id)
+      if (el) {
+        if (!pos) el.style.visibility = 'hidden'
+        else {
+          // Up and to the right of the gizmo centre, kept fully inside the view.
+          const x = Math.min(Math.max(pos.x + 70, 8), pos.width - SIZE - 8)
+          const y = Math.min(Math.max(pos.y - 70 - SIZE / 2, 8), pos.height - SIZE - 8)
+          el.style.visibility = 'visible'
+          el.style.transform = `translate(${x}px, ${y}px)`
+        }
+      }
+      raf = requestAnimationFrame(tick)
+    }
+    tick()
+    return () => cancelAnimationFrame(raf)
+  }, [id])
+
+  return (
+    <div ref={ref} className="viewport-scale-dial" aria-label="Precise resize dial">
+      <RadialScale
+        compact
+        value={dragging ? value : getSelectedUniformScale(id)}
+        getValue={() => getSelectedUniformScale(id)}
+        label="Precise resize"
+        onDragStart={(v) => {
+          beforeRef.current = snapshotObject(id)
+          setValue(v)
+          setDragging(true)
+        }}
+        onChange={(v) => {
+          setValue(v)
+          setSelectedUniformScale(id, v)
+        }}
+        onCommit={() => {
+          commitUniformScale(id, beforeRef.current)
+          beforeRef.current = null
+          setDragging(false)
+        }}
+      />
+    </div>
+  )
+}
+
 function Viewport() {
   const containerRef = useRef(null)
   const emptyModelInputRef = useRef(null)
@@ -797,6 +857,10 @@ function Viewport() {
           />
           {!loadError && <div className="ve-formats">GLB · glTF · FBX <span>·</span> Press ? for help</div>}
         </div>
+      )}
+
+      {mode === 'object' && objectMode === 'scale' && selectedObjectId != null && selectedObjectIds.length <= 1 && (
+        <ViewportScaleDial key={selectedObjectId} id={selectedObjectId} />
       )}
 
       {hasSceneContent && (

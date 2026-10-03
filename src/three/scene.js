@@ -87,6 +87,9 @@ import {
   setAnimationModel,
   setActiveAnimationCharacter,
   clearAnimationModel,
+  detachAnimationEntry,
+  reattachAnimationEntry,
+  disposeDetachedAnimationEntry,
   isAnyPlaying,
   updateAnimation,
   scrub,
@@ -94,6 +97,8 @@ import {
   selectEdit,
   updateRootMotionTrack,
   play,
+  pause,
+  hasActiveAction,
   stop,
   getImportedClipsData,
   restoreImportedClips,
@@ -129,6 +134,9 @@ import {
   applyAllObjectStyles,
   setObjectCastShadow,
   removeObject,
+  detachObjectSoft,
+  reattachObjectSoft,
+  disposeObjectEntry,
   resetObject,
   disposeObjects,
   setCharacterObject,
@@ -153,7 +161,8 @@ import {
   stopObjectAnimation,
 } from './objects.js'
 import { getPose, applyPose } from './posing.js'
-import { useStore } from '../store.js'
+import { useStore, captureCharacterRecord } from '../store.js'
+import { clearUndoHistory, pushUndoBatch, runWithoutHistoryCapture } from './undoHistory.js'
 
 // ---------------------------------------------------------------------------
 // Scene manager (module singleton)
@@ -780,6 +789,20 @@ export function scrubTimeline(t) {
   scrub(t)
 }
 
+// After keyframes change behind the engine's back (undo/redo), re-bake the
+// active character's keyframe-edit playback so the viewport and timeline agree.
+// Leaves playback paused at the same time; does nothing when stopped (rest pose).
+export function refreshEditPlayback() {
+  const s = useStore.getState()
+  if (!state.activeCharacterId || s.playbackSource !== 'edit' || s.playback === 'stopped') return
+  const t = s.currentTime
+  const d = selectEdit(s.animData, s.animDuration, { loop: s.loop, speed: s.speed })
+  s.setDuration(d)
+  s.setPlayback('paused')
+  scrub(Math.min(t, d))
+  requestRender()
+}
+
 function handleResize() {
   const { container, renderer, camera } = state
   if (!container || !renderer) return
@@ -966,6 +989,41 @@ export function playAllCharacters({ loop, speed } = {}) {
   return { started, maxDuration }
 }
 
+// Freeze every loaded character mid-clip (keeps each one's place, unlike stop).
+export function pauseAllCharacters() {
+  const store = useStore.getState()
+  const uiActiveId = state.activeCharacterId
+  for (const id of store.characterOrder) {
+    if (!state.characters.has(id)) continue
+    setActiveAnimationCharacter(id)
+    pause()
+  }
+  setActiveAnimationCharacter(uiActiveId)
+  useStore.setState({ playback: 'paused' })
+  requestRender()
+}
+
+// Continue every paused character from where it was frozen. Returns how many
+// had something armed to resume (0 means nothing was paused — start fresh).
+export function resumeAllCharacters() {
+  const store = useStore.getState()
+  const uiActiveId = state.activeCharacterId
+  let resumed = 0
+  for (const id of store.characterOrder) {
+    if (!state.characters.has(id)) continue
+    setActiveAnimationCharacter(id)
+    if (!hasActiveAction()) continue
+    play()
+    resumed++
+  }
+  setActiveAnimationCharacter(uiActiveId)
+  if (resumed > 0) {
+    useStore.setState({ playback: 'playing' })
+    requestRender()
+  }
+  return resumed
+}
+
 // Stop every loaded character's playback (used by the Stop-all button and
 // before a preview/recording pass, so a shot always starts from a clean rest).
 export function stopAllCharacters() {
@@ -983,9 +1041,40 @@ export function stopAllCharacters() {
 
 // and drop it from the registry). If it was the active one, another loaded
 // character (if any) becomes active.
-export function removeCharacter(id) {
+// Test seam: register an already-parsed model as a loaded character without a
+// WebGL context or file load (loadModelFile needs both). Mirrors the registry
+// part of loadModelFile; not used by the app.
+export function __seedCharacterForTest(id, parsed, threeScene) {
+  if (!state.scene) state.scene = threeScene
+  state.scene.add(parsed.root)
+  state.characters.set(id, parsed)
+  setCharacterObject(id, parsed.root, parsed.info.name)
+  useStore.getState().addCharacter(id, parsed.info)
+  state.activeCharacterId = id
+  state.currentModel = parsed
+}
+
+export function removeCharacter(id, recordHistory = true) {
+  if (!recordHistory) {
+    removeCharacterForGood(id)
+    return
+  }
+  if (!state.characters.has(id)) return
+  const batch = makeCharacterDeleteBatch(id)
+  if (!removeCharacterPresence(batch)) return
+  pushUndoBatch('object', batch)
+}
+
+// Permanent removal (no undo step): frees everything immediately.
+function removeCharacterForGood(id) {
   disposeCharacter(id)
   useStore.getState().removeCharacter(id)
+  afterCharacterRemoved(id)
+}
+
+// Shared tail of every removal: pick a new active character if the removed one
+// was active, and fall back to Object mode when only props remain.
+function afterCharacterRemoved(id) {
   const remaining = [...state.characters.keys()]
   if (state.activeCharacterId === id) {
     state.activeCharacterId = null
@@ -995,6 +1084,100 @@ export function removeCharacter(id) {
   const store = useStore.getState()
   if (remaining.length === 0 && store.sceneObjects.some((object) => !object.isCharacter)) store.setMode('object')
   requestRender()
+}
+
+// --- Undoable character delete ------------------------------------------------
+// Deleting detaches the character from the scene and every engine (animation,
+// cloth, dangle, posing, mesh-edit) but keeps its model, mixer (with any
+// imported mocap clips), materials and per-character state alive, so Undo can
+// put it back exactly as it was — pose, mesh edits, keyframes and all. The
+// resources are only freed (discard) once the delete can no longer be undone.
+// Not restored: cloth simulation (re-enable it on the garment) and props that
+// were glued to its bones (they stay in the scene as free props).
+function detachCharacterSoft(id) {
+  const model = state.characters.get(id)
+  if (!model) return null
+  const store = useStore.getState()
+  const record = {
+    id,
+    model,
+    storeRecord: captureCharacterRecord(store, id),
+    animEntry: null,
+  }
+  if (state.activeCharacterId === id) {
+    clearPoseModel()
+    clearMeshEditModel()
+  }
+  record.animEntry = detachAnimationEntry(id)
+  if (!isAnyPlaying()) setContinuousRender(false)
+  clearClothForMeshes(model.meshes, { restoreVisible: true })
+  clearDangle(id)
+  const detachedIds = detachObjectsForCharacter(id)
+  for (const objId of detachedIds) useStore.getState().setObjectAttachment(objId, null)
+  clearCharacterObject(id)
+  state.scene.remove(model.root)
+  state.characters.delete(id)
+  if (state.currentModel === model) state.currentModel = null
+  return record
+}
+
+function removeCharacterPresence(batch) {
+  const rec = detachCharacterSoft(batch.id)
+  if (!rec) return false
+  batch.rec = rec
+  batch.prevMode = useStore.getState().mode
+  runWithoutHistoryCapture(() => {
+    useStore.getState().removeCharacter(batch.id)
+  })
+  afterCharacterRemoved(batch.id)
+  return true
+}
+
+function restoreCharacterPresence(batch) {
+  const rec = batch.rec
+  if (!rec || !rec.storeRecord) return false
+  const { id, model } = rec
+  state.scene.add(model.root)
+  state.characters.set(id, model)
+  setCharacterObject(id, model.root, model.info.name)
+  reattachAnimationEntry(id, rec.animEntry)
+  runWithoutHistoryCapture(() => {
+    useStore.getState().restoreCharacter(rec.storeRecord)
+  })
+  setActiveCharacter(id, model) // re-point posing / mesh-edit / animation at it
+  const fields = rec.storeRecord.fields
+  setDangleConfig(id, model, fields.dangleEnabled, fields.dangleChains)
+  applyModelMaterials() // re-apply the current Look settings
+  // Deleting the last character forced Object mode; put the old mode back.
+  if (batch.prevMode && useStore.getState().mode !== batch.prevMode) useStore.getState().setMode(batch.prevMode)
+  batch.rec = null
+  requestRender()
+  return true
+}
+
+function makeCharacterDeleteBatch(id) {
+  const batch = {
+    entries: [], // presence steps carry no transform snapshots
+    kind: 'delete-character',
+    id,
+    rec: null, // set while the character is detached (deleted)
+    prevMode: null,
+    run(direction) {
+      if (direction === 'undo') restoreCharacterPresence(batch)
+      else removeCharacterPresence(batch)
+    },
+    // Dropped from history while detached -> nothing can bring it back; free it.
+    discard() {
+      const rec = batch.rec
+      if (!rec) return
+      batch.rec = null
+      disposeDetachedAnimationEntry(rec.animEntry)
+      restoreOriginalMaterials(rec.model)
+      disposeGeneratedMaterials(rec.model)
+      disposeObject(rec.model.root)
+    },
+  }
+  return batch
 }
 
 // Free one character's Three.js graph without touching any other loaded
@@ -1040,6 +1223,7 @@ export async function addObjectFile(file, { animationKey } = {}) {
   useStore.getState().addSceneObject(meta) // sets selectedObjectId = meta.id
   if (state.characters.size === 0) useStore.getState().setMode('object')
   applyModelMaterials() // pick up the current Look settings immediately
+  recordObjectAdded(meta.id)
   if (shouldFrameInitialObject) setCameraToObject(meta.id)
   requestRender()
   return meta
@@ -1113,6 +1297,7 @@ export async function addImageFile(file, { animationKey } = {}) {
   const name = file.name.replace(/\.[^.]+$/, '')
   const meta = addImage(texture, name, aspect, file, animationKey)
   useStore.getState().addSceneObject({ ...meta, kind: 'image' })
+  recordObjectAdded(meta.id)
   if (shouldFrameInitialObject) setCameraToObject(meta.id)
   requestRender()
   return meta
@@ -1140,11 +1325,111 @@ function loadImageTexture(file) {
   })
 }
 
-export function removeObjectById(id) {
-  unregisterObjectMeshes(id) // drop its parts from Mesh mode before the geometry is disposed
-  removeObject(id)
-  useStore.getState().removeSceneObject(id)
+// --- Undoable add / delete of props & images ---------------------------------
+// One "presence" step per add or delete, living in the object undo history.
+// Delete = soft-detach (resources kept alive for Undo); the batch frees them in
+// discard() once it can no longer be undone/redone back into the scene.
+function removePresence(batch) {
+  const store = useStore.getState()
+  const index = store.sceneObjects.findIndex((o) => o.id === batch.id)
+  const meta = index >= 0 ? store.sceneObjects[index] : null
+  const rec = detachObjectSoft(batch.id)
+  if (!rec) return false
+  batch.rec = rec
+  batch.meta = meta
+  batch.index = index
+  batch.track = store.objectAnimData?.[rec.entry.animationKey] || null
+  // The keyframe recorder must not log the track removal as its own step.
+  runWithoutHistoryCapture(() => {
+    unregisterObjectMeshes(batch.id) // drop its parts from Mesh mode
+    useStore.getState().removeSceneObject(batch.id)
+    useStore.getState().removeObjectAnimationTrack(rec.entry.animationKey)
+  })
   requestRender()
+  return true
+}
+
+function restorePresence(batch) {
+  const rec = batch.rec
+  if (!rec) return false
+  reattachObjectSoft(rec)
+  const { entry } = rec
+  runWithoutHistoryCapture(() => {
+    const store = useStore.getState()
+    if (batch.meta) {
+      const sceneObjects = [...store.sceneObjects]
+      sceneObjects.splice(Math.min(Math.max(batch.index, 0), sceneObjects.length), 0, batch.meta)
+      useStore.setState({
+        sceneObjects,
+        selectedObjectId: entry.id,
+        selectedObjectIds: [entry.id],
+        selectedBoneName: null,
+        selectedBoneNames: [],
+        selectedCameraId: null,
+        selectedLightId: null,
+      })
+    }
+    if (rec.wasAttached) useStore.getState().setObjectAttachment(entry.id, null)
+    if (batch.track) {
+      useStore.setState((s) => ({ objectAnimData: { ...s.objectAnimData, [entry.animationKey]: batch.track } }))
+    }
+  })
+  if (entry.meshes?.length) registerObjectMeshes(entry.id, entry.meshes)
+  batch.rec = null
+  requestRender()
+  return true
+}
+
+function pushPresenceBatch(kind, id) {
+  const batch = {
+    entries: [], // presence steps carry no transform snapshots
+    kind, // 'add' | 'delete'
+    id,
+    rec: null, // set while the object is detached (removed)
+    meta: null,
+    index: -1,
+    track: null,
+    // Undo of a delete / redo of an add puts the object back; the other two take it out.
+    run(direction) {
+      const putBack = (kind === 'delete') === (direction === 'undo')
+      if (putBack) restorePresence(batch)
+      else removePresence(batch)
+    },
+    // Dropped from history while detached -> nothing can bring it back; free it.
+    discard() {
+      if (batch.rec) {
+        disposeObjectEntry(batch.rec.entry)
+        batch.rec = null
+      }
+    },
+  }
+  return batch
+}
+
+// Log that a prop/image was just added (undo removes it, redo brings it back).
+function recordObjectAdded(id) {
+  pushUndoBatch('object', pushPresenceBatch('add', id))
+}
+
+export function removeObjectById(id, recordHistory = true) {
+  const target = useStore.getState().sceneObjects.find((o) => o.id === id)
+  if (target?.isCharacter) {
+    removeCharacter(id, recordHistory) // characters live in their own registry
+    return
+  }
+  if (!recordHistory) {
+    // Permanent removal (scene teardown): free everything now, no undo step.
+    unregisterObjectMeshes(id) // drop its parts from Mesh mode before the geometry is disposed
+    removeObject(id)
+    useStore.getState().removeSceneObject(id)
+    requestRender()
+    return
+  }
+  const meta = target
+  if (!meta) return
+  const batch = pushPresenceBatch('delete', id)
+  if (!removePresence(batch)) return
+  pushUndoBatch('object', batch)
 }
 
 // Show/hide a prop, image, or the character (updates the scene + the store).
@@ -1167,6 +1452,7 @@ export function pasteCopiedObject() {
   if (!meta) return null
   useStore.getState().addSceneObject(meta)
   registerObjectMeshes(meta.id, getObjectMeshesById(meta.id))
+  recordObjectAdded(meta.id)
   return meta
 }
 
@@ -1774,7 +2060,7 @@ export function clearProjectScene() {
   store.clearObjectAnimation()
   store.setObjectAnimDuration(2)
   for (const id of store.sceneObjects.filter((o) => !o.isCharacter).map((o) => o.id)) {
-    removeObjectById(id)
+    removeObjectById(id, false)
   }
   setViewCameraById(null)
   clearCameras()
@@ -1782,6 +2068,8 @@ export function clearProjectScene() {
   clearLights()
   useStore.setState({ sceneLights: [], selectedLightId: null })
   disposeCurrentModel()
+  // A blank project starts with a blank undo history too.
+  clearUndoHistory()
 }
 
 // Restore a project record: tear down the current session, then rebuild every
@@ -1985,6 +2273,10 @@ export async function applyProjectData(record) {
   // loop above.
   refreshPoseOverlays()
 
+  // The freshly loaded project starts with a clean undo history — the add/key
+  // steps recorded while rebuilding it aren't things a person did.
+  clearUndoHistory()
+
   requestRender()
 }
 
@@ -1993,8 +2285,8 @@ export async function applyProjectData(record) {
 export function disposeCurrentModel() {
   for (const id of [...state.characters.keys()]) disposeCharacter(id)
   state.activeCharacterId = null
-  useStore.getState().clearModel()
-  useStore.setState({ characters: {}, characterOrder: [], activeCharacterId: null })
+  state.currentModel = null
+  useStore.getState().clearAllCharacters()
   if (useStore.getState().sceneObjects.some((object) => !object.isCharacter)) useStore.getState().setMode('object')
 }
 
@@ -2536,6 +2828,22 @@ function applyCharacterLightLinks(s) {
 // Explicitly frame a prop or character without changing selection or its
 // transform. Normal loading deliberately never calls this after the initial
 // scene subject has established the viewport.
+// Where an object's centre currently sits on screen, in CSS pixels relative to
+// the viewport canvas (null if it can't be projected or is behind the camera).
+// Lets React overlays — like the on-canvas resize dial — follow an object.
+export function getObjectScreenPosition(id) {
+  const object = getObjectRootById(id)
+  if (!object || !state.camera || !state.renderer) return null
+  const box = new THREE.Box3().setFromObject(object)
+  if (box.isEmpty()) return null
+  const centre = box.getCenter(new THREE.Vector3()).project(state.camera)
+  if (centre.z > 1) return null
+  const el = state.renderer.domElement
+  const w = el.clientWidth
+  const h = el.clientHeight
+  return { x: ((centre.x + 1) / 2) * w, y: ((1 - centre.y) / 2) * h, width: w, height: h }
+}
+
 export function setCameraToObject(id) {
   const object = getObjectRootById(id)
   if (!object) return

@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store.js'
 import {
   importModelAuto,
-  disposeCurrentModel,
   setActiveCharacter,
   removeCharacter,
   getProjectData,
@@ -307,7 +306,7 @@ export default function ProjectPanel() {
               style={{ marginTop: 8 }}
               onClick={() => {
                 if (!window.confirm('Are you sure you want to delete this character?')) return
-                characterOrder.length > 1 ? removeCharacter(activeCharacterId) : disposeCurrentModel()
+                removeCharacter(activeCharacterId)
               }}
             >
               {characterOrder.length > 1 ? 'Remove active character' : 'Unload'}

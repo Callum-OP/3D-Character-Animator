@@ -6,13 +6,58 @@ export function registerUndoHistory(domain, getStacks) {
   histories.set(domain, getStacks)
 }
 
+// A batch may carry a `discard()` hook, called when the batch is permanently
+// dropped from history (trimmed off the end, or its redo branch overwritten by
+// a new edit, or history cleared). Used by add/delete-object batches to free
+// the Three.js resources of an object that is currently removed from the scene.
+function discardBatch(batch) {
+  if (batch && typeof batch.discard === 'function') {
+    try { batch.discard() } catch { /* freeing resources is best-effort */ }
+  }
+}
+
 export function pushUndoBatch(domain, batch) {
   const stacks = histories.get(domain)?.()
   if (!stacks) return
   batch.historyOrder = ++sequence
   stacks.undo.push(batch)
-  for (const getHistory of histories.values()) getHistory().redo.length = 0
+  for (const getHistory of histories.values()) {
+    const redo = getHistory().redo
+    const dropped = redo.splice(0, redo.length)
+    dropped.forEach(discardBatch)
+  }
   trimStack(stacks.undo)
+}
+
+// Latest history sequence number — lets a recorder check that nothing else has
+// been pushed since its own last batch (used to coalesce rapid keyframe edits).
+export function getHistorySequence() {
+  return sequence
+}
+
+// While suspended, observers that auto-record history (the keyframe recorder)
+// ignore store changes — for changes already covered by another history step.
+let captureSuspended = 0
+export function runWithoutHistoryCapture(fn) {
+  captureSuspended++
+  try {
+    return fn()
+  } finally {
+    captureSuspended--
+  }
+}
+export function isHistoryCaptureSuspended() {
+  return captureSuspended > 0
+}
+
+// Empty every undo/redo stack (New Project / loading a project: nothing from
+// the old scene can be meaningfully undone into the new one).
+export function clearUndoHistory() {
+  for (const getStacks of histories.values()) {
+    const stacks = getStacks()
+    stacks.undo.splice(0, stacks.undo.length).forEach(discardBatch)
+    stacks.redo.splice(0, stacks.redo.length).forEach(discardBatch)
+  }
 }
 
 export function markHistoryAction(batch) {
@@ -46,7 +91,7 @@ export function resolveUndoHistoryTarget(state, direction = 'undo') {
 }
 
 function trimStack(stack) {
-  if (stack.length > historyLimit) stack.splice(0, stack.length - historyLimit)
+  if (stack.length > historyLimit) stack.splice(0, stack.length - historyLimit).forEach(discardBatch)
 }
 
 function fallbackTarget(state) {

@@ -514,11 +514,13 @@ export function clearAllCloth() {
 // running untouched — cloth is keyed per-mesh, not tied to "the" character,
 // so there's nothing else to do to support several characters' cloth
 // simulating at once.
-export function clearClothForMeshes(meshes) {
+// `restoreVisible: true` un-hides the original meshes (cloth swaps them for a
+// simulated proxy) — needed when the character will live on (soft delete/undo).
+export function clearClothForMeshes(meshes, { restoreVisible = false } = {}) {
   if (!meshes || !meshes.length) return
   const targets = new Set(meshes)
-  for (const [uuid, entry] of cm.entries) {
-    if (targets.has(entry.mesh)) disableCloth(uuid, { restoreVisible: false })
+  for (const [uuid, entry] of [...cm.entries]) {
+    if (targets.has(entry.mesh)) disableCloth(uuid, { restoreVisible })
   }
 }
 

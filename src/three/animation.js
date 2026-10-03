@@ -143,6 +143,31 @@ export function setActiveAnimationCharacter(id) {
   activeId = id
 }
 
+// Take one character's animation entry OUT of the live set without disposing
+// it (mixer, clips — incl. imported mocap — and edit state stay intact), so a
+// deleted character can be restored by Undo. Returns the entry (or null).
+export function detachAnimationEntry(id) {
+  const entry = perChar.get(id)
+  if (!entry) return null
+  if (entry.action) entry.action.paused = true // nothing advances it while detached, but be explicit
+  perChar.delete(id)
+  if (activeId === id) activeId = null
+  return entry
+}
+
+export function reattachAnimationEntry(id, entry) {
+  if (!entry) return
+  perChar.set(id, entry)
+  activeId = id
+}
+
+// Free an entry that was detached and can no longer be restored.
+export function disposeDetachedAnimationEntry(entry) {
+  if (!entry || !entry.mixer) return
+  entry.mixer.stopAllAction()
+  entry.mixer.uncacheRoot(entry.mixer.getRoot())
+}
+
 function disposeEntry(id) {
   const entry = perChar.get(id)
   if (!entry) return
@@ -1073,6 +1098,12 @@ export function play() {
   a.refs.suspendPosing()
   a.action.paused = false
   a.refs.setContinuousRender(true)
+}
+
+// True if the active character has an armed (playing or paused) action — lets
+// callers tell "paused, can resume" apart from "stopped, must re-arm".
+export function hasActiveAction() {
+  return !!a.action
 }
 
 export function pause() {

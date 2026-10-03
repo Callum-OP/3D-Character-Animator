@@ -91,6 +91,22 @@ function snapshotCharacterFields(s) {
   return snap
 }
 
+// Everything needed to put a deleted character back exactly as it was: its
+// per-character state (live at the top level when it's the active one, else in
+// the registry), its slot in the roster and its row in the scene list.
+export function captureCharacterRecord(s, id) {
+  const fields = s.activeCharacterId === id ? snapshotCharacterFields(s) : s.characters[id]
+  if (!fields) return null
+  const sceneIndex = s.sceneObjects.findIndex((o) => o.id === id)
+  return {
+    id,
+    fields: { ...fields },
+    orderIndex: s.characterOrder.indexOf(id),
+    sceneMeta: sceneIndex >= 0 ? { ...s.sceneObjects[sceneIndex] } : null,
+    sceneIndex,
+  }
+}
+
 function defaultCharacterFields(modelInfo) {
   return {
     modelInfo,
@@ -157,6 +173,39 @@ export const useStore = create((set) => ({
           { id, name: modelInfo.name, isCharacter: true, characterId: id, visible: true },
           ...s.sceneObjects,
         ],
+      }
+    }),
+
+  // Undo of a character delete: reinstate it at its old roster/scene-list slot
+  // and make it the active character again (see captureCharacterRecord).
+  restoreCharacter: (record) =>
+    set((s) => {
+      const { id, fields } = record
+      const characters = { ...s.characters }
+      if (s.activeCharacterId && s.activeCharacterId !== id) {
+        characters[s.activeCharacterId] = snapshotCharacterFields(s)
+      }
+      delete characters[id] // the active character's fields live at the top level
+      const characterOrder = s.characterOrder.filter((cid) => cid !== id)
+      const at = record.orderIndex >= 0 ? Math.min(record.orderIndex, characterOrder.length) : characterOrder.length
+      characterOrder.splice(at, 0, id)
+      const sceneObjects = s.sceneObjects.filter((o) => o.id !== id)
+      if (record.sceneMeta) {
+        const sceneAt = record.sceneIndex >= 0 ? Math.min(record.sceneIndex, sceneObjects.length) : 0
+        sceneObjects.splice(sceneAt, 0, record.sceneMeta)
+      }
+      return {
+        loading: false,
+        loadError: null,
+        characters,
+        characterOrder,
+        activeCharacterId: id,
+        ...fields,
+        sceneObjects,
+        selectedObjectId: id,
+        selectedObjectIds: [id],
+        selectedCameraId: null,
+        selectedLightId: null,
       }
     }),
 
@@ -264,6 +313,24 @@ export const useStore = create((set) => ({
         selectedObjectIds: s.selectedObjectIds.filter((oid) => oid !== id),
       }
     }),
+
+  // Wipe EVERY character at once (full reset: New Project / loading another
+  // project). clearModel() only knows about the active character: with several
+  // loaded it left the others in sceneObjects, and promoted the next
+  // character's fields (modelInfo etc.) to the top level just before the
+  // registry was emptied — which is what kept a ghost character showing in the
+  // Character section with an Unload button after New Project.
+  clearAllCharacters: () =>
+    set((s) => ({
+      loadError: null,
+      ...defaultCharacterFields(null),
+      characters: {},
+      characterOrder: [],
+      activeCharacterId: null,
+      sceneObjects: s.sceneObjects.filter((o) => !o.isCharacter),
+      selectedObjectId: null,
+      selectedObjectIds: [],
+    })),
 
   // ---- Viewport display toggles ----
   showGrid: true,

@@ -297,18 +297,16 @@ export default function ObjectsPanel() {
                   >
                     {o.visible === false ? '🙈' : '👁'}
                   </button>
-                  {!o.isCharacter && (
-                    <button
-                      className="obj-del"
-                      title="Remove"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        confirmDeleteObject(o)
-                      }}
-                    >
-                      ×
-                    </button>
-                  )}
+                  <button
+                    className="obj-del"
+                    title={o.isCharacter ? 'Delete character (Ctrl+Z to undo)' : 'Remove'}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      confirmDeleteObject(o)
+                    }}
+                  >
+                    ×
+                  </button>
                 </div>
 
                 {(o.kind === 'model' || (!o.isCharacter && boneNames.length > 0)) && (

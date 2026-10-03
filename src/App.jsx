@@ -14,7 +14,7 @@ import HelpOverlay from './panels/HelpOverlay.jsx'
 import Accordion from './panels/Accordion.jsx'
 import TabGroup from './panels/TabGroup.jsx'
 import { useStore } from './store.js'
-import { useState, Component } from 'react'
+import { useState, useEffect, Component } from 'react'
 
 // Catches a render crash ANYWHERE in the app (outside the 3D viewport, which
 // has its own narrower ViewportErrorBoundary in Viewport.jsx) and shows an
@@ -76,6 +76,14 @@ function AppInner() {
   const sceneObjects = useStore((s) => s.sceneObjects)
   const sceneCameras = useStore((s) => s.sceneCameras)
   const sceneLights = useStore((s) => s.sceneLights)
+
+  // Esc closes the centred settings popup, same as the Help overlay.
+  useEffect(() => {
+    if (!settingsOpen) return undefined
+    const onKey = (e) => { if (e.key === 'Escape') setSettingsOpen(false) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [settingsOpen])
 
   return (
     <div className="app-shell">
@@ -166,22 +174,27 @@ function AppInner() {
         </Accordion>
       </aside>
       {settingsOpen && (
-        <>
-          <button className="settings-scrim" aria-label="Close settings" onClick={() => setSettingsOpen(false)} />
-          <aside className="settings-drawer" aria-label="Display and performance settings">
+        <div className="settings-backdrop" onClick={() => setSettingsOpen(false)}>
+          <aside
+            className="settings-drawer"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Display and performance settings"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="drawer-header">
               <div>
                 <span className="eyebrow">Preferences</span>
                 <h2>Viewport settings</h2>
               </div>
-              <button className="icon-btn" title="Close settings" aria-label="Close settings" onClick={() => setSettingsOpen(false)}>
+              <button className="icon-btn" title="Close settings (Esc)" aria-label="Close settings" onClick={() => setSettingsOpen(false)}>
                 ×
               </button>
             </div>
             <p className="drawer-copy">Tune the stage around your scene. These choices affect the viewport and exports.</p>
             <ViewPanel />
           </aside>
-        </>
+        </div>
       )}
       <HelpOverlay />
       </div>

@@ -444,6 +444,60 @@ export function removeObject(id) {
   o.requestRender()
 }
 
+// --- Undoable add / delete of props & images ---------------------------------
+// Deleting detaches the object from the scene but keeps its geometry/materials
+// alive so Undo can put it straight back; the resources are only freed once the
+// delete step falls out of history (see the batch's discard() below).
+
+// Take a prop out of the scene WITHOUT disposing it. Returns a record that
+// reattachObjectSoft() can restore, or null if `id` isn't a prop.
+export function detachObjectSoft(id) {
+  if (o.characterRoots.has(id)) return null
+  const index = o.objects.findIndex((e) => e.id === id)
+  if (index < 0) return null
+  const entry = o.objects[index]
+  const world = {
+    position: new THREE.Vector3(),
+    quaternion: new THREE.Quaternion(),
+    scale: new THREE.Vector3(),
+  }
+  entry.root.updateWorldMatrix(true, false)
+  entry.root.matrixWorld.decompose(world.position, world.quaternion, world.scale)
+  const wasAttached = Boolean(entry.attachedBone)
+  if (o.selected === entry.root) {
+    o.transform?.detach()
+    o.selected = null
+  }
+  if (entry.root.parent) entry.root.parent.remove(entry.root)
+  o.objects.splice(index, 1)
+  o.pivotRoots = o.pivotRoots.filter((r) => r !== entry.root)
+  o.requestRender?.()
+  return { entry, index, world, wasAttached }
+}
+
+// Put a soft-detached prop back in the scene at its old list position. A prop
+// that was glued to a bone comes back as a free prop at the same world pose.
+export function reattachObjectSoft(record) {
+  const { entry, index, world, wasAttached } = record
+  if (wasAttached) {
+    entry.attachedBone = null
+    entry.attachedBoneName = null
+    entry.attachedCharacterId = null
+    entry.root.position.copy(world.position)
+    entry.root.quaternion.copy(world.quaternion)
+    entry.root.scale.copy(world.scale)
+  }
+  o.scene.add(entry.root)
+  o.objects.splice(Math.min(index, o.objects.length), 0, entry)
+  o.requestRender?.()
+}
+
+// Free a prop's GPU resources for good (it must already be out of the scene).
+export function disposeObjectEntry(entry) {
+  disposePropMaterials(entry)
+  disposeObject(entry.root)
+}
+
 // Set a prop/background's look. 'auto' (the default) means "match whatever
 // style the character is currently using" — pick an explicit mode instead to
 // pin it (e.g. keep a realistic photo backdrop while the character is toon).
@@ -858,7 +912,8 @@ export function setObjectTransform(id, t) {
 export function undo() {
   const batch = o.undoStack.pop()
   if (!batch) return
-  for (const e of batch.entries) applySnapshot(e.root, e.before)
+  if (batch.run) batch.run('undo') // add/delete-object step (see recordObjectPresence)
+  else for (const e of batch.entries) applySnapshot(e.root, e.before)
   markHistoryAction(batch)
   o.redoStack.push(batch)
   o.requestRender()
@@ -867,7 +922,8 @@ export function undo() {
 export function redo() {
   const batch = o.redoStack.pop()
   if (!batch) return
-  for (const e of batch.entries) applySnapshot(e.root, e.after)
+  if (batch.run) batch.run('redo')
+  else for (const e of batch.entries) applySnapshot(e.root, e.after)
   markHistoryAction(batch)
   o.undoStack.push(batch)
   o.requestRender()
@@ -1047,6 +1103,24 @@ export function pauseObjectAnimation() {
   o.requestRender?.()
 }
 
+// True when object motion has been started and is currently paused part-way
+// (as opposed to never started / stopped), so it can be resumed in place.
+export function isObjectAnimationPaused() {
+  return !!o.animationRest && !useStore.getState().objectAnimPlaying
+}
+
+export function resumeObjectAnimation() {
+  const store = useStore.getState()
+  if (!o.animationRest) return 0
+  const duration = Math.max(0.1, Number(store.objectAnimDuration) || 2)
+  // Finished a non-looping run? Resuming replays from the start.
+  if (store.objectAnimTime >= duration) store.setObjectAnimTime(0)
+  store.setObjectAnimPlaying(true)
+  o.setContinuousRender?.(true)
+  o.requestRender?.()
+  return duration
+}
+
 export function stopObjectAnimation() {
   pauseObjectAnimation()
   if (o.animationRest) {
@@ -1181,6 +1255,7 @@ export function disposeObjects() {
   }
   o.objects = []
   o.selected = null
+  for (const batch of [...o.undoStack, ...o.redoStack]) batch.discard?.()
   o.undoStack = []
   o.redoStack = []
   o.dragBefore = null

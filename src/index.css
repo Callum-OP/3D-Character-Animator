@@ -2320,28 +2320,28 @@ body {
   border-color: #50606b;
 }
 
-.settings-scrim {
+.settings-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 20;
-  border: 0;
-  background: rgba(3, 7, 10, 0.46);
-  cursor: default;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.6);
 }
 
 .settings-drawer {
-  position: fixed;
-  top: 0;
-  right: 0;
-  z-index: 21;
-  width: min(390px, calc(100vw - 24px));
-  height: 100%;
+  position: relative;
+  width: 100%;
+  max-width: 460px;
+  max-height: 88vh;
   overflow-y: auto;
-  padding: 24px 20px;
-  border-left: 1px solid var(--panel-border);
-  background: linear-gradient(180deg, #292a31 0%, #1e1f24 100%);
-  box-shadow: -24px 0 60px rgba(0, 0, 0, 0.35);
-  animation: drawer-in 0.2s ease-out;
+  padding: 22px 24px;
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  background: var(--panel-bg);
+  animation: drawer-in 0.15s ease-out;
 }
 
 .drawer-header {
@@ -2435,8 +2435,8 @@ body {
 }
 
 @keyframes drawer-in {
-  from { opacity: 0; transform: translateX(18px); }
-  to { opacity: 1; transform: translateX(0); }
+  from { opacity: 0; transform: scale(0.97); }
+  to { opacity: 1; transform: scale(1); }
 }
 
 @media (max-width: 760px) {
@@ -2794,4 +2794,25 @@ body {
     min-width: 0;
     padding: 6px 9px;
   }
+}
+/* Precise resize dial floating in the 3D view, beside the resize gizmo */
+.viewport-scale-dial {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 5;
+  will-change: transform;
+}
+
+.viewport-scale-dial .radial-scale {
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  background: rgba(16, 17, 20, 0.78);
+  backdrop-filter: blur(12px);
+}
+
+.viewport-scale-dial .radial-scale-value {
+  font-size: 12px;
+  text-align: center;
 }

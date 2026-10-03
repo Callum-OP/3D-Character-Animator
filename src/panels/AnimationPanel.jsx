@@ -35,7 +35,7 @@ import {
   hasFileSystemAccess as hasClipFileSystemAccess,
 } from '../three/clipLibrary.js'
 import { getBoneQuaternion, getPosedBones, applyPose, setPosingEnabled } from '../three/posing.js'
-import { getCurrentModel, getGroundY, scrubTimeline, playAllCharacters, stopAllCharacters } from '../three/scene.js'
+import { getCurrentModel, getGroundY, scrubTimeline, playAllCharacters, stopAllCharacters, pauseAllCharacters, resumeAllCharacters } from '../three/scene.js'
 import * as THREE from 'three'
 import { simulateRagdollClip } from '../three/ragdoll.js'
 import {
@@ -43,6 +43,8 @@ import {
   getObjectRootById,
   startObjectAnimation,
   pauseObjectAnimation,
+  resumeObjectAnimation,
+  isObjectAnimationPaused,
   stopObjectAnimation,
   scrubObjectAnimation,
 } from '../three/objects.js'
@@ -449,6 +451,11 @@ export default function AnimationPanel() {
   const characterOrder = useStore((s) => s.characterOrder)
   const objectAnimData = useStore((s) => s.objectAnimData)
   const hasObjectAnimation = Object.values(objectAnimData || {}).some((keys) => keys && keys.length)
+  const objectAnimPlaying = useStore((s) => s.objectAnimPlaying)
+  // Anything at all running (the active character, or object motion). Other
+  // characters' playing state isn't in the store, but Play all / Pause all
+  // start and stop them together with the active one.
+  const anythingPlaying = playback === 'playing' || objectAnimPlaying
 
   const st = useStore.getState // for imperative setters inside handlers
   const bvhRef = useRef(null)
@@ -676,6 +683,14 @@ export default function AnimationPanel() {
   // at the same time.
   function onPlayAll() {
     const store = useStore.getState()
+    // Paused part-way (via Pause all)? Pick up where everything left off
+    // rather than restarting every clip from 0.
+    const charactersResumed = store.playback === 'paused' ? resumeAllCharacters() : 0
+    const objectResumed = isObjectAnimationPaused() ? (resumeObjectAnimation() > 0 ? 1 : 0) : 0
+    if (charactersResumed + objectResumed > 0) {
+      setKfMsg('Resumed all animation.')
+      return
+    }
     const { started: charactersStarted } = playAllCharacters()
     const objectTracks = Object.values(store.objectAnimData || {}).filter((keys) => keys && keys.length)
     const objectStarted = objectTracks.length > 0 ? (startObjectAnimation() > 0 ? 1 : 0) : 0
@@ -687,6 +702,12 @@ export default function AnimationPanel() {
           ? 'Playing the current scene animation.'
           : 'Nothing to play — pick a clip or create object motion first.',
     )
+  }
+
+  function onPauseAll() {
+    pauseAllCharacters()
+    pauseObjectAnimation()
+    setKfMsg('Paused all animation.')
   }
 
   function onStopAll() {
@@ -738,19 +759,23 @@ export default function AnimationPanel() {
     refreshCharacterAtTime(time)
   }
 
+  // Called after position keys are deleted or moved. Position keys carry a
+  // full-body pose key at the same time, so the baked playback clip must be
+  // REBUILT from the store every time — merely re-sampling the old clip (what
+  // this did unless playback was fully stopped) left the deleted pose baked
+  // in, so the character still changed pose there with no key shown.
   function onCharacterTrackChange(time) {
     if (st().playback === 'playing') {
       pause()
       st().setPlayback('paused')
     }
-    if (st().playback === 'stopped') {
-      if (source === 'edit') {
-        selectEdit(st().animData, st().animDuration, { loop, speed })
-      } else if (activeClipName) {
-        selectClip(activeClipName, { loop, speed }, st().animData)
-      }
-      st().setPlayback('paused')
+    const store = st()
+    if (source === 'edit') {
+      selectEdit(store.animData, store.animDuration, { loop, speed })
+    } else if (activeClipName) {
+      selectClip(activeClipName, { loop, speed }, store.animData)
     }
+    store.setPlayback('paused')
     updateRootMotionTrack(st().animData.root)
     scrubTimeline(time)
     st().setCurrentTime(time)
@@ -1650,10 +1675,15 @@ export default function AnimationPanel() {
         <div className="transport" style={{ marginTop: 6 }}>
           <button
             className="btn secondary"
-            onClick={onPlayAll}
-            title="Play every loaded character and any keyed object motion at the same time"
+            onClick={anythingPlaying ? onPauseAll : onPlayAll}
+            title={
+              anythingPlaying
+                ? 'Pause every loaded character and any object motion (Play all resumes)'
+                : 'Play every loaded character and any keyed object motion at the same time'
+            }
           >
-            ▶ Play all{characterOrder.length > 0 ? ` (${characterOrder.length})` : ''}
+            {anythingPlaying ? '❚❚ Pause all' : '▶ Play all'}
+            {characterOrder.length > 0 ? ` (${characterOrder.length})` : ''}
           </button>
           <button className="btn secondary" onClick={onStopAll}>
             ■ Stop all
@@ -1876,7 +1906,10 @@ export default function AnimationPanel() {
                 <button
                   className="btn secondary"
                   style={{ marginTop: 6 }}
-                  onClick={() => st().deleteKeyframe(selectedBoneName, snap(currentTime))}
+                  onClick={() => {
+                    st().deleteKeyframe(selectedBoneName, snap(currentTime))
+                    onCharacterTrackChange(st().currentTime)
+                  }}
                   title={`Remove only ${selectedBoneName}'s keyframe at the current time`}
                 >
                   Delete “{selectedBoneName}” key here
