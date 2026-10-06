@@ -169,6 +169,10 @@ export const useStore = create((set) => ({
         characterOrder: [...s.characterOrder, id],
         activeCharacterId: id,
         ...fields,
+        selectedObjectId: id,
+        selectedObjectIds: [id],
+        selectedCameraId: null,
+        selectedLightId: null,
         sceneObjects: [
           { id, name: modelInfo.name, isCharacter: true, characterId: id, visible: true },
           ...s.sceneObjects,
@@ -214,7 +218,11 @@ export const useStore = create((set) => ({
   // animation/mesh-edit engines at that character's Three.js objects.
   setActiveCharacterId: (id) =>
     set((s) => {
-      if (id === s.activeCharacterId) return {}
+      if (id === s.activeCharacterId) {
+        return id != null
+          ? { selectedObjectId: id, selectedObjectIds: [id], selectedCameraId: null, selectedLightId: null }
+          : {}
+      }
       const characters = { ...s.characters }
       if (s.activeCharacterId) characters[s.activeCharacterId] = snapshotCharacterFields(s)
       const next = id != null ? characters[id] || defaultCharacterFields(null) : defaultCharacterFields(null)
@@ -222,8 +230,8 @@ export const useStore = create((set) => ({
         characters,
         activeCharacterId: id,
         ...next,
-        selectedObjectId: null,
-        selectedObjectIds: [],
+        selectedObjectId: id,
+        selectedObjectIds: id != null ? [id] : [],
         selectedCameraId: null,
         selectedLightId: null,
       }
@@ -287,6 +295,10 @@ export const useStore = create((set) => ({
         characters: { ...s.characters, [id]: fields },
         characterOrder: s.characterOrder.includes(id) ? s.characterOrder : [...s.characterOrder, id],
         activeCharacterId: id,
+        selectedObjectId: id,
+        selectedObjectIds: [id],
+        selectedCameraId: null,
+        selectedLightId: null,
         // The character is a movable entry (kept first) in the objects list.
         sceneObjects: [
           { id, name: modelInfo.name, isCharacter: true, characterId: id, visible: true },
@@ -679,11 +691,14 @@ export const useStore = create((set) => ({
   // ---- Scene objects (props / backgrounds) ----
   sceneObjects: [], // [{ id, name, format }] — independent of the character
   objectAnimData: {}, // { [animationKey]: [{ time, position, quaternion, scale }] }
+  objectAttachmentData: {}, // { [animationKey]: { base, keys: [{ time, boneName, characterId, transform }] } }
   objectAnimDuration: 2,
   objectAnimTime: 0,
   objectAnimPlaying: false,
   globalTime: 0, // playhead of the "All animation" timeline (every character + object at once)
   setGlobalTime: (globalTime) => set({ globalTime }),
+  stopAtFirstClipEnd: false,
+  setStopAtFirstClipEnd: (stopAtFirstClipEnd) => set({ stopAtFirstClipEnd }),
   objectAutoKeyMovement: false,
   setObjectAnimDuration: (objectAnimDuration) => set({ objectAnimDuration }),
   setObjectAnimTime: (objectAnimTime) => set({ objectAnimTime }),
@@ -708,13 +723,18 @@ export const useStore = create((set) => ({
     }),
   removeObjectAnimationTrack: (animationKey) =>
     set((s) => {
-      if (!animationKey || !s.objectAnimData[animationKey]) return {}
+      if (
+        !animationKey ||
+        (!s.objectAnimData[animationKey] && !s.objectAttachmentData[animationKey])
+      ) return {}
       const objectAnimData = { ...s.objectAnimData }
       delete objectAnimData[animationKey]
-      return { objectAnimData }
+      const objectAttachmentData = { ...s.objectAttachmentData }
+      delete objectAttachmentData[animationKey]
+      return { objectAnimData, objectAttachmentData }
     }),
   clearObjectAnimation: () =>
-    set({ objectAnimData: {}, objectAnimTime: 0, objectAnimPlaying: false }),
+    set({ objectAnimData: {}, objectAttachmentData: {}, objectAnimTime: 0, objectAnimPlaying: false }),
   selectedObjectId: null, // "primary" selection — last one clicked; drives the panel's single-target controls
   selectedObjectIds: [], // full multi-selection (always includes selectedObjectId when non-empty)
   objectMode: 'translate', // gizmo mode: 'translate' | 'rotate' | 'scale'
@@ -750,6 +770,17 @@ export const useStore = create((set) => ({
     set((s) => ({
       sceneObjects: s.sceneObjects.map((o) => (o.id === id ? { ...o, attachedBoneName } : o)),
     })),
+  setObjectAttachmentTrack: (animationKey, track) =>
+    set((s) => ({
+      objectAttachmentData: { ...s.objectAttachmentData, [animationKey]: track },
+    })),
+  removeObjectAttachmentTrack: (animationKey) =>
+    set((s) => {
+      if (!animationKey || !s.objectAttachmentData[animationKey]) return {}
+      const objectAttachmentData = { ...s.objectAttachmentData }
+      delete objectAttachmentData[animationKey]
+      return { objectAttachmentData }
+    }),
   removeSceneObject: (id) =>
     set((s) => ({
       sceneObjects: s.sceneObjects.filter((o) => o.id !== id),

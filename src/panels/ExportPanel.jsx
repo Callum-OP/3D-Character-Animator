@@ -24,6 +24,8 @@ export default function ExportPanel() {
   const viewCameraId = useStore((s) => s.viewCameraId)
   const animData = useStore((s) => s.animData)
   const playbackSource = useStore((s) => s.playbackSource)
+  const stopAtFirstClipEnd = useStore((s) => s.stopAtFirstClipEnd)
+  const setStopAtFirstClipEnd = useStore((s) => s.setStopAtFirstClipEnd)
   const st = useStore.getState
   const [msg, setMsg] = useState(null)
   const [exportingModel, setExportingModel] = useState(false)
@@ -132,6 +134,14 @@ export default function ExportPanel() {
           {recording ? 'Recording…' : 'Record video'}
         </button>
       </div>
+      <label className="toggle-row" style={{ marginTop: 6 }}>
+        <input
+          type="checkbox"
+          checked={stopAtFirstClipEnd}
+          onChange={(event) => setStopAtFirstClipEnd(event.target.checked)}
+        />
+        Stop at the shortest character clip
+      </label>
       <div className="radio-hint" style={{ marginTop: 4 }}>
         Films {shotView.label}
         {shotView.kind === 'free' && sceneCameras.length > 1

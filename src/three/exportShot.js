@@ -124,10 +124,20 @@ export function runExportShot({ record, name, onStatus }) {
     stopObjectAnimation()
     if (prevLoop) useStore.setState({ loop: prevLoop })
   }
-  const { started: charStarted, maxDuration: charDur } = playAllCharacters({ loop: false, speed: s.speed })
+  const {
+    started: charStarted,
+    maxDuration: charDur,
+    minDuration: firstCharDur,
+  } = playAllCharacters({
+    loop: false,
+    speed: s.speed,
+    stopAtFirstClipEnd: s.stopAtFirstClipEnd,
+  })
   const objDur = startObjectAnimation() // 0 when no object has keyframes
   const started = charStarted + (objDur > 0 ? 1 : 0)
-  const durSec = Math.max(charDur || 0, objDur)
+  const durSec = s.stopAtFirstClipEnd && charStarted
+    ? firstCharDur
+    : Math.max(charDur || 0, objDur)
   if (started === 0) {
     setForceCameraCuts(false)
     restoreView()
@@ -148,7 +158,7 @@ export function runExportShot({ record, name, onStatus }) {
   }
   if (record) useStore.getState().setRecording(true)
   else useStore.getState().setPreviewing(true)
-  startGlobalClock(true) // the All animation timeline follows the shot
+  startGlobalClock(true, { duration: durSec, loop: false, stopAtFirstClipEnd: s.stopAtFirstClipEnd })
   const what = [
     charStarted > 0 ? (charStarted > 1 ? `${charStarted} characters` : '1 character') : null,
     objDur > 0 ? 'object motion' : null,

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import * as THREE from 'three'
+import { useStore } from '../store.js'
 import {
   initObjects,
   addObject,
@@ -8,6 +9,9 @@ import {
   attachObjectToBone,
   detachObject,
   getObjectAttachment,
+  keyObjectAttachment,
+  clearObjectAttachmentTrack,
+  scrubObjectAnimation,
   detachObjectsForCharacter,
   removeObject,
   disposeObjects,
@@ -35,7 +39,14 @@ describe('bone attachment', () => {
     const camera = new THREE.PerspectiveCamera()
     const renderer = { domElement: document.createElement('canvas') }
     const controls = { enabled: true, locked: false }
-    initObjects({ scene, camera, renderer, controls, requestRender: () => {} })
+    initObjects({
+      scene,
+      camera,
+      renderer,
+      controls,
+      requestRender: () => {},
+      resolveBone: (name) => (name === 'RightHand' ? bone : null),
+    })
 
     bone = new THREE.Bone()
     bone.name = 'RightHand'
@@ -44,6 +55,14 @@ describe('bone attachment', () => {
     scene.add(bone)
 
     id = addObject({ root: makeBoxRoot() }, 'Sword', 'glb', null).id
+    useStore.setState({
+      sceneObjects: [{ id, animationKey: 'test-sword', name: 'Sword' }],
+      objectAnimData: {},
+      objectAttachmentData: {},
+      objectAnimDuration: 3,
+      objectAnimTime: 0,
+      objectAnimPlaying: false,
+    })
   })
 
   it('reports no attachment before attaching', () => {
@@ -111,5 +130,23 @@ describe('bone attachment', () => {
     const otherId = addObject({ root: makeBoxRoot() }, 'Hat', 'glb', null).id
     attachObjectToBone(id, bone, 'RightHand')
     expect(() => selectObjects([id, otherId])).not.toThrow()
+  })
+
+  it('keys attachment and detachment on the shared object timeline', () => {
+    keyObjectAttachment(id, 'RightHand', 1, 'char_1', 'Character', (name) => name === 'RightHand' ? bone : null)
+    scrubObjectAnimation(0)
+    expect(getObjectAttachment(id)).toBeNull()
+
+    scrubObjectAnimation(1)
+    expect(getObjectAttachment(id)).toEqual({ boneName: 'RightHand', characterId: 'char_1' })
+
+    keyObjectAttachment(id, null, 2, null, null)
+    scrubObjectAnimation(1.5)
+    expect(getObjectAttachment(id)).toEqual({ boneName: 'RightHand', characterId: 'char_1' })
+    scrubObjectAnimation(2)
+    expect(getObjectAttachment(id)).toBeNull()
+    scrubObjectAnimation(1)
+    clearObjectAttachmentTrack(id)
+    expect(getObjectAttachment(id)).toBeNull()
   })
 })

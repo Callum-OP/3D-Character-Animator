@@ -466,8 +466,13 @@ export default function AnimationPanel() {
 
   const importedClipNames = useStore((s) => s.importedClipNames)
   const characterOrder = useStore((s) => s.characterOrder)
+  const stopAtFirstClipEnd = useStore((s) => s.stopAtFirstClipEnd)
+  const setStopAtFirstClipEnd = useStore((s) => s.setStopAtFirstClipEnd)
   const objectAnimData = useStore((s) => s.objectAnimData)
-  const hasObjectAnimation = Object.values(objectAnimData || {}).some((keys) => keys && keys.length)
+  const objectAttachmentData = useStore((s) => s.objectAttachmentData)
+  const hasObjectAnimation =
+    Object.values(objectAnimData || {}).some((keys) => keys && keys.length) ||
+    Object.values(objectAttachmentData || {}).some((track) => track?.keys?.length)
   const objectAnimPlaying = useStore((s) => s.objectAnimPlaying)
   // Anything at all running (the active character, or object motion). Other
   // characters' playing state isn't in the store, but Play all / Pause all
@@ -648,6 +653,14 @@ export default function AnimationPanel() {
               ■ Stop all
             </button>
           </div>
+          <label className="toggle-row" style={{ marginTop: 6 }}>
+            <input
+              type="checkbox"
+              checked={stopAtFirstClipEnd}
+              onChange={(event) => setStopAtFirstClipEnd(event.target.checked)}
+            />
+            Stop when the shortest character clip ends
+          </label>
           <div className="scrub-row">
             <input
               type="range"
@@ -837,20 +850,34 @@ export default function AnimationPanel() {
   // at the same time.
   function onPlayAll() {
     const store = useStore.getState()
+    const reachedFirstClipEnd =
+      store.stopAtFirstClipEnd &&
+      store.playback === 'paused' &&
+      store.globalTime >= getAllTimelineDuration({ stopAtFirstClipEnd: true }) - 1e-3
+    if (reachedFirstClipEnd) {
+      stopAllCharacters()
+      stopObjectAnimation()
+    }
     // Paused part-way (via Pause all)? Pick up where everything left off
     // rather than restarting every clip from 0.
-    const charactersResumed = store.playback === 'paused' ? resumeAllCharacters() : 0
-    const objectResumed = isObjectAnimationPaused() ? (resumeObjectAnimation() > 0 ? 1 : 0) : 0
+    const charactersResumed = !reachedFirstClipEnd && store.playback === 'paused' ? resumeAllCharacters() : 0
+    const objectResumed = !reachedFirstClipEnd && isObjectAnimationPaused() ? (resumeObjectAnimation() > 0 ? 1 : 0) : 0
     if (charactersResumed + objectResumed > 0) {
       startGlobalClock(false)
       setKfMsg('Resumed all animation.')
       return
     }
-    const { started: charactersStarted } = playAllCharacters()
-    const objectTracks = Object.values(store.objectAnimData || {}).filter((keys) => keys && keys.length)
-    const objectStarted = objectTracks.length > 0 ? (startObjectAnimation() > 0 ? 1 : 0) : 0
+    const { started: charactersStarted, minDuration } = playAllCharacters({
+      stopAtFirstClipEnd: store.stopAtFirstClipEnd,
+    })
+    const objectStarted = startObjectAnimation() > 0 ? 1 : 0
     const started = charactersStarted + objectStarted
-    if (started > 0) startGlobalClock(true)
+    if (started > 0) {
+      startGlobalClock(true, {
+        duration: store.stopAtFirstClipEnd && charactersStarted ? minDuration : undefined,
+        stopAtFirstClipEnd: store.stopAtFirstClipEnd,
+      })
+    }
     setKfMsg(
       started > 1
         ? `Playing ${started} active animation tracks.`

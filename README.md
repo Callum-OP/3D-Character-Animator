@@ -34,9 +34,10 @@ mocap retargeting, allows mesh-level edits for accessories and clothing, and add
   baked into editable keyframes.
 - **Scene props and layout** — add backgrounds and props from `.glb`, `.gltf`, or
   `.fbx`, arrange them in the scene, move/rotate/scale them, select multiple
-  objects together, and save/load scene layouts. The app also supports root
-  motion capture for characters that walk through the scene instead of staying
-  fixed in place.
+  objects together, and save/load scene layouts. Props can follow a character
+  bone, with attach/detach changes keyed to the All animation playhead. The app
+  also supports root motion capture for characters that walk through the scene
+  instead of staying fixed in place.
 - **Cloth and secondary motion** — enable cloth simulation on selected meshes to
   drape clothing or accessories against the character body, with live simulation
   controls and a reset/restore workflow. Dangle-bone physics adds lightweight
@@ -48,7 +49,9 @@ mocap retargeting, allows mesh-level edits for accessories and clothing, and add
   giving you more control over cinematic presentation and interactive shot setups.
 - **Export pipeline** — export transparent stills at 1×/2×/4× viewport sizes,
   record WebM video from the current camera view, export animation clips as BVH,
-  and use fullscreen capture for screen recordings and presentation work.
+  and use fullscreen capture for screen recordings and presentation work. Play
+  All and video export can optionally stop when the shortest active character
+  clip ends.
 - **Extra usability tools** — one-click presets, help overlays, per-part hide/
   show controls, FPS/memory readouts, a reference grid, and a practical UI tuned
   for quick iteration.

@@ -51,6 +51,7 @@ const o = {
   onMoveCommit: null, // (root) => void — fired after a gizmo drag actually changes a root's TRS
   onVisibilityChange: null,
   animationRest: null,
+  resolveBone: null,
   gizmoGrabbed: false, // true once per interaction that actually MOVED something via the gizmo (see objectChange)
   draggingViaGizmo: false, // true between dragging-changed(true) and (false) — not by itself proof of an actual move
   lastStyleOpts: { mode: 'unlit', toonSteps: 3, soften: 0, colorGrading: 'none', overrides: {} }, // last scene-wide style, for 'auto' objects
@@ -90,6 +91,7 @@ export function initObjects(refs) {
   o.controls = refs.controls
   o.requestRender = refs.requestRender
   o.setContinuousRender = refs.setContinuousRender
+  o.resolveBone = refs.resolveBone || null
 
   const transform = new TransformControls(o.camera, o.renderer.domElement)
   transform.setMode('translate')
@@ -304,6 +306,130 @@ export function attachObjectToBone(id, bone, boneName, characterId) {
   o.requestRender()
 }
 
+function objectTransform(root) {
+  return {
+    position: root.position.toArray(),
+    quaternion: root.quaternion.toArray(),
+    scale: root.scale.toArray(),
+  }
+}
+
+export function getObjectAnimationDuration(store = useStore.getState()) {
+  const transformEnd = Object.values(store.objectAnimData || {}).reduce(
+    (end, keys) => Math.max(end, keys?.[keys.length - 1]?.time || 0),
+    0,
+  )
+  const attachmentEnd = Object.values(store.objectAttachmentData || {}).reduce(
+    (end, track) => Math.max(end, track?.keys?.[track.keys.length - 1]?.time || 0),
+    0,
+  )
+  return Math.max(0.1, Number(store.objectAnimDuration) || 2, transformEnd, attachmentEnd)
+}
+
+function applyObjectTransform(root, transform) {
+  if (transform?.position) root.position.fromArray(transform.position)
+  if (transform?.quaternion) root.quaternion.fromArray(transform.quaternion)
+  if (transform?.scale) root.scale.fromArray(transform.scale)
+}
+
+function currentAttachmentState(entry) {
+  const character = entry.attachedCharacterId != null
+    ? o.characterRoots.get(entry.attachedCharacterId)
+    : null
+  return {
+    boneName: entry.attachedBoneName || null,
+    characterId: entry.attachedCharacterId ?? null,
+    characterName: character?.name || null,
+    transform: objectTransform(entry.root),
+  }
+}
+
+// Save an attach/detach change at the shared timeline playhead. The first
+// keyed change captures the original attachment and transform as the track's
+// baseline, so scrubbing before the first key restores the starting state.
+export function keyObjectAttachment(id, boneName, time, characterId, characterName, resolveBone = o.resolveBone) {
+  const entry = o.objects.find((candidate) => candidate.id === id)
+  if (!entry) return false
+  const keyTime = Math.max(0, Number(time) || 0)
+  const store = useStore.getState()
+  const track = store.objectAttachmentData?.[entry.animationKey]
+  const base = track?.base || currentAttachmentState(entry)
+  if (boneName) {
+    const bone = resolveBone?.(boneName, characterId)
+    if (!bone) return false
+    attachObjectToBone(id, bone, boneName, characterId)
+  } else {
+    detachObject(id)
+  }
+  const key = { time: keyTime, characterName: characterName || null, ...currentAttachmentState(entry) }
+  const keys = (track?.keys || []).filter((item) => Math.abs(item.time - keyTime) > 1e-6)
+  keys.push(key)
+  keys.sort((a, b) => a.time - b.time)
+  store.setObjectAttachmentTrack(entry.animationKey, { base, keys })
+  store.setObjectAnimDuration(Math.max(Number(store.objectAnimDuration) || 2, keyTime))
+  store.setObjectAttachment(id, entry.attachedBoneName)
+  o.requestRender?.()
+  return true
+}
+
+function applyAttachmentState(entry, state) {
+  const targetName = state?.boneName || null
+  const targetCharacterId = state?.characterId ?? null
+  if (targetName) {
+    const bone = o.resolveBone?.(targetName, targetCharacterId, state?.characterName)
+    if (!bone) {
+      if (entry.attachedBoneName) detachObject(entry.id)
+      const current = useStore.getState().sceneObjects.find((object) => object.id === entry.id)
+      if (current?.attachedBoneName) useStore.getState().setObjectAttachment(entry.id, null)
+      return
+    }
+    if (
+      entry.attachedBoneName !== targetName ||
+      entry.attachedCharacterId !== targetCharacterId ||
+      entry.attachedBone !== bone
+    ) {
+      attachObjectToBone(entry.id, bone, targetName, targetCharacterId)
+    }
+  } else if (entry.attachedBoneName) {
+    detachObject(entry.id)
+  }
+  const current = useStore.getState().sceneObjects.find((object) => object.id === entry.id)
+  if (current?.attachedBoneName !== (entry.attachedBoneName || null)) {
+    useStore.getState().setObjectAttachment(entry.id, entry.attachedBoneName)
+  }
+}
+
+function sampleAttachmentSegment(entry, track, time, transformKeys) {
+  if (!track) return
+  let segment = track.base
+  let segmentStart = 0
+  let nextKeyTime = Infinity
+  for (const key of track.keys || []) {
+    if (key.time <= time) {
+      segment = key
+      segmentStart = key.time
+    } else {
+      nextKeyTime = key.time
+      break
+    }
+  }
+  applyAttachmentState(entry, segment)
+  const keys = [
+    { time: segmentStart, ...segment.transform },
+    ...(transformKeys || []).filter((key) => key.time >= segmentStart && key.time < nextKeyTime),
+  ]
+  const unique = [...new Map(keys.map((key) => [key.time, key])).values()]
+    .sort((a, b) => a.time - b.time)
+  if (unique.length) applyObjectTransform(entry.root, sampleObjectTrack(unique, time))
+}
+
+function applyAttachmentAnimationsAt(time, tracks, transformTracks) {
+  for (const entry of o.objects) {
+    const track = tracks[entry.animationKey]
+    if (track?.base) sampleAttachmentSegment(entry, track, time, transformTracks[entry.animationKey] || [])
+  }
+}
+
 // Detach a prop back into the scene root, preserving its current world
 // position/rotation/scale (so it stays exactly where the bone left it).
 export function detachObject(id) {
@@ -325,6 +451,19 @@ export function getObjectAttachment(id) {
   const entry = o.objects.find((e) => e.id === id)
   if (!entry || !entry.attachedBoneName) return null
   return { boneName: entry.attachedBoneName, characterId: entry.attachedCharacterId }
+}
+
+export function clearObjectAttachmentTrack(id) {
+  const entry = o.objects.find((candidate) => candidate.id === id)
+  if (!entry) return
+  const store = useStore.getState()
+  const track = store.objectAttachmentData?.[entry.animationKey]
+  if (track?.base) {
+    applyAttachmentState(entry, track.base)
+    applyObjectTransform(entry.root, track.base.transform)
+  }
+  store.removeObjectAttachmentTrack(entry.animationKey)
+  o.requestRender?.()
 }
 
 // Detach every prop currently attached to bones belonging to `characterId` —
@@ -1078,23 +1217,25 @@ function sampleObjectTrack(keys, time) {
 }
 
 function applyObjectAnimationAt(time) {
-  const tracks = useStore.getState().objectAnimData || {}
+  const store = useStore.getState()
+  const tracks = store.objectAnimData || {}
   for (const entry of o.objects) {
     const keys = tracks[entry.animationKey]
-    if (!keys?.length) continue
+    if (!keys?.length || store.objectAttachmentData?.[entry.animationKey]?.base) continue
     const transform = sampleObjectTrack(keys, time)
-    entry.root.position.fromArray(transform.position)
-    entry.root.quaternion.fromArray(transform.quaternion)
-    entry.root.scale.fromArray(transform.scale)
+    applyObjectTransform(entry.root, transform)
   }
+  applyAttachmentAnimationsAt(time, store.objectAttachmentData || {}, tracks)
   o.requestRender?.()
 }
 
 export function startObjectAnimation() {
   const store = useStore.getState()
-  const hasKeys = Object.values(store.objectAnimData || {}).some((keys) => keys?.length)
+  const hasKeys =
+    Object.values(store.objectAnimData || {}).some((keys) => keys?.length) ||
+    Object.values(store.objectAttachmentData || {}).some((track) => track?.keys?.length)
   if (!hasKeys) return 0
-  const duration = Math.max(0.1, Number(store.objectAnimDuration) || 2)
+  const duration = getObjectAnimationDuration(store)
   o.animationRest = new Map(o.objects.map((entry) => [entry.animationKey, snapshot(entry.root)]))
   store.setObjectAnimTime(0)
   store.setObjectAnimPlaying(true)
@@ -1118,7 +1259,7 @@ export function isObjectAnimationPaused() {
 export function resumeObjectAnimation() {
   const store = useStore.getState()
   if (!o.animationRest) return 0
-  const duration = Math.max(0.1, Number(store.objectAnimDuration) || 2)
+  const duration = getObjectAnimationDuration(store)
   // Finished a non-looping run? Resuming replays from the start.
   if (store.objectAnimTime >= duration) store.setObjectAnimTime(0)
   store.setObjectAnimPlaying(true)
@@ -1136,24 +1277,25 @@ export function stopObjectAnimation() {
     }
   }
   o.animationRest = null
+  applyObjectAnimationAt(0)
   useStore.getState().setObjectAnimTime(0)
   o.requestRender?.()
 }
 
 export function scrubObjectAnimation(time) {
   const store = useStore.getState()
-  const safeTime = Math.max(0, Math.min(Number(time) || 0, store.objectAnimDuration || 0))
+  const safeTime = Math.max(0, Math.min(Number(time) || 0, getObjectAnimationDuration(store)))
   store.setObjectAnimTime(safeTime)
   applyObjectAnimationAt(safeTime)
 }
 
-export function stepObjectAnimation(delta) {
+export function stepObjectAnimation(delta, loopOverride) {
   const store = useStore.getState()
   if (!store.objectAnimPlaying) return
-  const duration = Math.max(0.1, Number(store.objectAnimDuration) || 2)
+  const duration = getObjectAnimationDuration(store)
   let time = store.objectAnimTime + Math.max(0, delta) * (Number(store.speed) || 1)
   if (time >= duration) {
-    if (store.loop) time %= duration
+    if (loopOverride ?? store.loop) time %= duration
     else {
       time = duration
       store.setObjectAnimPlaying(false)

@@ -10,6 +10,9 @@ import {
   setObjectOutlineById,
   setObjectCastShadowById,
   setObjectAttachmentById,
+  keyObjectAttachmentById,
+  clearObjectAttachmentTimeline,
+  scrubAllTimeline,
   setCameraToObject,
 } from '../three/scene.js'
 import {
@@ -46,6 +49,8 @@ export default function ObjectsPanel() {
   const sceneObjects = useStore((s) => s.sceneObjects)
   const selectedObjectId = useStore((s) => s.selectedObjectId)
   const selectedObjectIds = useStore((s) => s.selectedObjectIds)
+  const globalTime = useStore((s) => s.globalTime)
+  const objectAttachmentData = useStore((s) => s.objectAttachmentData)
   const objectMode = useStore((s) => s.objectMode)
   const setSelectedObjectId = useStore((s) => s.setSelectedObjectId)
   const toggleObjectSelection = useStore((s) => s.toggleObjectSelection)
@@ -62,6 +67,7 @@ export default function ObjectsPanel() {
   // typing "1." or "" mid-edit doesn't get clobbered by re-renders — only
   // committed (parsed + applied) on blur/Enter.
   const [scaleText, setScaleText] = useState(null)
+  const [keyAttachmentAtPlayhead, setKeyAttachmentAtPlayhead] = useState(false)
 
   function onPick(e) {
     const file = e.target.files && e.target.files[0]
@@ -354,25 +360,74 @@ export default function ObjectsPanel() {
                       </>
                     )}
                     {!o.isCharacter && boneNames.length > 0 && (
-                      <select
-                        className="select"
-                        style={{ fontSize: 11, padding: '2px 4px' }}
-                        title={
-                          o.attachedBoneName
-                            ? `Attached to "${o.attachedBoneName}" — follows that bone. Choose another bone, or "Not attached" to detach.`
-                            : 'Attach this to a bone (e.g. a gun to a hand bone) so it follows posing and animation'
-                        }
-                        value={o.attachedBoneName || ''}
-                        onClick={(e) => e.stopPropagation()}
-                        onChange={(e) => setObjectAttachmentById(o.id, e.target.value || null)}
-                      >
-                        <option value="">Not attached</option>
-                        {boneNames.map((name) => (
-                          <option key={name} value={name}>
-                            {name}
-                          </option>
+                      <>
+                        <select
+                          className="select"
+                          style={{ fontSize: 11, padding: '2px 4px' }}
+                          title={
+                            keyAttachmentAtPlayhead
+                              ? `Key attachment at ${globalTime.toFixed(2)}s on the All animation timeline`
+                              : o.attachedBoneName
+                                ? `Attached to "${o.attachedBoneName}" — follows that bone. Choose another bone, or "Not attached" to detach.`
+                                : 'Attach this to a bone (e.g. a gun to a hand bone) so it follows posing and animation'
+                          }
+                          value={o.attachedBoneName || ''}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => {
+                            const boneName = e.target.value || null
+                            if (keyAttachmentAtPlayhead) {
+                              const ok = keyObjectAttachmentById(o.id, boneName, globalTime)
+                              setMsg(ok
+                                ? `Attachment keyed at ${globalTime.toFixed(2)}s.`
+                                : `Could not find "${boneName}" on the active character.`)
+                            } else {
+                              setObjectAttachmentById(o.id, boneName)
+                            }
+                          }}
+                        >
+                          <option value="">Not attached</option>
+                          {boneNames.map((name) => (
+                            <option key={name} value={name}>
+                              {name}
+                            </option>
+                          ))}
+                        </select>
+                        <label className="radio-hint" style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                          <input
+                            type="checkbox"
+                            checked={keyAttachmentAtPlayhead}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) => setKeyAttachmentAtPlayhead(e.target.checked)}
+                          />
+                          Key at {globalTime.toFixed(2)}s
+                        </label>
+                        {objectAttachmentData?.[o.animationKey]?.keys?.map((key) => (
+                          <button
+                            key={key.time}
+                            className="btn secondary"
+                            title={`Go to attachment key at ${key.time.toFixed(2)}s`}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              scrubAllTimeline(key.time)
+                            }}
+                          >
+                            {key.boneName ? `${key.boneName} · ` : 'Detach · '}{key.time.toFixed(2)}s
+                          </button>
                         ))}
-                      </select>
+                        {objectAttachmentData?.[o.animationKey] && (
+                          <button
+                            className="btn secondary"
+                            title="Remove this object's timed attachment keys"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              clearObjectAttachmentTimeline(o.id)
+                              setMsg('Timed attachment keys cleared.')
+                            }}
+                          >
+                            Clear keys
+                          </button>
+                        )}
+                      </>
                     )}
                   </div>
                 )}

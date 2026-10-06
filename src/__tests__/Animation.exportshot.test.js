@@ -59,8 +59,10 @@ beforeEach(() => {
     recording: false,
     previewing: false,
     objectAnimData: {},
+    objectAttachmentData: {},
     objectAnimDuration: 2,
     objectAnimPlaying: false,
+    stopAtFirstClipEnd: false,
   })
 })
 
@@ -109,6 +111,21 @@ describe('preview / record plays object motion too', () => {
     expect(useStore.getState().loop).toBe(false) // shot plays once
     vi.advanceTimersByTime(1300)
     expect(useStore.getState().loop).toBe(true) // user's setting is back
+  })
+
+  it('stops a video preview when the shortest character clip ends if enabled', () => {
+    seedCharacter('c1', 'A', 2)
+    seedCharacter('c2', 'B', 4)
+    useStore.setState({
+      stopAtFirstClipEnd: true,
+      objectAnimData: { box: [key(0, 0), key(5, 5)] },
+      objectAnimDuration: 5,
+    })
+    runExportShot({ record: false, name: 'shot', onStatus: () => {} })
+
+    vi.advanceTimersByTime(2100)
+    expect(useStore.getState().previewing).toBe(false)
+    expect(useStore.getState().objectAnimPlaying).toBe(false)
   })
 
   it('films in View mode (no gizmos / picking) and puts the previous mode back afterwards', () => {

@@ -11,6 +11,8 @@ import {
   setObjectVisibleById,
   playAllCharacters,
   stopAllCharacters,
+  startGlobalClock,
+  getAllTimelineDuration,
 } from '../three/scene.js'
 import {
   hasFileSystemAccess,
@@ -67,7 +69,11 @@ export default function TitleBar({ onOpenSettings }) {
   const toggleHelp = useStore((s) => s.toggleHelp)
   const hasCharacter = useStore((s) => !!s.modelInfo)
   const sceneObjects = useStore((s) => s.sceneObjects)
-  const hasObjectAnimation = useStore((s) => Object.values(s.objectAnimData || {}).some((keys) => keys && keys.length))
+  const hasObjectAnimation = useStore(
+    (s) =>
+      Object.values(s.objectAnimData || {}).some((keys) => keys && keys.length) ||
+      Object.values(s.objectAttachmentData || {}).some((track) => track?.keys?.length),
+  )
   const hasSceneContent = hasCharacter || sceneObjects.length > 0
   const fsAccess = hasFileSystemAccess()
   const exportScale = useStore((s) => s.exportScale)
@@ -220,10 +226,25 @@ export default function TitleBar({ onOpenSettings }) {
   function onPlayAll() {
     setOpenMenu(null)
     const store = useStore.getState()
-    const { started: charactersStarted } = playAllCharacters()
-    const objectTracks = Object.values(store.objectAnimData || {}).filter((keys) => keys && keys.length)
-    const objectStarted = objectTracks.length > 0 ? (startObjectAnimation() > 0 ? 1 : 0) : 0
+    const reachedFirstClipEnd =
+      store.stopAtFirstClipEnd &&
+      store.playback === 'paused' &&
+      store.globalTime >= getAllTimelineDuration({ stopAtFirstClipEnd: true }) - 1e-3
+    if (reachedFirstClipEnd) {
+      stopAllCharacters()
+      stopObjectAnimation()
+    }
+    const { started: charactersStarted, minDuration } = playAllCharacters({
+      stopAtFirstClipEnd: store.stopAtFirstClipEnd,
+    })
+    const objectStarted = startObjectAnimation() > 0 ? 1 : 0
     const started = charactersStarted + objectStarted
+    if (started > 0) {
+      startGlobalClock(true, {
+        duration: store.stopAtFirstClipEnd && charactersStarted ? minDuration : undefined,
+        stopAtFirstClipEnd: store.stopAtFirstClipEnd,
+      })
+    }
     setMsg(started ? `Playing ${started} active animation track${started === 1 ? '' : 's'} across the scene.` : 'Nothing to play — select a clip or create object motion first.')
   }
 

@@ -75,6 +75,7 @@ beforeEach(() => {
 describe('all-animation timeline', () => {
   it('is as long as the longest character clip, or the object motion if that is longer', () => {
     expect(getAllTimelineDuration()).toBeCloseTo(4, 5)
+    expect(getAllTimelineDuration({ stopAtFirstClipEnd: true })).toBeCloseTo(2, 5)
     useStore.setState({
       objectAnimData: { box: [{ time: 0, position: [0, 0, 0], quaternion: [0, 0, 0, 1], scale: [1, 1, 1] }] },
       objectAnimDuration: 6,

@@ -156,6 +156,8 @@ import {
   attachObjectToBone,
   detachObject,
   getObjectAttachment,
+  keyObjectAttachment,
+  clearObjectAttachmentTrack,
   detachObjectsForCharacter,
   setViewCamera as setObjectsViewCamera,
   updateAllObjectRimLight,
@@ -164,6 +166,7 @@ import {
   getObjectRoots,
   getAllRootsForExport,
   stepObjectAnimation,
+  getObjectAnimationDuration,
   stopObjectAnimation,
   startObjectAnimation,
   pauseObjectAnimation,
@@ -449,7 +452,20 @@ export function initScene(container) {
   })
 
   // --- Scene objects (props / backgrounds with a move/rotate/scale gizmo) ---
-  initObjects({ scene, camera, renderer, controls, requestRender, setContinuousRender: (on) => setContinuousRender(on, 'object-animation') })
+  initObjects({
+    scene,
+    camera,
+    renderer,
+    controls,
+    requestRender,
+    setContinuousRender: (on) => setContinuousRender(on, 'object-animation'),
+    resolveBone: (boneName, characterId, characterName) => {
+      const model = [...state.characters.values()].find((candidate) => candidate.info.name === characterName) ||
+        state.characters.get(characterId) ||
+        state.currentModel
+      return model?.bones?.find((bone) => bone.name === boneName) || null
+    },
+  })
   setOnObjectVisibilityChange((id, visible) => useStore.getState().setObjectVisible(id, visible))
   // "Auto-save movement": when the toggle is on and the object being dragged
   // is the active character, drop a root-motion keyframe at the playhead —
@@ -766,6 +782,11 @@ export function setContinuousRender(on, reason = 'anim') {
       if (!state.continuous) return
       state.animId = requestAnimationFrame(tick)
       const delta = state.clock ? state.clock.getDelta() : 0
+      const speed = Number(useStore.getState().speed) || 1
+      const animationDelta =
+        globalClock && !globalClockLoop && globalClockDuration > 0
+          ? Math.min(delta, Math.max(0, globalClockDuration - useStore.getState().globalTime) / speed)
+          : delta
       // Smoothed FPS for the stats readout (only meaningful while playing).
       if (delta > 0) state.fps = state.fps * 0.9 + (1 / delta) * 0.1
       // Guarded: a thrown error in any one step (mixer, cloth playback, the
@@ -775,12 +796,12 @@ export function setContinuousRender(on, reason = 'anim') {
       // never updated again. Catch here so one bad frame logs a warning and
       // gets skipped instead of freezing everything after it.
       try {
-        updateAnimation(delta) // advance the mixer before drawing
-        stepObjectAnimation(delta)
-        advanceGlobalClock(delta)
-        stepClothLive(delta) // step any LIVE cloth sims, following the current pose
-        stepDangleLive(delta) // swing any dangle (hair/accessory) bones under gravity
-        updateCamTransition(delta) // glide any in-progress camera cut
+        updateAnimation(animationDelta) // advance the mixer before drawing
+        stepObjectAnimation(animationDelta, globalClock ? globalClockLoop : undefined)
+        advanceGlobalClock(animationDelta)
+        stepClothLive(animationDelta) // step any LIVE cloth sims, following the current pose
+        stepDangleLive(animationDelta) // swing any dangle (hair/accessory) bones under gravity
+        updateCamTransition(animationDelta) // glide any in-progress camera cut
         renderOnce()
       } catch (err) {
         console.error('Render tick failed, skipping this frame:', err)
@@ -990,12 +1011,13 @@ export function setOrbitSuspended(suspended) {
 // settings but can be overridden (e.g. a recorded shot always plays once,
 // regardless of the loop toggle). Returns { started, maxDuration } —
 // maxDuration is the longest of the clips just armed (seconds), 0 if none.
-export function playAllCharacters({ loop, speed } = {}) {
+export function playAllCharacters({ loop, speed, stopAtFirstClipEnd = false } = {}) {
   const store = useStore.getState()
-  const opts = { loop: loop ?? store.loop, speed: speed ?? store.speed }
+  const opts = { loop: stopAtFirstClipEnd ? false : (loop ?? store.loop), speed: speed ?? store.speed }
   const uiActiveId = state.activeCharacterId
   let started = 0
   let maxDuration = 0
+  let minDuration = Infinity
   for (const id of store.characterOrder) {
     if (!state.characters.has(id)) continue
     const c = id === uiActiveId ? store : store.characters[id]
@@ -1011,6 +1033,7 @@ export function playAllCharacters({ loop, speed } = {}) {
       play()
       started++
       maxDuration = Math.max(maxDuration, durSec)
+      minDuration = Math.min(minDuration, durSec)
     }
   }
   setActiveAnimationCharacter(uiActiveId) // restore whichever character the UI is focused on
@@ -1018,7 +1041,7 @@ export function playAllCharacters({ loop, speed } = {}) {
     useStore.setState({ playback: 'playing' })
     requestRender()
   }
-  return { started, maxDuration }
+  return { started, maxDuration, minDuration: started ? minDuration : 0 }
 }
 
 // --- All-animation timeline ---------------------------------------------------
@@ -1037,16 +1060,18 @@ function hasKeys(v) {
 }
 
 function objectKeysExist(store) {
-  return Object.values(store.objectAnimData || {}).some((keys) => keys && keys.length)
+  return Object.values(store.objectAnimData || {}).some((keys) => keys && keys.length) ||
+    Object.values(store.objectAttachmentData || {}).some((track) => track?.keys?.length)
 }
 
 // Length of the whole scene's animation in seconds: the longest of every
 // character's selected clip / keyframe edit and the object-motion duration.
 // Read-only (never switches the active character), so safe to call in render.
-export function getAllTimelineDuration() {
+export function getAllTimelineDuration({ stopAtFirstClipEnd = false } = {}) {
   const store = useStore.getState()
   const uiActiveId = state.activeCharacterId
   let max = 0
+  const characterDurations = []
   for (const id of store.characterOrder) {
     if (!state.characters.has(id)) continue
     const c = id === uiActiveId ? store : store.characters[id]
@@ -1054,9 +1079,16 @@ export function getAllTimelineDuration() {
     let d = 0
     if (c.playbackSource === 'edit') d = hasKeys(c.animData) ? store.animDuration : 0
     else if (c.activeClipName) d = getCharacterClipDuration(id, c.activeClipName)
-    if (d > max) max = d
+    if (d > 0) {
+      characterDurations.push(d)
+      if (d > max) max = d
+    }
   }
-  if (objectKeysExist(store)) max = Math.max(max, Number(store.objectAnimDuration) || 0)
+  if (stopAtFirstClipEnd && characterDurations.length) {
+    max = Math.min(...characterDurations)
+    return max
+  }
+  if (objectKeysExist(store)) max = Math.max(max, getObjectAnimationDuration(store))
   return max
 }
 
@@ -1095,7 +1127,7 @@ export function scrubAllTimeline(t) {
       startObjectAnimation() // takes the rest snapshot Stop restores to…
       pauseObjectAnimation() // …then holds at the scrub time instead of running
     }
-    scrubObjectAnimation(wrap(Number(store.objectAnimDuration) || 0))
+    scrubObjectAnimation(wrap(getObjectAnimationDuration(store)))
   }
   globalClock = false
   globalClockDuration = total
@@ -1108,12 +1140,17 @@ export function scrubAllTimeline(t) {
 
 // Called by the Play-all / resume buttons once everything has been started, to
 // make the shared playhead follow along. `fromStart` restarts it at 0.
-export function startGlobalClock(fromStart) {
-  globalClockDuration = getAllTimelineDuration()
-  const cur = useStore.getState().globalTime
+export function startGlobalClock(fromStart, options = {}) {
+  const store = useStore.getState()
+  const stopAtFirstClipEnd = options.stopAtFirstClipEnd ?? store.stopAtFirstClipEnd
+  globalClockDuration = options.duration ?? getAllTimelineDuration({ stopAtFirstClipEnd })
+  globalClockLoop = options.loop ?? (store.loop && !stopAtFirstClipEnd)
+  const cur = store.globalTime
   if (fromStart || (globalClockDuration > 0 && cur >= globalClockDuration)) useStore.setState({ globalTime: 0 })
   globalClock = true
 }
+
+let globalClockLoop = true
 
 export function pauseGlobalClock() {
   globalClock = false
@@ -1125,13 +1162,17 @@ function advanceGlobalClock(delta) {
   let t = s.globalTime + Math.max(0, delta) * (Number(s.speed) || 1)
   const d = globalClockDuration
   if (d > 0 && t >= d) {
-    if (s.loop) t %= d
+    if (globalClockLoop) t %= d
     else {
       t = d
       globalClock = false
     }
   }
   useStore.setState({ globalTime: t })
+  if (!globalClock && d > 0 && t >= d) {
+    pauseAllCharacters()
+    pauseObjectAnimation()
+  }
 }
 
 // Freeze every loaded character mid-clip (keeps each one's place, unlike stop).
@@ -1827,6 +1868,7 @@ export function resetObjectById(id) {
 // the scene + the store). Passing boneName=null/'' detaches it back into the
 // scene at its current world position.
 export function setObjectAttachmentById(id, boneName) {
+  clearObjectAttachmentTrack(id)
   if (!boneName) {
     detachObject(id)
     useStore.getState().setObjectAttachment(id, null)
@@ -1838,6 +1880,21 @@ export function setObjectAttachmentById(id, boneName) {
   attachObjectToBone(id, bone, boneName, state.activeCharacterId)
   useStore.getState().setObjectAttachment(id, boneName)
   requestRender()
+}
+
+export function keyObjectAttachmentById(id, boneName, time) {
+  const characterId = boneName ? state.activeCharacterId : null
+  const characterName = boneName ? state.currentModel?.info.name : null
+  return keyObjectAttachment(id, boneName, time, characterId, characterName, (name, idForBone, nameForBone) => {
+    const model = [...state.characters.values()].find((candidate) => candidate.info.name === nameForBone) ||
+      state.characters.get(idForBone) ||
+      state.currentModel
+    return model?.bones?.find((bone) => bone.name === name) || null
+  })
+}
+
+export function clearObjectAttachmentTimeline(id) {
+  clearObjectAttachmentTrack(id)
 }
 
 // ---------------------------------------------------------------------------
@@ -2375,6 +2432,7 @@ export function getProjectData() {
     characters,
     objects: getObjectsForSave(s.meshOverrides),
     objectAnimData: s.objectAnimData,
+    objectAttachmentData: s.objectAttachmentData,
     objectAnimDuration: s.objectAnimDuration,
     cameras: getCamerasData(),
     lights: getLightsData(),
@@ -2569,9 +2627,16 @@ export async function applyProjectData(record) {
     }
   }
 
+  const objectAnimData = record.objectAnimData || {}
+  const objectAttachmentData = record.objectAttachmentData || {}
+  const latestObjectKeyTime = [
+    ...Object.values(objectAnimData).map((keys) => keys?.[keys.length - 1]?.time || 0),
+    ...Object.values(objectAttachmentData).map((track) => track?.keys?.[track.keys.length - 1]?.time || 0),
+  ].reduce((latest, time) => Math.max(latest, time), 0)
   useStore.setState({
-    objectAnimData: record.objectAnimData || {},
-    objectAnimDuration: record.objectAnimDuration || 2,
+    objectAnimData,
+    objectAttachmentData,
+    objectAnimDuration: Math.max(Number(record.objectAnimDuration) || 2, latestObjectKeyTime),
     objectAnimTime: 0,
     objectAnimPlaying: false,
   })
