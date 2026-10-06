@@ -1,16 +1,9 @@
 # 3D Character Poser & Animator
 
-Animare 3D Animator is a lightweight 3D character posing, animation, and scene
-setup tool built for fast character work without the heavy overhead of full DCC
-software. It is designed to import rigged characters or objects created from other 3D tools, pose them, animate them, set up shots, add props and physics, and export
-final frames or video — all locally in the browser or as a desktop app.
+Animare 3D Animator is a low memory 3D character and scene animation tool for setting up and recording 3D animations. It is designed to import rigged characters or objects created from other 3D tools, move or pose them, animate them, set up cameras and shots, add attachable props to characters as well as physics (dangle, ragdoll or cloth physics), and export the final video all locally in the browser or as a desktop app.
 
 The app keeps the original material look, supports character animation and
-mocap retargeting, allows mesh-level edits for accessories and clothing, and adds
-scene staging workflows such as cameras, lighting, scene props, root motion,
-cloth, and ragdoll-style motion. Everything runs client-side: no upload, no
-backend, no account, and no file leaves your machine unless you explicitly export
-it.
+mocap retargeting, allows mesh-level edits for accessories and clothing, and adds sveral scene staging workflows such as cameras, lighting, art styles, scene props, root motion, cloth, and ragdoll-style motion. Allowing you to animate not just characters performing actions but also objects moving, cameras moving or camera cuts and changes to lighting. Everything runs client-side so no account required, no cloud or backend, and no file leaves your machine unless you explicitly export it.
 
 ## Features
 
@@ -133,6 +126,7 @@ npm run build-store
 This outputs `release/Animare3DAnimator_<version>.msixbundle` — a single
 multi-architecture bundle to upload to Partner Center. The per-architecture
 `.appx` files electron-builder creates are alongside it in `release/`.
+The MSIX package targets Windows 10 version 1809 (build 17763) or later.
 The package identity (`appx` block in `package.json`) must match the identity
 Partner Center gives the listing; the Store tile images are in `build/appx/`.
 > The command runs: clean `release`, build the frontend, package x64 and arm64
