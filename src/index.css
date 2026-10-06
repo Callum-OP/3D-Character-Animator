@@ -1194,6 +1194,12 @@ input.xform-value {
   padding: 8px 6px;
 }
 
+.global-timeline {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border, #333);
+}
+
 .scrub-row {
   display: flex;
   align-items: center;

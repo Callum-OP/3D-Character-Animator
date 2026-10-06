@@ -40,7 +40,19 @@ import {
   hasFileSystemAccess as hasClipFileSystemAccess,
 } from '../three/clipLibrary.js'
 import { getBoneQuaternion, getPosedBones, applyPose, setPosingEnabled } from '../three/posing.js'
-import { getCurrentModel, getGroundY, scrubTimeline, playAllCharacters, stopAllCharacters, pauseAllCharacters, resumeAllCharacters } from '../three/scene.js'
+import {
+  getCurrentModel,
+  getGroundY,
+  scrubTimeline,
+  playAllCharacters,
+  stopAllCharacters,
+  pauseAllCharacters,
+  resumeAllCharacters,
+  scrubAllTimeline,
+  getAllTimelineDuration,
+  startGlobalClock,
+  pauseGlobalClock,
+} from '../three/scene.js'
 import * as THREE from 'three'
 import { simulateRagdollClip } from '../three/ragdoll.js'
 import {
@@ -461,6 +473,12 @@ export default function AnimationPanel() {
   // characters' playing state isn't in the store, but Play all / Pause all
   // start and stop them together with the active one.
   const anythingPlaying = playback === 'playing' || objectAnimPlaying
+  // "All animation" timeline: one playhead over every character + object.
+  // `characters` is subscribed only so the length re-computes when any
+  // character's clip / keyframes change.
+  const globalTime = useStore((s) => s.globalTime)
+  useStore((s) => s.characters)
+  const globalDuration = characterOrder.length > 0 || hasObjectAnimation ? getAllTimelineDuration() : 0
 
   const st = useStore.getState // for imperative setters inside handlers
   const bvhRef = useRef(null)
@@ -472,6 +490,8 @@ export default function AnimationPanel() {
   const [trimRange, setTrimRange] = useState([0, 0]) // [start, end] seconds
   const [toolsOpen, setToolsOpen] = useState(false) // collapses the less-common clip tools
   const [combineSel, setCombineSel] = useState([]) // clip names picked for Combine, in order
+  const [combineMatchGround, setCombineMatchGround] = useState(true) // keep feet on the same ground level across clips
+  const [combineInPlace, setCombineInPlace] = useState(false) // strip horizontal hip travel from the combined clip
   const [bvhBusy, setBvhBusy] = useState(false)
   const [kfMsg, setKfMsg] = useState(null) // feedback after adding a keyframe
   const [blankFrames, setBlankFrames] = useState(4) // how many frames to insert
@@ -597,8 +617,83 @@ export default function AnimationPanel() {
       st().setCurrentTime(insertTime)
     }
   }, [currentTime, insertTime, playback, source, st, modelInfo, hasCharacterSelected, animData, animDuration, loop, speed])
+  // "All animation" timeline: shown in every Animate view (character selected,
+  // or a prop / nothing selected) whenever a character is loaded. In a scene
+  // with only props the object's own transport already drives every object,
+  // so a second bar there would just duplicate it.
+  const globalTimelineSection = (
+    <>
+      {/* All animation: one timeline for every character and object at once */}
+      {(characterOrder.length > 0 || hasObjectAnimation) && (
+        <div className="global-timeline">
+          <div className="field-label">All animation</div>
+          <div className="kf-help">
+            One timeline for every character and object in the scene. Each keeps its own clip or motion — this
+            plays, pauses and scrubs them all together.
+          </div>
+          <div className="transport">
+            <button
+              className="btn"
+              onClick={anythingPlaying ? onPauseAll : onPlayAll}
+              title={
+                anythingPlaying
+                  ? 'Pause every loaded character and any object motion (Play all resumes)'
+                  : 'Play every loaded character and any keyed object motion at the same time'
+              }
+            >
+              {anythingPlaying ? '❚❚ Pause all' : '▶ Play all'}
+              {characterOrder.length > 0 ? ` (${characterOrder.length})` : ''}
+            </button>
+            <button className="btn secondary" onClick={onStopAll}>
+              ■ Stop all
+            </button>
+          </div>
+          <div className="scrub-row">
+            <input
+              type="range"
+              min={0}
+              max={globalDuration || 0.0001}
+              step={0.001}
+              value={Math.min(globalTime, globalDuration || 0)}
+              onChange={(e) => onScrubAll(Number(e.target.value))}
+              disabled={globalDuration <= 0}
+              aria-label="All animation timeline"
+            />
+            <EditableValue
+              className="scrub-time"
+              value={Math.min(globalTime, globalDuration || 0)}
+              min={0}
+              max={globalDuration || 0}
+              onChange={onScrubAll}
+              format={(v) => `${v.toFixed(2)} / ${(globalDuration || 0).toFixed(2)}s`}
+              label="All animation time (seconds)"
+            />
+          </div>
+          {globalDuration > 0 && (
+            <FrameStepper
+              time={Math.min(globalTime, globalDuration)}
+              duration={globalDuration}
+              fps={animFps}
+              onChange={onScrubAll}
+            />
+          )}
+          {globalDuration <= 0 && (
+            <div className="empty" style={{ padding: '6px 8px' }}>
+              Nothing to play yet — pick a clip for a character or key some object motion.
+            </div>
+          )}
+        </div>
+      )}
+    </>
+  )
+
   if (!modelInfo || !hasCharacterSelected) {
-    return selectedSceneObject ? <ObjectMovementEditor onScrub={onScrub} /> : null
+    return (
+      <>
+        {selectedSceneObject && <ObjectMovementEditor onScrub={onScrub} />}
+        {characterOrder.length > 0 && globalTimelineSection}
+      </>
+    )
   }
 
   const bakedNames = modelInfo.clipNames || []
@@ -609,7 +704,12 @@ export default function AnimationPanel() {
   // skeleton to import mocap onto.
   const hasClips = clipNames.length > 0
   if (!hasClips && !hasBones) {
-    return selectedSceneObject ? <ObjectMovementEditor onScrub={onScrub} /> : null
+    return (
+      <>
+        {selectedSceneObject && <ObjectMovementEditor onScrub={onScrub} />}
+        {characterOrder.length > 0 && globalTimelineSection}
+      </>
+    )
   }
 
   const displayDuration = source === 'edit' ? animDuration : duration
@@ -742,6 +842,7 @@ export default function AnimationPanel() {
     const charactersResumed = store.playback === 'paused' ? resumeAllCharacters() : 0
     const objectResumed = isObjectAnimationPaused() ? (resumeObjectAnimation() > 0 ? 1 : 0) : 0
     if (charactersResumed + objectResumed > 0) {
+      startGlobalClock(false)
       setKfMsg('Resumed all animation.')
       return
     }
@@ -749,6 +850,7 @@ export default function AnimationPanel() {
     const objectTracks = Object.values(store.objectAnimData || {}).filter((keys) => keys && keys.length)
     const objectStarted = objectTracks.length > 0 ? (startObjectAnimation() > 0 ? 1 : 0) : 0
     const started = charactersStarted + objectStarted
+    if (started > 0) startGlobalClock(true)
     setKfMsg(
       started > 1
         ? `Playing ${started} active animation tracks.`
@@ -759,14 +861,21 @@ export default function AnimationPanel() {
   }
 
   function onPauseAll() {
+    pauseGlobalClock()
     pauseAllCharacters()
     pauseObjectAnimation()
     setKfMsg('Paused all animation.')
   }
 
   function onStopAll() {
-    stopAllCharacters()
+    stopAllCharacters() // also resets the all-animation playhead
     stopObjectAnimation()
+  }
+
+  // Drag the all-animation playhead: every character and object jumps to that
+  // time and holds there (paused).
+  function onScrubAll(t) {
+    scrubAllTimeline(t)
   }
 
   function onScrub(t) {
@@ -1304,9 +1413,30 @@ export default function AnimationPanel() {
 
   function onConfirmCombine() {
     if (combineSel.length < 2) return
-    const newName = combineClips(combineSel, animFps)
+    const newName = combineClips(combineSel, animFps, {
+      matchGround: combineMatchGround,
+      inPlace: combineInPlace,
+    })
     if (!newName) return
     setCombineSel([])
+    // The combined clip carries ALL its movement itself. Character-movement
+    // keys left in the editor (e.g. from the last clip you selected) would be
+    // layered on top of it on every play, so the model travels twice.
+    const cur = st().animData
+    if ((cur.root || []).length) {
+      const adopted = activeClipName && isClipKeysAdopted(activeClipName) ? getClipEditKeys(activeClipName) : null
+      const mirrorsClip = adopted && JSON.stringify(adopted.root || []) === JSON.stringify(cur.root)
+      if (
+        mirrorsClip ||
+        window.confirm(
+          'The editor still has character-movement keys. They would play on top of the combined clip and add extra movement. Clear them? (Cancel keeps them.)',
+        )
+      ) {
+        runWithoutHistoryCapture(() => {
+          st().setAnimData({ ...cur, root: [] })
+        })
+      }
+    }
     armClip(newName)
     setBvhMsg(`Combined ${combineSel.length} clips into “${newName}”, in the order you picked them.`)
   }
@@ -1543,6 +1673,28 @@ export default function AnimationPanel() {
                       )
                     })}
                   </div>
+                  <label
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, fontSize: 12 }}
+                    title="Shift each clip's hip height so its lowest foot sits at the same ground level as the first clip's. Stops the character dipping or popping up at the joins."
+                  >
+                    <input
+                      type="checkbox"
+                      checked={combineMatchGround}
+                      onChange={(e) => setCombineMatchGround(e.target.checked)}
+                    />
+                    Keep feet on the same ground level
+                  </label>
+                  <label
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, fontSize: 12 }}
+                    title="Remove all forward/sideways hip travel baked into the clips so the character stays on the spot (up/down bob is kept)."
+                  >
+                    <input
+                      type="checkbox"
+                      checked={combineInPlace}
+                      onChange={(e) => setCombineInPlace(e.target.checked)}
+                    />
+                    Keep on the spot (no movement)
+                  </label>
                   <div className="kf-actions" style={{ marginTop: 6 }}>
                     <button
                       className="btn secondary"
@@ -1739,26 +1891,6 @@ export default function AnimationPanel() {
           ■ Stop
         </button>
       </div>
-
-      {(characterOrder.length > 0 || hasObjectAnimation) && (
-        <div className="transport" style={{ marginTop: 6 }}>
-          <button
-            className="btn secondary"
-            onClick={anythingPlaying ? onPauseAll : onPlayAll}
-            title={
-              anythingPlaying
-                ? 'Pause every loaded character and any object motion (Play all resumes)'
-                : 'Play every loaded character and any keyed object motion at the same time'
-            }
-          >
-            {anythingPlaying ? '❚❚ Pause all' : '▶ Play all'}
-            {characterOrder.length > 0 ? ` (${characterOrder.length})` : ''}
-          </button>
-          <button className="btn secondary" onClick={onStopAll}>
-            ■ Stop all
-          </button>
-        </div>
-      )}
 
       <div className="scrub-row">
         <input
@@ -1994,6 +2126,8 @@ export default function AnimationPanel() {
           </details>
         </div>
       )}
+
+      {globalTimelineSection}
     </div>
     </>
   )

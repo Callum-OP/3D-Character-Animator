@@ -96,6 +96,8 @@ import {
   selectClip,
   selectEdit,
   getClipEditKeys,
+  getClipDuration,
+  getCharacterClipDuration,
   rebakeClipFromKeys,
   updateRootMotionTrack,
   play,
@@ -161,6 +163,10 @@ import {
   getAllRootsForExport,
   stepObjectAnimation,
   stopObjectAnimation,
+  startObjectAnimation,
+  pauseObjectAnimation,
+  isObjectAnimationPaused,
+  scrubObjectAnimation,
 } from './objects.js'
 import { getPose, applyPose } from './posing.js'
 import { useStore, captureCharacterRecord } from '../store.js'
@@ -769,6 +775,7 @@ export function setContinuousRender(on, reason = 'anim') {
       try {
         updateAnimation(delta) // advance the mixer before drawing
         stepObjectAnimation(delta)
+        advanceGlobalClock(delta)
         stepClothLive(delta) // step any LIVE cloth sims, following the current pose
         stepDangleLive(delta) // swing any dangle (hair/accessory) bones under gravity
         updateCamTransition(delta) // glide any in-progress camera cut
@@ -1008,8 +1015,122 @@ export function playAllCharacters({ loop, speed } = {}) {
   return { started, maxDuration }
 }
 
+// --- All-animation timeline ---------------------------------------------------
+// One shared playhead over every loaded character AND every keyed object, so
+// the whole scene can be scrubbed / played / paused together. Each character
+// keeps its own clip and each object its own track; this just drives them all
+// from a single time (a shorter clip holds its last pose, or loops when Loop
+// is on, exactly as it would under Play all).
+let globalClock = false // true while Play all is running, advancing globalTime
+let globalClockDuration = 0
+
+function hasKeys(v) {
+  if (Array.isArray(v)) return v.length > 0
+  if (v && typeof v === 'object') return Object.values(v).some(hasKeys)
+  return false
+}
+
+function objectKeysExist(store) {
+  return Object.values(store.objectAnimData || {}).some((keys) => keys && keys.length)
+}
+
+// Length of the whole scene's animation in seconds: the longest of every
+// character's selected clip / keyframe edit and the object-motion duration.
+// Read-only (never switches the active character), so safe to call in render.
+export function getAllTimelineDuration() {
+  const store = useStore.getState()
+  const uiActiveId = state.activeCharacterId
+  let max = 0
+  for (const id of store.characterOrder) {
+    if (!state.characters.has(id)) continue
+    const c = id === uiActiveId ? store : store.characters[id]
+    if (!c) continue
+    let d = 0
+    if (c.playbackSource === 'edit') d = hasKeys(c.animData) ? store.animDuration : 0
+    else if (c.activeClipName) d = getCharacterClipDuration(id, c.activeClipName)
+    if (d > max) max = d
+  }
+  if (objectKeysExist(store)) max = Math.max(max, Number(store.objectAnimDuration) || 0)
+  return max
+}
+
+// Put every character and object at time `t` and leave them paused there
+// (Play all then carries on from this point).
+export function scrubAllTimeline(t) {
+  const store = useStore.getState()
+  const opts = { loop: store.loop, speed: store.speed }
+  const total = getAllTimelineDuration()
+  const time = Math.max(0, Math.min(Number(t) || 0, total))
+  const wrap = (dur) => (store.loop && dur > 0 && time > dur ? time % dur : time)
+  const uiActiveId = state.activeCharacterId
+  let any = false
+  let uiTime = null
+  for (const id of store.characterOrder) {
+    if (!state.characters.has(id)) continue
+    const c = id === uiActiveId ? store : store.characters[id]
+    if (!c) continue
+    setActiveAnimationCharacter(id)
+    if (!hasActiveAction()) {
+      let durSec = 0
+      if (c.playbackSource === 'edit') durSec = hasKeys(c.animData) ? selectEdit(c.animData, store.animDuration, opts) : 0
+      else if (c.activeClipName) durSec = selectClip(c.activeClipName, opts, c.animData)
+      if (!(durSec > 0)) continue
+    }
+    pause()
+    const at = wrap(getClipDuration())
+    scrub(at)
+    any = true
+    if (id === uiActiveId) uiTime = at
+  }
+  setActiveAnimationCharacter(uiActiveId)
+  if (objectKeysExist(store)) {
+    if (store.objectAnimPlaying) pauseObjectAnimation()
+    else if (!isObjectAnimationPaused()) {
+      startObjectAnimation() // takes the rest snapshot Stop restores to…
+      pauseObjectAnimation() // …then holds at the scrub time instead of running
+    }
+    scrubObjectAnimation(wrap(Number(store.objectAnimDuration) || 0))
+  }
+  globalClock = false
+  globalClockDuration = total
+  const patch = { globalTime: time }
+  if (any) patch.playback = 'paused'
+  if (uiTime !== null) patch.currentTime = uiTime
+  useStore.setState(patch)
+  requestRender()
+}
+
+// Called by the Play-all / resume buttons once everything has been started, to
+// make the shared playhead follow along. `fromStart` restarts it at 0.
+export function startGlobalClock(fromStart) {
+  globalClockDuration = getAllTimelineDuration()
+  const cur = useStore.getState().globalTime
+  if (fromStart || (globalClockDuration > 0 && cur >= globalClockDuration)) useStore.setState({ globalTime: 0 })
+  globalClock = true
+}
+
+export function pauseGlobalClock() {
+  globalClock = false
+}
+
+function advanceGlobalClock(delta) {
+  if (!globalClock) return
+  const s = useStore.getState()
+  let t = s.globalTime + Math.max(0, delta) * (Number(s.speed) || 1)
+  const d = globalClockDuration
+  if (d > 0 && t >= d) {
+    if (s.loop) t %= d
+    else {
+      t = d
+      globalClock = false
+    }
+  }
+  useStore.setState({ globalTime: t })
+}
+
 // Freeze every loaded character mid-clip (keeps each one's place, unlike stop).
 export function pauseAllCharacters() {
+  globalClock = false
   const store = useStore.getState()
   const uiActiveId = state.activeCharacterId
   for (const id of store.characterOrder) {
@@ -1054,7 +1175,8 @@ export function stopAllCharacters() {
     stop()
   }
   setActiveAnimationCharacter(uiActiveId)
-  useStore.setState({ playback: 'stopped', currentTime: 0 })
+  globalClock = false
+  useStore.setState({ playback: 'stopped', currentTime: 0, globalTime: 0 })
 }
 
 

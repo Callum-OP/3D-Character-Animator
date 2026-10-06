@@ -461,23 +461,46 @@ export function describeClipBoneMismatch(name) {
 // Concatenate several clips end-to-end into one new playable clip (e.g. "walk"
 // then "wave"), sampled at `fps`. Order follows `names`. Returns the new
 // clip's name, or null.
-export function combineClips(names, fps) {
+//
+// Each clip stores its hip's position/heading in ITS OWN coordinates (a mocap
+// clip typically starts at its own origin facing its own way). Naively
+// concatenating those keys made the second clip snap back to its origin and
+// swing round to its own heading at the seam, then carry on travelling along
+// its own axes — the character "drifting off" along a path nobody keyed.
+// So every clip after the first is re-based onto where the previous one left
+// the character: its hip travel starts from the previous clip's end position
+// and its heading is rotated to continue from the previous clip's end
+// heading (see restitchHip). Two optional fallbacks on top of that:
+//   opts.matchGround — (default on) keep every clip's feet on the first
+//                     clip's ground level so height doesn't step at seams.
+//   opts.inPlace    — drop all horizontal hip travel (walk on the spot);
+//                     vertical bob and body rotation are kept.
+export function combineClips(names, fps, opts = {}) {
   if (!a.model || names.length < 2) return null
   const tracks = {}
   for (const b of a.model.bones) tracks[b.name] = []
+  const st = { anchor: null, endYaw: 0 }
   let offset = 0
   let any = false
   for (const name of names) {
     const clip = findClip(name)
     if (!clip) continue
-    const res = sampleClipRange(clip, fps, 0, clip.duration, false)
+    const res = sampleClipRange(clip, fps, 0, clip.duration, false, { captureHip: true })
     if (!res) continue
-    any = true
+    if (res.hip) restitchHip(res, st, opts, !any)
     for (const boneName of Object.keys(tracks)) {
       const keys = res.tracks[boneName]
       if (!keys || !keys.length) continue
-      for (const k of keys) tracks[boneName].push({ time: k.time + offset, quat: k.quat, pos: k.pos })
+      for (let i = 0; i < keys.length; i++) {
+        // A later clip's first frame lands on the same timestamp as the
+        // previous clip's last frame; keeping both makes duplicate key times
+        // (undefined interpolation), so the seam keeps just one.
+        if (any && i === 0) continue
+        const k = keys[i]
+        tracks[boneName].push({ time: k.time + offset, quat: k.quat, pos: k.pos })
+      }
     }
+    any = true
     offset += res.duration
   }
   if (!any) return null
@@ -495,6 +518,109 @@ export function combineClips(names, fps) {
   const combined = buildEditClip(tracks, offset, {})
   combined.name = names.join(' + ')
   return addGeneratedClip(combined)
+}
+
+const TWO_PI = Math.PI * 2
+const _worldUp = new THREE.Vector3(0, 1, 0)
+const _hv = new THREE.Vector3()
+const _hq = new THREE.Quaternion()
+const _hq2 = new THREE.Quaternion()
+const _hq3 = new THREE.Quaternion()
+const _hm = new THREE.Matrix4()
+const _hs = new THREE.Vector3()
+const _ht = new THREE.Vector3()
+
+// Heading (yaw about world up) of the hip, measured as how far its WORLD
+// rotation has turned away from its rest pose. `prev` is returned when the
+// hip's forward axis points almost straight up/down (heading undefined).
+function hipYaw(q, restQ, prev) {
+  _hq.copy(restQ).invert().premultiply(q)
+  _hv.set(0, 0, 1).applyQuaternion(_hq)
+  if (_hv.x * _hv.x + _hv.z * _hv.z < 0.04) return prev
+  return Math.atan2(_hv.x, _hv.z)
+}
+
+// Re-base one sampled clip's hip (res.hip, captured by sampleClipRange's
+// captureHip option) onto the running state `st` shared across the combine,
+// rewriting that bone's keys in res.tracks in place. Everything is worked out
+// in WORLD space and converted back through the hip's parent matrix, so it's
+// right whatever rig/axes/nesting the hip has.
+function restitchHip(res, st, opts, isFirst) {
+  const hip = res.hip
+  const keys = res.tracks[hip.name]
+  const fr = hip.frames
+  if (!keys || !fr || keys.length !== fr.length || !fr.length) return
+
+  const yaws = []
+  let prev = 0
+  for (let i = 0; i < fr.length; i++) {
+    let y = hipYaw(fr[i].quat, hip.restQuat, prev)
+    y += TWO_PI * Math.round((prev - y) / TWO_PI) // unwrap so it never jumps by 2π
+    yaws.push(y)
+    prev = y
+  }
+  const p0 = fr[0].pos
+  if (isFirst || !st.anchor) {
+    st.anchor = { x: p0.x, z: p0.z }
+    st.endYaw = yaws[0]
+  }
+  // Whole-segment turn that makes this clip start facing where the previous
+  // clip ended.
+  const theta = st.endYaw - yaws[0]
+  // Vertical: each clip is authored with its own hip height / ground, so a
+  // plain concatenation steps down at one seam and back up at the next. Keep
+  // every clip's feet on the same ground as the first clip's by shifting its
+  // hip height (feet, not hips: a crouch or jump keeps its real hip height).
+  if (isFirst || st.groundY === undefined) st.groundY = hip.groundY
+  const dy = opts.matchGround !== false && Number.isFinite(hip.groundY) ? st.groundY - hip.groundY : 0
+  const startOffset = Math.hypot(st.anchor.x - p0.x, st.anchor.z - p0.z)
+  const touchRot = Math.abs(theta) > 1e-6 || hip.rootDriven
+  const touchPos =
+    !!opts.inPlace || Math.abs(theta) > 1e-6 || startOffset > 1e-6 || hip.rootDriven || Math.abs(dy) > 1e-6
+  if (!touchRot && !touchPos) {
+    st.anchor = { x: fr[fr.length - 1].pos.x, z: fr[fr.length - 1].pos.z }
+    st.endYaw = yaws[yaws.length - 1]
+    return
+  }
+
+  let lastX = st.anchor.x
+  let lastZ = st.anchor.z
+  let px = st.anchor.x
+  let pz = st.anchor.z
+  let prevQ = null
+  for (let i = 0; i < fr.length; i++) {
+    const f = fr[i]
+    const k = keys[i]
+    if (touchPos) {
+      if (!opts.inPlace && i > 0) {
+        _hv.set(f.pos.x - fr[i - 1].pos.x, 0, f.pos.z - fr[i - 1].pos.z).applyAxisAngle(_worldUp, theta)
+        px += _hv.x
+        pz += _hv.z
+      }
+      lastX = px
+      lastZ = pz
+      _hm.copy(f.parent).invert()
+      _ht.set(px, f.pos.y + dy, pz).applyMatrix4(_hm)
+      k.pos = [_ht.x, _ht.y, _ht.z]
+    }
+    if (touchRot) {
+      _hq2.setFromAxisAngle(_worldUp, theta).multiply(f.quat) // new world rotation
+      f.parent.decompose(_ht, _hq3, _hs)
+      _hq3.invert().multiply(_hq2) // back to the hip's local space
+      if (prevQ && prevQ.dot(_hq3) < 0) {
+        _hq3.set(-_hq3.x, -_hq3.y, -_hq3.z, -_hq3.w)
+      }
+      k.quat = [_hq3.x, _hq3.y, _hq3.z, _hq3.w]
+      prevQ = prevQ || new THREE.Quaternion()
+      prevQ.copy(_hq3)
+    }
+  }
+  if (!touchPos) {
+    lastX = fr[fr.length - 1].pos.x
+    lastZ = fr[fr.length - 1].pos.z
+  }
+  st.anchor = { x: lastX, z: lastZ }
+  st.endYaw = yaws[yaws.length - 1] + theta
 }
 
 // Sample a clip at one time into a pose map { boneName: [x,y,z,w] } (for "apply
@@ -890,11 +1016,39 @@ function sampleClipRange(clip, fps, startTime, endTime, prune = true, opts = {})
   let startWorld = null
   const rootKeys = rootBone ? [] : null
 
+  // opts.captureHip (used by combineClips): also record the hip's world
+  // position/rotation (plus its parent's world matrix) every frame so the
+  // caller can re-base its travel and heading. The character's own root
+  // placement (clip root tracks / current position) is held fixed while
+  // sampling, so only the skeleton's own motion is captured.
+  const hipBone = opts.captureHip ? findMovingRootBone(clip, a.model.bones) : null
+  const hipFrames = hipBone ? [] : null
+  // Ground level of this clip = the lowest a foot gets across the whole clip
+  // (falls back to the lowest bone when the rig has no foot-named bones).
+  let groundBones = null
+  let groundY = Infinity
+  if (hipBone) {
+    const feet = a.model.bones.filter((b) => /foot|ankle|toe|heel/i.test(b.name))
+    groundBones = feet.length ? feet : a.model.bones
+  }
+  let hipRestQuat = null
+  let rootBaseM = null
+  if (hipBone) {
+    restoreRest()
+    a.model.root.updateWorldMatrix(true, true)
+    hipRestQuat = hipBone.getWorldQuaternion(new THREE.Quaternion())
+    rootBaseM = a.model.root.matrixWorld.clone() // where the root sits when the combined clip plays
+  }
+
   const tracks = {}
   for (const b of a.model.bones) tracks[b.name] = []
   for (let f = 0; f < frames; f++) {
     const t = start + (span > 0 ? (f / (frames - 1)) * span : 0)
     mixer.setTime(t)
+    // The mixer drives the model root too when the clip has root tracks (a
+    // clip made with "keep movement"), so the hip's WORLD position/rotation
+    // below already includes that travel — it gets folded into the hip.
+    if (hipBone) a.model.root.updateWorldMatrix(true, true)
     for (const b of a.model.bones) {
       const q = b.quaternion
       const bp = b.position
@@ -915,6 +1069,22 @@ function sampleClipRange(clip, fps, startTime, endTime, prune = true, opts = {})
       const usePos = b === rootBone && rootBoneRestPos ? [rootBoneRestPos.x, rootBoneRestPos.y, rootBoneRestPos.z] : [bp.x, bp.y, bp.z]
       tracks[b.name].push({ time: t - start, quat: [q.x, q.y, q.z, q.w], pos: usePos })
     }
+    if (hipBone) {
+      for (const gb of groundBones) {
+        const gy = gb.matrixWorld.elements[13]
+        if (gy < groundY) groundY = gy
+      }
+      hipFrames.push({
+        pos: hipBone.getWorldPosition(new THREE.Vector3()),
+        quat: hipBone.getWorldQuaternion(new THREE.Quaternion()),
+        // The hip's parent as it will be at playback: the model root at its
+        // base placement, not wherever this clip's root tracks have moved it.
+        parent: rootBaseM
+          .clone()
+          .multiply(new THREE.Matrix4().copy(a.model.root.matrixWorld).invert())
+          .multiply(hipBone.parent.matrixWorld),
+      })
+    }
     if (rootBone) {
       a.model.root.updateWorldMatrix(true, true)
       rootBone.getWorldPosition(_wp)
@@ -933,6 +1103,10 @@ function sampleClipRange(clip, fps, startTime, endTime, prune = true, opts = {})
   mixer.stopAllAction()
   mixer.uncacheClip(clip)
   restoreRest()
+  if (hipBone) {
+    a.model.root.position.copy(basePos)
+    a.model.root.quaternion.copy(baseQuat)
+  }
   a.refs.requestRender()
 
   // Drop tracks whose rotation never changes (keeps the keyframe data small).
@@ -949,7 +1123,21 @@ function sampleClipRange(clip, fps, startTime, endTime, prune = true, opts = {})
       if (!rotates && !translates) delete tracks[boneName]
     }
   }
-  return { tracks, duration: span, root: rootKeys }
+  return {
+    tracks,
+    duration: span,
+    root: rootKeys,
+    hip: hipBone
+      ? {
+          name: hipBone.name,
+          restQuat: hipRestQuat,
+          frames: hipFrames,
+          groundY,
+          // clip also moves the model root (unqualified ".position"/".quaternion" tracks)
+          rootDriven: clip.tracks.some((t) => t.name.startsWith('.')),
+        }
+      : null,
+  }
 }
 
 // Build the in-app clip from the full keyframe data (bone tracks + root motion
@@ -1502,6 +1690,16 @@ export function exportAnimationBVH(animData, fps, duration, clipName, playbackSo
 }
 
 // --- internals ---------------------------------------------------------------
+
+// Duration of a named clip on ANY loaded character (not just the active one),
+// 0 if that character has no such clip. Read-only: the all-animation
+// timeline uses it to size itself without switching the active character.
+export function getCharacterClipDuration(id, name) {
+  const e = perChar.get(id)
+  if (!e || !name) return 0
+  const c = (e.bakedClips || []).find((x) => x.name === name) || (e.importedClips || []).find((x) => x.name === name)
+  return c ? c.duration : 0
+}
 
 function findClip(name) {
   return a.bakedClips.find((c) => c.name === name) || a.importedClips.find((c) => c.name === name)

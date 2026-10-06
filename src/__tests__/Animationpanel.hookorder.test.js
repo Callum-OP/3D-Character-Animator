@@ -67,6 +67,33 @@ describe('AnimationPanel stays mounted across modelInfo going to null', () => {
     expect(screen.getByRole('button', { name: /Key selected object/ })).toBeTruthy()
   })
 
+  it('keeps the All animation timeline visible when a prop is selected with a character loaded', () => {
+    useStore.setState({
+      modelInfo: { name: 'TestChar', bones: [{ name: 'Hips', deform: true }], meshCount: 1, boneCount: 1, clipNames: ['Walk'] },
+      mode: 'object',
+      playbackSource: 'clip',
+      activeClipName: 'Walk',
+      playback: 'stopped',
+      duration: 2,
+      characterOrder: [1],
+      sceneObjects: [
+        { id: 1, name: 'TestChar', isCharacter: true, characterId: 1, visible: true },
+        { id: 11, name: 'Crate', animationKey: 'crate-track', visible: true },
+      ],
+      activeCharacterId: 1,
+      selectedObjectId: 11,
+      selectedObjectIds: [11],
+      objectAnimData: {},
+    })
+    render(React.createElement(App))
+    fireEvent.click(screen.getByText('Animate'))
+
+    expect(screen.getByText('Object movement')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Edit keyframes' })).toBeNull()
+    expect(screen.getByText('All animation')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Play all/ })).toBeTruthy()
+  })
+
   it('shows object animation controls only while a non-character object is selected', () => {
     useStore.setState({
       modelInfo: null,
@@ -228,7 +255,10 @@ describe('AnimationPanel stays mounted across modelInfo going to null', () => {
     const advanced = screen.getByText('Advanced keyframe tools').closest('details')
     expect(advanced.open).toBe(false)
     expect(screen.getByRole('button', { name: 'Key selected joint' })).toBeTruthy()
-    expect(container.querySelectorAll('.scrub-row input[type="range"]')).toHaveLength(1)
+    // The character has exactly one timeline slider; the separate "All animation"
+    // section carries its own (shown because a character is loaded).
+    expect(container.querySelectorAll('.scrub-row:not(.global-timeline .scrub-row) input[type="range"]')).toHaveLength(1)
+    expect(container.querySelectorAll('.global-timeline .scrub-row input[type="range"]')).toHaveLength(1)
     expect(container.querySelectorAll('.keyframe-editor input[type="range"]')).toHaveLength(0)
     expect(container.querySelectorAll('.movement-track input[type="range"]')).toHaveLength(0)
 

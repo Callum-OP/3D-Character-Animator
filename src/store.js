@@ -682,6 +682,8 @@ export const useStore = create((set) => ({
   objectAnimDuration: 2,
   objectAnimTime: 0,
   objectAnimPlaying: false,
+  globalTime: 0, // playhead of the "All animation" timeline (every character + object at once)
+  setGlobalTime: (globalTime) => set({ globalTime }),
   objectAutoKeyMovement: false,
   setObjectAnimDuration: (objectAnimDuration) => set({ objectAnimDuration }),
   setObjectAnimTime: (objectAnimTime) => set({ objectAnimTime }),
