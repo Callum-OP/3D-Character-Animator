@@ -3,6 +3,9 @@ import {
   copyObjectById,
   pasteCopiedObject,
   hasCopiedObjectData,
+  copyCharacterById,
+  pasteCopiedCharacter,
+  hasCopiedCharacterData,
   setMeshVisibleByUuid,
   setObjectVisibleById,
 } from './scene.js'
@@ -10,6 +13,7 @@ import { applyPose, getPose, resetPose } from './posing.js'
 import { getMeshDelta, setMeshDelta } from './meshedit.js'
 
 let meshClipboard = null
+let objectClipboardType = 'object'
 
 export function copyCurrentEdit(state = useStore.getState()) {
   if (state.mode === 'bone' && state.modelInfo) {
@@ -17,7 +21,17 @@ export function copyCurrentEdit(state = useStore.getState()) {
     return 'pose'
   }
   if (state.mode === 'object' && state.selectedObjectId != null) {
-    return copyObjectById(state.selectedObjectId) ? 'object' : null
+    const selected = state.sceneObjects.find((entry) => entry.id === state.selectedObjectId)
+    if (selected?.isCharacter) {
+      const copied = copyCharacterById(state.selectedObjectId)
+      if (!copied) return null
+      objectClipboardType = 'character'
+      return 'character'
+    }
+    const copied = copyObjectById(state.selectedObjectId)
+    if (!copied) return null
+    objectClipboardType = 'object'
+    return 'object'
   }
   if (state.mode === 'mesh' && state.selectedMeshUuid) {
     meshClipboard = getMeshDelta(state.selectedMeshUuid)
@@ -31,6 +45,10 @@ export function pasteCurrentEdit(state = useStore.getState()) {
     return { type: 'pose', result: applyPose(state.poseClipboard) }
   }
   if (state.mode === 'object') {
+    if (objectClipboardType === 'character' && hasCopiedCharacterData()) {
+      const result = pasteCopiedCharacter()
+      return result ? { type: 'character', result } : null
+    }
     const result = pasteCopiedObject()
     return result ? { type: 'object', result } : null
   }
@@ -68,7 +86,7 @@ export function canCopyCurrentEdit(state = useStore.getState()) {
   if (state.mode === 'bone') return !!state.modelInfo
   if (state.mode === 'object') {
     const selected = state.sceneObjects.find((entry) => entry.id === state.selectedObjectId)
-    return !!selected && !selected.isCharacter
+    return !!selected
   }
   if (state.mode === 'mesh') return !!state.selectedMeshUuid
   return false
@@ -76,7 +94,11 @@ export function canCopyCurrentEdit(state = useStore.getState()) {
 
 export function canPasteCurrentEdit(state = useStore.getState()) {
   if (state.mode === 'bone') return !!state.poseClipboard
-  if (state.mode === 'object') return hasObjectClipboard()
+  if (state.mode === 'object') {
+    return objectClipboardType === 'character'
+      ? hasCopiedCharacterData()
+      : hasObjectClipboard()
+  }
   if (state.mode === 'mesh') return !!meshClipboard
   return false
 }

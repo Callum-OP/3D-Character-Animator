@@ -98,7 +98,7 @@ export default function HelpOverlay() {
                 <b>H</b> — hide / show the selected object, character or mesh part
               </li>
               <li>
-                <b>Ctrl / Cmd + C</b> — copy the selected pose, object or mesh transform
+                <b>Ctrl / Cmd + C</b> — copy the selected pose, object, character or mesh transform
               </li>
               <li>
                 <b>Ctrl / Cmd + P or V</b> — paste into the current mode

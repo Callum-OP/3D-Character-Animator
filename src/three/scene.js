@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { loadModel, disposeObject } from './loadModel.js'
@@ -131,6 +132,7 @@ import {
   copyObject,
   pasteObject,
   hasCopiedObject,
+  clearCopiedObject,
   setObjectVisible,
   setObjectTransform,
   setObjectStyle,
@@ -850,6 +852,7 @@ function handleResize() {
 // ---------------------------------------------------------------------------
 
 let characterIdCounter = 0
+let characterClipboard = null
 
 // Load a model file as the ACTIVE character.
 //   addNew=false (default): replaces the active character in place (legacy
@@ -859,6 +862,8 @@ let characterIdCounter = 0
 export async function loadModelFile(file, { addNew = false } = {}) {
   const store = useStore.getState()
   const shouldFrameInitialCharacter = state.characters.size === 0 && store.sceneObjects.length === 0
+  const isAddition = !state.currentModel || (addNew && !!state.currentModel)
+  const previousCharacterState = isAddition ? captureCharacterUndoContext(store) : null
   store.setLoading(true)
   try {
     const parsed = await loadModel(file, { autoDecimate: store.autoDecimate })
@@ -900,6 +905,7 @@ export async function loadModelFile(file, { addNew = false } = {}) {
     // Only the first character establishes the initial viewport. Adding or
     // replacing another character must leave the user's current view alone.
     setActiveCharacter(id, parsed, { frame: shouldFrameInitialCharacter, isNewLoad: true })
+    if (isAddition) recordCharacterAdded(id, previousCharacterState)
 
     requestRender()
     return parsed
@@ -1185,7 +1191,8 @@ export function stopAllCharacters() {
 // Test seam: register an already-parsed model as a loaded character without a
 // WebGL context or file load (loadModelFile needs both). Mirrors the registry
 // part of loadModelFile; not used by the app.
-export function __seedCharacterForTest(id, parsed, threeScene) {
+export function __seedCharacterForTest(id, parsed, threeScene, { recordHistory = false } = {}) {
+  const previousState = recordHistory ? captureCharacterUndoContext(useStore.getState()) : null
   if (!state.scene) state.scene = threeScene
   state.scene.add(parsed.root)
   state.characters.set(id, parsed)
@@ -1193,6 +1200,7 @@ export function __seedCharacterForTest(id, parsed, threeScene) {
   useStore.getState().addCharacter(id, parsed.info)
   state.activeCharacterId = id
   state.currentModel = parsed
+  if (recordHistory) recordCharacterAdded(id, previousState)
 }
 
 export function removeCharacter(id, recordHistory = true) {
@@ -1204,6 +1212,188 @@ export function removeCharacter(id, recordHistory = true) {
   const batch = makeCharacterDeleteBatch(id)
   if (!removeCharacterPresence(batch)) return
   pushUndoBatch('object', batch)
+}
+
+export function copyCharacterById(id) {
+  const source = state.characters.get(id)
+  const record = captureCharacterRecord(useStore.getState(), id)
+  if (!source || !record) return false
+  const model = cloneCharacterModel(source)
+  const fields = structuredClone(record.fields)
+  fields.meshOverrides = remapMeshOverrides(fields.meshOverrides, source, model)
+  const importedClips = getImportedClipsData(id)
+  clearCopiedObject()
+  clearCopiedCharacterData()
+  characterClipboard = {
+    model,
+    fields,
+    importedClips,
+  }
+  return true
+}
+
+export function pasteCopiedCharacter() {
+  if (!characterClipboard || !state.scene) return null
+  const previousState = captureCharacterUndoContext(useStore.getState())
+  const model = cloneCharacterModel(characterClipboard.model)
+  const id = `char_${++characterIdCounter}`
+  model.info = { ...model.info, name: `${model.info.name} Copy` }
+  model.root.name = model.info.name
+  model.root.position.x += 0.25
+
+  state.scene.add(model.root)
+  state.characters.set(id, model)
+  setCharacterObject(id, model.root, model.info.name)
+  recordOriginalMaterials(model)
+  useStore.getState().addCharacter(id, model.info)
+  useStore.setState((store) => ({
+    sceneObjects: store.sceneObjects.map((entry) =>
+      entry.id === id ? { ...entry, visible: model.root.visible } : entry,
+    ),
+  }))
+  setActiveCharacter(id, model, { isNewLoad: true })
+  restoreImportedClips(id, characterClipboard.importedClips)
+
+  const fields = structuredClone(characterClipboard.fields)
+  fields.meshOverrides = remapMeshOverrides(fields.meshOverrides, characterClipboard.model, model)
+  useStore.setState({
+    ...fields,
+    modelInfo: model.info,
+    selectedBoneName: null,
+    selectedBoneNames: [],
+    selectedMeshUuid: null,
+    poseClipboard: null,
+    playback: 'stopped',
+    currentTime: 0,
+  })
+  setDangleConfig(id, model, fields.dangleEnabled, fields.dangleChains)
+  applyModelMaterials()
+  recordCharacterAdded(id, previousState)
+  requestRender()
+  return { id, name: model.info.name, isCharacter: true }
+}
+
+function remapMeshOverrides(overrides, source, target) {
+  const result = {}
+  for (let i = 0; i < (source.meshes || []).length; i++) {
+    const sourceMesh = source.meshes[i]
+    const targetMesh = target.meshes[i]
+    const override = overrides?.[sourceMesh.uuid]
+    if (targetMesh && override) result[targetMesh.uuid] = override
+  }
+  return result
+}
+
+export function hasCopiedCharacterData() {
+  return !!characterClipboard
+}
+
+export function clearCopiedCharacterData() {
+  if (!characterClipboard) return
+  disposeObject(characterClipboard.model.root)
+  characterClipboard = null
+}
+
+function cloneCharacterModel(source) {
+  const root = cloneSkeleton(source.root)
+  const sourceNodes = []
+  const clonedNodes = []
+  source.root.traverse((node) => sourceNodes.push(node))
+  root.traverse((node) => clonedNodes.push(node))
+  const nodeMap = new Map(sourceNodes.map((node, index) => [node, clonedNodes[index]]))
+  const overlays = []
+  root.traverse((node) => {
+    if (node.isSkinnedMesh && node.name.startsWith('(part overlay: ')) overlays.push(node)
+  })
+  for (const overlay of overlays) overlay.parent?.remove(overlay)
+  const textureCopies = new Map()
+
+  const cloneMaterial = (material) => {
+    if (!material) return material
+    const copy = material.clone()
+    for (const key of Object.keys(copy)) {
+      const texture = copy[key]
+      if (!texture?.isTexture) continue
+      if (!textureCopies.has(texture)) textureCopies.set(texture, texture.clone())
+      copy[key] = textureCopies.get(texture)
+    }
+    return copy
+  }
+  const cloneMaterialValue = (material) =>
+    Array.isArray(material) ? material.map(cloneMaterial) : cloneMaterial(material)
+
+  const meshes = (source.meshes || []).map((mesh) => {
+    const cloned = nodeMap.get(mesh)
+    if (mesh.geometry) cloned.geometry = mesh.geometry.clone()
+    const original = source.materials?.originals?.get(mesh) || mesh.material
+    cloned.material = cloneMaterialValue(original)
+    return cloned
+  })
+  const bones = (source.bones || []).map((bone) => nodeMap.get(bone))
+  const skinnedMeshes = (source.skinnedMeshes || []).map((mesh) => nodeMap.get(mesh))
+  const infoMeshes = meshes.map((mesh, index) => ({
+    ...(source.info?.meshes?.[index] || {}),
+    uuid: mesh.uuid,
+  }))
+  const info = { ...source.info, meshes: infoMeshes }
+  return {
+    ...source,
+    root,
+    meshes,
+    bones,
+    skinnedMeshes,
+    skeleton: skinnedMeshes.find((mesh) => mesh.skeleton)?.skeleton || null,
+    materials: null,
+    info,
+  }
+}
+
+function captureCharacterUndoContext(store) {
+  return {
+    activeCharacterId: state.activeCharacterId,
+    mode: store.mode,
+    selectedObjectId: store.selectedObjectId,
+    selectedObjectIds: [...(store.selectedObjectIds || [])],
+    selectedCameraId: store.selectedCameraId,
+    selectedLightId: store.selectedLightId,
+  }
+}
+
+function recordCharacterAdded(id, previousState) {
+  pushUndoBatch('object', makeCharacterAddBatch(id, previousState))
+}
+
+function makeCharacterAddBatch(id, previousState) {
+  const batch = {
+    entries: [],
+    kind: 'add-character',
+    id,
+    rec: null,
+    prevMode: null,
+    run(direction) {
+      if (direction === 'undo') {
+        if (!removeCharacterPresence(batch)) return
+        if (previousState?.activeCharacterId && state.characters.has(previousState.activeCharacterId)) {
+          setActiveCharacter(previousState.activeCharacterId)
+        }
+        if (previousState) {
+          useStore.setState({
+            mode: previousState.mode,
+            selectedObjectId: previousState.selectedObjectId,
+            selectedObjectIds: previousState.selectedObjectIds,
+            selectedCameraId: previousState.selectedCameraId,
+            selectedLightId: previousState.selectedLightId,
+          })
+        }
+      } else {
+        restoreCharacterPresence(batch)
+      }
+    },
+    discard() {
+      discardDetachedCharacter(batch)
+    },
+  }
+  return batch
 }
 
 // Permanent removal (no undo step): frees everything immediately.
@@ -1309,16 +1499,20 @@ function makeCharacterDeleteBatch(id) {
     },
     // Dropped from history while detached -> nothing can bring it back; free it.
     discard() {
-      const rec = batch.rec
-      if (!rec) return
-      batch.rec = null
-      disposeDetachedAnimationEntry(rec.animEntry)
-      restoreOriginalMaterials(rec.model)
-      disposeGeneratedMaterials(rec.model)
-      disposeObject(rec.model.root)
+      discardDetachedCharacter(batch)
     },
   }
   return batch
+}
+
+function discardDetachedCharacter(batch) {
+  const rec = batch.rec
+  if (!rec) return
+  batch.rec = null
+  disposeDetachedAnimationEntry(rec.animEntry)
+  restoreOriginalMaterials(rec.model)
+  disposeGeneratedMaterials(rec.model)
+  disposeObject(rec.model.root)
 }
 
 // Free one character's Three.js graph without touching any other loaded
@@ -1585,7 +1779,9 @@ export function setMeshVisibleByUuid(uuid, visible) {
 }
 
 export function copyObjectById(id) {
-  return copyObject(id)
+  const copied = copyObject(id)
+  if (copied) clearCopiedCharacterData()
+  return copied
 }
 
 export function pasteCopiedObject() {

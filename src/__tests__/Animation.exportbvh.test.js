@@ -179,6 +179,62 @@ describe('exportAnimationBVH', () => {
     expect(mag).toBeGreaterThan(80)
   })
 
+  it('applies the BVH yaw correction consistently to root facing and translation', async () => {
+    const root = new THREE.Group()
+    root.position.set(2, 0, 3)
+    root.rotation.y = Math.PI / 2
+    const hips = new THREE.Bone()
+    hips.name = 'Hips'
+    hips.position.y = 1
+    const spine = new THREE.Bone()
+    spine.name = 'Spine'
+    hips.add(spine)
+    root.add(hips)
+
+    const skinnedMesh = new THREE.SkinnedMesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial())
+    const skeleton = new THREE.Skeleton([hips, spine])
+    skinnedMesh.bind(skeleton)
+    root.add(skinnedMesh)
+
+    const clip = new THREE.AnimationClip('Idle', 1, [])
+    const model = { root, bones: [hips, spine], skinnedMeshes: [skinnedMesh], meshes: [], skeleton, clips: [clip], info: {} }
+    initAnimation(refs)
+    setAnimationModel(model, 'test-char-facing')
+    selectClip('Idle')
+
+    const expectedPosition = new THREE.Vector3()
+    hips.getWorldPosition(expectedPosition)
+    const rootKeys = [
+      { time: 0, pos: [2, 0, 3], quat: [0, Math.SQRT1_2, 0, Math.SQRT1_2] },
+      { time: 1, pos: [4, 0, 3], quat: [0, Math.SQRT1_2, 0, Math.SQRT1_2] },
+    ]
+    const text = exportAnimationBVH({ tracks: {}, root: rootKeys, meshes: {}, cameras: {}, cuts: [], morphs: {}, lights: {} }, 24, 1, 'Idle', 'clip')
+    const { BVHLoader } = await import('three/examples/jsm/loaders/BVHLoader.js')
+    const result = new BVHLoader().parse(text)
+    const reRoot = result.skeleton.bones[0]
+    const reMixer = new THREE.AnimationMixer(reRoot)
+    reMixer.clipAction(result.clip).play()
+    reMixer.update(0)
+    reRoot.updateWorldMatrix(true, true)
+
+    const actualPosition = new THREE.Vector3()
+    reRoot.getWorldPosition(actualPosition)
+    const actualForward = new THREE.Vector3(0, 0, 1).applyQuaternion(reRoot.getWorldQuaternion(new THREE.Quaternion()))
+    expect(expectedPosition.toArray()).toEqual([2, 1, 3])
+    expect(actualPosition.toArray()).toEqual([-3, 1, 2])
+    expect(actualForward.x).toBeCloseTo(0, 2)
+    expect(actualForward.z).toBeCloseTo(1, 2)
+
+    reMixer.setTime(1)
+    reRoot.updateWorldMatrix(true, true)
+    reRoot.getWorldPosition(actualPosition)
+    expect(actualPosition.x).toBeCloseTo(-3, 3)
+    expect(actualPosition.y).toBeCloseTo(1, 3)
+    expect(actualPosition.z).toBeCloseTo(4, 3)
+    expect(root.position.toArray()).toEqual([2, 0, 3])
+    expect(root.rotation.y).toBeCloseTo(Math.PI / 2)
+  })
+
   it('keeps a mirrored (negative-scale) limb from twisting backward on export', async () => {
     // Some rigs mirror one side of the body by putting a negative scale on
     // that side's chain instead of authoring a true mirrored bone orientation.

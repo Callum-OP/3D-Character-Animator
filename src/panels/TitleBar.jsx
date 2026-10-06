@@ -344,7 +344,10 @@ export default function TitleBar({ onOpenSettings }) {
   function onCopyCurrentEdit() {
     setOpenMenu(null)
     const copied = copyCurrentEdit()
-    if (copied) setMsg(`${copied === 'pose' ? 'Pose' : copied === 'mesh' ? 'Mesh transform' : 'Object'} copied.`)
+    if (copied) {
+      const label = copied === 'pose' ? 'Pose' : copied === 'mesh' ? 'Mesh transform' : copied === 'character' ? 'Character' : 'Object'
+      setMsg(`${label} copied.`)
+    }
   }
 
   function onPasteCurrentEdit() {
@@ -355,6 +358,8 @@ export default function TitleBar({ onOpenSettings }) {
       const { applied, missing } = pasted.result
       setMsg(`Pasted ${applied} bone(s)` + (missing.length ? `, ${missing.length} skipped.` : '.'))
     } else if (pasted.type === 'object') {
+      setMsg(`Pasted "${pasted.result.name}".`)
+    } else if (pasted.type === 'character') {
       setMsg(`Pasted "${pasted.result.name}".`)
     } else {
       setMsg('Mesh transform pasted.')
@@ -479,10 +484,12 @@ export default function TitleBar({ onOpenSettings }) {
               ) : (
                 <>
                   <button role="menuitem" onClick={onCopyCurrentEdit} disabled={!editCopyAvailable}>
-                    {mode === 'object' ? 'Copy Object' : mode === 'mesh' ? 'Copy Mesh Transform' : 'Copy'}
+                    {mode === 'object'
+                      ? (sceneObjects.find((entry) => entry.id === selectedObjectId)?.isCharacter ? 'Copy Character' : 'Copy Object')
+                      : mode === 'mesh' ? 'Copy Mesh Transform' : 'Copy'}
                   </button>
                   <button role="menuitem" onClick={onPasteCurrentEdit} disabled={!editPasteAvailable}>
-                    {mode === 'object' ? 'Paste Object' : mode === 'mesh' ? 'Paste Mesh Transform' : 'Paste'}
+                    {mode === 'object' ? 'Paste Object or Character' : mode === 'mesh' ? 'Paste Mesh Transform' : 'Paste'}
                   </button>
                 </>
               )}

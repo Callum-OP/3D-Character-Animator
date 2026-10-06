@@ -105,6 +105,25 @@ describe('deleting a character is undoable', () => {
     expect(scene.children).toContain(only.root)
   })
 
+  it('undoes and redoes adding a character while restoring the previous active character', () => {
+    seed('c1', 'One')
+    const added = makeParsed('Added')
+    __seedCharacterForTest('c2', added, scene, { recordHistory: true })
+
+    expect(chars().sort()).toEqual(['c1', 'c2'])
+    expect(useStore.getState().activeCharacterId).toBe('c2')
+
+    undo()
+    expect(chars()).toEqual(['c1'])
+    expect(useStore.getState().activeCharacterId).toBe('c1')
+    expect(scene.children).not.toContain(added.root)
+
+    redo()
+    expect(chars().sort()).toEqual(['c1', 'c2'])
+    expect(useStore.getState().activeCharacterId).toBe('c2')
+    expect(scene.children).toContain(added.root)
+  })
+
   it('keeps geometry alive while undoable and frees it once the delete drops out of history', () => {
     seed('c1', 'One')
     const doomed = seed('c2', 'Two')

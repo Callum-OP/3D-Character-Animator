@@ -424,6 +424,12 @@ export function hasCopiedObject() {
   return !!objectClipboard
 }
 
+export function clearCopiedObject() {
+  if (!objectClipboard) return
+  disposeObject(objectClipboard.root)
+  objectClipboard = null
+}
+
 export function removeObject(id) {
   if (o.characterRoots.has(id)) return // characters are removed via removeCharacter(), not this
   const idx = o.objects.findIndex((e) => e.id === id)
