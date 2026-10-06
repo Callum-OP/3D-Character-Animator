@@ -366,7 +366,17 @@ export default function TitleBar({ onOpenSettings }) {
     setOpenMenu(null)
     const copied = copyCurrentEdit()
     if (copied) {
-      const label = copied === 'pose' ? 'Pose' : copied === 'mesh' ? 'Mesh transform' : copied === 'character' ? 'Character' : 'Object'
+      const label = copied === 'pose'
+        ? 'Pose'
+        : copied === 'mesh'
+          ? 'Mesh transform'
+          : copied === 'character'
+            ? 'Character'
+            : copied === 'camera'
+              ? 'Camera'
+              : copied === 'light'
+                ? 'Light'
+                : 'Object'
       setMsg(`${label} copied.`)
     }
   }
@@ -381,6 +391,8 @@ export default function TitleBar({ onOpenSettings }) {
     } else if (pasted.type === 'object') {
       setMsg(`Pasted "${pasted.result.name}".`)
     } else if (pasted.type === 'character') {
+      setMsg(`Pasted "${pasted.result.name}".`)
+    } else if (pasted.type === 'camera' || pasted.type === 'light') {
       setMsg(`Pasted "${pasted.result.name}".`)
     } else {
       setMsg('Mesh transform pasted.')

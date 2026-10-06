@@ -11,11 +11,19 @@ import {
 } from './scene.js'
 import { applyPose, getPose, resetPose } from './posing.js'
 import { getMeshDelta, setMeshDelta } from './meshedit.js'
+import { copySceneItem, hasSceneClipboard, pasteSceneItem } from './sceneClipboard.js'
+import { setLightVisible } from './lights.js'
 
 let meshClipboard = null
 let objectClipboardType = 'object'
 
 export function copyCurrentEdit(state = useStore.getState()) {
+  if (state.mode === 'object' && state.selectedCameraId != null) {
+    return copySceneItem('camera', state.selectedCameraId)
+  }
+  if (state.mode === 'object' && state.selectedLightId != null) {
+    return copySceneItem('light', state.selectedLightId)
+  }
   if (state.mode === 'bone' && state.modelInfo) {
     state.setPoseClipboard(getPose())
     return 'pose'
@@ -26,11 +34,13 @@ export function copyCurrentEdit(state = useStore.getState()) {
       const copied = copyCharacterById(state.selectedObjectId)
       if (!copied) return null
       objectClipboardType = 'character'
+      useStore.getState().setSceneClipboardType(null)
       return 'character'
     }
     const copied = copyObjectById(state.selectedObjectId)
     if (!copied) return null
     objectClipboardType = 'object'
+    useStore.getState().setSceneClipboardType(null)
     return 'object'
   }
   if (state.mode === 'mesh' && state.selectedMeshUuid) {
@@ -45,6 +55,7 @@ export function pasteCurrentEdit(state = useStore.getState()) {
     return { type: 'pose', result: applyPose(state.poseClipboard) }
   }
   if (state.mode === 'object') {
+    if (hasSceneClipboard()) return pasteSceneItem()
     if (objectClipboardType === 'character' && hasCopiedCharacterData()) {
       const result = pasteCopiedCharacter()
       return result ? { type: 'character', result } : null
@@ -79,12 +90,21 @@ export function toggleCurrentVisibility(state = useStore.getState()) {
     setObjectVisibleById(object.id, visible)
     return { type: 'object', visible }
   }
+  if (state.mode === 'object' && state.selectedLightId != null) {
+    const light = state.sceneLights.find((entry) => entry.id === state.selectedLightId)
+    if (!light) return null
+    const visible = light.visible === false
+    setLightVisible(state.selectedLightId, visible)
+    return { type: 'light', visible }
+  }
   return null
 }
 
 export function canCopyCurrentEdit(state = useStore.getState()) {
   if (state.mode === 'bone') return !!state.modelInfo
   if (state.mode === 'object') {
+    if (state.selectedCameraId != null) return true
+    if (state.selectedLightId != null) return true
     const selected = state.sceneObjects.find((entry) => entry.id === state.selectedObjectId)
     return !!selected
   }
@@ -95,6 +115,7 @@ export function canCopyCurrentEdit(state = useStore.getState()) {
 export function canPasteCurrentEdit(state = useStore.getState()) {
   if (state.mode === 'bone') return !!state.poseClipboard
   if (state.mode === 'object') {
+    if (hasSceneClipboard()) return true
     return objectClipboardType === 'character'
       ? hasCopiedCharacterData()
       : hasObjectClipboard()

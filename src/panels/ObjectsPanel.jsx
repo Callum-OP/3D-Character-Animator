@@ -20,8 +20,11 @@ import {
   setSelectedUniformScale,
   snapshotObject,
   commitUniformScale,
+  getObjectTransform,
+  setObjectTransformWithUndo,
 } from '../three/objects.js'
 import RadialScale from './RadialScale.jsx'
+import TransformEditor from './TransformEditor.jsx'
 
 // Side-panel section: add props / backgrounds around the character, then move,
 // rotate or resize the selected one. Objects are independent of the character —
@@ -176,6 +179,15 @@ export default function ObjectsPanel() {
               </button>
             ))}
           </div>
+
+          {!multiSelected && selectedObjectId != null && getObjectTransform(selectedObjectId) && (
+            <TransformEditor
+              label={sceneObjects.find((object) => object.id === selectedObjectId)?.name || 'Object'}
+              transform={getObjectTransform(selectedObjectId)}
+              readTransform={() => getObjectTransform(selectedObjectId)}
+              onCommit={(transform) => setObjectTransformWithUndo(selectedObjectId, transform)}
+            />
+          )}
 
           {multiSelected && (
             <div className="pose-msg" style={{ marginTop: 10 }}>

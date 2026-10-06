@@ -25,6 +25,7 @@ import {
   setOutlineToggle,
   setViewCameraById,
   setCameraToObject,
+  setCameraToTarget,
   setActiveCharacter,
   dollyViewport,
   syncActiveDangleConfig,
@@ -71,8 +72,20 @@ import {
   cutCurrentEdit,
   toggleCurrentVisibility,
 } from './editClipboard.js'
-import { selectCamera, setCameraGizmoMode, consumeCameraGizmoGrab, pickCameraId } from './cameras.js'
-import { selectLight, consumeLightGizmoGrab } from './lights.js'
+import {
+  selectCamera,
+  setCameraGizmoMode,
+  setCamerasEnabled,
+  consumeCameraGizmoGrab,
+  pickCameraId,
+} from './cameras.js'
+import {
+  selectLight,
+  setLightGizmoMode,
+  setLightsEnabled,
+  consumeLightGizmoGrab,
+  pickLightId,
+} from './lights.js'
 import StatsOverlay from '../panels/StatsOverlay.jsx'
 
 // The viewport's mode switcher. 'view' is look-only (no picking at all);
@@ -503,6 +516,20 @@ function Viewport() {
   }, [cameraGizmoMode])
 
   useEffect(() => {
+    setCamerasEnabled(mode === 'object')
+  }, [mode])
+
+  const selectedLightId = useStore((s) => s.selectedLightId)
+  useEffect(() => {
+    selectLight(selectedLightId)
+  }, [selectedLightId])
+
+  useEffect(() => {
+    setLightsEnabled(mode === 'object')
+    setLightGizmoMode(objectMode)
+  }, [mode, objectMode])
+
+  useEffect(() => {
     setViewCameraById(viewCameraId)
   }, [viewCameraId])
 
@@ -582,10 +609,16 @@ function Viewport() {
         const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1
         const ndcY = -((e.clientY - rect.top) / rect.height) * 2 + 1
         const cameraHitId = s.mode === 'object' ? pickCameraId(ndcX, ndcY) : null
+        const lightHitId = s.mode === 'object' ? pickLightId(ndcX, ndcY) : null
         const hitId = pickObjectId(ndcX, ndcY)
 
         if (cameraHitId != null) {
           s.setSelectedCameraId(cameraHitId)
+          return
+        }
+
+        if (lightHitId != null) {
+          s.setSelectedLightId(lightHitId)
           return
         }
 
@@ -661,7 +694,8 @@ function Viewport() {
       } else if (plainKey && s.mode === 'mesh' && GIZMO_KEYS[e.key.toLowerCase()]) {
         s.setMeshGizmoMode(GIZMO_KEYS[e.key.toLowerCase()])
       } else if (plainKey && s.mode === 'object' && GIZMO_KEYS[e.key.toLowerCase()]) {
-        s.setObjectMode(GIZMO_KEYS[e.key.toLowerCase()])
+        if (s.selectedCameraId != null) s.setCameraGizmoMode(GIZMO_KEYS[e.key.toLowerCase()])
+        else s.setObjectMode(GIZMO_KEYS[e.key.toLowerCase()])
       } else if (plainKey && e.key.toLowerCase() === 'h') {
         toggleCurrentVisibility(s)
       } else if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
@@ -717,9 +751,11 @@ function Viewport() {
   // Preview / Record film the viewport, so the on-canvas toolbars step aside.
   const shotActive = useStore((s) => s.recording || s.previewing)
   const sceneObjects = useStore((s) => s.sceneObjects)
+  const sceneLights = useStore((s) => s.sceneLights)
   const selectedObjectId = useStore((s) => s.selectedObjectId)
   const hasCharacter = Boolean(modelInfo)
-  const hasSceneContent = hasCharacter || sceneObjects.length > 0
+  const hasSceneContent =
+    hasCharacter || sceneObjects.length > 0 || sceneCameras.length > 0 || sceneLights.length > 0
   const modeButtons = hasCharacter ? MODE_BUTTONS : MODE_BUTTONS.filter((b) => b.value === 'view' || b.value === 'object' || b.value === 'mesh')
 
   return (
@@ -774,7 +810,7 @@ function Viewport() {
         </div>
       )}
 
-      {(modelInfo || selectedCameraId != null || selectedObjectIds.length > 0) && mode !== 'view' && (
+      {(modelInfo || selectedCameraId != null || selectedLightId != null || selectedObjectIds.length > 0) && mode !== 'view' && (
         <div className="transform-widget-strip" title="What dragging the gizmo does">
           {TRANSFORM_BUTTONS.map((b) => {
             // Bone mode has Move (IK: drag the joint, its ancestor chain
@@ -782,7 +818,8 @@ function Viewport() {
             // but no Resize, since a bone has no size of its own.
             const isBone = mode === 'bone'
             const isCamera = mode === 'object' && selectedCameraId != null
-            const disabled = (isBone || isCamera) && b.value === 'scale'
+            const isLight = mode === 'object' && selectedLightId != null
+            const disabled = isBone && b.value === 'scale'
             const activeValue = isBone
               ? boneGizmoMode
               : mode === 'mesh'
@@ -807,7 +844,10 @@ function Viewport() {
                   if (mode === 'bone') useStore.getState().setBoneGizmoMode(b.value)
                   else if (mode === 'mesh') useStore.getState().setMeshGizmoMode(b.value)
                   else if (isCamera) useStore.getState().setCameraGizmoMode(b.value)
-                  else if (mode === 'object') useStore.getState().setObjectMode(b.value)
+                  else if (mode === 'object') {
+                    useStore.getState().setObjectMode(b.value)
+                    if (isLight) setLightGizmoMode(b.value)
+                  }
                 }}
               >
                 <span className="transform-widget-icon">{b.icon}</span>
@@ -861,7 +901,7 @@ function Viewport() {
         </div>
       )}
 
-      {mode === 'object' && objectMode === 'scale' && selectedObjectId != null && selectedObjectIds.length <= 1 && (
+      {mode === 'object' && objectMode === 'scale' && selectedObjectId != null && selectedObjectIds.length <= 1 && selectedCameraId == null && selectedLightId == null && (
         <ViewportScaleDial key={selectedObjectId} id={selectedObjectId} />
       )}
 
@@ -869,10 +909,18 @@ function Viewport() {
         <div className="zoom-toolbar" aria-label="Viewport camera controls">
           <button
             className="zoom-toolbar-btn"
-            title={selectedObjectId != null ? 'Frame selected object and orbit around it' : 'Select an object to frame it'}
-            aria-label="Frame selected object"
-            disabled={selectedObjectId == null}
-            onClick={() => setCameraToObject(selectedObjectId)}
+            title={
+              selectedObjectId != null || selectedCameraId != null || selectedLightId != null
+                ? 'Frame selected item and orbit around it'
+                : 'Select an item to frame it'
+            }
+            aria-label="Frame selected item"
+            disabled={selectedObjectId == null && selectedCameraId == null && selectedLightId == null}
+            onClick={() => {
+              if (selectedCameraId != null) setCameraToTarget('camera', selectedCameraId)
+              else if (selectedLightId != null) setCameraToTarget('light', selectedLightId)
+              else setCameraToObject(selectedObjectId)
+            }}
           >
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden="true">
               <path d="M4 7h3l1.5-2h7L17 7h3v12H4z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />

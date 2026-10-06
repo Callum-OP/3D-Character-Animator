@@ -1,3 +1,4 @@
+import { useRef, useState } from 'react'
 import { useStore } from '../store.js'
 import {
   addCamera,
@@ -5,8 +6,16 @@ import {
   setCameraFov,
   snapCameraToView,
   getCameraKeyValue,
+  getCameraTransform,
+  setCameraTransform,
+  snapshotCameraTransform,
+  setCameraUniformScale,
+  commitCameraTransform,
 } from '../three/cameras.js'
 import EditableValue from './EditableValue.jsx'
+import TransformEditor from './TransformEditor.jsx'
+import RadialScale from './RadialScale.jsx'
+import { copySceneItem, hasSceneClipboard, pasteSceneItem } from '../three/sceneClipboard.js'
 
 // Side-panel section: place cameras in the scene, frame shots through them, and
 // keyframe their movement. A new camera copies the current viewport view, so
@@ -15,10 +24,12 @@ import EditableValue from './EditableValue.jsx'
 const MODES = [
   { value: 'translate', label: 'Move' },
   { value: 'rotate', label: 'Rotate' },
+  { value: 'scale', label: 'Resize' },
 ]
 
 export default function CamerasPanel() {
   const sceneCameras = useStore((s) => s.sceneCameras)
+  const sceneClipboardType = useStore((s) => s.sceneClipboardType)
   const selectedCameraId = useStore((s) => s.selectedCameraId)
   const setSelectedCameraId = useStore((s) => s.setSelectedCameraId)
   const setMode = useStore((s) => s.setMode)
@@ -44,6 +55,9 @@ export default function CamerasPanel() {
   const blurAmount = useStore((s) => s.blurAmount)
   const setBlurAmount = useStore((s) => s.setBlurAmount)
   const st = useStore.getState
+  const scaleBefore = useRef(null)
+  const [scaleDragging, setScaleDragging] = useState(false)
+  const [scaleValue, setScaleValue] = useState(1)
 
   const selected = sceneCameras.find((cam) => cam.id === selectedCameraId) || null
   const keyCount = selected ? (animData.cameras?.[selected.name] || []).length : 0
@@ -63,7 +77,11 @@ export default function CamerasPanel() {
 
   function onRemove(id) {
     removeCamera(id)
-    st().removeSceneCamera(id)
+  }
+
+  function onPasteCamera() {
+    const pasted = pasteSceneItem('camera')
+    if (pasted) setMode('object')
   }
 
   function onFov(fov) {
@@ -77,7 +95,7 @@ export default function CamerasPanel() {
     const key = getCameraKeyValue(selected.id)
     if (!key) return
     const t = Math.round(insertTime * animFps) / animFps // snap to the fps grid
-    st().addCameraKeyframe(selected.name, t, { pos: key.pos, quat: key.quat })
+    st().addCameraKeyframe(selected.name, t, { pos: key.pos, quat: key.quat, scale: key.scale })
   }
 
   // Insert a camera cut: during playback the view switches to this camera from
@@ -97,6 +115,15 @@ export default function CamerasPanel() {
 
       <button className="btn" onClick={onAdd} title="Place a camera at the current view">
         + Add camera (from this view)
+      </button>
+      <button
+        className="btn secondary"
+        style={{ marginTop: 6 }}
+        onClick={onPasteCamera}
+        disabled={sceneClipboardType !== 'camera' || !hasSceneClipboard('camera')}
+        title="Paste a copied camera"
+      >
+        Paste camera
       </button>
 
       {sceneCameras.length > 0 && (
@@ -131,6 +158,16 @@ export default function CamerasPanel() {
                 </span>
                 <button
                   className="obj-eye"
+                  title={`Copy ${cam.name}`}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    copySceneItem('camera', cam.id)
+                  }}
+                >
+                  ⧉
+                </button>
+                <button
+                  className="obj-eye"
                   title={
                     cam.id === viewCameraId
                       ? 'Back to the free view (Esc)'
@@ -159,6 +196,32 @@ export default function CamerasPanel() {
 
           {selected && (
             <div className="joint-controls">
+              <TransformEditor
+                label={selected.name}
+                transform={getCameraTransform(selected.id)}
+                readTransform={() => getCameraTransform(selected.id)}
+                onCommit={(transform) => setCameraTransform(selected.id, transform)}
+              />
+              <RadialScale
+                value={scaleDragging ? scaleValue : (getCameraTransform(selected.id)?.scale[0] || 1)}
+                getValue={() => getCameraTransform(selected.id)?.scale[0] || 1}
+                label="Camera size"
+                onDragStart={(value) => {
+                  scaleBefore.current = snapshotCameraTransform(selected.id)
+                  setScaleValue(value)
+                  setScaleDragging(true)
+                }}
+                onChange={(value) => {
+                  setScaleValue(value)
+                  setCameraUniformScale(selected.id, value)
+                }}
+                onCommit={() => {
+                  commitCameraTransform(selected.id, scaleBefore.current)
+                  scaleBefore.current = null
+                  setScaleDragging(false)
+                }}
+              />
+
               <button
                 className={selected.id === viewCameraId ? 'btn secondary' : 'btn'}
                 style={{ width: '100%' }}
@@ -232,7 +295,7 @@ export default function CamerasPanel() {
           </label>
 
           <div className="pose-hint">
-            📷 Select a camera to move or rotate it. Use <b>Key camera</b> for
+            📷 Select a camera to move, rotate, or resize it. Use <b>Key camera</b> for
             camera motion and <b>Cut here</b> to switch shots. Exports use the
             active view; Play follows camera keys and cuts when enabled above.
           </div>

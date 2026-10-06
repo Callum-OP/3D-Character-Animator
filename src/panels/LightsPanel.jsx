@@ -1,3 +1,4 @@
+import { useRef, useState } from 'react'
 import { useStore } from '../store.js'
 import {
   addLight,
@@ -8,9 +9,18 @@ import {
   setLightCastShadow,
   setLightDirectional,
   getLightKeyValue,
+  getLightTransform,
+  setLightTransform,
+  setLightVisible,
+  snapshotLightTransform,
+  setLightUniformScale,
+  commitLightTransform,
 } from '../three/lights.js'
 import { applyModelMaterials } from '../three/scene.js'
 import EditableValue from './EditableValue.jsx'
+import TransformEditor from './TransformEditor.jsx'
+import RadialScale from './RadialScale.jsx'
+import { copySceneItem, hasSceneClipboard, pasteSceneItem } from '../three/sceneClipboard.js'
 
 // Side-panel section: add point lights, move them around the character, and
 // adjust colour/brightness/shadows per light. Separate from the built-in key
@@ -19,6 +29,7 @@ import EditableValue from './EditableValue.jsx'
 // character/cameras — key it at two times and it glides between them on Play.
 export default function LightsPanel() {
   const sceneLights = useStore((s) => s.sceneLights)
+  const sceneClipboardType = useStore((s) => s.sceneClipboardType)
   const selectedLightId = useStore((s) => s.selectedLightId)
   const setSelectedLightId = useStore((s) => s.setSelectedLightId)
   const rimFollowLight = useStore((s) => s.rimFollowLight)
@@ -26,7 +37,11 @@ export default function LightsPanel() {
   const animData = useStore((s) => s.animData)
   const animFps = useStore((s) => s.animFps)
   const insertTime = useStore((s) => s.insertTime)
+  const setMode = useStore((s) => s.setMode)
   const st = useStore.getState
+  const scaleBefore = useRef(null)
+  const [scaleDragging, setScaleDragging] = useState(false)
+  const [scaleValue, setScaleValue] = useState(1)
 
   const selected = sceneLights.find((lt) => lt.id === selectedLightId) || null
   const keyCount = selected ? (animData.lights?.[selected.name] || []).length : 0
@@ -35,22 +50,32 @@ export default function LightsPanel() {
     const meta = addLight()
     st().addSceneLight(meta)
     selectLight(meta.id)
+    setMode('object')
   }
 
   function onSelect(id) {
     const next = id === selectedLightId ? null : id
     setSelectedLightId(next)
     selectLight(next)
+    if (next != null) setMode('object')
   }
 
   function onRemove(id) {
     removeLight(id)
-    st().removeSceneLight(id)
     if (rimFollowLightId === id) {
       st().setRimFollowLight(false)
       st().setRimFollowLightId(null)
       applyModelMaterials()
     }
+  }
+
+  function onPasteLight() {
+    const pasted = pasteSceneItem('light')
+    if (pasted) setMode('object')
+  }
+
+  function onVisibility(id, visible) {
+    setLightVisible(id, visible)
   }
 
   function onColor(color) {
@@ -85,7 +110,13 @@ export default function LightsPanel() {
     const key = getLightKeyValue(selected.id)
     if (!key) return
     const t = Math.round(insertTime * animFps) / animFps // snap to the fps grid
-    st().addLightKeyframe(selected.name, t, { pos: key.pos, color: key.color, intensity: key.intensity })
+    st().addLightKeyframe(selected.name, t, {
+      pos: key.pos,
+      quat: key.quat,
+      scale: key.scale,
+      color: key.color,
+      intensity: key.intensity,
+    })
   }
 
   // Toggle whether this light drives the character's rim-light colour +
@@ -108,6 +139,15 @@ export default function LightsPanel() {
       <button className="btn" onClick={onAdd} title="Place a light near the character">
         + Add light
       </button>
+      <button
+        className="btn secondary"
+        style={{ marginTop: 6 }}
+        onClick={onPasteLight}
+        disabled={sceneClipboardType !== 'light' || !hasSceneClipboard('light')}
+        title="Paste a copied light"
+      >
+        Paste light
+      </button>
 
       {sceneLights.length > 0 && (
         <>
@@ -127,6 +167,26 @@ export default function LightsPanel() {
                     </span>
                   )}
                 </span>
+                <button
+                  className="obj-eye"
+                  title={lt.visible === false ? 'Show light' : 'Hide light'}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onVisibility(lt.id, lt.visible === false)
+                  }}
+                >
+                  {lt.visible === false ? '🙈' : '👁'}
+                </button>
+                <button
+                  className="obj-eye"
+                  title={`Copy ${lt.name}`}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    copySceneItem('light', lt.id)
+                  }}
+                >
+                  ⧉
+                </button>
                 <button
                   className="obj-eye"
                   title={
@@ -157,6 +217,32 @@ export default function LightsPanel() {
 
           {selected && (
             <div className="joint-controls">
+              <TransformEditor
+                label={selected.name}
+                transform={getLightTransform(selected.id)}
+                readTransform={() => getLightTransform(selected.id)}
+                onCommit={(transform) => setLightTransform(selected.id, transform)}
+              />
+              <RadialScale
+                value={scaleDragging ? scaleValue : (getLightTransform(selected.id)?.scale[0] || 1)}
+                getValue={() => getLightTransform(selected.id)?.scale[0] || 1}
+                label="Light size"
+                onDragStart={(value) => {
+                  scaleBefore.current = snapshotLightTransform(selected.id)
+                  setScaleValue(value)
+                  setScaleDragging(true)
+                }}
+                onChange={(value) => {
+                  setScaleValue(value)
+                  setLightUniformScale(selected.id, value)
+                }}
+                onCommit={() => {
+                  commitLightTransform(selected.id, scaleBefore.current)
+                  scaleBefore.current = null
+                  setScaleDragging(false)
+                }}
+              />
+
               <label className="slider-row">
                 <span className="slider-label">Color</span>
                 <input
@@ -232,7 +318,7 @@ export default function LightsPanel() {
           )}
 
           <div className="pose-hint">
-            Drag a light's gizmo to move it. Props can be styled (flat, cartoon,
+            Drag a light's gizmo to move, rotate, or resize it. Props can be styled (flat, cartoon,
             soft anime, realistic) or set to ignore shadows from the Objects
             panel. A light set to drive the rim light overrides the manual
             colour/direction in the Look panel until it's turned off there or

@@ -4,6 +4,16 @@ import { disposeObject } from './loadModel.js'
 import { markHistoryAction, pushUndoBatch, registerUndoHistory } from './undoHistory.js'
 import { useStore } from '../store.js'
 import {
+  sampleCameraTracks,
+  getCamerasPlaybackSnapshot,
+  applyCamerasPlaybackSnapshot,
+} from './cameras.js'
+import {
+  sampleLightTracks,
+  getLightsPlaybackSnapshot,
+  applyLightsPlaybackSnapshot,
+} from './lights.js'
+import {
   recordOriginalMaterials,
   applyMaterials,
   updateRimLightMaterials,
@@ -51,6 +61,7 @@ const o = {
   onMoveCommit: null, // (root) => void — fired after a gizmo drag actually changes a root's TRS
   onVisibilityChange: null,
   animationRest: null,
+  sceneAnimationRest: null,
   resolveBone: null,
   gizmoGrabbed: false, // true once per interaction that actually MOVED something via the gizmo (see objectChange)
   draggingViaGizmo: false, // true between dragging-changed(true) and (false) — not by itself proof of an actual move
@@ -323,7 +334,16 @@ export function getObjectAnimationDuration(store = useStore.getState()) {
     (end, track) => Math.max(end, track?.keys?.[track.keys.length - 1]?.time || 0),
     0,
   )
-  return Math.max(0.1, Number(store.objectAnimDuration) || 2, transformEnd, attachmentEnd)
+  const hasCharacters = (store.characterOrder || []).length > 0
+  const cameraEnd = hasCharacters ? 0 : Object.values(store.animData?.cameras || {}).reduce(
+    (end, keys) => Math.max(end, keys?.[keys.length - 1]?.time || 0),
+    0,
+  )
+  const lightEnd = hasCharacters ? 0 : Object.values(store.animData?.lights || {}).reduce(
+    (end, keys) => Math.max(end, keys?.[keys.length - 1]?.time || 0),
+    0,
+  )
+  return Math.max(0.1, Number(store.objectAnimDuration) || 2, transformEnd, attachmentEnd, cameraEnd, lightEnd)
 }
 
 function applyObjectTransform(root, transform) {
@@ -464,6 +484,21 @@ export function clearObjectAttachmentTrack(id) {
   }
   store.removeObjectAttachmentTrack(entry.animationKey)
   o.requestRender?.()
+}
+
+export function removeObjectAttachmentKey(id, time) {
+  const entry = o.objects.find((candidate) => candidate.id === id)
+  if (!entry) return false
+  const store = useStore.getState()
+  const track = store.objectAttachmentData?.[entry.animationKey]
+  if (!track) return false
+  if (track.keys.length <= 1) {
+    clearObjectAttachmentTrack(id)
+    return true
+  }
+  store.removeObjectAttachmentKey(entry.animationKey, time)
+  applyObjectAnimationAt(store.globalTime)
+  return true
 }
 
 // Detach every prop currently attached to bones belonging to `characterId` —
@@ -1040,6 +1075,28 @@ export function snapshotObject(id) {
   return root ? snapshot(root) : null
 }
 
+export function getObjectTransform(id) {
+  const root = rootFor(id)
+  return root
+    ? {
+        position: root.position.toArray(),
+        quaternion: root.quaternion.toArray(),
+        scale: root.scale.toArray(),
+      }
+    : null
+}
+
+export function setObjectTransformWithUndo(id, transform) {
+  const root = rootFor(id)
+  if (!root || !transform) return
+  const before = snapshot(root)
+  if (transform.position) root.position.fromArray(transform.position)
+  if (transform.quaternion) root.quaternion.fromArray(transform.quaternion)
+  if (transform.scale) root.scale.fromArray(transform.scale)
+  pushUndoIfChanged(root, before)
+  o.requestRender()
+}
+
 // Set an object's full transform at once (used when restoring a saved project).
 export function setObjectTransform(id, t) {
   const root = rootFor(id)
@@ -1216,7 +1273,7 @@ function sampleObjectTrack(keys, time) {
   }
 }
 
-function applyObjectAnimationAt(time) {
+function applyObjectAnimationAt(time, includeSceneTracks = true) {
   const store = useStore.getState()
   const tracks = store.objectAnimData || {}
   for (const entry of o.objects) {
@@ -1226,6 +1283,10 @@ function applyObjectAnimationAt(time) {
     applyObjectTransform(entry.root, transform)
   }
   applyAttachmentAnimationsAt(time, store.objectAttachmentData || {}, tracks)
+  if (includeSceneTracks && !(store.characterOrder || []).length) {
+    sampleCameraTracks(store.animData?.cameras || {}, time)
+    sampleLightTracks(store.animData?.lights || {}, time)
+  }
   o.requestRender?.()
 }
 
@@ -1233,10 +1294,19 @@ export function startObjectAnimation() {
   const store = useStore.getState()
   const hasKeys =
     Object.values(store.objectAnimData || {}).some((keys) => keys?.length) ||
-    Object.values(store.objectAttachmentData || {}).some((track) => track?.keys?.length)
+    Object.values(store.objectAttachmentData || {}).some((track) => track?.keys?.length) ||
+    (!(store.characterOrder || []).length &&
+      (Object.values(store.animData?.cameras || {}).some((keys) => keys?.length) ||
+        Object.values(store.animData?.lights || {}).some((keys) => keys?.length)))
   if (!hasKeys) return 0
   const duration = getObjectAnimationDuration(store)
   o.animationRest = new Map(o.objects.map((entry) => [entry.animationKey, snapshot(entry.root)]))
+  o.sceneAnimationRest = !(store.characterOrder || []).length
+    ? {
+        cameras: getCamerasPlaybackSnapshot(),
+        lights: getLightsPlaybackSnapshot(),
+      }
+    : null
   store.setObjectAnimTime(0)
   store.setObjectAnimPlaying(true)
   applyObjectAnimationAt(0)
@@ -1276,8 +1346,14 @@ export function stopObjectAnimation() {
       if (before) applySnapshot(entry.root, before)
     }
   }
+  const sceneRest = o.sceneAnimationRest
   o.animationRest = null
-  applyObjectAnimationAt(0)
+  o.sceneAnimationRest = null
+  applyObjectAnimationAt(0, false)
+  if (sceneRest) {
+    applyCamerasPlaybackSnapshot(sceneRest.cameras)
+    applyLightsPlaybackSnapshot(sceneRest.lights)
+  }
   useStore.getState().setObjectAnimTime(0)
   o.requestRender?.()
 }

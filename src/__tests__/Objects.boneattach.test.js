@@ -9,6 +9,7 @@ import {
   attachObjectToBone,
   detachObject,
   getObjectAttachment,
+  getObjectRootById,
   keyObjectAttachment,
   clearObjectAttachmentTrack,
   scrubObjectAnimation,
@@ -140,11 +141,21 @@ describe('bone attachment', () => {
     scrubObjectAnimation(1)
     expect(getObjectAttachment(id)).toEqual({ boneName: 'RightHand', characterId: 'char_1' })
 
-    keyObjectAttachment(id, null, 2, null, null)
     scrubObjectAnimation(1.5)
     expect(getObjectAttachment(id)).toEqual({ boneName: 'RightHand', characterId: 'char_1' })
+    bone.position.x = 5
+    scene.updateMatrixWorld(true)
+    const root = getObjectRootById(id)
+    root.updateMatrixWorld(true)
+    const beforeRelease = new THREE.Vector3().setFromMatrixPosition(root.matrixWorld)
+    keyObjectAttachment(id, null, 2, null, null)
     scrubObjectAnimation(2)
     expect(getObjectAttachment(id)).toBeNull()
+    expect(bone.children).toHaveLength(0)
+    expect(root.parent).toBe(scene)
+    root.updateMatrixWorld(true)
+    const afterRelease = new THREE.Vector3().setFromMatrixPosition(root.matrixWorld)
+    expect(afterRelease.distanceTo(beforeRelease)).toBeLessThan(1e-5)
     scrubObjectAnimation(1)
     clearObjectAttachmentTrack(id)
     expect(getObjectAttachment(id)).toBeNull()

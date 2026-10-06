@@ -40,6 +40,7 @@ import {
 import {
   initCameras,
   getCameraById,
+  getCameraRigById,
   getCameraIdByName,
   setActiveCameraBody,
   getCamerasData,
@@ -59,6 +60,7 @@ import {
   setLightDirectional,
   setLightLinks,
   getLightRimSource,
+  getLightById,
   getLightsData,
   applyLightsData,
   clearLights,
@@ -158,6 +160,7 @@ import {
   getObjectAttachment,
   keyObjectAttachment,
   clearObjectAttachmentTrack,
+  removeObjectAttachmentKey,
   detachObjectsForCharacter,
   setViewCamera as setObjectsViewCamera,
   updateAllObjectRimLight,
@@ -176,6 +179,7 @@ import {
 import { getPose, applyPose } from './posing.js'
 import { useStore, captureCharacterRecord } from '../store.js'
 import { clearUndoHistory, pushUndoBatch, runWithoutHistoryCapture } from './undoHistory.js'
+import { pushSceneHistory } from './sceneHistory.js'
 
 // ---------------------------------------------------------------------------
 // Scene manager (module singleton)
@@ -359,6 +363,7 @@ export function initScene(container) {
   // 'wheel' listener doesn't behave as expected.
   controls.enableZoom = false
   controls.addEventListener('start', () => {
+    state.viewDragBefore = snapshotViewportView()
     // Orbiting is fragment-bound with lit materials and the outline pass. A
     // temporary lower DPR keeps interaction responsive; the final frame is
     // rendered at the normal quality as soon as the drag ends.
@@ -366,6 +371,8 @@ export function initScene(container) {
   })
   controls.addEventListener('end', () => {
     renderer.setPixelRatio(getPerformancePixelRatio())
+    commitViewportView(state.viewDragBefore)
+    state.viewDragBefore = null
     requestRender()
   })
   controls.addEventListener('change', requestRender)
@@ -513,6 +520,12 @@ export function initScene(container) {
     controls,
     requestRender,
     getSceneScale: () => state.modelRadius,
+    getPlacement: (sceneScale) => {
+      const direction = camera.getWorldDirection(new THREE.Vector3())
+      const distanceToTarget = camera.position.distanceTo(controls.target)
+      const distance = Math.max(sceneScale * 0.5, Math.min(sceneScale * 3, distanceToTarget * 0.65))
+      return camera.position.clone().add(direction.multiplyScalar(distance))
+    },
     onChange: updateFollowedRimLight,
   })
 
@@ -638,6 +651,7 @@ export function dollyViewport(direction, { smooth = false } = {}) {
   const offset = camera.position.clone().sub(controls.target)
   const distance = offset.length()
   if (distance < 1e-6) return
+  beginDollyHistory()
   const factor = smooth
     ? Math.pow(0.9985, direction) // ~0.15% per pixel of scroll, smooth and continuous
     : direction < 0
@@ -650,6 +664,56 @@ export function dollyViewport(direction, { smooth = false } = {}) {
   camera.position.copy(controls.target).add(offset)
   controls.update()
   requestRender()
+}
+
+function snapshotViewportView() {
+  if (!state.camera || !state.controls) return null
+  return {
+    position: state.camera.position.clone(),
+    quaternion: state.camera.quaternion.clone(),
+    target: state.controls.target.clone(),
+    zoom: state.camera.zoom,
+  }
+}
+
+function applyViewportView(snapshot) {
+  if (!snapshot || !state.camera || !state.controls) return
+  state.camera.position.copy(snapshot.position)
+  state.camera.quaternion.copy(snapshot.quaternion)
+  state.camera.zoom = snapshot.zoom
+  state.camera.updateProjectionMatrix()
+  state.controls.target.copy(snapshot.target)
+  state.controls.update()
+  requestRender()
+}
+
+function sameViewportView(a, b) {
+  return !!a && !!b && a.position.equals(b.position) && a.quaternion.equals(b.quaternion) &&
+    a.target.equals(b.target) && a.zoom === b.zoom
+}
+
+function commitViewportView(before, after = snapshotViewportView()) {
+  if (!sameViewportView(before, after)) return
+  pushSceneHistory(
+    () => applyViewportView(before),
+    () => applyViewportView(after),
+  )
+}
+
+function beginDollyHistory() {
+  if (state.dollyUndoTimer) clearTimeout(state.dollyUndoTimer)
+  if (!state.dollyUndoBefore) state.dollyUndoBefore = snapshotViewportView()
+  state.dollyUndoTimer = setTimeout(() => {
+    commitViewportView(state.dollyUndoBefore)
+    state.dollyUndoBefore = null
+    state.dollyUndoTimer = null
+  }, 220)
+}
+
+function commitFramingChange(frame) {
+  const before = snapshotViewportView()
+  frame()
+  commitViewportView(before)
 }
 
 function renderOnce() {
@@ -1064,6 +1128,12 @@ function objectKeysExist(store) {
     Object.values(store.objectAttachmentData || {}).some((track) => track?.keys?.length)
 }
 
+function standaloneCameraLightKeysExist(store) {
+  return !(store.characterOrder || []).length &&
+    (Object.values(store.animData?.cameras || {}).some((keys) => keys?.length) ||
+      Object.values(store.animData?.lights || {}).some((keys) => keys?.length))
+}
+
 // Length of the whole scene's animation in seconds: the longest of every
 // character's selected clip / keyframe edit and the object-motion duration.
 // Read-only (never switches the active character), so safe to call in render.
@@ -1088,7 +1158,9 @@ export function getAllTimelineDuration({ stopAtFirstClipEnd = false } = {}) {
     max = Math.min(...characterDurations)
     return max
   }
-  if (objectKeysExist(store)) max = Math.max(max, getObjectAnimationDuration(store))
+  if (objectKeysExist(store) || standaloneCameraLightKeysExist(store)) {
+    max = Math.max(max, getObjectAnimationDuration(store))
+  }
   return max
 }
 
@@ -1121,7 +1193,7 @@ export function scrubAllTimeline(t) {
     if (id === uiActiveId) uiTime = at
   }
   setActiveAnimationCharacter(uiActiveId)
-  if (objectKeysExist(store)) {
+  if (objectKeysExist(store) || standaloneCameraLightKeysExist(store)) {
     if (store.objectAnimPlaying) pauseObjectAnimation()
     else if (!isObjectAnimationPaused()) {
       startObjectAnimation() // takes the rest snapshot Stop restores to…
@@ -1895,6 +1967,10 @@ export function keyObjectAttachmentById(id, boneName, time) {
 
 export function clearObjectAttachmentTimeline(id) {
   clearObjectAttachmentTrack(id)
+}
+
+export function removeObjectAttachmentKeyById(id, time) {
+  return removeObjectAttachmentKey(id, time)
 }
 
 // ---------------------------------------------------------------------------
@@ -3120,6 +3196,10 @@ export function setEnvironmentLighting(enabled, intensity = 1) {
 // ---------------------------------------------------------------------------
 
 export function disposeScene() {
+  if (state.dollyUndoTimer) clearTimeout(state.dollyUndoTimer)
+  state.dollyUndoTimer = null
+  state.dollyUndoBefore = null
+  state.viewDragBefore = null
   setContinuousRender(false)
   disposeCurrentModel()
   disposeObjects()
@@ -3249,6 +3329,15 @@ export function getObjectScreenPosition(id) {
 export function setCameraToObject(id) {
   const object = getObjectRootById(id)
   if (!object) return
-  frameCameraToObject(object)
-  requestRender()
+  commitFramingChange(() => frameCameraToObject(object))
+}
+
+export function setCameraToTarget(kind, id) {
+  const target = kind === 'camera'
+    ? getCameraRigById(id)
+    : kind === 'light'
+      ? getLightById(id)
+      : getObjectRootById(id)
+  if (!target) return
+  commitFramingChange(() => frameCameraToObject(target))
 }

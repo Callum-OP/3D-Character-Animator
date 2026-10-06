@@ -1,5 +1,7 @@
 import * as THREE from 'three'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
+import { pushSceneHistory } from './sceneHistory.js'
+import { useStore } from '../store.js'
 
 // ---------------------------------------------------------------------------
 // Scene cameras
@@ -7,7 +9,8 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 // Placeable cameras the shot can be framed and rendered through — the
 // animation-app staple. Each camera is a rig Group (a PerspectiveCamera plus a
 // small body visual showing where it points) that a TransformControls gizmo
-// moves and rotates. New cameras spawn at the CURRENT viewport view, so
+// moves and rotates; its body can also be resized without changing the lens.
+// New cameras spawn at the CURRENT viewport view, so
 // "frame the shot, add camera" just works.
 //
 // Camera motion is keyframed in the store's animData (keyed by camera NAME so
@@ -31,7 +34,10 @@ const c = {
   helper: null,
   cameras: [], // { id, name, rig, camera, body }
   selected: null, // selected rig (or null)
+  enabled: true,
+  gizmoMode: 'translate',
   gizmoGrabbed: false,
+  dragBefore: null,
 }
 
 const _qa = new THREE.Quaternion()
@@ -52,7 +58,12 @@ export function initCameras(refs) {
   transform.setSize(0.8)
   transform.addEventListener('dragging-changed', (e) => {
     c.controls.enabled = !e.value && !c.controls.locked
-    if (e.value) c.gizmoGrabbed = true
+    if (e.value) {
+      c.dragBefore = c.selected ? cameraSnapshot(c.selected) : null
+      c.gizmoGrabbed = true
+    } else {
+      commitCameraDrag()
+    }
   })
   transform.addEventListener('objectChange', () => c.requestRender())
   c.transform = transform
@@ -65,7 +76,7 @@ export function initCameras(refs) {
 
 // Add a camera at the current viewport view (position, aim and zoom copied),
 // so it starts out framing exactly what the user is looking at.
-export function addCamera(fov) {
+export function addCamera(fov, { recordUndo = true, position, quaternion, bodyScale } = {}) {
   const id = ++idCounter
   const name = `Camera ${++nameCounter}`
   const camera = new THREE.PerspectiveCamera(fov || c.camera.fov, 1, 0.01, 1000)
@@ -75,27 +86,114 @@ export function addCamera(fov) {
   const body = makeCameraBody(c.getSceneScale())
   rig.add(body)
 
-  rig.position.copy(c.camera.position)
-  rig.quaternion.copy(c.camera.quaternion)
+  if (position) rig.position.fromArray(position)
+  else rig.position.copy(c.camera.position)
+  if (quaternion) rig.quaternion.fromArray(quaternion)
+  else rig.quaternion.copy(c.camera.quaternion)
+  if (bodyScale) body.scale.fromArray(bodyScale)
 
   c.scene.add(rig)
-  c.cameras.push({ id, name, rig, camera, body })
+  const entry = { id, name, rig, camera, body }
+  c.cameras.push(entry)
   c.requestRender()
-  return { id, name, fov: camera.fov }
+  const meta = { id, name, fov: camera.fov }
+  if (recordUndo) {
+    pushSceneHistory(
+      () => {
+        detachCameraEntry(entry)
+        useStore.getState().removeSceneCamera(id)
+      },
+      () => {
+        attachCameraEntry(entry)
+        useStore.getState().addSceneCamera(meta)
+      },
+      () => {
+        if (!c.cameras.includes(entry)) disposeBody(entry.body)
+      },
+    )
+  }
+  return meta
 }
 
 export function removeCamera(id) {
   const idx = c.cameras.findIndex((e) => e.id === id)
   if (idx < 0) return
   const entry = c.cameras[idx]
+  const store = useStore.getState()
+  const meta = store.sceneCameras.find((camera) => camera.id === id)
+  const viewCameraId = store.viewCameraId
+  detachCameraEntry(entry)
+  store.removeSceneCamera(id)
+  pushSceneHistory(
+    () => {
+      attachCameraEntry(entry, idx)
+      if (meta) {
+        useStore.getState().addSceneCamera(meta)
+        if (viewCameraId === id) useStore.getState().setViewCameraId(id)
+      }
+    },
+    () => {
+      detachCameraEntry(entry)
+      useStore.getState().removeSceneCamera(id)
+    },
+    () => {
+      if (!c.cameras.includes(entry)) disposeBody(entry.body)
+    },
+  )
+}
+
+function detachCameraEntry(entry) {
   if (c.selected === entry.rig) {
     c.transform.detach()
     c.selected = null
   }
   c.scene.remove(entry.rig)
-  disposeBody(entry.body)
-  c.cameras.splice(idx, 1)
+  const index = c.cameras.indexOf(entry)
+  if (index >= 0) c.cameras.splice(index, 1)
   c.requestRender()
+}
+
+function attachCameraEntry(entry, index = c.cameras.length) {
+  if (!c.cameras.includes(entry)) c.cameras.splice(Math.min(index, c.cameras.length), 0, entry)
+  c.scene.add(entry.rig)
+  c.requestRender()
+}
+
+function cameraSnapshot(rig) {
+  const entry = c.cameras.find((camera) => camera.rig === rig)
+  return {
+    position: rig.position.clone(),
+    quaternion: rig.quaternion.clone(),
+    rigScale: rig.scale.clone(),
+    bodyScale: entry?.body.scale.clone(),
+  }
+}
+
+function applyCameraSnapshot(rig, snapshot) {
+  const entry = c.cameras.find((camera) => camera.rig === rig)
+  rig.position.copy(snapshot.position)
+  rig.quaternion.copy(snapshot.quaternion)
+  rig.scale.copy(snapshot.rigScale)
+  if (entry && snapshot.bodyScale) entry.body.scale.copy(snapshot.bodyScale)
+  c.requestRender()
+}
+
+function sameCameraSnapshot(a, b) {
+  return a && b && a.position.equals(b.position) && a.quaternion.equals(b.quaternion) &&
+    a.rigScale.equals(b.rigScale) && (!a.bodyScale || a.bodyScale.equals(b.bodyScale))
+}
+
+function commitCameraDrag() {
+  const rig = c.selected
+  const before = c.dragBefore
+  c.dragBefore = null
+  if (!rig || !before) return
+  const after = cameraSnapshot(rig)
+  if (sameCameraSnapshot(before, after)) return
+  pushSceneHistory(
+    () => applyCameraSnapshot(rig, before),
+    () => applyCameraSnapshot(rig, after),
+  )
 }
 
 // Attach the gizmo to a camera rig (or null to detach).
@@ -103,15 +201,32 @@ export function selectCamera(id) {
   if (!c.transform) return
   const entry = c.cameras.find((e) => e.id === id)
   c.selected = entry ? entry.rig : null
-  if (c.selected) c.transform.attach(c.selected)
+  if (c.selected && c.enabled) c.transform.attach(cameraTransformTarget(entry))
   else c.transform.detach()
+  c.requestRender()
+}
+
+export function setCamerasEnabled(enabled) {
+  c.enabled = enabled
+  if (!c.transform) return
+  if (!enabled) c.transform.detach()
+  else if (c.selected) c.transform.attach(cameraTransformTarget(c.cameras.find((e) => e.rig === c.selected)))
   c.requestRender()
 }
 
 export function setCameraGizmoMode(mode) {
   if (!c.transform) return
-  c.transform.setMode(mode) // 'translate' | 'rotate'
+  c.gizmoMode = mode
+  c.transform.setMode(mode) // 'translate' | 'rotate' | 'scale'
+  if (c.selected && c.enabled) {
+    const entry = c.cameras.find((e) => e.rig === c.selected)
+    if (entry) c.transform.attach(cameraTransformTarget(entry))
+  }
   c.requestRender()
+}
+
+function cameraTransformTarget(entry) {
+  return c.gizmoMode === 'scale' ? entry.body : entry.rig
 }
 
 // Find a placed camera by its visible body in the free viewport.
@@ -145,8 +260,16 @@ export function setCameraFov(id, fov) {
 export function snapCameraToView(id) {
   const entry = c.cameras.find((e) => e.id === id)
   if (!entry) return
+  const before = cameraSnapshot(entry.rig)
   entry.rig.position.copy(c.camera.position)
   entry.rig.quaternion.copy(c.camera.quaternion)
+  const after = cameraSnapshot(entry.rig)
+  if (!sameCameraSnapshot(before, after)) {
+    pushSceneHistory(
+      () => applyCameraSnapshot(entry.rig, before),
+      () => applyCameraSnapshot(entry.rig, after),
+    )
+  }
   c.requestRender()
 }
 
@@ -154,6 +277,82 @@ export function snapCameraToView(id) {
 export function getCameraById(id) {
   const entry = c.cameras.find((e) => e.id === id)
   return entry ? entry.camera : null
+}
+
+export function getCameraRigById(id) {
+  return c.cameras.find((e) => e.id === id)?.rig || null
+}
+
+export function getCameraTransform(id) {
+  const entry = c.cameras.find((camera) => camera.id === id)
+  return entry
+    ? {
+        position: entry.rig.position.toArray(),
+        quaternion: entry.rig.quaternion.toArray(),
+        scale: entry.body.scale.toArray(),
+      }
+    : null
+}
+
+export function setCameraTransform(id, transform) {
+  const entry = c.cameras.find((camera) => camera.id === id)
+  if (!entry || !transform) return
+  const before = cameraSnapshot(entry.rig)
+  if (transform.position) entry.rig.position.fromArray(transform.position)
+  if (transform.quaternion) entry.rig.quaternion.fromArray(transform.quaternion)
+  if (transform.scale) entry.body.scale.fromArray(transform.scale)
+  const after = cameraSnapshot(entry.rig)
+  c.requestRender()
+  if (!sameCameraSnapshot(before, after)) {
+    pushSceneHistory(
+      () => applyCameraSnapshot(entry.rig, before),
+      () => applyCameraSnapshot(entry.rig, after),
+    )
+  }
+}
+
+export function getCameraClipboardData(id) {
+  const entry = c.cameras.find((camera) => camera.id === id)
+  if (!entry) return null
+  return {
+    fov: entry.camera.fov,
+    position: entry.rig.position.toArray(),
+    quaternion: entry.rig.quaternion.toArray(),
+    bodyScale: entry.body.scale.toArray(),
+  }
+}
+
+export function pasteCamera(data) {
+  if (!data) return null
+  return addCamera(data.fov, {
+    position: data.position,
+    quaternion: data.quaternion,
+    bodyScale: data.bodyScale,
+  })
+}
+
+export function snapshotCameraTransform(id) {
+  const entry = c.cameras.find((camera) => camera.id === id)
+  return entry ? cameraSnapshot(entry.rig) : null
+}
+
+export function setCameraUniformScale(id, value) {
+  const entry = c.cameras.find((camera) => camera.id === id)
+  if (!entry) return
+  const scale = Math.max(0.01, value)
+  entry.body.scale.setScalar(scale)
+  c.requestRender()
+}
+
+export function commitCameraTransform(id, before) {
+  const entry = c.cameras.find((camera) => camera.id === id)
+  if (!entry || !before) return
+  const after = cameraSnapshot(entry.rig)
+  if (sameCameraSnapshot(before, after)) return
+  pushSceneHistory(
+    () => applyCameraSnapshot(entry.rig, before),
+    () => applyCameraSnapshot(entry.rig, after),
+  )
 }
 
 // Resolve a camera's id from its name (camera cuts are stored by name).
@@ -179,6 +378,7 @@ export function getCameraKeyValue(id) {
     name: entry.name,
     pos: entry.rig.position.toArray(),
     quat: entry.rig.quaternion.toArray(),
+    scale: entry.body.scale.toArray(),
   }
 }
 
@@ -189,8 +389,10 @@ export function getCameraKeyValue(id) {
 export function getCamerasPlaybackSnapshot() {
   return c.cameras.map((entry) => ({
     rig: entry.rig,
+    body: entry.body,
     pos: entry.rig.position.clone(),
     quat: entry.rig.quaternion.clone(),
+    scale: entry.body.scale.clone(),
   }))
 }
 
@@ -199,45 +401,54 @@ export function applyCamerasPlaybackSnapshot(snap) {
   for (const s of snap) {
     s.rig.position.copy(s.pos)
     s.rig.quaternion.copy(s.quat)
+    if (s.scale) s.body.scale.copy(s.scale)
   }
 }
 
-// Drive the camera rigs from keyframe tracks at time t.
-// tracks: { [cameraName]: [{ time, pos:[3], quat:[4] }] } (each sorted by time).
+// Drive the camera rigs and visible bodies from keyframe tracks at time t.
+// Tracks: { [cameraName]: [{ time, pos:[3], quat:[4], scale:[3]? }] }.
 export function sampleCameraTracks(tracks, t) {
   if (!tracks) return
   for (const [name, keys] of Object.entries(tracks)) {
     if (!keys || keys.length === 0) continue
     const entry = c.cameras.find((e) => e.name === name)
     if (!entry) continue
-    sampleTRQ(keys, t, entry.rig)
+    sampleTRQ(keys, t, entry)
   }
 }
 
 // Interpolate {time,pos,quat} keys at t onto an Object3D (lerp + slerp).
-function sampleTRQ(keys, t, obj) {
-  if (t <= keys[0].time) return applyKey(obj, keys[0])
+function sampleTRQ(keys, t, entry) {
+  if (t <= keys[0].time) return applyKey(entry, keys[0])
   const last = keys[keys.length - 1]
-  if (t >= last.time) return applyKey(obj, last)
+  if (t >= last.time) return applyKey(entry, last)
   let i = 0
   while (i < keys.length - 1 && keys[i + 1].time < t) i++
   const k0 = keys[i]
   const k1 = keys[i + 1]
   const span = k1.time - k0.time
   const f = span > 0 ? (t - k0.time) / span : 0
-  obj.position.set(
+  entry.rig.position.set(
     k0.pos[0] + (k1.pos[0] - k0.pos[0]) * f,
     k0.pos[1] + (k1.pos[1] - k0.pos[1]) * f,
     k0.pos[2] + (k1.pos[2] - k0.pos[2]) * f,
   )
   _qa.fromArray(k0.quat)
   _qb.fromArray(k1.quat)
-  obj.quaternion.slerpQuaternions(_qa, _qb, f)
+  entry.rig.quaternion.slerpQuaternions(_qa, _qb, f)
+  if (k0.scale && k1.scale) {
+    entry.body.scale.set(
+      k0.scale[0] + (k1.scale[0] - k0.scale[0]) * f,
+      k0.scale[1] + (k1.scale[1] - k0.scale[1]) * f,
+      k0.scale[2] + (k1.scale[2] - k0.scale[2]) * f,
+    )
+  }
 }
 
-function applyKey(obj, k) {
-  obj.position.fromArray(k.pos)
-  obj.quaternion.fromArray(k.quat)
+function applyKey(entry, k) {
+  entry.rig.position.fromArray(k.pos)
+  entry.rig.quaternion.fromArray(k.quat)
+  if (k.scale) entry.body.scale.fromArray(k.scale)
 }
 
 // --- Save / load ---------------------------------------------------------------
@@ -249,6 +460,7 @@ export function getCamerasData() {
     fov: entry.camera.fov,
     position: entry.rig.position.toArray(),
     quaternion: entry.rig.quaternion.toArray(),
+    scale: entry.body.scale.toArray(),
   }))
 }
 
@@ -259,7 +471,7 @@ export function applyCamerasData(list) {
   if (!Array.isArray(list)) return []
   const metas = []
   for (const item of list) {
-    const meta = addCamera(item.fov)
+    const meta = addCamera(item.fov, { recordUndo: false })
     const entry = c.cameras.find((e) => e.id === meta.id)
     if (item.name) {
       entry.name = item.name
@@ -270,6 +482,7 @@ export function applyCamerasData(list) {
     }
     if (item.position) entry.rig.position.fromArray(item.position)
     if (item.quaternion) entry.rig.quaternion.fromArray(item.quaternion)
+    if (item.scale) entry.body.scale.fromArray(item.scale)
     metas.push(meta)
   }
   c.requestRender()
@@ -285,6 +498,7 @@ export function clearCameras() {
     disposeBody(entry.body)
   }
   c.cameras = []
+  c.dragBefore = null
   c.requestRender()
 }
 

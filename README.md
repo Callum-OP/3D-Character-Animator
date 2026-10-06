@@ -185,11 +185,17 @@ Vite build sets `base: '/3D-Character-Animator/'` (see `vite.config.js`). Local
    `E` rotate / `R` resize) or type exact values, and **Key part** to animate it
    on the timeline.
 9. The **Cameras** panel places cameras: orbit until the shot looks right, then
-   **+ Add camera (from this view)**. Click 📷 (or press `0`) to look through
-   it — PNG export and **Record video** capture that view. **Key camera** at two
-   times makes it glide between placements; **Cut here** switches the view to
-   that camera at the insert time, so several cameras can cover one animation
-   like film shots (the view cuts automatically during playback and recording).
+   **+ Add camera (from this view)**. Select a camera to move, rotate, or resize
+   its visible body with the Object-mode gizmo; use the viewport's frame button
+   to focus on it. The Objects, Cameras, and Lights panels provide exact
+   position, rotation, and scale fields; transform edits and viewport framing
+   can be undone with Ctrl+Z. Click 📷 (or press `0`) to look through it — PNG export and
+   **Record video** capture that view. Key its transform from the Animate panel
+   or **Key camera** at two times to glide between placements; **Cut here**
+   switches the view to that camera at the insert time, so several cameras can
+   cover one animation like film shots (the view cuts automatically during
+   playback and recording). Placed lights can likewise be selected, transformed,
+   framed, and keyed from Animate.
 10. The **View** panel toggles the reference grid and switches between a
     transparent background (the default, for compositing) and a solid colour.
 

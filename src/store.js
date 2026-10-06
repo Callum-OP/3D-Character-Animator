@@ -774,6 +774,16 @@ export const useStore = create((set) => ({
     set((s) => ({
       objectAttachmentData: { ...s.objectAttachmentData, [animationKey]: track },
     })),
+  removeObjectAttachmentKey: (animationKey, time) =>
+    set((s) => {
+      const track = s.objectAttachmentData[animationKey]
+      if (!track) return {}
+      const keys = track.keys.filter((key) => Math.abs(key.time - time) > 1e-6)
+      const objectAttachmentData = { ...s.objectAttachmentData }
+      if (keys.length) objectAttachmentData[animationKey] = { ...track, keys }
+      else delete objectAttachmentData[animationKey]
+      return { objectAttachmentData }
+    }),
   removeObjectAttachmentTrack: (animationKey) =>
     set((s) => {
       if (!animationKey || !s.objectAttachmentData[animationKey]) return {}
@@ -854,6 +864,8 @@ export const useStore = create((set) => ({
   setObjectMode: (objectMode) => set({ objectMode }),
 
   // ---- Scene cameras ----
+  sceneClipboardType: null,
+  setSceneClipboardType: (sceneClipboardType) => set({ sceneClipboardType }),
   sceneCameras: [], // [{ id, name, fov }] — placeable cameras, independent of the model
   selectedCameraId: null, // camera the gizmo is attached to
   cameraGizmoMode: 'translate', // 'translate' | 'rotate'
@@ -895,7 +907,7 @@ export const useStore = create((set) => ({
 
   addSceneLight: (light) =>
     set((s) => ({
-      sceneLights: [...s.sceneLights, light],
+      sceneLights: [...s.sceneLights, { visible: true, ...light }],
       selectedLightId: light.id,
       selectedObjectId: null, // one gizmo at a time
       selectedObjectIds: [],
@@ -909,6 +921,10 @@ export const useStore = create((set) => ({
       selectedLightId: s.selectedLightId === id ? null : s.selectedLightId,
     })),
   setSceneLights: (sceneLights) => set({ sceneLights }),
+  setSceneLightVisible: (id, visible) =>
+    set((s) => ({
+      sceneLights: s.sceneLights.map((light) => (light.id === id ? { ...light, visible } : light)),
+    })),
   setSelectedLightId: (id) =>
     set(
       id != null
@@ -983,8 +999,8 @@ export const useStore = create((set) => ({
   insertTime: 0, // where "Add keyframe" inserts (seconds)
   // tracks = bone rotations; root = character world motion [{ time, pos:[3], quat:[4] }];
   // meshes = part motion keyed by mesh INDEX [{ time, pos:[3], quat:[4], scale:[3] }];
-  // cameras = camera motion keyed by camera NAME [{ time, pos:[3], quat:[4] }];
-  // lights = light motion keyed by light NAME [{ time, pos:[3], color: '#hex', intensity }];
+  // cameras = camera transforms keyed by NAME [{ time, pos:[3], quat:[4], scale:[3]? }];
+  // lights = light transforms keyed by NAME [{ time, pos:[3], quat:[4]?, scale:[3]?, color, intensity }];
   // cuts = camera switches [{ time, camera: name }] — the view hard-cuts to that
   // camera from that time on during playback (one cut per time)
   animData: { tracks: {}, root: [], meshes: {}, cameras: {}, cuts: [], lights: {} },
@@ -1044,6 +1060,14 @@ export const useStore = create((set) => ({
       cameras[name] = keys
       return { animData: { ...s.animData, cameras } }
     }),
+  deleteCameraKeyframe: (name, time) =>
+    set((s) => {
+      const cameras = { ...(s.animData.cameras || {}) }
+      const keys = (cameras[name] || []).filter((key) => Math.abs(key.time - time) > 1e-6)
+      if (keys.length) cameras[name] = keys
+      else delete cameras[name]
+      return { animData: { ...s.animData, cameras } }
+    }),
 
   // Insert/replace a light keyframe (position + colour + intensity), by light name.
   addLightKeyframe: (name, time, key) =>
@@ -1053,6 +1077,14 @@ export const useStore = create((set) => ({
       keys.push({ time, ...key })
       keys.sort((a, b) => a.time - b.time)
       lights[name] = keys
+      return { animData: { ...s.animData, lights } }
+    }),
+  deleteLightKeyframe: (name, time) =>
+    set((s) => {
+      const lights = { ...(s.animData.lights || {}) }
+      const keys = (lights[name] || []).filter((key) => Math.abs(key.time - time) > 1e-6)
+      if (keys.length) lights[name] = keys
+      else delete lights[name]
       return { animData: { ...s.animData, lights } }
     }),
 

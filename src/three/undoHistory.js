@@ -95,6 +95,7 @@ function trimStack(stack) {
 }
 
 function fallbackTarget(state) {
+  if (state.selectedCameraId != null || state.selectedLightId != null) return 'scene'
   if (state.selectedObjectId != null) return 'object'
   if (state.mode === 'mesh') return 'mesh'
   return 'bone'

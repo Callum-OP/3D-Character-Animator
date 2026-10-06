@@ -1127,6 +1127,46 @@ input.xform-value {
   opacity: 0.6;
 }
 
+.scene-transform-editor {
+  margin: 10px 0;
+  padding: 8px;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: var(--panel-bg-2);
+}
+
+.scene-transform-editor h3 {
+  margin: 0 0 7px;
+  font-size: 12px;
+}
+
+.scene-transform-row {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  align-items: center;
+  gap: 6px;
+  margin-top: 5px;
+  font-size: 11px;
+}
+
+.scene-transform-values {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.scene-transform-values input {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px;
+  color: var(--text);
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  font: inherit;
+}
+
 .joint-header {
   display: flex;
   align-items: center;

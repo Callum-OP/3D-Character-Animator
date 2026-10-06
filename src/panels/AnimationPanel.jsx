@@ -52,6 +52,8 @@ import {
   getAllTimelineDuration,
   startGlobalClock,
   pauseGlobalClock,
+  keyObjectAttachmentById,
+  removeObjectAttachmentKeyById,
 } from '../three/scene.js'
 import * as THREE from 'three'
 import { simulateRagdollClip } from '../three/ragdoll.js'
@@ -65,6 +67,8 @@ import {
   stopObjectAnimation,
   scrubObjectAnimation,
 } from '../three/objects.js'
+import { getCameraKeyValue } from '../three/cameras.js'
+import { getLightKeyValue } from '../three/lights.js'
 
 // Collect every keyframe time across joints, the character position, parts and
 // cameras, with a count of what's keyed at each — for the overview/manage list.
@@ -211,8 +215,14 @@ function FrameStepper({ time, duration, fps, onChange }) {
 function ObjectMovementEditor({ onScrub, onCharacterKeyframe, onCharacterTrackChange }) {
   const allSceneObjects = useStore((s) => s.sceneObjects)
   const selectedObjectId = useStore((s) => s.selectedObjectId)
+  const selectedCameraId = useStore((s) => s.selectedCameraId)
+  const selectedLightId = useStore((s) => s.selectedLightId)
+  const sceneCameras = useStore((s) => s.sceneCameras)
+  const sceneLights = useStore((s) => s.sceneLights)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const objectAnimData = useStore((s) => s.objectAnimData)
+  const objectAttachmentData = useStore((s) => s.objectAttachmentData)
+  const globalTime = useStore((s) => s.globalTime)
   const duration = useStore((s) => s.objectAnimDuration)
   const time = useStore((s) => s.objectAnimTime)
   const playing = useStore((s) => s.objectAnimPlaying)
@@ -227,13 +237,27 @@ function ObjectMovementEditor({ onScrub, onCharacterKeyframe, onCharacterTrackCh
   const animDuration = useStore((s) => s.animDuration)
   const autoKeyMovement = useStore((s) => s.autoKeyMovement)
   const rippleRootEdit = useStore((s) => s.rippleRootEdit)
+  const insertTime = useStore((s) => s.insertTime)
   const selected =
     allSceneObjects.find((object) => object.id === selectedObjectId) ||
-    (!selectedObjectId && modelInfo
+    (!selectedObjectId && selectedCameraId == null && selectedLightId == null && modelInfo
       ? allSceneObjects.find((object) => object.isCharacter && object.characterId === activeCharacterId)
       : null)
+  const selectedCamera = sceneCameras.find((camera) => camera.id === selectedCameraId) || null
+  const selectedLight = sceneLights.find((light) => light.id === selectedLightId) || null
   const isCharacter = !!selected?.isCharacter
+  const standaloneSceneMotion = !modelInfo
   const keys = selected?.animationKey ? objectAnimData[selected.animationKey] || [] : []
+  const attachmentTrack = selected?.animationKey ? objectAttachmentData[selected.animationKey] : null
+  const transformKeys = selectedCamera
+    ? animData.cameras?.[selectedCamera.name] || []
+    : selectedLight
+      ? animData.lights?.[selectedLight.name] || []
+      : []
+  const sceneMotionDuration = Math.max(
+    Number(duration) || 2,
+    transformKeys[transformKeys.length - 1]?.time || 0,
+  )
   const characterKeys = animData.root || []
   const characterTime = Math.min(currentTime, source === 'edit' ? animDuration : duration)
   const characterPlaying = playback === 'playing'
@@ -241,6 +265,28 @@ function ObjectMovementEditor({ onScrub, onCharacterKeyframe, onCharacterTrackCh
   const st = useStore.getState
 
   function onKeyframe() {
+    if (selectedCamera) {
+      const key = getCameraKeyValue(selectedCamera.id)
+      if (!key) return
+      const keyTime = Math.round((standaloneSceneMotion ? time : insertTime) * fps) / fps
+      st().addCameraKeyframe(selectedCamera.name, keyTime, { pos: key.pos, quat: key.quat, scale: key.scale })
+      setMessage(`Saved ${selectedCamera.name} at ${keyTime.toFixed(2)}s.`)
+      return
+    }
+    if (selectedLight) {
+      const key = getLightKeyValue(selectedLight.id)
+      if (!key) return
+      const keyTime = Math.round((standaloneSceneMotion ? time : insertTime) * fps) / fps
+      st().addLightKeyframe(selectedLight.name, keyTime, {
+        pos: key.pos,
+        quat: key.quat,
+        scale: key.scale,
+        color: key.color,
+        intensity: key.intensity,
+      })
+      setMessage(`Saved ${selectedLight.name} at ${keyTime.toFixed(2)}s.`)
+      return
+    }
     const root = selected && getObjectRootById(selected.id)
     if (!root) return
     const keyTime = Math.round((isCharacter ? characterTime : time) * fps) / fps
@@ -270,6 +316,164 @@ function ObjectMovementEditor({ onScrub, onCharacterKeyframe, onCharacterTrackCh
       return
     }
     if (!startObjectAnimation()) setMessage('Add at least one object keyframe before playing.')
+  }
+
+  function keyAttachment(boneName) {
+    if (!selected?.animationKey) return
+    const ok = keyObjectAttachmentById(selected.id, boneName, globalTime)
+    setMessage(
+      ok
+        ? `${boneName ? `Attach to ${boneName}` : 'Release object'} keyed at ${globalTime.toFixed(2)}s.`
+        : `Could not attach to "${boneName}" on the active character.`,
+    )
+  }
+
+  function goToAttachmentKey(keyTime) {
+    scrubAllTimeline(keyTime)
+  }
+
+  function onSetTransformKeyTime(time) {
+    const snapped = Math.round(time * fps) / fps
+    if (standaloneSceneMotion) {
+      scrubObjectAnimation(snapped)
+      return
+    }
+    st().setInsertTime(snapped)
+    if (modelInfo) onScrub(snapped)
+    else st().setCurrentTime(snapped)
+  }
+
+  if (selectedCamera || selectedLight) {
+    const cameraTrack = !!selectedCamera
+    const item = selectedCamera || selectedLight
+    return (
+      <div className="movement-track">
+        <div className="movement-heading">{cameraTrack ? 'Camera movement' : 'Light movement'}</div>
+        <p className="panel-hint">
+          Move, rotate, or resize the selected {cameraTrack ? 'camera' : 'light'} in Object mode and key its transform on the Animate timeline.
+        </p>
+        {standaloneSceneMotion ? (
+          <>
+            <div className="kf-numbers">
+              <label>
+                Duration
+                <input
+                  type="number"
+                  min={0.1}
+                  step={0.1}
+                  value={duration}
+                  onChange={(event) => st().setObjectAnimDuration(Math.max(0.1, Number(event.target.value)))}
+                />
+                s
+              </label>
+            </div>
+            <label className="slider-row">
+              <span className="slider-label">Time</span>
+              <input
+                type="range"
+                min={0}
+                max={sceneMotionDuration}
+                step={1 / fps}
+                value={Math.min(time, sceneMotionDuration)}
+                disabled={playing}
+                onChange={(event) => scrubObjectAnimation(Number(event.target.value))}
+              />
+              <EditableValue
+                value={time}
+                min={0}
+                max={sceneMotionDuration}
+                onChange={scrubObjectAnimation}
+                format={(value) => `${value.toFixed(2)}s`}
+                label="Camera or light animation time"
+              />
+            </label>
+            <div className="kf-actions">
+              <button className="btn secondary" onClick={() => scrubObjectAnimation(0)} disabled={playing}>Start</button>
+              <button className="btn secondary" onClick={() => scrubObjectAnimation(sceneMotionDuration)} disabled={playing}>End</button>
+              <button className="btn" onClick={onPlay} disabled={!playing && !transformKeys.length}>
+                {playing ? 'Pause' : 'Play'}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="kf-numbers">
+              <label>
+                Duration
+                <input
+                  type="number"
+                  min={0.1}
+                  step={0.1}
+                  value={animDuration}
+                  onChange={(event) => st().setAnimDuration(Math.max(0.1, Number(event.target.value)))}
+                />
+                s
+              </label>
+            </div>
+            <label className="slider-row">
+              <span className="slider-label">Key time</span>
+              <input
+                type="range"
+                min={0}
+                max={animDuration}
+                step={1 / fps}
+                value={Math.min(insertTime, animDuration)}
+                onChange={(event) => onSetTransformKeyTime(Number(event.target.value))}
+              />
+              <EditableValue
+                value={insertTime}
+                min={0}
+                max={animDuration}
+                onChange={onSetTransformKeyTime}
+                format={(value) => `${value.toFixed(2)}s`}
+                label="Camera or light key time"
+              />
+            </label>
+          </>
+        )}
+        <div className="kf-actions">
+          <button className="btn secondary" onClick={onKeyframe} disabled={standaloneSceneMotion && playing}>
+            Key selected {cameraTrack ? 'camera' : 'light'}{transformKeys.length ? ` (${transformKeys.length})` : ''}
+          </button>
+        </div>
+        {transformKeys.length > 0 && (
+          <div className="kf-list" style={{ marginTop: 8 }}>
+            {transformKeys.map((key) => (
+              <div
+                key={key.time}
+                className={'kf-list-row' + (Math.abs(key.time - (standaloneSceneMotion ? time : currentTime)) < 1e-4 ? ' active' : '')}
+                title="Select this transform key on the timeline"
+                role="button"
+                tabIndex={0}
+                onClick={() => onSetTransformKeyTime(key.time)}
+                onKeyDown={(event) => {
+                  if (event.target !== event.currentTarget) return
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault()
+                    onSetTransformKeyTime(key.time)
+                  }
+                }}
+              >
+                <span className="kf-time">{key.time.toFixed(2)}s</span>
+                <span className="kf-what">{item.name} transform</span>
+                <button
+                  className="kf-del"
+                  title={`Delete this ${cameraTrack ? 'camera' : 'light'} keyframe`}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    if (cameraTrack) st().deleteCameraKeyframe(item.name, key.time)
+                    else st().deleteLightKeyframe(item.name, key.time)
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        {message && <div className="pose-msg">{message}</div>}
+      </div>
+    )
   }
 
   if (isCharacter) {
@@ -435,6 +639,81 @@ function ObjectMovementEditor({ onScrub, onCharacterKeyframe, onCharacterTrackCh
         </div>
       )}
 
+      {selected.animationKey && !selected.isCharacter && (
+        <section className="movement-track" aria-labelledby="attachment-track-heading" style={{ marginTop: 12 }}>
+          <div className="movement-heading" id="attachment-track-heading">Pick up / release</div>
+          <p className="panel-hint">
+            Set the All animation playhead to the action time, choose a hand or other bone and key it.
+            Later, choose <b>Not attached</b> and key again to release or set the object down.
+          </p>
+          <label className="field-label" htmlFor="attachment-bone-select">Pick up at {globalTime.toFixed(2)}s</label>
+          <div className="radio-hint" style={{ marginBottom: 4 }} aria-live="polite">
+            {selected.attachedBoneName
+              ? `Currently attached to ${selected.attachedBoneName}.`
+              : 'Currently free in the scene.'}
+          </div>
+          <select
+            id="attachment-bone-select"
+            className="select"
+            value={selected.attachedBoneName || ''}
+            disabled={playing || playback === 'playing' || !modelInfo?.bones?.length}
+            onChange={(event) => {
+              if (event.target.value) keyAttachment(event.target.value)
+            }}
+            aria-describedby="attachment-key-help"
+          >
+            <option value="">Choose a bone…</option>
+            {(modelInfo?.bones || []).map((bone) => (
+              <option key={bone.name} value={bone.name}>{bone.name}</option>
+            ))}
+          </select>
+          <button
+            className="btn secondary"
+            style={{ marginTop: 6 }}
+            disabled={playing || playback === 'playing'}
+            onClick={() => keyAttachment(null)}
+          >
+            Key release / set down at {globalTime.toFixed(2)}s
+          </button>
+          <div id="attachment-key-help" className="radio-hint" style={{ marginTop: 4 }}>
+            Choosing a bone keys pickup. Use Key release / set down to detach at the current All animation time.
+            Pause playback before changing attachment.
+          </div>
+          {attachmentTrack?.keys?.length > 0 && (
+            <div className="kf-list" aria-label={`${selected.name} attachment events`} style={{ marginTop: 8 }}>
+              {attachmentTrack.keys.map((key) => (
+                <div
+                  key={key.time}
+                  className={'kf-list-row' + (Math.abs(key.time - globalTime) < 1e-3 ? ' active' : '')}
+                >
+                  <button
+                    className="kf-time"
+                    onClick={() => goToAttachmentKey(key.time)}
+                    title="Move the All animation playhead to this pickup/release"
+                    aria-label={`Go to ${key.boneName ? `pickup on ${key.boneName}` : 'release'} at ${key.time.toFixed(2)} seconds`}
+                  >
+                    {key.time.toFixed(2)}s
+                  </button>
+                  <span className="kf-what">
+                    {key.boneName
+                      ? `Pick up · ${key.characterName || 'character'} / ${key.boneName}`
+                      : 'Release / set down'}
+                  </span>
+                  <button
+                    className="kf-del"
+                    title="Delete this pickup/release key"
+                    aria-label={`Delete attachment key at ${key.time.toFixed(2)} seconds`}
+                    onClick={() => removeObjectAttachmentKeyById(selected.id, key.time)}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
       {message && <div className="pose-msg">{message}</div>}
     </div>
   )
@@ -448,6 +727,10 @@ export default function AnimationPanel() {
   const modelInfo = useStore((s) => s.modelInfo)
   const sceneObjects = useStore((s) => s.sceneObjects)
   const selectedObjectId = useStore((s) => s.selectedObjectId)
+  const selectedCameraId = useStore((s) => s.selectedCameraId)
+  const selectedLightId = useStore((s) => s.selectedLightId)
+  const sceneCameras = useStore((s) => s.sceneCameras)
+  const sceneLights = useStore((s) => s.sceneLights)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const selectedBoneName = useStore((s) => s.selectedBoneName)
 
@@ -472,13 +755,16 @@ export default function AnimationPanel() {
   const objectAttachmentData = useStore((s) => s.objectAttachmentData)
   const hasObjectAnimation =
     Object.values(objectAnimData || {}).some((keys) => keys && keys.length) ||
-    Object.values(objectAttachmentData || {}).some((track) => track?.keys?.length)
+    Object.values(objectAttachmentData || {}).some((track) => track?.keys?.length) ||
+    (characterOrder.length === 0 &&
+      (Object.values(animData.cameras || {}).some((keys) => keys?.length) ||
+        Object.values(animData.lights || {}).some((keys) => keys?.length)))
   const objectAnimPlaying = useStore((s) => s.objectAnimPlaying)
-  // Anything at all running (the active character, or object motion). Other
+  // Anything at all running (the active character, or scene motion). Other
   // characters' playing state isn't in the store, but Play all / Pause all
   // start and stop them together with the active one.
   const anythingPlaying = playback === 'playing' || objectAnimPlaying
-  // "All animation" timeline: one playhead over every character + object.
+  // "All animation" timeline: one playhead over every character + scene item.
   // `characters` is subscribed only so the length re-computes when any
   // character's clip / keyframes change.
   const globalTime = useStore((s) => s.globalTime)
@@ -519,10 +805,16 @@ export default function AnimationPanel() {
   const pickBaselineRef = useRef(null) // selectedBoneName at the moment picking was armed, so we don't grab a stale/already-selected bone
   const selectedSceneObject =
     sceneObjects.find((object) => object.id === selectedObjectId) ||
-    (!selectedObjectId && modelInfo
+    (!selectedObjectId && selectedCameraId == null && selectedLightId == null && modelInfo
       ? sceneObjects.find((object) => object.isCharacter && object.characterId === activeCharacterId)
       : null)
-  const hasCharacterSelected = selectedSceneObject ? !!selectedSceneObject.isCharacter : !!modelInfo
+  const hasTransformItemSelected =
+    !!selectedSceneObject ||
+    sceneCameras.some((camera) => camera.id === selectedCameraId) ||
+    sceneLights.some((light) => light.id === selectedLightId)
+  const hasCharacterSelected = selectedSceneObject
+    ? !!selectedSceneObject.isCharacter
+    : selectedCameraId == null && selectedLightId == null && !!modelInfo
 
   useEffect(() => {
     refreshRecentClips()
@@ -628,12 +920,12 @@ export default function AnimationPanel() {
   // so a second bar there would just duplicate it.
   const globalTimelineSection = (
     <>
-      {/* All animation: one timeline for every character and object at once */}
+      {/* All animation: one timeline for every character and scene item */}
       {(characterOrder.length > 0 || hasObjectAnimation) && (
         <div className="global-timeline">
           <div className="field-label">All animation</div>
           <div className="kf-help">
-            One timeline for every character and object in the scene. Each keeps its own clip or motion — this
+            One timeline for every character and scene item. Each keeps its own clip or motion — this
             plays, pauses and scrubs them all together.
           </div>
           <div className="transport">
@@ -692,7 +984,7 @@ export default function AnimationPanel() {
           )}
           {globalDuration <= 0 && (
             <div className="empty" style={{ padding: '6px 8px' }}>
-              Nothing to play yet — pick a clip for a character or key some object motion.
+              Nothing to play yet — pick a clip or key some scene-item motion.
             </div>
           )}
         </div>
@@ -703,7 +995,7 @@ export default function AnimationPanel() {
   if (!modelInfo || !hasCharacterSelected) {
     return (
       <>
-        {selectedSceneObject && <ObjectMovementEditor onScrub={onScrub} />}
+        {hasTransformItemSelected && <ObjectMovementEditor onScrub={onScrub} />}
         {characterOrder.length > 0 && globalTimelineSection}
       </>
     )
@@ -719,7 +1011,7 @@ export default function AnimationPanel() {
   if (!hasClips && !hasBones) {
     return (
       <>
-        {selectedSceneObject && <ObjectMovementEditor onScrub={onScrub} />}
+        {hasTransformItemSelected && <ObjectMovementEditor onScrub={onScrub} />}
         {characterOrder.length > 0 && globalTimelineSection}
       </>
     )
