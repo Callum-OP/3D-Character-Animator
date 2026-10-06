@@ -111,7 +111,11 @@ export default function ProjectPanel() {
         openProjectInputRef.current?.click()
       }
     } catch (e) {
-      if (e?.name !== 'AbortError') setMsg('Open failed: ' + (e.message || String(e)))
+      if (e?.message === 'FILE_SYSTEM_ACCESS_UNAVAILABLE') {
+        openProjectInputRef.current?.click() // picker refused (e.g. itch.io iframe) → plain file input
+      } else if (e?.name !== 'AbortError') {
+        setMsg('Open failed: ' + (e.message || String(e)))
+      }
     } finally {
       setBusy(false)
     }

@@ -17,9 +17,11 @@ import {
   listRecentProjects,
   openRecentProject,
   openProjectFromDisk,
+  openProjectFromFileObject,
   saveProjectToHandle,
   saveProjectAs,
 } from '../three/projectStore.js'
+import { pickFileWithInput } from '../three/fsAccess.js'
 import { exportAnimationBVH, play, pause, stop, selectClip, selectEdit } from '../three/animation.js'
 import { runExportShot, canRecordVideo } from '../three/exportShot.js'
 import {
@@ -136,13 +138,22 @@ export default function TitleBar({ onOpenSettings }) {
 
   const onOpen = () =>
     withMenuClosed(async () => {
-      if (!fsAccess) {
-        setMsg('Use "Open Project…" in the sidebar — this browser needs the file-picker fallback there.')
-        return
+      let opened
+      if (fsAccess) {
+        try {
+          opened = await openProjectFromDisk()
+        } catch (e) {
+          // Picker refused by the browser (e.g. embedded on itch.io): use a plain file chooser.
+          if (e?.message !== 'FILE_SYSTEM_ACCESS_UNAVAILABLE') throw e
+        }
       }
-      const { record, handle, name } = await openProjectFromDisk()
-      await applyProjectData(record)
-      setCurrent({ name, handle })
+      if (!opened) {
+        const file = await pickFileWithInput('.3dcp,application/json')
+        if (!file) return
+        opened = await openProjectFromFileObject(file)
+      }
+      await applyProjectData(opened.record)
+      setCurrent({ name: opened.name, handle: opened.handle })
     })
 
   const onOpenRecentFile = (recent) =>

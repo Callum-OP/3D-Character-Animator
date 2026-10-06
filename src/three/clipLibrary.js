@@ -22,6 +22,7 @@
 // ---------------------------------------------------------------------------
 
 import { openDB, CLIPS_STORE as STORE } from './localdb.js'
+import { pickerUsable, isPickerBlocked } from './fsAccess.js'
 
 const FILE_EXT = '.3dclip' // { clip: THREE.AnimationClip.toJSON(), meshTracks, morphTracks } — see animation.js's wrapClipJSON
 const MIME = 'application/json'
@@ -31,9 +32,19 @@ function nativeBridge() {
   return typeof window !== 'undefined' && window.animare?.isElectron ? window.animare : null
 }
 
+// Recents bookkeeping must never fail an open/save that already worked
+// (IndexedDB can be missing/blocked in private mode or embedded iframes).
+async function rememberRecent(entry) {
+  try {
+    return await upsertRecent(entry)
+  } catch {
+    return null
+  }
+}
+
 export function hasFileSystemAccess() {
   if (nativeBridge()) return true
-  return typeof window !== 'undefined' && typeof window.showOpenFilePicker === 'function'
+  return pickerUsable()
 }
 
 // ---------------------------------------------------------------------------
@@ -194,12 +205,18 @@ export async function openClipFromDisk() {
   }
 
   if (hasFileSystemAccess()) {
-    const [handle] = await window.showOpenFilePicker({
-      id: 'character-animator-clip',
-      types: [{ description: 'Animation clip', accept: { [MIME]: [FILE_EXT, '.json'] } }],
-      excludeAcceptAllOption: false,
-      multiple: false,
-    })
+    let handle
+    try {
+      ;[handle] = await window.showOpenFilePicker({
+        id: 'character-animator-clip',
+        types: [{ description: 'Animation clip', accept: { [MIME]: [FILE_EXT, '.json'] } }],
+        excludeAcceptAllOption: false,
+        multiple: false,
+      })
+    } catch (err) {
+      if (isPickerBlocked(err)) throw new Error('FILE_SYSTEM_ACCESS_UNAVAILABLE')
+      throw err
+    }
     const file = await handle.getFile()
     const json = await readClipFile(file)
     await upsertRecent({ name: file.name, handle })
@@ -212,7 +229,7 @@ export async function openClipFromDisk() {
 // File it got from a normal <input type="file">.
 export async function openClipFromFileObject(file) {
   const json = await readClipFile(file)
-  await upsertRecent({ name: file.name, handle: null })
+  await rememberRecent({ name: file.name, handle: null })
   return { json, handle: null, name: file.name }
 }
 
@@ -243,17 +260,24 @@ export async function saveClipAs(json, suggestedName) {
   }
 
   if (hasFileSystemAccess()) {
-    const handle = await window.showSaveFilePicker({
-      id: 'character-animator-clip',
-      suggestedName: `${name}${FILE_EXT}`,
-      types: [{ description: 'Animation clip', accept: { [MIME]: [FILE_EXT] } }],
-    })
-    await ensureWritePermission(handle)
-    const writable = await handle.createWritable()
-    await writable.write(JSON.stringify(json))
-    await writable.close()
-    await upsertRecent({ name: handle.name, handle })
-    return { handle, name: handle.name }
+    let handle = null
+    try {
+      handle = await window.showSaveFilePicker({
+        id: 'character-animator-clip',
+        suggestedName: `${name}${FILE_EXT}`,
+        types: [{ description: 'Animation clip', accept: { [MIME]: [FILE_EXT] } }],
+      })
+    } catch (err) {
+      if (!isPickerBlocked(err)) throw err // blocked → fall through to the download below
+    }
+    if (handle) {
+      await ensureWritePermission(handle)
+      const writable = await handle.createWritable()
+      await writable.write(JSON.stringify(json))
+      await writable.close()
+      await upsertRecent({ name: handle.name, handle })
+      return { handle, name: handle.name }
+    }
   }
 
   // Fallback: forced download, no handle to remember.
@@ -265,6 +289,6 @@ export async function saveClipAs(json, suggestedName) {
   a.download = fileName
   a.click()
   URL.revokeObjectURL(url)
-  await upsertRecent({ name: fileName, handle: null })
+  await rememberRecent({ name: fileName, handle: null })
   return { handle: null, name: fileName }
 }

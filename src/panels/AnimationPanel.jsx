@@ -1325,7 +1325,9 @@ export default function AnimationPanel() {
         clipFileRef.current?.click()
       }
     } catch (err) {
-      if (err?.name !== 'AbortError' && err?.message !== 'FILE_SYSTEM_ACCESS_UNAVAILABLE') {
+      if (err?.message === 'FILE_SYSTEM_ACCESS_UNAVAILABLE') {
+        clipFileRef.current?.click() // picker refused (e.g. itch.io iframe) → plain file input
+      } else if (err?.name !== 'AbortError') {
         setBvhMsg('Open failed: ' + (err.message || String(err)))
       }
     }

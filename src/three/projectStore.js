@@ -29,6 +29,7 @@
 // ---------------------------------------------------------------------------
 
 import { openDB, PROJECTS_STORE as STORE } from './localdb.js'
+import { pickerUsable, isPickerBlocked } from './fsAccess.js'
 
 const FILE_EXT = '.3dcp' // "3D Character Poser" project — just JSON inside
 const MIME = 'application/json'
@@ -38,9 +39,20 @@ function nativeBridge() {
   return typeof window !== 'undefined' && window.animare?.isElectron ? window.animare : null
 }
 
+// Recents bookkeeping is a convenience, never a reason to fail a save/open
+// that already worked: IndexedDB can be missing or blocked (private mode,
+// storage-partitioned/embedded iframes such as itch.io).
+async function rememberRecent(entry) {
+  try {
+    return await upsertRecent(entry)
+  } catch {
+    return { savedAt: Date.now() }
+  }
+}
+
 export function hasFileSystemAccess() {
   if (nativeBridge()) return true
-  return typeof window !== 'undefined' && typeof window.showOpenFilePicker === 'function'
+  return pickerUsable()
 }
 
 export async function requestPersistentStorage() {
@@ -289,12 +301,20 @@ export async function openProjectFromDisk() {
   }
 
   if (hasFileSystemAccess()) {
-    const [handle] = await window.showOpenFilePicker({
-      id: 'character-animator-project',
-      types: [{ description: '3D Character Animator project', accept: { [MIME]: [FILE_EXT] } }],
-      excludeAcceptAllOption: false,
-      multiple: false,
-    })
+    let handle
+    try {
+      ;[handle] = await window.showOpenFilePicker({
+        id: 'character-animator-project',
+        types: [{ description: '3D Character Animator project', accept: { [MIME]: [FILE_EXT] } }],
+        excludeAcceptAllOption: false,
+        multiple: false,
+      })
+    } catch (err) {
+      // Browser refused the picker (e.g. embedded cross-origin on itch.io):
+      // let the caller use its <input type="file"> fallback instead.
+      if (isPickerBlocked(err)) throw new Error('FILE_SYSTEM_ACCESS_UNAVAILABLE')
+      throw err
+    }
     const file = await handle.getFile()
     const record = await readProjectFile(file)
     await upsertRecent({ name: file.name, handle })
@@ -310,7 +330,7 @@ export async function openProjectFromDisk() {
 // File it got from a normal <input type="file">.
 export async function openProjectFromFileObject(file) {
   const record = await readProjectFile(file)
-  await upsertRecent({ name: file.name, handle: null })
+  await rememberRecent({ name: file.name, handle: null })
   return { record, handle: null, name: file.name }
 }
 
@@ -367,14 +387,22 @@ export async function saveProjectAs(record, suggestedName) {
   }
 
   if (hasFileSystemAccess()) {
-    const handle = await window.showSaveFilePicker({
-      id: 'character-animator-project',
-      suggestedName: `${safeFileName(suggestedName || record.name)}${FILE_EXT}`,
-      types: [{ description: '3D Character Animator project', accept: { [MIME]: [FILE_EXT] } }],
-    })
-    await writeToHandle(handle, record)
-    const recent = await upsertRecent({ name: handle.name, handle })
-    return { handle, name: handle.name, savedAt: recent.savedAt }
+    let handle = null
+    try {
+      handle = await window.showSaveFilePicker({
+        id: 'character-animator-project',
+        suggestedName: `${safeFileName(suggestedName || record.name)}${FILE_EXT}`,
+        types: [{ description: '3D Character Animator project', accept: { [MIME]: [FILE_EXT] } }],
+      })
+    } catch (err) {
+      // Picker refused (cross-origin frame etc.) → fall through to the download below.
+      if (!isPickerBlocked(err)) throw err
+    }
+    if (handle) {
+      await writeToHandle(handle, record)
+      const recent = await upsertRecent({ name: handle.name, handle })
+      return { handle, name: handle.name, savedAt: recent.savedAt }
+    }
   }
 
   // Fallback: classic forced download. There's no handle to remember, so
@@ -390,6 +418,6 @@ export async function saveProjectAs(record, suggestedName) {
   a.download = name
   a.click()
   URL.revokeObjectURL(url)
-  const recent = await upsertRecent({ name, handle: null })
+  const recent = await rememberRecent({ name, handle: null })
   return { handle: null, name, savedAt: recent.savedAt }
 }
