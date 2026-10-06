@@ -7,8 +7,10 @@ import {
   startRecording,
   stopRecordingAndDownload,
   canRecordVideo,
+  startGlobalClock,
 } from './scene.js'
 import { setForceCameraCuts } from './animation.js'
+import { startObjectAnimation, stopObjectAnimation } from './objects.js'
 import { selectLight } from './lights.js'
 
 export { canRecordVideo }
@@ -89,9 +91,10 @@ function armShotView(view) {
   return () => transitionViewCameraTo(prevId)
 }
 
-// Play every loaded character's own selected clip/animation once from the
-// start — recording it to a .webm, or just previewing exactly what a
-// recording would show. One shared code path (used by the Export panel's
+// Play everything animated in the scene once from the start — every loaded
+// character's own selected clip/animation AND any keyed object motion —
+// recording it to a .webm, or just previewing exactly what a recording would
+// show. One shared code path (used by the Export panel's
 // Preview/Record buttons AND the title bar's Export As > Video item) so a
 // preview can never end up showing something different from what gets saved.
 // onStatus(message) reports progress/errors/completion as it happens.
@@ -100,33 +103,62 @@ export function runExportShot({ record, name, onStatus }) {
   const s0 = useStore.getState()
   if (s0.recording || s0.previewing) return
   stopAllCharacters() // clear any armed playback first (also restores cut-driven views)
+  stopObjectAnimation() // …and put props back at rest, so object motion starts from a clean pose
+  // A shot is filmed in View mode: no gizmos, no bone dots, no picking, and the
+  // viewport's own toolbars step aside. The user's mode comes back afterwards.
+  const prevMode = s0.mode
+  if (prevMode !== 'view') useStore.getState().setMode('view')
+  const restoreMode = () => {
+    if (prevMode !== 'view' && useStore.getState().mode === 'view') useStore.getState().setMode(prevMode)
+  }
   const restoreGizmos = hideGizmosForShot()
   const s = useStore.getState()
   const view = resolveShotView(s)
   const restoreView = armShotView(view)
   setForceCameraCuts(true)
-  const { started, maxDuration: durSec } = playAllCharacters({ loop: false, speed: s.speed })
+  // Object motion reads the global Loop flag; a shot plays everything once.
+  const prevLoop = s.loop
+  if (prevLoop) useStore.setState({ loop: false })
+  const finishShot = () => {
+    stopAllCharacters()
+    stopObjectAnimation()
+    if (prevLoop) useStore.setState({ loop: prevLoop })
+  }
+  const { started: charStarted, maxDuration: charDur } = playAllCharacters({ loop: false, speed: s.speed })
+  const objDur = startObjectAnimation() // 0 when no object has keyframes
+  const started = charStarted + (objDur > 0 ? 1 : 0)
+  const durSec = Math.max(charDur || 0, objDur)
   if (started === 0) {
     setForceCameraCuts(false)
     restoreView()
+    restoreMode()
     restoreGizmos()
+    if (prevLoop) useStore.setState({ loop: prevLoop })
     say(`Nothing to ${record ? 'record' : 'preview'} — pick a clip or make an animation first.`)
     return
   }
   if (record && !startRecording(30)) {
     setForceCameraCuts(false)
     restoreView()
+    restoreMode()
     restoreGizmos()
-    stopAllCharacters()
+    finishShot()
     say('Video recording isn’t supported in this browser — use Fullscreen and screen-record instead.')
     return
   }
   if (record) useStore.getState().setRecording(true)
   else useStore.getState().setPreviewing(true)
-  say(`${record ? 'Recording' : 'Previewing'} ${view.label}${started > 1 ? ` (${started} characters)` : ''}…`)
+  startGlobalClock(true) // the All animation timeline follows the shot
+  const what = [
+    charStarted > 0 ? (charStarted > 1 ? `${charStarted} characters` : '1 character') : null,
+    objDur > 0 ? 'object motion' : null,
+  ]
+    .filter(Boolean)
+    .join(' + ')
+  say(`${record ? 'Recording' : 'Previewing'} ${view.label}${started > 1 ? ` (${what})` : ''}…`)
   const ms = (durSec / (s.speed || 1)) * 1000 + (record ? 400 : 100)
   window.setTimeout(() => {
-    stopAllCharacters()
+    finishShot()
     setForceCameraCuts(false)
     if (record) {
       stopRecordingAndDownload(name)
@@ -137,6 +169,7 @@ export function runExportShot({ record, name, onStatus }) {
       say(null)
     }
     restoreView()
+    restoreMode()
     restoreGizmos()
   }, ms)
 }

@@ -714,6 +714,8 @@ function Viewport() {
   const loading = useStore((s) => s.loading)
   const loadError = useStore((s) => s.loadError)
   const showStats = useStore((s) => s.showStats)
+  // Preview / Record film the viewport, so the on-canvas toolbars step aside.
+  const shotActive = useStore((s) => s.recording || s.previewing)
   const sceneObjects = useStore((s) => s.sceneObjects)
   const selectedObjectId = useStore((s) => s.selectedObjectId)
   const hasCharacter = Boolean(modelInfo)
@@ -731,7 +733,7 @@ function Viewport() {
           live as siblings so React never fights the imperatively-added canvas. */}
       <div ref={containerRef} className="viewport-canvas-host" />
 
-      {hasSceneContent && (
+      {hasSceneContent && !shotActive && (
         <div className="mode-toolbar seg" title="What clicking and dragging does in the view">
           {modeButtons.map((b) => (
             <button
@@ -863,7 +865,7 @@ function Viewport() {
         <ViewportScaleDial key={selectedObjectId} id={selectedObjectId} />
       )}
 
-      {hasSceneContent && (
+      {hasSceneContent && !shotActive && (
         <div className="zoom-toolbar" aria-label="Viewport camera controls">
           <button
             className="zoom-toolbar-btn"
@@ -887,7 +889,7 @@ function Viewport() {
         </div>
       )}
 
-      {showStats && <StatsOverlay />}
+      {showStats && !shotActive && <StatsOverlay />}
     </div>
   )
 }
