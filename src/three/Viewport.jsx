@@ -810,7 +810,7 @@ function Viewport() {
         </div>
       )}
 
-      {(modelInfo || selectedCameraId != null || selectedLightId != null || selectedObjectIds.length > 0) && mode !== 'view' && (
+      {!shotActive && mode !== 'view' && (
         <div className="transform-widget-strip" title="What dragging the gizmo does">
           {TRANSFORM_BUTTONS.map((b) => {
             // Bone mode has Move (IK: drag the joint, its ancestor chain

@@ -2455,20 +2455,6 @@ body {
   border-top: 1px solid var(--panel-border);
 }
 
-.look-disclosure-group {
-  border-top: 1px solid var(--panel-border);
-}
-
-.look-disclosure-group > .light-controls {
-  margin: 0;
-  padding: 10px;
-  border-bottom: 1px solid var(--panel-border);
-}
-
-.look-disclosure-group > .light-controls:last-child {
-  border-bottom: 0;
-}
-
 .standalone-control {
   margin: 12px 0;
 }

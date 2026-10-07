@@ -472,9 +472,6 @@ export default function MaterialPanel() {
         </div>
       )}
 
-      <details className="look-disclosure">
-        <summary>Studio, environment &amp; rim lighting</summary>
-        <div className="look-disclosure-group">
         <div className={'light-controls' + (rimCapable ? '' : ' disabled')}>
           <div className="field-label" style={{ marginTop: 0 }}>
             Rim light {rimCapable ? '' : '(only affects Cartoon / Soft Anime)'}
@@ -587,11 +584,6 @@ export default function MaterialPanel() {
           Directional (light side only)
         </label>
 
-        <div className="radio-hint" style={{ marginTop: 2 }}>
-          {rimCapable
-            ? 'Soft and Hard are independent \u2014 turn on either, or both. Width controls how far each reaches in from the silhouette. Directional limits the glow to just the side of the character the key light is coming from (e.g. a light from the right only lights the right edge), which reads as calmer than the default all-round rim. To use a placed light instead of the key light, mark it "drive the rim light" in the Lights panel.'
-            : 'Only affects Cartoon / Soft Anime modes.'}
-        </div>
         </div>
         <div className={'light-controls' + (lit ? '' : ' disabled')}>
           <div className="field-label" style={{ marginTop: 4 }}>
@@ -681,8 +673,6 @@ export default function MaterialPanel() {
             : 'Only affects Realistic mode.'}
         </div>
         </div>
-        </div>
-      </details>
 
       <details className="look-disclosure">
         <summary>Outline</summary>
