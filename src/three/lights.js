@@ -594,6 +594,7 @@ export function getLightsData() {
     intensity: entry.light.intensity,
     castShadow: entry.light.castShadow,
     directional: entry.directional,
+    visible: entry.light.visible,
     position: entry.light.position.toArray(),
     quaternion: entry.light.quaternion.toArray(),
     scale: entry.light.scale.toArray(),

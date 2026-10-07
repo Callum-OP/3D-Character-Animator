@@ -23,7 +23,13 @@ export function poseToJSON(bones) {
 
 // Validate the shape of a parsed pose file, throwing a legible error otherwise.
 export function validatePose(json) {
-  if (!json || json.format !== POSE_FORMAT || typeof json.bones !== 'object') {
+  if (
+    !json ||
+    json.format !== POSE_FORMAT ||
+    !json.bones ||
+    typeof json.bones !== 'object' ||
+    Array.isArray(json.bones)
+  ) {
     throw new Error(`Not a valid pose file (expected format "${POSE_FORMAT}").`)
   }
 }

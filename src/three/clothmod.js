@@ -591,7 +591,7 @@ function collisionMargin(avgEdge) {
 // Enable cloth on `mesh`, colliding against `otherMeshes` (typically every
 // other visible mesh of the same character, snapshotted at the current pose).
 export function enableCloth(mesh, otherMeshes, { pinTop = 0.12, preset = 'cotton', shrinkwrap = false } = {}) {
-  if (!mesh || cm.entries.has(mesh.uuid)) return false
+  if (!mesh || cm.entries.has(mesh.uuid) || !mesh.geometry?.getAttribute?.('position')?.count) return false
   const worldGeom = worldSpaceGeometry(mesh)
   let spec
   try {

@@ -29,7 +29,7 @@ import { useStore } from '../store.js'
 describe('AnimationPanel stays mounted across modelInfo going to null', () => {
   it('does not crash the app when New Project is selected with the Animate panel open', async () => {
     useStore.setState({
-      modelInfo: { name: 'TestChar', bones: [{ name: 'Hips', deform: true }], meshCount: 1, boneCount: 1, clipNames: ['Walk'] },
+      modelInfo: { name: 'TestChar', bones: [{ name: 'Hips', deform: true, depth: 0 }], meshCount: 1, boneCount: 1, clipNames: ['Walk'] },
       mode: 'bone',
       sceneObjects: [],
     })
@@ -43,8 +43,10 @@ describe('AnimationPanel stays mounted across modelInfo going to null', () => {
     fireEvent.click(screen.getByText('File'))
     const newProjectBtn = screen.getAllByText('New Project').find((el) => el.getAttribute('role') === 'menuitem')
     window.confirm = () => true
-    fireEvent.click(newProjectBtn)
-    await new Promise((r) => setTimeout(r, 50))
+    await act(async () => {
+      fireEvent.click(newProjectBtn)
+      await new Promise((r) => setTimeout(r, 50))
+    })
 
     // The real symptom: the app-level crash screen should never appear.
     expect(screen.queryByText('Something went wrong')).toBeNull()
@@ -69,7 +71,7 @@ describe('AnimationPanel stays mounted across modelInfo going to null', () => {
 
   it('keeps the All animation timeline visible when a prop is selected with a character loaded', () => {
     useStore.setState({
-      modelInfo: { name: 'TestChar', bones: [{ name: 'Hips', deform: true }], meshCount: 1, boneCount: 1, clipNames: ['Walk'] },
+      modelInfo: { name: 'TestChar', bones: [{ name: 'Hips', deform: true, depth: 0 }], meshCount: 1, boneCount: 1, clipNames: ['Walk'] },
       mode: 'object',
       playbackSource: 'clip',
       activeClipName: 'Walk',
@@ -115,7 +117,7 @@ describe('AnimationPanel stays mounted across modelInfo going to null', () => {
 
   it('shows character motion and movement when a character is selected, then hides character tools for a prop', () => {
     useStore.setState({
-      modelInfo: { name: 'TestChar', bones: [{ name: 'Hips', deform: true }], meshCount: 1, boneCount: 1, clipNames: ['Walk'] },
+      modelInfo: { name: 'TestChar', bones: [{ name: 'Hips', deform: true, depth: 0 }], meshCount: 1, boneCount: 1, clipNames: ['Walk'] },
       mode: 'object',
       playbackSource: 'clip',
       activeClipName: 'Walk',
@@ -151,7 +153,7 @@ describe('AnimationPanel stays mounted across modelInfo going to null', () => {
 
   it('selects a position key by clicking its row and lets its time be edited', () => {
     useStore.setState({
-      modelInfo: { name: 'TestChar', bones: [{ name: 'Hips', deform: true }], meshCount: 1, boneCount: 1, clipNames: [] },
+      modelInfo: { name: 'TestChar', bones: [{ name: 'Hips', deform: true, depth: 0 }], meshCount: 1, boneCount: 1, clipNames: [] },
       mode: 'object',
       playbackSource: 'edit',
       playback: 'paused',
@@ -191,7 +193,7 @@ describe('AnimationPanel stays mounted across modelInfo going to null', () => {
 
   it('deletes a position key without selecting its row', () => {
     useStore.setState({
-      modelInfo: { name: 'TestChar', bones: [{ name: 'Hips', deform: true }], meshCount: 1, boneCount: 1, clipNames: [] },
+      modelInfo: { name: 'TestChar', bones: [{ name: 'Hips', deform: true, depth: 0 }], meshCount: 1, boneCount: 1, clipNames: [] },
       mode: 'object',
       playbackSource: 'edit',
       playback: 'paused',
@@ -243,7 +245,7 @@ describe('AnimationPanel stays mounted across modelInfo going to null', () => {
 
   it('keeps detailed character keyframe controls available in an advanced disclosure', () => {
     useStore.setState({
-      modelInfo: { name: 'TestChar', bones: [{ name: 'Hips', deform: true }], meshCount: 1, boneCount: 1, clipNames: [] },
+      modelInfo: { name: 'TestChar', bones: [{ name: 'Hips', deform: true, depth: 0 }], meshCount: 1, boneCount: 1, clipNames: [] },
       mode: 'bone',
       playbackSource: 'edit',
       sceneObjects: [],
@@ -272,7 +274,7 @@ describe('AnimationPanel stays mounted across modelInfo going to null', () => {
 
   it('starts a clean keyframe animation while keeping imported clips available', () => {
     useStore.setState({
-      modelInfo: { name: 'TestChar', bones: [{ name: 'Hips', deform: true }], meshCount: 1, boneCount: 1, clipNames: ['Walk'] },
+      modelInfo: { name: 'TestChar', bones: [{ name: 'Hips', deform: true, depth: 0 }], meshCount: 1, boneCount: 1, clipNames: ['Walk'] },
       mode: 'bone',
       playbackSource: 'edit',
       playback: 'stopped',
@@ -304,7 +306,7 @@ describe('AnimationPanel stays mounted across modelInfo going to null', () => {
 
   it('keeps clip renaming in Manage clips and groups extra character actions', () => {
     useStore.setState({
-      modelInfo: { name: 'TestChar', bones: [{ name: 'Hips', deform: true }], meshCount: 1, boneCount: 1, clipNames: [] },
+      modelInfo: { name: 'TestChar', bones: [{ name: 'Hips', deform: true, depth: 0 }], meshCount: 1, boneCount: 1, clipNames: [] },
       mode: 'bone',
       playbackSource: 'clip',
       playback: 'paused',
