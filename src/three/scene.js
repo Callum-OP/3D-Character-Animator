@@ -2821,6 +2821,7 @@ function collectSettings() {
     animFps: s.animFps,
     animDuration: s.animDuration,
     boneViewMode: s.boneViewMode, // 'bones' or 'parts' — which Pose overlay was showing
+    stopAtFirstClipEnd: s.stopAtFirstClipEnd, // Play all / preview / export end when the first clip ends
   }
 }
 
@@ -2933,6 +2934,7 @@ export function clearProjectScene() {
   disposeCurrentModel()
   // A blank project starts with a blank undo history too.
   clearUndoHistory()
+  useStore.setState({ stopAtFirstClipEnd: false }) // per-project setting
 }
 
 // Restore a project record: tear down the current session, then rebuild every
@@ -3057,6 +3059,9 @@ export async function applyProjectData(record) {
     if (oldShadowDefaults && (k === 'shadowStrength' || k === 'shadowSoftness') && st[k] === 0.15) continue
     if (st[k] !== undefined) patch[k] = st[k]
   }
+  // Per-project: a save from before this existed (or a project that never
+  // turned it on) opens with it OFF, rather than inheriting the last project's.
+  patch.stopAtFirstClipEnd = st.stopAtFirstClipEnd === true
   useStore.setState(patch) // Viewport effects push these into the scene reactively
   // Apply saved shared style settings immediately to every loaded character;
   // the active-character UI effect alone would leave inactive models behind.
