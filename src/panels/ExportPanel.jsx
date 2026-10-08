@@ -90,9 +90,10 @@ export default function ExportPanel() {
   // the viewport size when "Match viewport" is selected.
   const imageSize = previewOutputSize('image')
   const videoSize = previewOutputSize('video')
-  // MP4 is encoded with WebCodecs (seekable file); WebM goes through MediaRecorder.
-  const videoFormatInfo = videoFormat === 'mp4' && webCodecsAvailable()
-    ? { ext: 'mp4', fellBack: false }
+  // MP4 and WebM are both encoded with WebCodecs (seekable files with a real
+  // duration); MediaRecorder (WebM only) is the fallback for browsers without it.
+  const videoFormatInfo = webCodecsAvailable()
+    ? { ext: videoFormat === 'mp4' ? 'mp4' : 'webm', fellBack: false }
     : canRecord
       ? { ...pickVideoFormat('webm', (t) => MediaRecorder.isTypeSupported(t)), fellBack: videoFormat === 'mp4' }
       : null

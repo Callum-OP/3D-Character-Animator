@@ -4,7 +4,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { loadModel, disposeObject } from './loadModel.js'
 import { installShadowDarkening, setShadowDarkness } from './shadowDarkening.js'
-import { VideoCapture, findH264Config, webCodecsAvailable } from './videoCapture.js'
+import { VideoCapture, findVideoConfig, webCodecsAvailable } from './videoCapture.js'
 import { computeOutputSize, videoBitrate, pickVideoFormat, MAX_VIDEO_SIDE } from './exportSize.js'
 import { fitShadowExtents, needsRefit, collectFloorReceivers, probeFloor } from './shadowFit.js'
 import {
@@ -933,7 +933,7 @@ export function setContinuousRender(on, reason = 'anim') {
       const now = performance.now()
       if (
         state.recordingFrameInterval &&
-        now - state.lastRecordingFrameAt < state.recordingFrameInterval
+        now - state.lastRecordingFrameAt < state.recordingFrameInterval - 2 // half a refresh of slack, or 30 fps on a 60 Hz screen keeps landing on 50 ms
       ) return
       if (state.recordingFrameInterval) state.lastRecordingFrameAt = now
       const delta = state.clock ? state.clock.getDelta() : 0
@@ -2445,6 +2445,7 @@ export function exportPNG(scale = 2, name = 'render') {
 
 // True if the browser can record the canvas to a video.
 export function canRecordVideo() {
+  if (webCodecsAvailable()) return true
   return typeof MediaRecorder !== 'undefined' && !!state.renderer?.domElement?.captureStream
 }
 
@@ -2467,15 +2468,18 @@ export function beginPreviewFraming() {
 // (resolution, aspect, frame rate, quality, container). Resolves to details of
 // what is being recorded, or null if unsupported / it could not start.
 //
-// MP4 is encoded with WebCodecs + mp4-muxer so the file has a duration and a
-// seek index (MediaRecorder's MP4 is fragmented: no scrub bar, stutters at the
-// start). WebM, and MP4 on browsers without WebCodecs H.264, go through
-// MediaRecorder (the latter saved as WebM).
+// Both MP4 (H.264) and WebM (VP9/VP8) are encoded with WebCodecs + a muxer, so
+// every frame carries an explicit timestamp and the file has a real duration
+// and seek index. MediaRecorder (wall-clock timestamps, no duration, ends up
+// truncated or frozen when the encoder stalls) is only the last resort for
+// browsers without WebCodecs. The encoder is warmed up here, before playback
+// starts, so the opening frames aren't lost to encoder start-up.
+// Call beginRecordingClock() the moment playback starts.
 export async function startRecording() {
   if (state.recorder || state.videoCapture || state.recorderStarting || state.outputOverride) return null
   const s = useStore.getState()
   const wantMp4 = s.exportVideoFormat === 'mp4'
-  const canWebCodecs = wantMp4 && webCodecsAvailable()
+  const canWebCodecs = webCodecsAvailable()
   if (!canWebCodecs && !canRecordVideo()) return null
   state.recorderStarting = true
   try {
@@ -2491,18 +2495,39 @@ export async function startRecording() {
     const info = { width, height, fps, bitrate, clamped: size.clamped, fellBack: false, ext: 'webm' }
 
     if (canWebCodecs) {
-      try {
-        const config = await findH264Config({ width, height, fps, bitrate })
-        if (config) {
-          const { Muxer, ArrayBufferTarget } = await import('mp4-muxer')
-          state.videoCapture = new VideoCapture({ canvas, width, height, fps, config, Muxer, ArrayBufferTarget })
+      // Requested container first; if the browser can't encode it, the other one
+      // (MP4 → WebM) before giving up on WebCodecs altogether.
+      const order = wantMp4 ? ['mp4', 'webm'] : ['webm']
+      for (const container of order) {
+        try {
+          const config = await findVideoConfig(container, { width, height, fps, bitrate })
+          if (!config) continue
+          // Literal specifiers: Vite can only bundle (and chunk) a dynamic import it can read.
+          const muxerLib = container === 'mp4' ? await import('mp4-muxer') : await import('webm-muxer')
+          const capture = new VideoCapture({
+            canvas,
+            width,
+            height,
+            fps,
+            config,
+            container,
+            Muxer: muxerLib.Muxer,
+            ArrayBufferTarget: muxerLib.ArrayBufferTarget,
+            manualStart: true, // timestamps start when playback does (beginRecordingClock)
+          })
+          state.videoCapture = capture
           state.recordingFrameInterval = 1000 / fps
           state.lastRecordingFrameAt = -Infinity
-          state.recordingMeta = { ext: 'mp4', blobType: 'video/mp4', restore }
-          return { ...info, ext: 'mp4' }
+          state.recordingMeta = { ext: container, blobType: capture.mime, restore }
+          await capture.warmUp(() => renderOnce()) // pay the encoder's start-up cost now
+          if (capture.error) throw capture.error
+          return { ...info, ext: container, fellBack: wantMp4 && container !== 'mp4' }
+        } catch (err) {
+          console.warn(`WebCodecs ${container} recording failed, trying the next option:`, err)
+          state.videoCapture?.cancel()
+          state.videoCapture = null
+          state.recordingMeta = null
         }
-      } catch {
-        state.videoCapture = null
       }
     }
 
@@ -2549,11 +2574,18 @@ export async function startRecording() {
     state.recorder = recorder
     state.recordingFrameInterval = 1000 / fps
     state.lastRecordingFrameAt = -Infinity
-    state.recordingMeta = { ext: 'webm', blobType: format.blobType, restore, startedAt: performance.now() }
+    state.recordingMeta = { ext: 'webm', blobType: format.blobType, restore, startedAt: performance.now() } // startedAt re-anchored by beginRecordingClock()
     return { ...info, ext: 'webm', fellBack: wantMp4 }
   } finally {
     state.recorderStarting = false
   }
+}
+
+// Playback has just started: frame timestamps are measured from this moment.
+export function beginRecordingClock() {
+  const now = performance.now()
+  state.videoCapture?.begin(now)
+  if (state.recordingMeta && state.recorder) state.recordingMeta.startedAt = now
 }
 
 // Stop recording and download the video. Resolves { ok, error? } once the file
@@ -2571,7 +2603,7 @@ export async function stopRecordingAndDownload(name = 'animation') {
     requestRender()
     try {
       const blob = await capture.finish()
-      downloadBlob(blob, `${name}_${timestamp()}.mp4`)
+      downloadBlob(blob, `${name}_${timestamp()}.${capture.ext}`)
       return { ok: true, dropped: capture.dropped }
     } catch (error) {
       return { ok: false, error }

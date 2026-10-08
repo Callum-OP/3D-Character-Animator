@@ -5,6 +5,7 @@ import {
   playAllCharacters,
   stopAllCharacters,
   startRecording,
+  beginRecordingClock,
   stopRecordingAndDownload,
   canRecordVideo,
   startGlobalClock,
@@ -99,7 +100,7 @@ function armShotView(view) {
 
 // Play everything animated in the scene once from the start — every loaded
 // character's own selected clip/animation AND any keyed object motion —
-// recording it to a .webm, or just previewing exactly what a recording would
+// recording it to an .mp4 / .webm, or just previewing exactly what a recording would
 // show. One shared code path (used by the Export panel's
 // Preview/Record buttons AND the title bar's Export As > Video item) so a
 // preview can never end up showing something different from what gets saved.
@@ -174,6 +175,7 @@ export async function runExportShot({ record, name, onStatus }) {
     stopAtFirstClipEnd: s.stopAtFirstClipEnd,
   })
   const objDur = startObjectAnimation() // 0 when no object has keyframes
+  if (record) beginRecordingClock() // frame timestamps start with playback, not with encoder setup
   const started = charStarted + (objDur > 0 ? 1 : 0)
   if (record) useStore.getState().setRecording(true)
   else useStore.getState().setPreviewing(true)

@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest'
 import { Muxer, ArrayBufferTarget } from 'mp4-muxer'
-import { VideoCapture, findH264Config, H264_CODECS } from '../three/videoCapture.js'
+import { Muxer as WebmMuxer, ArrayBufferTarget as WebmTarget } from 'webm-muxer'
+import { VideoCapture, findH264Config, findVideoConfig, H264_CODECS, VP_CODECS } from '../three/videoCapture.js'
 
 // --- minimal WebCodecs stand-ins (jsdom has none) --------------------------
 class FakeEncodedVideoChunk {
@@ -213,11 +214,20 @@ describe('VideoCapture (WebCodecs MP4)', () => {
     expect(keys[1]).toBe(60) // 2 s × 30 fps
   })
 
-  it('drops frames instead of piling up when the encoder is behind', () => {
-    const cap = makeCapture({ queue: 4 })
+  it('drops frames instead of piling up when the encoder is really far behind', () => {
+    const cap = makeCapture({ queue: 12 })
     for (let i = 0; i < 10; i++) cap.onFrame(i * 40)
     expect(cap.captured).toBe(0)
     expect(cap.dropped).toBe(10)
+  })
+
+  it('tolerates a short backlog (encoder start-up) instead of dropping the opening frames', () => {
+    // Regression: a limit of 4 dropped every frame while a hardware encoder spun
+    // up, so the first frame was held for seconds. A small backlog must be kept.
+    const cap = makeCapture({ queue: 6 })
+    for (let i = 0; i < 10; i++) cap.onFrame(i * 40)
+    expect(cap.dropped).toBe(0)
+    expect(cap.captured).toBeGreaterThan(5)
   })
 
   it('reports an encoder failure instead of writing a broken file', async () => {
@@ -260,5 +270,137 @@ describe('findH264Config', () => {
     expect(await findH264Config(dims, { isConfigSupported: async () => ({ supported: false }) })).toBeNull()
     expect(await findH264Config(dims, {})).toBeNull()
     expect(await findH264Config(dims, { isConfigSupported: async () => { throw new Error('x') } })).toBeNull()
+  })
+})
+
+describe('VideoCapture start-up (warm-up and playback anchoring)', () => {
+  function manualCapture(encoderState = {}, extra = {}) {
+    return new VideoCapture({
+      canvas: {}, width: 1920, height: 1080, fps, config: { codec: 'avc1.640033' }, Muxer, ArrayBufferTarget,
+      manualStart: true, EncoderClass: makeEncoderClass(encoderState), FrameClass: FakeFrame, ...extra,
+    })
+  }
+
+  it('ignores render frames until playback begins', () => {
+    const cap = manualCapture()
+    expect(cap.onFrame(0)).toBe(false)
+    expect(cap.onFrame(500)).toBe(false)
+    expect(cap.captured).toBe(0)
+    cap.begin(1000)
+    expect(cap.onFrame(1000)).toBe(true)
+  })
+
+  it('measures frame times from begin(), not from the first render', () => {
+    const stamps = []
+    class Spy extends FakeFrame {
+      constructor(c, init) { super(c, init); stamps.push(init.timestamp) }
+    }
+    const cap = manualCapture({}, { FrameClass: Spy })
+    cap.onFrame(100) // an early render, before playback: must not start the clock
+    cap.begin(5000)
+    cap.onFrame(5000)
+    cap.onFrame(5034)
+    expect(stamps[0]).toBe(0)
+    expect(stamps[1]).toBeGreaterThan(30_000)
+    expect(stamps[1]).toBeLessThan(36_000)
+  })
+
+  it('warmUp draws the first frame itself, pushes it through the encoder and waits for it', async () => {
+    const order = []
+    const state = {}
+    const Enc = makeEncoderClass(state)
+    class SpyEnc extends Enc {
+      encode(...a) { order.push('encode'); return super.encode(...a) }
+      async flush() { order.push('flush') }
+    }
+    const cap = manualCapture({}, { EncoderClass: SpyEnc })
+    await cap.warmUp(() => order.push('render'))
+    expect(order).toEqual(['render', 'encode', 'flush']) // render → encode synchronously, then wait
+    expect(cap.captured).toBe(1)
+    // The live grid carries on after frame 0: no duplicate frame at t=0.
+    cap.begin(2000)
+    expect(cap.onFrame(2000)).toBe(false)
+    expect(cap.onFrame(2000 + 1000 / fps)).toBe(true)
+  })
+
+  it('warmUp does not hang on an encoder that never answers', async () => {
+    const Enc = makeEncoderClass({})
+    class Stuck extends Enc { flush() { return new Promise(() => {}) } }
+    const cap = manualCapture({}, { EncoderClass: Stuck })
+    const t0 = Date.now()
+    await cap.warmUp(() => {}, 50)
+    expect(Date.now() - t0).toBeLessThan(1000)
+  })
+
+  it('warmUp surfaces an encoder failure so the caller can fall back', async () => {
+    const cap = manualCapture({ throwOnEncode: true })
+    await cap.warmUp(() => {})
+    expect(cap.error).toBeTruthy()
+  })
+
+  it('a stall between warm-up and playback does not freeze the opening of the video', async () => {
+    const cap = manualCapture()
+    await cap.warmUp(() => {})
+    // encoder set-up "took" a long time, playback starts afterwards at t=10 s
+    cap.begin(10_000)
+    for (let i = 0; i <= 60; i++) cap.onFrame(10_000 + (i * 1000) / 30)
+    cap.stopCapturing(12_000)
+    const { seconds } = await readBoxes(await cap.finish())
+    expect(seconds).toBeGreaterThan(1.9)
+    expect(seconds).toBeLessThan(2.2)
+  })
+})
+
+describe('VideoCapture (WebCodecs WebM)', () => {
+  function webmCapture(codec = 'vp09.00.51.08') {
+    const opts = {}
+    class SpyMuxer extends WebmMuxer {
+      constructor(o) { super(o); opts.value = o }
+    }
+    const cap = new VideoCapture({
+      canvas: {}, width: 1280, height: 720, fps, config: { codec }, container: 'webm',
+      Muxer: SpyMuxer, ArrayBufferTarget: WebmTarget,
+      EncoderClass: makeEncoderClass({}), FrameClass: FakeFrame,
+    })
+    return { cap, opts }
+  }
+
+  it('writes a WebM blob with the matching extension and mime type', async () => {
+    const { cap } = webmCapture()
+    for (let i = 0; i <= 60; i++) cap.onFrame(i * (1000 / 30))
+    cap.stopCapturing(2000)
+    const blob = await cap.finish()
+    expect(cap.ext).toBe('webm')
+    expect(blob.type).toBe('video/webm')
+    const head = new Uint8Array(await blob.arrayBuffer()).slice(0, 4)
+    expect([...head]).toEqual([0x1a, 0x45, 0xdf, 0xa3]) // EBML header
+  })
+
+  it('tells the muxer VP9 vs VP8 and the frame rate; no MP4 fast-start option', () => {
+    expect(webmCapture('vp09.00.51.08').opts.value.video).toMatchObject({ codec: 'V_VP9', width: 1280, height: 720, frameRate: fps })
+    expect(webmCapture('vp8').opts.value.video.codec).toBe('V_VP8')
+    expect(webmCapture().opts.value.fastStart).toBeUndefined()
+  })
+})
+
+describe('findVideoConfig', () => {
+  const dims = { width: 1920, height: 1080, fps: 30, bitrate: 10_000_000 }
+  const only = (codec) => ({ isConfigSupported: async (c) => ({ supported: c.codec === codec, config: c }) })
+
+  it('finds a WebM (VP9) config, falling back to VP8', async () => {
+    expect((await findVideoConfig('webm', dims, only(VP_CODECS[2]))).codec).toBe(VP_CODECS[2])
+    expect((await findVideoConfig('webm', dims, only('vp8'))).codec).toBe('vp8')
+  })
+
+  it('only sets the H.264 length-prefixed option on H.264 configs', async () => {
+    const mp4 = await findVideoConfig('mp4', dims, only(H264_CODECS[0]))
+    const webm = await findVideoConfig('webm', dims, only('vp8'))
+    expect(mp4.avc).toEqual({ format: 'avc' })
+    expect(webm.avc).toBeUndefined()
+  })
+
+  it('returns null for an unknown container or when nothing is supported', async () => {
+    expect(await findVideoConfig('mov', dims, only('vp8'))).toBeNull()
+    expect(await findVideoConfig('webm', dims, only('nope'))).toBeNull()
   })
 })
