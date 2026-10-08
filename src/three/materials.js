@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { shadowDarkness } from './shadowDarkening.js'
 
 // ---------------------------------------------------------------------------
 // Material modes + per-mesh shading overrides
@@ -137,6 +138,7 @@ function installRimLight(material) {
   // so every toon/soft material can safely share one compiled program variant.
   material.customProgramCacheKey = () => 'charanim-rim-v4'
   material.onBeforeCompile = (shader) => {
+    shader.uniforms.uShadowDarkness = shadowDarkness // shared: see shadowDarkening.js
     shader.uniforms.rimColor = { value: u.rimColor }
     shader.uniforms.rimLightDir = { value: u.rimLightDir }
     shader.uniforms.rimSoftIntensity = { value: u.rimSoftIntensity }
@@ -313,6 +315,7 @@ function installStyleGrade(material) {
   u.colorGrading = u.colorGrading || 0
   material.customProgramCacheKey = () => 'charanim-grade-v1'
   material.onBeforeCompile = (shader) => {
+    shader.uniforms.uShadowDarkness = shadowDarkness
     shader.uniforms.styleColorGrading = { value: u.colorGrading }
     shader.fragmentShader = shader.fragmentShader.replace(
       '#include <common>',

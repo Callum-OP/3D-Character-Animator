@@ -161,6 +161,9 @@ export default function LightsPanel() {
               >
                 <span className="obj-name">
                   {lt.directional ? '📐' : '💡'} {lt.name}
+                  {rimFollowLight && rimFollowLightId === lt.id && (
+                    <span title="Driving the rim light" style={{ marginLeft: 6 }}>🎯</span>
+                  )}
                   {(animData.lights?.[lt.name] || []).length > 0 && (
                     <span className="kf-tag" style={{ marginLeft: 6 }}>
                       {(animData.lights?.[lt.name] || []).length} keys
@@ -176,40 +179,6 @@ export default function LightsPanel() {
                   }}
                 >
                   {lt.visible === false ? '🙈' : '👁'}
-                </button>
-                <button
-                  className="obj-eye"
-                  title={`Copy ${lt.name}`}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    copySceneItem('light', lt.id)
-                  }}
-                >
-                  ⧉
-                </button>
-                <button
-                  className="obj-eye"
-                  title={
-                    rimFollowLight && rimFollowLightId === lt.id
-                      ? 'Driving the rim light \u2014 click to stop'
-                      : 'Use this light\u2019s colour + direction for the rim light'
-                  }
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onFollowRim(lt.id)
-                  }}
-                >
-                  {rimFollowLight && rimFollowLightId === lt.id ? '🎯' : '🔘'}
-                </button>
-                <button
-                  className="obj-del"
-                  title="Remove this light"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onRemove(lt.id)
-                  }}
-                >
-                  ×
                 </button>
               </div>
             ))}
@@ -314,6 +283,38 @@ export default function LightsPanel() {
                   Key light{keyCount ? ` (${keyCount})` : ''}
                 </button>
               </div>
+
+              {/* Copy / Remove live down here, away from the row's quick toggles,
+                  with Remove pushed to the far side so it can't be hit by accident. */}
+              <div
+                className="light-danger-zone"
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: 8,
+                  marginTop: 16,
+                  paddingTop: 10,
+                  borderTop: '1px solid var(--panel-border)',
+                }}
+              >
+                <button
+                  className="btn secondary"
+                  style={{ flex: '0 0 auto' }}
+                  title={`Copy ${selected.name}`}
+                  onClick={() => copySceneItem('light', selected.id)}
+                >
+                  ⧉ Copy light
+                </button>
+                <button
+                  className="btn secondary"
+                  style={{ flex: '0 0 auto', color: '#ff6b6b', borderColor: '#ff6b6b' }}
+                  title={`Remove ${selected.name}`}
+                  onClick={() => onRemove(selected.id)}
+                >
+                  Remove light
+                </button>
+              </div>
             </div>
           )}
 
@@ -321,11 +322,9 @@ export default function LightsPanel() {
             Drag a light's gizmo to move, rotate, or resize it. Props can be styled (flat, cartoon,
             soft anime, realistic) or set to ignore shadows from the Objects
             panel. A light set to drive the rim light overrides the manual
-            colour/direction in the Look panel until it's turned off there or
-            here (🎯). <b>Key light</b> animates a light's position, colour,
-            and intensity over time — key it at two times and it glides
-            between them during playback, on the same timeline as the
-            character and cameras (Animate panel).
+            colour/direction in the Look panel. <b>Key light</b> animates a light's position, colour,
+            and intensity over time - key it at two positions and it glides
+            between them during playback.
           </div>
         </>
       )}

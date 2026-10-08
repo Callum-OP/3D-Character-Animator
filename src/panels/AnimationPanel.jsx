@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store.js'
 import EditableValue from './EditableValue.jsx'
+import { applyKeyClick, isTimeSelected, pruneSelection, timesToDelete } from './keySelection.js'
 import {
   selectClip,
   selectEdit,
@@ -264,6 +265,65 @@ function ObjectMovementEditor({ onScrub, onCharacterKeyframe, onCharacterTrackCh
   const [message, setMessage] = useState('')
   const st = useStore.getState
 
+  // Multi-select for the key lists below (Ctrl/Cmd-click toggles, Shift-click
+  // selects a range). Pressing × on a selected row deletes the whole selection.
+  const [selectedKeyTimes, setSelectedKeyTimes] = useState([])
+  const keyAnchorRef = useRef(null)
+  const activeKeyTimes = selectedCamera || selectedLight
+    ? transformKeys.map((k) => k.time)
+    : isCharacter
+      ? characterKeys.map((k) => k.time)
+      : keys.map((k) => k.time)
+  const keyTrackId = selectedCamera
+    ? `camera:${selectedCamera.id}`
+    : selectedLight
+      ? `light:${selectedLight.id}`
+      : `object:${selected?.id ?? ''}`
+  useEffect(() => {
+    setSelectedKeyTimes([])
+    keyAnchorRef.current = null
+  }, [keyTrackId])
+  useEffect(() => {
+    setSelectedKeyTimes((prev) => {
+      const next = pruneSelection(prev, activeKeyTimes)
+      return next.length === prev.length ? prev : next
+    })
+  }, [activeKeyTimes.join('|')])
+  // Returns true when the click was a selection gesture (so callers skip scrubbing).
+  function onKeyRowClick(event, time) {
+    const result = applyKeyClick({
+      selection: selectedKeyTimes,
+      anchor: keyAnchorRef.current,
+      times: activeKeyTimes,
+      time,
+      shift: event.shiftKey,
+      toggle: event.ctrlKey || event.metaKey,
+    })
+    keyAnchorRef.current = result.anchor
+    setSelectedKeyTimes(result.selection)
+    return result.handled
+  }
+  const isDeleteKey = (event) =>
+    !event.ctrlKey && !event.metaKey && !event.altKey &&
+    (event.key === 'x' || event.key === 'X' || event.key === 'Delete' || event.key === 'Backspace')
+  function deleteCharacterKeys(times) {
+    st().deleteRootKeyframes(times)
+    setSelectedKeyTimes([])
+    onCharacterTrackChange?.(characterTime)
+  }
+  function deleteTransformKeys(times) {
+    const track = selectedCamera || selectedLight
+    if (!track) return
+    if (selectedCamera) st().deleteCameraKeyframes(selectedCamera.name, times)
+    else st().deleteLightKeyframes(selectedLight.name, times)
+    setSelectedKeyTimes([])
+  }
+  const keyRowClass = (time) => (isTimeSelected(selectedKeyTimes, time) ? ' selected' : '')
+  const keyDeleteTitle = (time, single) =>
+    isTimeSelected(selectedKeyTimes, time) && selectedKeyTimes.length > 1
+      ? `Delete the ${selectedKeyTimes.length} selected keyframes`
+      : single
+
   function onKeyframe() {
     if (selectedCamera) {
       const key = getCameraKeyValue(selectedCamera.id)
@@ -441,16 +501,23 @@ function ObjectMovementEditor({ onScrub, onCharacterKeyframe, onCharacterTrackCh
             {transformKeys.map((key) => (
               <div
                 key={key.time}
-                className={'kf-list-row' + (Math.abs(key.time - (standaloneSceneMotion ? time : currentTime)) < 1e-4 ? ' active' : '')}
-                title="Select this transform key on the timeline"
+                className={'kf-list-row' + (Math.abs(key.time - (standaloneSceneMotion ? time : currentTime)) < 1e-4 ? ' active' : '') + keyRowClass(key.time)}
+                title="Select this transform key on the timeline (Ctrl/Cmd-click or Shift-click to select several)"
                 role="button"
                 tabIndex={0}
-                onClick={() => onSetTransformKeyTime(key.time)}
+                onClick={(event) => {
+                  if (onKeyRowClick(event, key.time)) return
+                  onSetTransformKeyTime(key.time)
+                }}
                 onKeyDown={(event) => {
                   if (event.target !== event.currentTarget) return
                   if (event.key === 'Enter' || event.key === ' ') {
                     event.preventDefault()
                     onSetTransformKeyTime(key.time)
+                  } else if (isDeleteKey(event)) {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    deleteTransformKeys(timesToDelete(selectedKeyTimes, key.time))
                   }
                 }}
               >
@@ -458,11 +525,10 @@ function ObjectMovementEditor({ onScrub, onCharacterKeyframe, onCharacterTrackCh
                 <span className="kf-what">{item.name} transform</span>
                 <button
                   className="kf-del"
-                  title={`Delete this ${cameraTrack ? 'camera' : 'light'} keyframe`}
+                  title={keyDeleteTitle(key.time, `Delete this ${cameraTrack ? 'camera' : 'light'} keyframe`)}
                   onClick={(event) => {
                     event.stopPropagation()
-                    if (cameraTrack) st().deleteCameraKeyframe(item.name, key.time)
-                    else st().deleteLightKeyframe(item.name, key.time)
+                    deleteTransformKeys(timesToDelete(selectedKeyTimes, key.time))
                   }}
                 >
                   ×
@@ -512,16 +578,23 @@ function ObjectMovementEditor({ onScrub, onCharacterKeyframe, onCharacterTrackCh
             {characterKeys.map((key) => (
               <div
                 key={key.time}
-                className={'kf-list-row' + (Math.abs(key.time - characterTime) < 1e-4 ? ' active' : '')}
-                title="Select this position on the timeline"
+                className={'kf-list-row' + (Math.abs(key.time - characterTime) < 1e-4 ? ' active' : '') + keyRowClass(key.time)}
+                title="Select this position on the timeline (Ctrl/Cmd-click or Shift-click to select several)"
                 role="button"
                 tabIndex={0}
-                onClick={() => onScrub(key.time)}
+                onClick={(event) => {
+                  if (onKeyRowClick(event, key.time)) return
+                  onScrub(key.time)
+                }}
                 onKeyDown={(event) => {
                   if (event.target !== event.currentTarget) return
                   if (event.key === 'Enter' || event.key === ' ') {
                     event.preventDefault()
                     onScrub(key.time)
+                  } else if (isDeleteKey(event)) {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    deleteCharacterKeys(timesToDelete(selectedKeyTimes, key.time))
                   }
                 }}
               >
@@ -543,11 +616,10 @@ function ObjectMovementEditor({ onScrub, onCharacterKeyframe, onCharacterTrackCh
                 <span className="kf-what">{selected.name} position</span>
                 <button
                   className="kf-del"
-                  title="Delete this position keyframe"
+                  title={keyDeleteTitle(key.time, 'Delete this position keyframe')}
                   onClick={(event) => {
                     event.stopPropagation()
-                    st().deleteRootKeyframe(key.time)
-                    onCharacterTrackChange?.(characterTime)
+                    deleteCharacterKeys(timesToDelete(selectedKeyTimes, key.time))
                   }}
                 >
                   ×
@@ -630,10 +702,34 @@ function ObjectMovementEditor({ onScrub, onCharacterKeyframe, onCharacterTrackCh
       {keys.length > 0 && (
         <div className="kf-list" style={{ marginTop: 8 }}>
           {keys.map((key) => (
-            <div key={key.time} className={'kf-list-row' + (Math.abs(key.time - time) < 1e-4 ? ' active' : '')}>
-              <button className="kf-time" onClick={() => scrubObjectAnimation(key.time)}>{key.time.toFixed(2)}s</button>
+            <div
+              key={key.time}
+              className={'kf-list-row' + (Math.abs(key.time - time) < 1e-4 ? ' active' : '') + keyRowClass(key.time)}
+              title="Ctrl/Cmd-click or Shift-click to select several keys"
+              onClick={(event) => { onKeyRowClick(event, key.time) }}
+            >
+              <button
+                className="kf-time"
+                onClick={(event) => {
+                  if (event.shiftKey || event.ctrlKey || event.metaKey) return // let the row handle selection
+                  scrubObjectAnimation(key.time)
+                }}
+              >
+                {key.time.toFixed(2)}s
+              </button>
               <span className="kf-what">{selected.name}</span>
-              <button className="kf-del" title="Delete this keyframe" onClick={() => st().deleteObjectTransformKeyframe(selected.animationKey, key.time)}>×</button>
+              <button
+                className="kf-del"
+                title={keyDeleteTitle(key.time, 'Delete this keyframe')}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  const doomed = timesToDelete(selectedKeyTimes, key.time)
+                  st().deleteObjectTransformKeyframes(selected.animationKey, doomed)
+                  setSelectedKeyTimes([])
+                }}
+              >
+                ×
+              </button>
             </div>
           ))}
         </div>

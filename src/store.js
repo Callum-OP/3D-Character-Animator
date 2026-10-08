@@ -5,7 +5,9 @@ import { setUndoHistoryLimit } from './three/undoHistory.js'
 // in their own local-storage record so opening a project cannot overwrite the
 // user's preferred viewport and look defaults.
 const APP_SETTINGS_FIELDS = [
-  'undoLimit',
+  'undoLimit', 'settingsVersion',
+  'exportScale', 'exportImageResolution', 'exportVideoResolution', 'exportAspect',
+  'exportVideoFps', 'exportVideoQuality', 'exportVideoFormat',
   'showGrid', 'showGround', 'solidBackground', 'backgroundColor', 'showShadow',
   'shadowMapping', 'shadowSoftness', 'shadowStrength', 'showStats',
   'performanceMode', 'performanceBackgroundObjects', 'performanceLowPoly',
@@ -351,8 +353,11 @@ export const useStore = create((set) => ({
   backgroundColor: '#202127',
   showShadow: true, // ground shadow on/off
   shadowMapping: true, // true = real cast shadows; false = cheap blob
-  shadowSoftness: 0.15, // 0 = crisp/hard edge, 1 = very soft/blurred
-  shadowStrength: 0.15, // 0 = barely visible, 1 = solid black
+  // 0.15/0.15 (briefly the default) made shadows nearly invisible; settingsVersion
+  // below migrates anyone still carrying those values.
+  shadowSoftness: 0.4, // 0 = crisp/hard edge, 1 = very soft/blurred
+  shadowStrength: 0.45, // 0 = barely visible, 1 = solid black
+  settingsVersion: 2, // bump when a default changes in a way saved settings should pick up
   showStats: false, // FPS / memory readout overlay
   undoLimit: 100,
   performanceMode: false, // reserved master for performance controls
@@ -389,11 +394,23 @@ export const useStore = create((set) => ({
   setAutoDecimate: (autoDecimate) => set({ autoDecimate }),
 
   // ---- Export ----
-  exportScale: 2, // PNG resolution multiplier (1× / 2× / 4×)
+  exportScale: 2, // PNG resolution multiplier (1× / 2× / 4×) — used when image size is 'viewport'
+  exportImageResolution: 'viewport', // 'viewport' (× exportScale) or a fixed preset: 720p…8k
+  exportVideoResolution: '1080p', // 'viewport' or a fixed preset: 720p / 1080p / 1440p / 4k
+  exportAspect: 'viewport', // 'viewport' or 16:9 / 9:16 / 1:1 / 4:3 / 21:9 (images + video)
+  exportVideoFps: 30, // 24 / 30 / 60
+  exportVideoQuality: 'high', // 'standard' | 'high' | 'max' (sets the bitrate)
+  exportVideoFormat: 'mp4', // 'mp4' (falls back to webm if unsupported) | 'webm'
   recording: false, // true while capturing a video
   previewing: false, // true while playing a shot preview (no capture)
 
   setExportScale: (exportScale) => set({ exportScale }),
+  setExportImageResolution: (exportImageResolution) => set({ exportImageResolution }),
+  setExportVideoResolution: (exportVideoResolution) => set({ exportVideoResolution }),
+  setExportAspect: (exportAspect) => set({ exportAspect }),
+  setExportVideoFps: (exportVideoFps) => set({ exportVideoFps }),
+  setExportVideoQuality: (exportVideoQuality) => set({ exportVideoQuality }),
+  setExportVideoFormat: (exportVideoFormat) => set({ exportVideoFormat }),
   setRecording: (recording) => set({ recording }),
   setPreviewing: (previewing) => set({ previewing }),
 
@@ -717,6 +734,16 @@ export const useStore = create((set) => ({
     set((s) => {
       const objectAnimData = { ...s.objectAnimData }
       const keys = (objectAnimData[animationKey] || []).filter((key) => Math.abs(key.time - time) > 1e-6)
+      if (keys.length) objectAnimData[animationKey] = keys
+      else delete objectAnimData[animationKey]
+      return { objectAnimData }
+    }),
+  // Batch version: removes several keys in one store update so it is a single undo step.
+  deleteObjectTransformKeyframes: (animationKey, times) =>
+    set((s) => {
+      const near = (key) => times.some((t) => Math.abs(key.time - t) <= 1e-6)
+      const objectAnimData = { ...s.objectAnimData }
+      const keys = (objectAnimData[animationKey] || []).filter((key) => !near(key))
       if (keys.length) objectAnimData[animationKey] = keys
       else delete objectAnimData[animationKey]
       return { objectAnimData }
@@ -1069,6 +1096,15 @@ export const useStore = create((set) => ({
       return { animData: { ...s.animData, cameras } }
     }),
 
+  deleteCameraKeyframes: (name, times) =>
+    set((s) => {
+      const cameras = { ...(s.animData.cameras || {}) }
+      const keys = (cameras[name] || []).filter((key) => !times.some((t) => Math.abs(key.time - t) <= 1e-6))
+      if (keys.length) cameras[name] = keys
+      else delete cameras[name]
+      return { animData: { ...s.animData, cameras } }
+    }),
+
   // Insert/replace a light keyframe (position + colour + intensity), by light name.
   addLightKeyframe: (name, time, key) =>
     set((s) => {
@@ -1083,6 +1119,14 @@ export const useStore = create((set) => ({
     set((s) => {
       const lights = { ...(s.animData.lights || {}) }
       const keys = (lights[name] || []).filter((key) => Math.abs(key.time - time) > 1e-6)
+      if (keys.length) lights[name] = keys
+      else delete lights[name]
+      return { animData: { ...s.animData, lights } }
+    }),
+  deleteLightKeyframes: (name, times) =>
+    set((s) => {
+      const lights = { ...(s.animData.lights || {}) }
+      const keys = (lights[name] || []).filter((key) => !times.some((t) => Math.abs(key.time - t) <= 1e-6))
       if (keys.length) lights[name] = keys
       else delete lights[name]
       return { animData: { ...s.animData, lights } }
@@ -1124,6 +1168,20 @@ export const useStore = create((set) => ({
   deleteRootKeyframe: (time) =>
     set((s) => {
       const near = (k) => Math.abs(k.time - time) <= 1e-6
+      const tracks = {}
+      for (const [name, keys] of Object.entries(s.animData.tracks || {})) {
+        const kept = keys.filter((k) => !near(k))
+        if (kept.length) tracks[name] = kept
+      }
+      return {
+        animData: { ...s.animData, root: (s.animData.root || []).filter((k) => !near(k)), tracks },
+      }
+    }),
+  // Batch delete (multi-select): same as deleteRootKeyframe for each time, but one
+  // store update so Ctrl+Z restores the whole selection in a single step.
+  deleteRootKeyframes: (times) =>
+    set((s) => {
+      const near = (k) => times.some((t) => Math.abs(k.time - t) <= 1e-6)
       const tracks = {}
       for (const [name, keys] of Object.entries(s.animData.tracks || {})) {
         const kept = keys.filter((k) => !near(k))
@@ -1339,10 +1397,26 @@ export const useStore = create((set) => ({
 // Hydrate and save only app-wide preferences. Keeping this separate from the
 // project store means opening a project never replaces the user's defaults.
 const APP_SETTINGS_STORAGE_KEY = '3d-animator-app-settings'
+
+// v1 -> v2: shadow strength/softness defaulted to 0.15 for a while, which left
+// real shadows almost invisible and that value got saved into every user's
+// settings. Exactly 0.15 is the old default (not a deliberate choice), so drop
+// it and let the new default apply; anything else the user set is kept.
+export function migrateAppSettings(saved) {
+  const next = { ...saved }
+  if ((next.settingsVersion || 1) < 2) {
+    if (next.shadowStrength === 0.15) delete next.shadowStrength
+    if (next.shadowSoftness === 0.15) delete next.shadowSoftness
+  }
+  delete next.settingsVersion // the store's current version is re-saved below
+  return next
+}
 if (typeof localStorage !== 'undefined') {
   try {
     const saved = JSON.parse(localStorage.getItem(APP_SETTINGS_STORAGE_KEY) || 'null')
-    if (saved && typeof saved === 'object') useStore.setState(saved)
+    if (saved && typeof saved === 'object') {
+      useStore.setState(migrateAppSettings(saved))
+    }
     const undoLimit = setUndoHistoryLimit(useStore.getState().undoLimit)
     useStore.setState({ undoLimit })
   } catch {

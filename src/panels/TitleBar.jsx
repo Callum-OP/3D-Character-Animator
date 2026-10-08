@@ -297,8 +297,8 @@ export default function TitleBar({ onOpenSettings }) {
 
   const onExportPNG = () =>
     withMenuClosed(async () => {
-      exportPNG(exportScale, name)
-      setMsg(`Saved a ${exportScale}× PNG.`)
+      const size = exportPNG(exportScale, name)
+      setMsg(size ? `Saved a ${size.width}×${size.height} PNG.` : 'Could not save the image right now.')
     })
 
   const onExportModel = (format) =>

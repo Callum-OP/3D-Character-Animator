@@ -2,16 +2,47 @@ import { useState } from 'react'
 import { useStore } from '../store.js'
 import {
   exportPNG,
+  previewOutputSize,
   exportSceneModel,
   enterFullscreen,
 } from '../three/scene.js'
 import { exportAnimationBVH } from '../three/animation.js'
+import { pickVideoFormat, videoBitrate, VIDEO_FPS } from '../three/exportSize.js'
+import { webCodecsAvailable } from '../three/videoCapture.js'
 import { runExportShot, resolveShotView, canRecordVideo, hideGizmosForShot } from '../three/exportShot.js'
 
 // Side-panel section: get your work out of the app — transparent PNG, a video of
 // the animation, or the in-app animation as a .bvh, plus a fullscreen view for
 // screen-recording.
 const SCALES = [1, 2, 4]
+const IMAGE_RESOLUTIONS = [
+  ['viewport', 'Match viewport (× scale)'],
+  ['720p', '720p'],
+  ['1080p', '1080p (Full HD)'],
+  ['1440p', '1440p (2K)'],
+  ['4k', '4K (UHD)'],
+  ['8k', '8K'],
+]
+const VIDEO_RESOLUTIONS = [
+  ['viewport', 'Match viewport'],
+  ['720p', '720p'],
+  ['1080p', '1080p (Full HD)'],
+  ['1440p', '1440p (2K)'],
+  ['4k', '4K (UHD)'],
+]
+const ASPECT_OPTIONS = [
+  ['viewport', 'Match viewport'],
+  ['16:9', '16:9 (landscape)'],
+  ['9:16', '9:16 (portrait / shorts)'],
+  ['1:1', '1:1 (square)'],
+  ['4:3', '4:3'],
+  ['21:9', '21:9 (cinematic)'],
+]
+const QUALITIES = [
+  ['standard', 'Standard'],
+  ['high', 'High'],
+  ['max', 'Maximum'],
+]
 
 export default function ExportPanel() {
   const modelInfo = useStore((s) => s.modelInfo)
@@ -19,6 +50,12 @@ export default function ExportPanel() {
   const recording = useStore((s) => s.recording)
   const previewing = useStore((s) => s.previewing)
   const setExportScale = useStore((s) => s.setExportScale)
+  const imageResolution = useStore((s) => s.exportImageResolution)
+  const videoResolution = useStore((s) => s.exportVideoResolution)
+  const aspect = useStore((s) => s.exportAspect)
+  const videoFps = useStore((s) => s.exportVideoFps)
+  const videoQuality = useStore((s) => s.exportVideoQuality)
+  const videoFormat = useStore((s) => s.exportVideoFormat)
   // Subscribed so the "Films …" caption stays current as cameras/cuts change.
   const sceneCameras = useStore((s) => s.sceneCameras)
   const viewCameraId = useStore((s) => s.viewCameraId)
@@ -40,10 +77,28 @@ export default function ExportPanel() {
 
   function onPNG() {
     const restoreGizmos = hideGizmosForShot()
-    exportPNG(exportScale, name)
+    const size = exportPNG(exportScale, name)
     restoreGizmos()
-    setMsg(`Saved a ${exportScale}× PNG.`)
+    if (!size) {
+      setMsg('Could not save the image right now.')
+      return
+    }
+    setMsg(`Saved a ${size.width}×${size.height} PNG${size.clamped ? ' (reduced to what your GPU supports)' : ''}.`)
   }
+
+  // Live captions for the chosen sizes. Recomputed each render, so they follow
+  // the viewport size when "Match viewport" is selected.
+  const imageSize = previewOutputSize('image')
+  const videoSize = previewOutputSize('video')
+  // MP4 is encoded with WebCodecs (seekable file); WebM goes through MediaRecorder.
+  const videoFormatInfo = videoFormat === 'mp4' && webCodecsAvailable()
+    ? { ext: 'mp4', fellBack: false }
+    : canRecord
+      ? { ...pickVideoFormat('webm', (t) => MediaRecorder.isTypeSupported(t)), fellBack: videoFormat === 'mp4' }
+      : null
+  const bitrateMbps = (
+    videoBitrate({ width: videoSize.width, height: videoSize.height, fps: videoFps, quality: videoQuality }) / 1e6
+  ).toFixed(0)
 
   function onExportBVH() {
     const s = st()
@@ -94,17 +149,44 @@ export default function ExportPanel() {
       </p>
 
       <div className="field">
-        <label className="field-label">Image size</label>
-        <div className="seg">
-          {SCALES.map((s) => (
-            <button
-              key={s}
-              className={'seg-btn' + (exportScale === s ? ' active' : '')}
-              onClick={() => setExportScale(s)}
-            >
-              {s}×
-            </button>
+        <label className="field-label">Shape (images + video)</label>
+        <select
+          value={aspect}
+          onChange={(e) => st().setExportAspect(e.target.value)}
+          title="Aspect ratio of saved images and videos. Wider or taller than the viewport shows more or less of the scene to the sides."
+        >
+          {ASPECT_OPTIONS.map(([value, label]) => (
+            <option key={value} value={value}>{label}</option>
           ))}
+        </select>
+      </div>
+
+      <div className="field">
+        <label className="field-label">Image size</label>
+        <select
+          value={imageResolution}
+          onChange={(e) => st().setExportImageResolution(e.target.value)}
+        >
+          {IMAGE_RESOLUTIONS.map(([value, label]) => (
+            <option key={value} value={value}>{label}</option>
+          ))}
+        </select>
+        {imageResolution === 'viewport' && (
+          <div className="seg" style={{ marginTop: 6 }}>
+            {SCALES.map((s) => (
+              <button
+                key={s}
+                className={'seg-btn' + (exportScale === s ? ' active' : '')}
+                onClick={() => setExportScale(s)}
+              >
+                {s}×
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="radio-hint" style={{ marginTop: 4 }}>
+          Saves {imageSize.width} × {imageSize.height} px
+          {imageSize.clamped ? ` (reduced from ${imageSize.requested.width} × ${imageSize.requested.height} — your GPU's limit)` : ''}.
         </div>
       </div>
 
@@ -142,6 +224,72 @@ export default function ExportPanel() {
         />
         Stop at the shortest character clip
       </label>
+      <div className="field" style={{ marginTop: 10 }}>
+        <label className="field-label">Video quality</label>
+        <label className="radio-hint" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          Resolution
+          <select
+            value={videoResolution}
+            onChange={(e) => st().setExportVideoResolution(e.target.value)}
+            disabled={busy}
+          >
+            {VIDEO_RESOLUTIONS.map(([value, label]) => (
+              <option key={value} value={value}>{label}</option>
+            ))}
+          </select>
+        </label>
+        <div className="radio-hint" style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 4 }}>
+          Frame rate
+          <div className="seg">
+            {VIDEO_FPS.map((f) => (
+              <button
+                key={f}
+                className={'seg-btn' + (videoFps === f ? ' active' : '')}
+                onClick={() => st().setExportVideoFps(f)}
+                disabled={busy}
+              >
+                {f}
+              </button>
+            ))}
+          </div>
+        </div>
+        <label className="radio-hint" style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 4 }}>
+          Quality
+          <select
+            value={videoQuality}
+            onChange={(e) => st().setExportVideoQuality(e.target.value)}
+            disabled={busy}
+            title="Sets the video bitrate. Higher = sharper, bigger files."
+          >
+            {QUALITIES.map(([value, label]) => (
+              <option key={value} value={value}>{label}</option>
+            ))}
+          </select>
+        </label>
+        <div className="radio-hint" style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 4 }}>
+          Format
+          <div className="seg">
+            {[['mp4', 'MP4'], ['webm', 'WebM']].map(([value, label]) => (
+              <button
+                key={value}
+                className={'seg-btn' + (videoFormat === value ? ' active' : '')}
+                onClick={() => st().setExportVideoFormat(value)}
+                disabled={busy}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="radio-hint" style={{ marginTop: 4 }}>
+          Records {videoSize.width} × {videoSize.height} @ {videoFps} fps, about {bitrateMbps} Mbps
+          {videoFormatInfo ? `, .${videoFormatInfo.ext}` : ''}
+          {videoFormatInfo?.fellBack ? ' (MP4 isn’t supported in this browser — will use WebM)' : ''}
+          {videoSize.clamped ? ' (size reduced to your GPU’s limit)' : ''}.
+          {' '}It’s captured live, so a heavy scene at high resolution or 60 fps can drop frames — Preview first.
+        </div>
+      </div>
+
       <div className="radio-hint" style={{ marginTop: 4 }}>
         Films {shotView.label}
         {shotView.kind === 'free' && sceneCameras.length > 1

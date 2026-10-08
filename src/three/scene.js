@@ -3,6 +3,10 @@ import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.j
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { loadModel, disposeObject } from './loadModel.js'
+import { installShadowDarkening, setShadowDarkness } from './shadowDarkening.js'
+import { VideoCapture, findH264Config, webCodecsAvailable } from './videoCapture.js'
+import { computeOutputSize, videoBitrate, pickVideoFormat, MAX_VIDEO_SIDE } from './exportSize.js'
+import { fitShadowExtents, needsRefit, collectFloorReceivers, probeFloor } from './shadowFit.js'
 import {
   recordOriginalMaterials,
   applyMaterials,
@@ -207,6 +211,10 @@ const state = {
   groundY: 0, // floor height (where the ground/shadow planes sit)
   shadow: null, // cheap blob ground shadow
   shadowReceiver: null, // plane that catches real cast shadows
+  shadowFit: null, // { center, half } the key light's shadow camera is currently fitted to
+  shadowFloorY: null, // height the shadow receiver/blob currently sits at (follows the surface under the character)
+  shadowFloorProbeAt: 0,
+  shadowSurfaceBelow: false, // a real receiving mesh is under the active character
   shadowOn: true, // master ground-shadow toggle
   shadowMap: false, // real shadow mapping vs blob
   dirLight: null,
@@ -241,16 +249,21 @@ const state = {
   performanceEffects: false,
   outlineBeforePerformance: false,
   recorder: null, // MediaRecorder while capturing a video
+  recordingFrameInterval: 0, // limit rendering to the export frame rate while recording
+  lastRecordingFrameAt: -Infinity,
   recordedChunks: [],
+  videoCapture: null, // WebCodecs MP4 capture in progress (see videoCapture.js)
+  recorderStarting: false,
+  recordingMeta: null, // { ext, blobType, restore } for the recording in progress
+  outputOverride: null, // { width, height } while rendering at a fixed export size
   resizeObserver: null,
 }
 
-// Reserved layer used only while a draw is in progress. The main camera never
-// sees it; shadow cameras do. This lets an off-screen root remain a caster
-// without paying for its regular color pass.
-const SHADOW_ONLY_LAYER = 31
+const SHADOW_MAP_SIZE = 2048
+const SHADOW_MAP_SIZE_PERFORMANCE = 1024
 
 export function initScene(container) {
+  installShadowDarkening() // before any material compiles
   if (state.renderer) return // already initialised
 
   state.container = container
@@ -367,7 +380,7 @@ export function initScene(container) {
     // Orbiting is fragment-bound with lit materials and the outline pass. A
     // temporary lower DPR keeps interaction responsive; the final frame is
     // rendered at the normal quality as soon as the drag ends.
-    if (state.pixelRatio > 1.25) renderer.setPixelRatio(1.25)
+    if (!state.outputOverride && state.pixelRatio > 1.25) renderer.setPixelRatio(1.25)
   })
   controls.addEventListener('end', () => {
     renderer.setPixelRatio(getPerformancePixelRatio())
@@ -550,13 +563,12 @@ export function initScene(container) {
   const dirLight = new THREE.DirectionalLight(0xffffff, 2.0)
   dirLight.position.set(2, 4, 3)
   dirLight.castShadow = false // enabled only in "realistic shadows" mode
-  // Real shadows are optional and expensive. Keep the explicit mode usable,
-  // but avoid spending a million texels on a small editor viewport.
-  dirLight.shadow.mapSize.set(512, 512)
+  // 2048² keeps contact shadows crisp (512² made them soft, blocky and faint).
+  // applyShadowMode drops this to 1024² in performance mode.
+  dirLight.shadow.mapSize.set(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE)
   dirLight.shadow.bias = -0.0005
   scene.add(dirLight)
   scene.add(dirLight.target) // shadow camera aims at the model via this target
-  dirLight.shadow.camera.layers.enable(SHADOW_ONLY_LAYER)
   state.dirLight = dirLight
 
   const ambientLight = new THREE.AmbientLight(0xffffff, 0.6)
@@ -742,27 +754,34 @@ function renderOnce() {
     // blur it; when both are off this is a no-op and we draw straight to screen.
     const usedPostFX = renderPostFX(camera, drawScene)
     if (!usedPostFX) drawScene()
+    // Same task as the draw, so the canvas still holds this frame.
+    if (state.videoCapture) state.videoCapture.onFrame(now)
   } finally {
     restoreCulling()
   }
 }
 
 // Hide whole prop/character roots from the color pass when they are outside
-// the current view. A root is kept on the shadow camera when its bounds still
-// intersect that camera's frustum, which prevents a visible floor shadow from
-// popping merely because its caster left the screen.
+// the current view — unless they could still throw a shadow into it.
+//
+// IMPORTANT: a shadow caster must stay on the default layer and visible. three's
+// shadow pass tests each object's layers against the MAIN camera's layers (not
+// the shadow camera's), so parking an off-screen caster on a "shadow-only" layer
+// the main camera ignores silently removes it from the shadow map — which is
+// what made props and characters near the edge of view stop casting shadows.
+// Off-screen meshes are still frustum-culled per mesh in the colour pass, so
+// leaving them visible costs very little.
+//
+// Same pass also gathers the casters' bounds so the key light's shadow camera
+// can be fitted to the whole scene (see updateShadowFit).
 function applyRenderCulling(camera) {
   if (!camera || !state.scene) return () => {}
 
-  camera.layers.disable(SHADOW_ONLY_LAYER)
   const viewFrustum = makeCameraFrustum(camera)
   const shadowCamera = state.dirLight?.shadow?.camera
   let anotherShadowLight = false
   state.scene.traverse((obj) => {
-    if (obj.isLight && obj.castShadow && obj !== state.dirLight) {
-      anotherShadowLight = true
-      obj.shadow?.camera?.layers.enable(SHADOW_ONLY_LAYER)
-    }
+    if (obj.isLight && obj.castShadow && obj !== state.dirLight) anotherShadowLight = true
   })
   const shadowEnabled = state.shadowMap && (state.dirLight?.castShadow || anotherShadowLight)
   const shadowFrustum = shadowEnabled && shadowCamera ? makeCameraFrustum(shadowCamera) : null
@@ -771,6 +790,8 @@ function applyRenderCulling(camera) {
   const roots = new Set([...state.characters.values()].map((model) => model.root))
   for (const root of objectRoots) roots.add(root)
   const changed = []
+  const casterSpheres = []
+  const maxCasterRadius = Math.max(state.modelRadius * 10, 20)
 
   for (const root of roots) {
     if (!root || !root.visible) continue
@@ -780,33 +801,97 @@ function applyRenderCulling(camera) {
     const inView = viewFrustum.intersectsSphere(sphere)
     const distantBackground = state.performanceMode && state.performanceBackgroundObjects &&
       objectRootSet.has(root) && camera.position.distanceTo(sphere.center) > Math.max(6, state.modelRadius * 4)
-    if (inView && !distantBackground) continue
 
     let castsShadow = false
-    root.traverse((obj) => {
-      if (obj.isMesh && obj.castShadow) castsShadow = true
-    })
+    if (shadowEnabled && !distantBackground) {
+      root.traverse((obj) => {
+        if (obj.isMesh && obj.castShadow) castsShadow = true
+      })
+      if (castsShadow && sphere.radius > 0 && sphere.radius <= maxCasterRadius) casterSpheres.push(sphere)
+    }
+    if (inView && !distantBackground) continue
+
+    // Out of view: keep it only if it can still shadow something in view.
     // Other light types may use cube or point-light shadow cameras, so their
-    // exact projected receiver region is not available here. Keeping these
-    // casters is conservative and still removes them from the color pass.
-    const canShadowView = !distantBackground && castsShadow && (
+    // exact projected receiver region is not available here; keeping these
+    // casters is conservative.
+    const keepForShadow = !distantBackground && castsShadow && (
       shadowFrustum?.intersectsSphere(sphere) || anotherShadowLight
     )
-    const previous = { root, visible: root.visible, mask: root.layers.mask }
-    if (canShadowView) {
-      root.layers.set(SHADOW_ONLY_LAYER)
-    } else {
-      root.visible = false
-    }
-    changed.push(previous)
+    if (keepForShadow) continue
+    changed.push({ root, visible: root.visible })
+    root.visible = false
+  }
+
+  if (shadowEnabled) {
+    updateShadowFit(casterSpheres)
+    updateShadowFloor()
   }
 
   return () => {
-    for (const previous of changed) {
-      previous.root.layers.mask = previous.mask
-      previous.root.visible = previous.visible
-    }
+    for (const previous of changed) previous.root.visible = previous.visible
   }
+}
+
+// Refit the key light's shadow camera to every caster in the scene, so props
+// and characters that were added or moved after the first model loaded are
+// still inside the shadow map. Re-fits only on a meaningful change.
+function updateShadowFit(casterSpheres) {
+  const next = fitShadowExtents(casterSpheres, {
+    minHalf: Math.max(state.modelRadius * 3, 1),
+    maxHalf: Math.max(state.modelRadius * 20, 10),
+  })
+  if (!next || !needsRefit(state.shadowFit, next)) return
+  state.shadowFit = next
+  positionLight()
+}
+
+// Keep the shadow receiver (and blob) on the surface under the active
+// character rather than at the height the model happened to load at — saved
+// projects restore the character's transform AFTER load, so a character
+// standing on a raised map used to cast its shadow onto a plane far below it.
+// The invisible shadow-catching plane is only a stand-in floor for scenes with
+// nothing to land shadows on. It is an endless flat sheet, so wherever a real
+// surface exists (a map, a platform, the ground disc) it must stay hidden —
+// otherwise its shadows hang in mid-air past the edge of that surface, or show
+// through walls and across other levels. Real meshes receive shadows themselves.
+function syncShadowReceiverVisibility() {
+  if (!state.shadowReceiver) return
+  const realOn = !(state.performanceMode && state.performanceEffects) && state.shadowOn && state.shadowMap
+  state.shadowReceiver.visible = !!realOn && !state.shadowSurfaceBelow && !state.ground?.visible
+}
+
+function updateShadowFloor() {
+  const now = typeof performance !== 'undefined' ? performance.now() : 0
+  if (now - state.shadowFloorProbeAt < 150) return
+  state.shadowFloorProbeAt = now
+  const model = state.currentModel
+  if (!model?.root) return
+  const roots = getObjectRoots()
+  const feet = new THREE.Vector3()
+  model.root.getWorldPosition(feet)
+  // The receiver is a big plane, but it must still be under the character if
+  // they walk (or are dragged) far from where the model loaded.
+  if (state.shadowReceiver) state.shadowReceiver.position.set(feet.x, state.shadowReceiver.position.y, feet.z)
+  let floorY = state.groundY
+  let surfaceBelow = false
+  if (roots.length) {
+    const probe = probeFloor(collectFloorReceivers(roots), feet, {
+      startAbove: Math.max(state.modelRadius * 0.25, 0.1),
+      fallback: state.groundY,
+    })
+    floorY = probe.y
+    surfaceBelow = probe.hit
+  }
+  if (surfaceBelow !== state.shadowSurfaceBelow) {
+    state.shadowSurfaceBelow = surfaceBelow
+    syncShadowReceiverVisibility()
+  }
+  if (state.shadowFloorY !== null && Math.abs(floorY - state.shadowFloorY) < 1e-4) return
+  state.shadowFloorY = floorY
+  const lift = state.modelRadius * 0.001
+  if (state.shadowReceiver) state.shadowReceiver.position.y = floorY + lift
+  if (state.shadow) state.shadow.position.y = floorY + lift * 2
 }
 
 function makeCameraFrustum(camera) {
@@ -845,6 +930,12 @@ export function setContinuousRender(on, reason = 'anim') {
     const tick = () => {
       if (!state.continuous) return
       state.animId = requestAnimationFrame(tick)
+      const now = performance.now()
+      if (
+        state.recordingFrameInterval &&
+        now - state.lastRecordingFrameAt < state.recordingFrameInterval
+      ) return
+      if (state.recordingFrameInterval) state.lastRecordingFrameAt = now
       const delta = state.clock ? state.clock.getDelta() : 0
       const speed = Number(useStore.getState().speed) || 1
       const animationDelta =
@@ -919,17 +1010,32 @@ export function refreshEditPlayback() {
 function handleResize() {
   const { container, renderer, camera } = state
   if (!container || !renderer) return
-  const width = container.clientWidth || 1
-  const height = container.clientHeight || 1
-  renderer.setSize(width, height)
+  // While exporting at a fixed size the canvas keeps that size (and the
+  // viewport just letterboxes it); the window can still be resized freely.
+  const override = state.outputOverride
+  const width = override ? override.width : container.clientWidth || 1
+  const height = override ? override.height : container.clientHeight || 1
+  if (override) {
+    renderer.setPixelRatio(1)
+    renderer.setSize(width, height, false)
+  } else {
+    renderer.setSize(width, height)
+  }
   camera.aspect = width / height
   camera.updateProjectionMatrix()
   if (state.viewCamera) {
     state.viewCamera.aspect = width / height
     state.viewCamera.updateProjectionMatrix()
   }
-  resizePostFX(width, height, state.pixelRatio)
+  resizePostFX(width, height, override ? 1 : state.pixelRatio)
   requestRender()
+}
+
+// Aspect ratio the scene is currently being drawn at (the viewport, or the fixed
+// export size while recording / saving an image).
+function getViewAspect() {
+  if (state.outputOverride) return state.outputOverride.width / state.outputOverride.height
+  return (state.container?.clientWidth || 1) / (state.container?.clientHeight || 1)
 }
 
 // ---------------------------------------------------------------------------
@@ -1983,10 +2089,15 @@ export function removeObjectAttachmentKeyById(id, time) {
 // camera so interaction still works in the camera view.
 export function setViewCameraById(id) {
   const cam = id != null ? getCameraById(id) : null
+  // A hard set always wins over a glide that's still in flight. Without this a
+  // leftover glide (the previous shot's restore, or a camera cut) keeps running
+  // and, when it finishes, writes its OLD destination back into the store —
+  // yanking the view off the camera mid-recording.
+  state.camTransition = null
   state.viewCamera = cam
   setActiveCameraBody(!!cam) // hide every camera body while looking through one
   if (cam && state.container) {
-    cam.aspect = (state.container.clientWidth || 1) / (state.container.clientHeight || 1)
+    cam.aspect = getViewAspect()
     cam.updateProjectionMatrix()
   }
   if (state.controls) {
@@ -2038,7 +2149,7 @@ export function transitionViewCameraTo(id, duration = 0.6) {
   tc.fov = fromCam.fov
   tc.near = targetCam.near
   tc.far = targetCam.far
-  tc.aspect = (state.container?.clientWidth || 1) / (state.container?.clientHeight || 1)
+  tc.aspect = getViewAspect()
   tc.updateProjectionMatrix()
 
   state.viewCamera = tc
@@ -2109,7 +2220,48 @@ function updateCamTransition(delta) {
     // setViewCameraById directly) means Viewport's viewCameraId effect does
     // the swap, so there's exactly one place that ever hard-sets the camera.
     useStore.getState().setViewCameraId(tr.finalId)
+    // If the store already held this id the store write above is a no-op and
+    // the Viewport effect never fires, which would leave the view stuck on the
+    // scratch glide camera (frozen, no longer following the real camera's
+    // keyframes). Landing on the real camera directly is idempotent.
+    setViewCameraById(tr.finalId)
   }
+}
+
+// Finish any in-flight camera glide immediately, landing exactly on its
+// destination. Used before a preview/recording starts so the shot is framed
+// from the settled view instead of a half-finished glide.
+export function settleCameraTransition() {
+  const tr = state.camTransition
+  if (!tr) return false
+  state.camTransition = null
+  useStore.getState().setViewCameraId(tr.finalId)
+  setViewCameraById(tr.finalId)
+  return true
+}
+
+export function isCameraTransitionActive() {
+  return !!state.camTransition
+}
+
+// Test seams: drive the camera glide without a WebGL render loop.
+export function __setViewCameraRefsForTest(camera, controls = null) {
+  state.camera = camera
+  state.controls = controls
+  state.container = state.container || { clientWidth: 100, clientHeight: 100 }
+}
+export function __setRendererForTest(renderer, container) {
+  state.renderer = renderer
+  state.container = container
+}
+export function __applyOutputSizeForTest(width, height) {
+  return applyOutputSize(width, height)
+}
+export function __tickCameraTransitionForTest(delta) {
+  updateCamTransition(delta)
+}
+export function __getViewCameraForTest() {
+  return state.viewCamera
 }
 
 // Current character root transform (for "keyframe position" root motion).
@@ -2200,19 +2352,95 @@ export async function exportSceneModel(format = 'glb', name = 'scene', poseMode 
   }
 }
 
-// Render the current frame at `scale`× the viewport resolution and save a PNG.
-// Transparent background is preserved (alpha), so it drops into 2D art.
+// Largest canvas side the GPU will give us (texture + viewport limits).
+function getMaxOutputSide() {
+  try {
+    const gl = state.renderer.getContext()
+    const dims = gl.getParameter(gl.MAX_VIEWPORT_DIMS)
+    const tex = state.renderer.capabilities.maxTextureSize || 4096
+    return Math.max(256, Math.min(tex, dims?.[0] || tex, dims?.[1] || tex))
+  } catch {
+    return 4096
+  }
+}
+
+// What a save/record would produce right now, for the Export panel's caption.
+export function previewOutputSize(kind) {
+  const s = useStore.getState()
+  const w = state.container?.clientWidth || 1
+  const h = state.container?.clientHeight || 1
+  const isVideo = kind === 'video'
+  const resolution = isVideo ? s.exportVideoResolution : s.exportImageResolution
+  if (resolution === 'viewport' && s.exportAspect === 'viewport') {
+    const ratio = isVideo ? state.pixelRatio : (s.exportScale || 1) * state.pixelRatio
+    return { width: Math.floor(w * ratio), height: Math.floor(h * ratio), clamped: false, requested: null }
+  }
+  return computeOutputSize({
+    resolution,
+    aspect: s.exportAspect,
+    viewportW: w * (resolution === 'viewport' ? (isVideo ? state.pixelRatio : (s.exportScale || 1) * state.pixelRatio) : 1),
+    viewportH: h * (resolution === 'viewport' ? (isVideo ? state.pixelRatio : (s.exportScale || 1) * state.pixelRatio) : 1),
+    maxSide: isVideo ? Math.min(getMaxOutputSide(), MAX_VIDEO_SIDE) : getMaxOutputSide(),
+    evenSizes: isVideo,
+  })
+}
+
+// Render at an exact pixel size (device pixel ratio 1) until the returned
+// restore function is called. Cameras are re-aspected to match; the on-screen
+// canvas is letterboxed so it never looks stretched.
+function applyOutputSize(width, height) {
+  const renderer = state.renderer
+  const canvas = renderer.domElement
+  state.outputOverride = { width, height }
+  canvas.style.objectFit = 'contain'
+  handleResize()
+  return () => {
+    state.outputOverride = null
+    canvas.style.objectFit = ''
+    renderer.setPixelRatio(getPerformancePixelRatio())
+    handleResize()
+  }
+}
+
+// Save the current frame as a PNG. Size comes from the Export panel: either the
+// viewport × `scale` (legacy "1×/2×/4×"), or a fixed preset like 1080p / 4K / 8K
+// in the chosen aspect (clamped to what the GPU supports). Transparent
+// background is preserved (alpha), so it drops into 2D art. Returns the pixel
+// size actually written, or null if nothing could be exported.
 export function exportPNG(scale = 2, name = 'render') {
-  if (!state.renderer || !state.container) return
+  if (!state.renderer || !state.container || state.outputOverride) return null
+  const s = useStore.getState()
   const w = state.container.clientWidth || 1
   const h = state.container.clientHeight || 1
-  state.renderer.setSize(w * scale, h * scale, false) // false: keep CSS size, bigger buffer
+  const fixed = s.exportImageResolution !== 'viewport' || s.exportAspect !== 'viewport'
+  const size = fixed
+    ? computeOutputSize({
+        resolution: s.exportImageResolution,
+        aspect: s.exportAspect,
+        viewportW: w * (s.exportImageResolution === 'viewport' ? scale : 1),
+        viewportH: h * (s.exportImageResolution === 'viewport' ? scale : 1),
+        maxSide: getMaxOutputSide(),
+        evenSizes: false,
+      })
+    : null
+  let restore
+  if (size) {
+    restore = applyOutputSize(size.width, size.height)
+  } else {
+    state.renderer.setSize(w * scale, h * scale, false) // false: keep CSS size, bigger buffer
+    restore = () => {
+      state.renderer.setSize(w, h, false)
+      requestRender()
+    }
+  }
   renderOnce()
+  const out = { width: state.renderer.domElement.width, height: state.renderer.domElement.height, clamped: !!size?.clamped }
   state.renderer.domElement.toBlob((blob) => {
     if (blob) downloadBlob(blob, `${name}_${timestamp()}.png`)
-    state.renderer.setSize(w, h, false) // restore
+    restore()
     requestRender()
   }, 'image/png')
+  return out
 }
 
 // True if the browser can record the canvas to a video.
@@ -2220,33 +2448,164 @@ export function canRecordVideo() {
   return typeof MediaRecorder !== 'undefined' && !!state.renderer?.domElement?.captureStream
 }
 
-// Start recording the live canvas to a webm video. Returns false if unsupported.
-export function startRecording(fps = 30) {
-  if (!canRecordVideo()) return false
-  const stream = state.renderer.domElement.captureStream(fps)
-  const types = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']
-  const mimeType = types.find((t) => MediaRecorder.isTypeSupported(t)) || ''
-  const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined)
-  state.recordedChunks = []
-  recorder.ondataavailable = (e) => {
-    if (e.data && e.data.size) state.recordedChunks.push(e.data)
-  }
-  recorder.start()
-  state.recorder = recorder
-  return true
+// Briefly match a shot PREVIEW to the recording's shape (not its pixel count)
+// so framing is what the video will show. No-op when the shape follows the viewport.
+export function beginPreviewFraming() {
+  const s = useStore.getState()
+  if (!state.renderer || state.outputOverride || s.exportAspect === 'viewport') return () => {}
+  const size = computeOutputSize({
+    resolution: '720p',
+    aspect: s.exportAspect,
+    viewportW: 1,
+    viewportH: 1,
+    maxSide: getMaxOutputSide(),
+  })
+  return applyOutputSize(size.width, size.height)
 }
 
-// Stop recording and download the webm.
-export function stopRecordingAndDownload(name = 'animation') {
-  const recorder = state.recorder
-  if (!recorder) return
-  recorder.onstop = () => {
-    const blob = new Blob(state.recordedChunks, { type: 'video/webm' })
-    downloadBlob(blob, `${name}_${timestamp()}.webm`)
+// Start recording the live canvas using the Export panel's video settings
+// (resolution, aspect, frame rate, quality, container). Resolves to details of
+// what is being recorded, or null if unsupported / it could not start.
+//
+// MP4 is encoded with WebCodecs + mp4-muxer so the file has a duration and a
+// seek index (MediaRecorder's MP4 is fragmented: no scrub bar, stutters at the
+// start). WebM, and MP4 on browsers without WebCodecs H.264, go through
+// MediaRecorder (the latter saved as WebM).
+export async function startRecording() {
+  if (state.recorder || state.videoCapture || state.recorderStarting || state.outputOverride) return null
+  const s = useStore.getState()
+  const wantMp4 = s.exportVideoFormat === 'mp4'
+  const canWebCodecs = wantMp4 && webCodecsAvailable()
+  if (!canWebCodecs && !canRecordVideo()) return null
+  state.recorderStarting = true
+  try {
+    const fps = [24, 30, 60].includes(s.exportVideoFps) ? s.exportVideoFps : 30
+    const size = previewOutputSize('video')
+    const fixed = s.exportVideoResolution !== 'viewport' || s.exportAspect !== 'viewport'
+    const restore = fixed ? applyOutputSize(size.width, size.height) : () => {}
+    renderOnce() // give the stream a correctly-sized first frame
+    const canvas = state.renderer.domElement
+    const width = canvas.width - (canvas.width % 2) // encoders need even sizes
+    const height = canvas.height - (canvas.height % 2)
+    const bitrate = videoBitrate({ width, height, fps, quality: s.exportVideoQuality })
+    const info = { width, height, fps, bitrate, clamped: size.clamped, fellBack: false, ext: 'webm' }
+
+    if (canWebCodecs) {
+      try {
+        const config = await findH264Config({ width, height, fps, bitrate })
+        if (config) {
+          const { Muxer, ArrayBufferTarget } = await import('mp4-muxer')
+          state.videoCapture = new VideoCapture({ canvas, width, height, fps, config, Muxer, ArrayBufferTarget })
+          state.recordingFrameInterval = 1000 / fps
+          state.lastRecordingFrameAt = -Infinity
+          state.recordingMeta = { ext: 'mp4', blobType: 'video/mp4', restore }
+          return { ...info, ext: 'mp4' }
+        }
+      } catch {
+        state.videoCapture = null
+      }
+    }
+
+    // MediaRecorder path (WebM, or MP4 unavailable → WebM).
+    if (!canRecordVideo()) {
+      restore()
+      return null
+    }
+    const format = pickVideoFormat('webm', (t) => MediaRecorder.isTypeSupported(t))
+    let recorder = null
+    let stream = null
+    try {
+      stream = canvas.captureStream(fps)
+      const attempts = [
+        { mimeType: format.mimeType || undefined, videoBitsPerSecond: bitrate },
+        { mimeType: format.mimeType || undefined },
+        undefined,
+      ]
+      for (const options of attempts) {
+        try {
+          recorder = new MediaRecorder(stream, options)
+          break
+        } catch {
+          recorder = null
+        }
+      }
+      if (!recorder) throw new Error('MediaRecorder could not be created')
+    } catch {
+      stream?.getTracks().forEach((track) => track.stop())
+      restore()
+      return null
+    }
     state.recordedChunks = []
+    recorder.ondataavailable = (e) => {
+      if (e.data && e.data.size) state.recordedChunks.push(e.data)
+    }
+    try {
+      recorder.start(1000) // flush a chunk every second so long recordings don't sit in one buffer
+    } catch {
+      stream.getTracks().forEach((track) => track.stop())
+      restore()
+      return null
+    }
+    state.recorder = recorder
+    state.recordingFrameInterval = 1000 / fps
+    state.lastRecordingFrameAt = -Infinity
+    state.recordingMeta = { ext: 'webm', blobType: format.blobType, restore, startedAt: performance.now() }
+    return { ...info, ext: 'webm', fellBack: wantMp4 }
+  } finally {
+    state.recorderStarting = false
   }
-  recorder.stop()
-  state.recorder = null
+}
+
+// Stop recording and download the video. Resolves { ok, error? } once the file
+// has been written (MP4 needs a moment to flush the encoder).
+export async function stopRecordingAndDownload(name = 'animation') {
+  const meta = state.recordingMeta || { ext: 'webm', blobType: 'video/webm', restore: () => {} }
+  const capture = state.videoCapture
+  if (capture) {
+    state.videoCapture = null
+    state.recordingMeta = null
+    state.recordingFrameInterval = 0
+    state.lastRecordingFrameAt = -Infinity
+    capture.stopCapturing(typeof performance !== 'undefined' ? performance.now() : 0) // last frame, at recording size
+    meta.restore()
+    requestRender()
+    try {
+      const blob = await capture.finish()
+      downloadBlob(blob, `${name}_${timestamp()}.mp4`)
+      return { ok: true, dropped: capture.dropped }
+    } catch (error) {
+      return { ok: false, error }
+    }
+  }
+  const recorder = state.recorder
+  if (!recorder) return { ok: false }
+  return new Promise((resolve) => {
+    const stoppedAt = performance.now()
+    recorder.onstop = async () => {
+      let blob = new Blob(state.recordedChunks, { type: meta.blobType })
+      state.recordedChunks = []
+      meta.restore()
+      requestRender()
+      if (meta.ext === 'webm' && meta.startedAt != null) {
+        // MediaRecorder writes WebM with no duration, so players show no scrub
+        // bar. Writing the duration into the header fixes that. (Never fails:
+        // on anything unexpected it hands back the original file.)
+        try {
+          const { default: fixWebmDuration } = await import('fix-webm-duration')
+          blob = await fixWebmDuration(blob, Math.max(1, Math.round(stoppedAt - meta.startedAt)), { logger: false })
+        } catch {
+          // keep the unpatched file
+        }
+      }
+      downloadBlob(blob, `${name}_${timestamp()}.${meta.ext}`)
+      resolve({ ok: true })
+    }
+    state.recorder = null
+    state.recordingMeta = null
+    state.recordingFrameInterval = 0
+    state.lastRecordingFrameAt = -Infinity
+    recorder.stop()
+  })
 }
 
 // Enter fullscreen on the viewport (Esc exits — browser default).
@@ -2420,6 +2779,7 @@ function collectSettings() {
     shadowMapping: s.shadowMapping,
     shadowSoftness: s.shadowSoftness,
     shadowStrength: s.shadowStrength,
+    shadowDefaultsVersion: 2, // projects saved before this carry the faint 0.15 defaults
     performanceMode: s.performanceMode,
     performanceBackgroundObjects: s.performanceBackgroundObjects,
     performanceLowPoly: s.performanceLowPoly,
@@ -2646,6 +3006,9 @@ export async function applyProjectData(record) {
     })
   }
   const patch = {}
+  // Projects saved while the shadow defaults were 0.15/0.15 stored those values
+  // even though the user never chose them — keep the current settings instead.
+  const oldShadowDefaults = st.shadowDefaultsVersion == null
   for (const k of [
     'materialMode', 'toonSteps', 'colorGrading',
     'ambientOcclusionStrength', 'backlightColor', 'backlightFalloff', 'lightLinks',
@@ -2659,6 +3022,7 @@ export async function applyProjectData(record) {
     'shadowSoftness', 'shadowStrength', 'autoDecimate',
     'animFps', 'animDuration', 'boneViewMode',
   ]) {
+    if (oldShadowDefaults && (k === 'shadowStrength' || k === 'shadowSoftness') && st[k] === 0.15) continue
     if (st[k] !== undefined) patch[k] = st[k]
   }
   useStore.setState(patch) // Viewport effects push these into the scene reactively
@@ -2807,6 +3171,11 @@ function placeShadowUnder(box) {
   state.modelCenter.copy(center)
   state.modelRadius = Math.max(maxDim, 0.5)
   state.groundY = box.min.y
+  // A newly framed model starts from the default fit; the next shadow pass
+  // refits to every caster and re-probes the floor under the character.
+  state.shadowFit = null
+  state.shadowFloorY = null
+  state.shadowFloorProbeAt = 0
 
   if (state.ground) {
     const r = maxDim * 6
@@ -2835,23 +3204,28 @@ function positionLight() {
   const dl = state.dirLight
   if (!dl) return
   const r = state.modelRadius
-  const dist = Math.max(10, r * 6) // high & far so the frustum sits above the scene
-  dl.position.copy(state.modelCenter).addScaledVector(state.lightDir, dist)
-  dl.target.position.copy(state.modelCenter)
+  // Until a shadow pass has fitted the camera to the scene's casters, cover
+  // ±3× the model size around the model; afterwards use the fitted extents.
+  const center = state.shadowFit?.center || state.modelCenter
+  const half = state.shadowFit?.half ?? Math.max(r * 3, 1)
+  const depth = Math.max(r * 5, half * 1.8) // sphere of casters must fit between near and far
+  const dist = Math.max(10, r * 6, half * 2) // high & far so the frustum sits above the scene
+  dl.position.copy(center).addScaledVector(state.lightDir, dist)
+  dl.target.position.copy(center)
   dl.target.updateMatrixWorld()
 
   const cam = dl.shadow.camera
-  const half = Math.max(r * 3, 1) // cover ±3× the model size around the centre
   cam.left = -half
   cam.right = half
   cam.top = half
   cam.bottom = -half
-  cam.near = Math.max(0.01, dist - r * 5)
-  cam.far = dist + r * 5
+  cam.near = Math.max(0.01, dist - depth)
+  cam.far = dist + depth
   cam.updateProjectionMatrix()
-  // Scale-aware normal bias: bigger frustum = bigger texels, so offset along the
-  // surface normal in world units to avoid acne without peter-panning.
-  dl.shadow.normalBias = r * 0.02
+  // Scale-aware normal bias: a couple of shadow-map texels in world units keeps
+  // acne away without peter-panning, however far the frustum was stretched.
+  const texel = (half * 2) / (dl.shadow.mapSize.x || SHADOW_MAP_SIZE)
+  dl.shadow.normalBias = Math.max(texel * 2, r * 0.004)
 }
 
 // ---------------------------------------------------------------------------
@@ -2865,6 +3239,7 @@ export function setGridVisible(visible) {
 
 export function setGroundVisible(visible) {
   if (state.ground) state.ground.visible = visible
+  syncShadowReceiverVisibility()
   requestRender()
 }
 
@@ -2885,6 +3260,7 @@ export function setShadowMapping(on) {
 }
 
 function getPerformancePixelRatio() {
+  if (state.outputOverride) return 1 // exact export pixels, no device-ratio scaling
   return state.performanceLowPoly
     ? Math.min(state.pixelRatio, state.performanceResolution)
     : state.pixelRatio
@@ -2938,7 +3314,7 @@ export function setShadowSoftness(softness) {
   state.shadowSoftness = softness
   const dl = state.dirLight
   if (dl) {
-    dl.shadow.radius = softness * 12
+    dl.shadow.radius = Math.min(8, softness * 12)
     dl.shadow.blurSamples = Math.round(8 + softness * 16)
   }
   requestRender()
@@ -2948,6 +3324,7 @@ export function setShadowSoftness(softness) {
 export function setShadowStrength(strength) {
   state.shadowStrength = strength
   if (state.shadowReceiver) state.shadowReceiver.material.opacity = strength
+  updateShadowDarkness()
   requestRender()
 }
 
@@ -2970,13 +3347,35 @@ export function setBlurSettings(enabled, blurPx) {
 
 // The blob and the real cast-shadow are mutually exclusive: blob when shadows are
 // on but shadow-mapping is off; real shadows when both are on.
+// Strength of the per-pixel darkening on real surfaces (see shadowDarkening.js).
+// Only active while real shadow-map shadows are on.
+function updateShadowDarkness() {
+  const realOn = !(state.performanceMode && state.performanceEffects) && state.shadowOn && state.shadowMap
+  setShadowDarkness(realOn ? state.shadowStrength : 0)
+  requestRender()
+}
+
 function applyShadowMode() {
   const blobOn = state.shadowOn && !state.shadowMap
   const realOn = !(state.performanceMode && state.performanceEffects) && state.shadowOn && state.shadowMap
   if (state.renderer) state.renderer.shadowMap.enabled = realOn
   if (state.shadow) state.shadow.visible = blobOn
-  if (state.shadowReceiver) state.shadowReceiver.visible = realOn
-  if (state.dirLight) state.dirLight.castShadow = realOn
+  syncShadowReceiverVisibility()
+  updateShadowDarkness()
+  if (state.dirLight) {
+    state.dirLight.castShadow = realOn
+    // Resolution follows performance mode. A changed size needs a fresh map.
+    const size = state.performanceMode ? SHADOW_MAP_SIZE_PERFORMANCE : SHADOW_MAP_SIZE
+    const shadow = state.dirLight.shadow
+    if (shadow.mapSize.x !== size) {
+      shadow.mapSize.set(size, size)
+      if (shadow.map) {
+        shadow.map.dispose()
+        shadow.map = null
+      }
+      positionLight() // normal bias depends on texel size
+    }
+  }
   requestRender()
 }
 

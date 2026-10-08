@@ -1918,6 +1918,17 @@ input.xform-value {
   background: rgba(255, 90, 60, 0.14);
 }
 
+/* Multi-selected key rows (Ctrl/Cmd-click or Shift-click) */
+.kf-list-row.selected {
+  background: rgba(80, 150, 255, 0.22);
+  box-shadow: inset 3px 0 0 #5096ff;
+  user-select: none;
+}
+
+.kf-list-row.selected.active {
+  background: rgba(150, 120, 255, 0.28);
+}
+
 .kf-time {
   font-variant-numeric: tabular-nums;
   color: var(--text-dim);

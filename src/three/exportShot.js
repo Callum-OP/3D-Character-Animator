@@ -8,6 +8,9 @@ import {
   stopRecordingAndDownload,
   canRecordVideo,
   startGlobalClock,
+  getAllTimelineDuration,
+  settleCameraTransition,
+  beginPreviewFraming,
 } from './scene.js'
 import { setForceCameraCuts } from './animation.js'
 import { startObjectAnimation, stopObjectAnimation } from './objects.js'
@@ -79,8 +82,11 @@ export function hideGizmosForShot() {
 
 function armShotView(view) {
   const prevId = useStore.getState().viewCameraId
-  if (view.id != null && view.id !== prevId) {
-    useStore.getState().setViewCameraId(view.id)
+  if (view.id != null) {
+    // Always hard-set the shot camera (even when it is already the store's
+    // current id): if a cut/restore glide had left the viewport on a scratch
+    // camera, this is what puts it back on the real, keyframe-following one.
+    if (view.id !== prevId) useStore.getState().setViewCameraId(view.id)
     setViewCameraById(view.id)
     return () => transitionViewCameraTo(prevId)
   }
@@ -98,12 +104,18 @@ function armShotView(view) {
 // Preview/Record buttons AND the title bar's Export As > Video item) so a
 // preview can never end up showing something different from what gets saved.
 // onStatus(message) reports progress/errors/completion as it happens.
-export function runExportShot({ record, name, onStatus }) {
+let shotStarting = false // true while a recording is waiting on the encoder to become ready
+
+export async function runExportShot({ record, name, onStatus }) {
   const say = onStatus || (() => {})
   const s0 = useStore.getState()
-  if (s0.recording || s0.previewing) return
+  if (s0.recording || s0.previewing || shotStarting) return
   stopAllCharacters() // clear any armed playback first (also restores cut-driven views)
   stopObjectAnimation() // …and put props back at rest, so object motion starts from a clean pose
+  // The stops above (and the previous shot's restore) may have started a camera
+  // glide. Let it land now so the view we resolve and film is the settled one,
+  // and so it can't finish mid-recording and snap the view somewhere else.
+  settleCameraTransition()
   // A shot is filmed in View mode: no gizmos, no bone dots, no picking, and the
   // viewport's own toolbars step aside. The user's mode comes back afterwards.
   const prevMode = s0.mode
@@ -124,21 +136,8 @@ export function runExportShot({ record, name, onStatus }) {
     stopObjectAnimation()
     if (prevLoop) useStore.setState({ loop: prevLoop })
   }
-  const {
-    started: charStarted,
-    maxDuration: charDur,
-    minDuration: firstCharDur,
-  } = playAllCharacters({
-    loop: false,
-    speed: s.speed,
-    stopAtFirstClipEnd: s.stopAtFirstClipEnd,
-  })
-  const objDur = startObjectAnimation() // 0 when no object has keyframes
-  const started = charStarted + (objDur > 0 ? 1 : 0)
-  const durSec = s.stopAtFirstClipEnd && charStarted
-    ? firstCharDur
-    : Math.max(charDur || 0, objDur)
-  if (started === 0) {
+  const durSec = getAllTimelineDuration({ stopAtFirstClipEnd: s.stopAtFirstClipEnd })
+  if (!(durSec > 0)) {
     setForceCameraCuts(false)
     restoreView()
     restoreMode()
@@ -147,7 +146,18 @@ export function runExportShot({ record, name, onStatus }) {
     say(`Nothing to ${record ? 'record' : 'preview'} — pick a clip or make an animation first.`)
     return
   }
-  if (record && !startRecording(30)) {
+  let rec = null
+  if (record) {
+    // Only the record path waits (the encoder has to report back); previews stay synchronous.
+    shotStarting = true
+    try {
+      rec = await startRecording()
+    } finally {
+      shotStarting = false
+    }
+  }
+  const restorePreviewFraming = record ? () => {} : beginPreviewFraming()
+  if (record && !rec) {
     setForceCameraCuts(false)
     restoreView()
     restoreMode()
@@ -156,6 +166,15 @@ export function runExportShot({ record, name, onStatus }) {
     say('Video recording isn’t supported in this browser — use Fullscreen and screen-record instead.')
     return
   }
+  // Encoder setup can take noticeable time. Start playback only after recording
+  // is ready so the animation's opening frames aren't consumed during setup.
+  const { started: charStarted } = playAllCharacters({
+    loop: false,
+    speed: s.speed,
+    stopAtFirstClipEnd: s.stopAtFirstClipEnd,
+  })
+  const objDur = startObjectAnimation() // 0 when no object has keyframes
+  const started = charStarted + (objDur > 0 ? 1 : 0)
   if (record) useStore.getState().setRecording(true)
   else useStore.getState().setPreviewing(true)
   startGlobalClock(true, { duration: durSec, loop: false, stopAtFirstClipEnd: s.stopAtFirstClipEnd })
@@ -165,16 +184,28 @@ export function runExportShot({ record, name, onStatus }) {
   ]
     .filter(Boolean)
     .join(' + ')
-  say(`${record ? 'Recording' : 'Previewing'} ${view.label}${started > 1 ? ` (${what})` : ''}…`)
+  const detail = rec ? ` at ${rec.width}×${rec.height}, ${rec.fps} fps, .${rec.ext}` : ''
+  say(`${record ? 'Recording' : 'Previewing'} ${view.label}${started > 1 ? ` (${what})` : ''}${detail}…`)
   const ms = (durSec / (s.speed || 1)) * 1000 + (record ? 400 : 100)
-  window.setTimeout(() => {
+  window.setTimeout(async () => {
     finishShot()
     setForceCameraCuts(false)
     if (record) {
-      stopRecordingAndDownload(name)
       useStore.getState().setRecording(false)
-      say('Video saved (.webm).')
+      say('Finishing video…')
+      const result = await stopRecordingAndDownload(name)
+      if (!result.ok) {
+        say('The video could not be saved — try WebM or a smaller size.')
+      } else {
+        const notes = [
+          rec.fellBack ? 'MP4 isn’t supported in this browser, so it was saved as .webm' : null,
+          rec.clamped ? 'size was reduced to what your GPU supports' : null,
+          result.dropped > 5 ? `${result.dropped} frames were skipped because the encoder couldn’t keep up — try a lower size or frame rate` : null,
+        ].filter(Boolean)
+        say(`Video saved (.${rec.ext}, ${rec.width}×${rec.height}, ${rec.fps} fps)${notes.length ? ' — ' + notes.join('; ') : ''}.`)
+      }
     } else {
+      restorePreviewFraming()
       useStore.getState().setPreviewing(false)
       say(null)
     }
