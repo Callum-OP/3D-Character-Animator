@@ -3504,7 +3504,6 @@ export function applyModelMaterials() {
     outlineColor: s.outlineColor,
     outlineOpacity: s.outlineOpacity,
     overrides: s.meshOverrides, // per-part visibility (H key / eye icon) — same map the character uses
-    transparencyDefault: false, // alpha textures are opaque unless switched on (Scene objects → Transparency)
   })
   const materialOptions = {
     mode: s.materialMode,
@@ -3516,7 +3515,6 @@ export function applyModelMaterials() {
     backlightFalloff: s.backlightFalloff,
     shadowStrength: s.shadowStrength,
     rimLight,
-    transparencyDefault: false,
   }
   for (const [id, model] of state.characters) {
     const character = id === s.activeCharacterId ? s : s.characters[id]

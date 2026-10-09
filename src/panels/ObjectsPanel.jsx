@@ -290,12 +290,13 @@ export default function ObjectsPanel() {
 
           <div className="obj-list">
             {sceneObjects.map((o) => {
-              // Models whose textures use alpha (skin that lets the mouth show through, hair
-              // cards, glass…) start out opaque. Only offered when the model has some.
+              // Models whose textures use alpha (hair cards, glass, or skin that lets the mouth
+              // show through…) keep it by default; this switch turns it off. Only offered when
+              // the model has some.
               const alphaMeshes = getTransparentMeshUuidsForObject(o)
               const overridesFor =
                 o.isCharacter && o.id !== activeCharacterId ? characterRoster[o.id]?.meshOverrides || {} : meshOverrides
-              const alphaOn = alphaMeshes.length > 0 && alphaMeshes.every((uuid) => overridesFor[uuid]?.alpha === true)
+              const alphaOn = alphaMeshes.every((uuid) => overridesFor[uuid]?.alpha !== false)
               return (
               <div
                 key={o.id}
@@ -344,7 +345,7 @@ export default function ObjectsPanel() {
                   <div className="obj-row-controls">
                     <label
                       className="obj-alpha"
-                      title="This model uses transparent textures. They're off so inner parts (mouth, teeth) don't show through skin — turn on for hair, lashes or glass that need it."
+                      title="This model uses transparent textures. Turn off if inner parts (mouth, teeth) show through the skin — hair, lashes or glass that rely on it will look solid."
                       onClick={(e) => e.stopPropagation()}
                     >
                       <input

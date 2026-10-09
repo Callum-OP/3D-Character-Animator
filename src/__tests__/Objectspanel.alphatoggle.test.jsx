@@ -43,17 +43,18 @@ describe('Transparency switch in Scene objects', () => {
     expect(within(rowOf('Plain')).queryByLabelText('Transparency')).toBeNull()
   })
 
-  it('starts off, and turning it on enables alpha on every transparent mesh and re-applies materials', () => {
+  it('starts on, and turning it off disables alpha on every transparent mesh and re-applies materials', () => {
     render(<ObjectsPanel />)
     const box = within(rowOf('Hero')).getByLabelText('Transparency')
-    expect(box.checked).toBe(false)
+    expect(box.checked).toBe(true)
     fireEvent.click(box)
-    expect(useStore.getState().meshOverrides['skin-a'].alpha).toBe(true)
-    expect(useStore.getState().meshOverrides['skin-b'].alpha).toBe(true)
-    expect(apply).toHaveBeenCalled()
-    expect(within(rowOf('Hero')).getByLabelText('Transparency').checked).toBe(true)
-    fireEvent.click(within(rowOf('Hero')).getByLabelText('Transparency'))
     expect(useStore.getState().meshOverrides['skin-a'].alpha).toBe(false)
+    expect(useStore.getState().meshOverrides['skin-b'].alpha).toBe(false)
+    expect(apply).toHaveBeenCalled()
+    expect(within(rowOf('Hero')).getByLabelText('Transparency').checked).toBe(false)
+    fireEvent.click(within(rowOf('Hero')).getByLabelText('Transparency'))
+    expect(useStore.getState().meshOverrides['skin-a'].alpha).toBe(true)
+    expect(within(rowOf('Hero')).getByLabelText('Transparency').checked).toBe(true)
   })
 
   it('clicking the switch does not select the row', () => {
@@ -65,14 +66,14 @@ describe('Transparency switch in Scene objects', () => {
   it('works for props too', () => {
     render(<ObjectsPanel />)
     fireEvent.click(within(rowOf('Window')).getByLabelText('Transparency'))
-    expect(useStore.getState().meshOverrides.glass.alpha).toBe(true)
+    expect(useStore.getState().meshOverrides.glass.alpha).toBe(false)
   })
 
   it('writes into a non-active character\'s own overrides', () => {
     transparent[2] = ['eyes']
     render(<ObjectsPanel />)
     fireEvent.click(within(rowOf('Plain')).getByLabelText('Transparency'))
-    expect(useStore.getState().characters[2].meshOverrides.eyes.alpha).toBe(true)
+    expect(useStore.getState().characters[2].meshOverrides.eyes.alpha).toBe(false)
     expect(useStore.getState().meshOverrides.eyes).toBeUndefined()
     delete transparent[2]
   })

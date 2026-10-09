@@ -460,7 +460,7 @@ export function applyMaterials(model, opts) {
   const {
     mode, toonSteps = 3, soften = 0, overrides = {}, rimLight,
     ambientOcclusionStrength, backlightColor, backlightFalloff, colorGrading, shadowStrength,
-    transparencyDefault = true, // the app passes false: alpha is off unless a mesh opts in (overrides[uuid].alpha)
+    transparencyDefault = true, // alpha stays as loaded unless a mesh is switched off (overrides[uuid].alpha === false)
   } = opts
   const store = model.materials
 

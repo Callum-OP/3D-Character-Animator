@@ -738,7 +738,6 @@ function applyObjectStyle(entry, opts) {
       // globally unique regardless of whether the mesh belongs to a
       // character or a prop.
       overrides: use.overrides || {},
-      transparencyDefault: use.transparencyDefault,
     },
   )
   const width = use.outlineWidth != null ? use.outlineWidth : 0.0025
