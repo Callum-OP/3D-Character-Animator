@@ -10,6 +10,7 @@ import { fitShadowExtents, needsRefit, collectFloorReceivers, probeFloor } from 
 import {
   recordOriginalMaterials,
   applyMaterials,
+  getTransparentMeshes,
   updateRimLightMaterials,
   restoreOriginalMaterials,
   disposeGeneratedMaterials,
@@ -144,6 +145,7 @@ import {
   setObjectStyle,
   setObjectOutline,
   applyAllObjectStyles,
+  getObjectMaterialModelById,
   setObjectCastShadow,
   removeObject,
   detachObjectSoft,
@@ -3466,6 +3468,15 @@ export function setBackground(solid, color) {
 // settings. Each character keeps its own mesh overrides, but material style is
 // global across the scene. This is the single entry point for any
 // material/shading/outline-width change.
+// uuids of the meshes of a scene object (character or model prop) that were
+// loaded with transparency / alpha textures — empty when there's nothing for the
+// "Transparency" switch to do, which is when the panel hides it.
+export function getTransparentMeshUuidsForObject(object) {
+  if (!object) return []
+  const model = object.isCharacter ? state.characters.get(object.id) : getObjectMaterialModelById(object.id)
+  return getTransparentMeshes(model).map((mesh) => mesh.uuid)
+}
+
 export function applyModelMaterials() {
   const s = useStore.getState()
   applyCharacterLightLinks(s)
@@ -3493,6 +3504,7 @@ export function applyModelMaterials() {
     outlineColor: s.outlineColor,
     outlineOpacity: s.outlineOpacity,
     overrides: s.meshOverrides, // per-part visibility (H key / eye icon) — same map the character uses
+    transparencyDefault: false, // alpha textures are opaque unless switched on (Scene objects → Transparency)
   })
   const materialOptions = {
     mode: s.materialMode,
@@ -3504,6 +3516,7 @@ export function applyModelMaterials() {
     backlightFalloff: s.backlightFalloff,
     shadowStrength: s.shadowStrength,
     rimLight,
+    transparencyDefault: false,
   }
   for (const [id, model] of state.characters) {
     const character = id === s.activeCharacterId ? s : s.characters[id]

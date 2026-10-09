@@ -14,6 +14,8 @@ import {
   clearObjectAttachmentTimeline,
   scrubAllTimeline,
   setCameraToObject,
+  getTransparentMeshUuidsForObject,
+  applyModelMaterials,
 } from '../three/scene.js'
 import {
   getSelectedUniformScale,
@@ -55,6 +57,10 @@ export default function ObjectsPanel() {
   const globalTime = useStore((s) => s.globalTime)
   const objectAttachmentData = useStore((s) => s.objectAttachmentData)
   const objectMode = useStore((s) => s.objectMode)
+  const meshOverrides = useStore((s) => s.meshOverrides)
+  const characterRoster = useStore((s) => s.characters)
+  const activeCharacterId = useStore((s) => s.activeCharacterId)
+  const setMeshesAlpha = useStore((s) => s.setMeshesAlpha)
   const setSelectedObjectId = useStore((s) => s.setSelectedObjectId)
   const toggleObjectSelection = useStore((s) => s.toggleObjectSelection)
   const setObjectMode = useStore((s) => s.setObjectMode)
@@ -283,7 +289,14 @@ export default function ObjectsPanel() {
           </div>
 
           <div className="obj-list">
-            {sceneObjects.map((o) => (
+            {sceneObjects.map((o) => {
+              // Models whose textures use alpha (skin that lets the mouth show through, hair
+              // cards, glass…) start out opaque. Only offered when the model has some.
+              const alphaMeshes = getTransparentMeshUuidsForObject(o)
+              const overridesFor =
+                o.isCharacter && o.id !== activeCharacterId ? characterRoster[o.id]?.meshOverrides || {} : meshOverrides
+              const alphaOn = alphaMeshes.length > 0 && alphaMeshes.every((uuid) => overridesFor[uuid]?.alpha === true)
+              return (
               <div
                 key={o.id}
                 className={
@@ -326,6 +339,26 @@ export default function ObjectsPanel() {
                     ×
                   </button>
                 </div>
+
+                {alphaMeshes.length > 0 && (
+                  <div className="obj-row-controls">
+                    <label
+                      className="obj-alpha"
+                      title="This model uses transparent textures. They're off so inner parts (mouth, teeth) don't show through skin — turn on for hair, lashes or glass that need it."
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={alphaOn}
+                        onChange={(e) => {
+                          setMeshesAlpha(alphaMeshes, e.target.checked, o.isCharacter ? o.id : null)
+                          applyModelMaterials()
+                        }}
+                      />
+                      Transparency
+                    </label>
+                  </div>
+                )}
 
                 {(o.kind === 'model' || (!o.isCharacter && boneNames.length > 0)) && (
                   <div className="obj-row-controls">
@@ -444,7 +477,8 @@ export default function ObjectsPanel() {
                   </div>
                 )}
               </div>
-            ))}
+              )
+            })}
           </div>
 
           {selectedObjectIds.length > 0 && (

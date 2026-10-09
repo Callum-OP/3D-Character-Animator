@@ -357,11 +357,60 @@ export function recordOriginalMaterials(model) {
     normalizeTransparency(mesh.material)
     originals.set(mesh, mesh.material)
   }
+  // What each original material's alpha settings were as loaded (after the
+  // fix-up above), so transparency can be switched off and back on without ever
+  // losing them. `hasAlpha` marks materials that use alpha at all: flagged
+  // transparent, alpha-tested, an alpha map, or partial opacity.
+  const alpha = new Map()
+  for (const original of originals.values()) {
+    for (const m of Array.isArray(original) ? original : [original]) {
+      if (!m || alpha.has(m)) continue
+      alpha.set(m, {
+        transparent: !!m.transparent,
+        alphaTest: m.alphaTest || 0,
+        depthWrite: m.depthWrite !== false,
+        hasAlpha: !!m.transparent || (m.alphaTest || 0) > 0 || !!m.alphaMap || (m.opacity != null && m.opacity < 1),
+      })
+    }
+  }
   model.materials = {
     originals, // mesh -> Material | Material[]  (never mutated)
     unlit: new Map(), // mesh -> generated MeshBasicMaterial(s)
     toon: new Map(), // mesh -> generated MeshToonMaterial(s)
+    alpha, // material -> as-loaded alpha settings (see above)
   }
+}
+
+// Meshes that came in with transparency/alpha on at least one of their
+// materials — the ones whose "Transparency" switch actually does something.
+export function getTransparentMeshes(model) {
+  const store = model && model.materials
+  if (!store || !store.alpha) return []
+  return (model.meshes || []).filter((mesh) => {
+    const original = store.originals.get(mesh)
+    return (Array.isArray(original) ? original : [original]).some((m) => m && store.alpha.get(m)?.hasAlpha)
+  })
+}
+
+// Switch a mesh's alpha behaviour on (as loaded) or off (fully opaque). Off is
+// what stops textures with an alpha channel — skin, face — letting the mouth,
+// teeth and tongue behind them show through. Works on the original material and
+// on generated unlit/toon copies alike (`target` and `original` line up).
+function applyAlphaState(target, original, store, on) {
+  const targets = Array.isArray(target) ? target : [target]
+  const originals = Array.isArray(original) ? original : [original]
+  targets.forEach((m, i) => {
+    const info = m && store.alpha ? store.alpha.get(originals[i]) : null
+    if (!info || !info.hasAlpha) return
+    const transparent = on ? info.transparent : false
+    const alphaTest = on ? info.alphaTest : 0
+    const depthWrite = on ? info.depthWrite : true
+    // transparent / alphaTest are compile-time shader switches.
+    if (m.transparent !== transparent || m.alphaTest !== alphaTest) m.needsUpdate = true
+    m.transparent = transparent
+    m.alphaTest = alphaTest
+    m.depthWrite = depthWrite
+  })
 }
 
 // A material can end up with opacity < 1 (or an alpha-carrying texture) while
@@ -411,6 +460,7 @@ export function applyMaterials(model, opts) {
   const {
     mode, toonSteps = 3, soften = 0, overrides = {}, rimLight,
     ambientOcclusionStrength, backlightColor, backlightFalloff, colorGrading, shadowStrength,
+    transparencyDefault = true, // the app passes false: alpha is off unless a mesh opts in (overrides[uuid].alpha)
   } = opts
   const store = model.materials
 
@@ -422,6 +472,10 @@ export function applyMaterials(model, opts) {
     // Per-mesh visibility (hide clothing layers, etc.).
     mesh.visible = !(ov && ov.visible === false)
 
+    // Transparency: this mesh's own switch, else the default.
+    const alphaOn = ov && typeof ov.alpha === 'boolean' ? ov.alpha : transparencyDefault !== false
+    applyAlphaState(original, original, store, alphaOn)
+
     // 'flat' (or Unlit mode) → raw colour, no lighting.
     if (mode === 'unlit' || shading === 'flat') {
       const unlitMat = getOrBuild(store.unlit, mesh, original, (src) => {
@@ -430,6 +484,7 @@ export function applyMaterials(model, opts) {
         return made
       })
       updateStyleControls(unlitMat, { colorGrading })
+      applyAlphaState(unlitMat, original, store, alphaOn)
       mesh.material = unlitMat
       continue
     }
@@ -456,6 +511,7 @@ export function applyMaterials(model, opts) {
     // ramp stacked on top of the global soften amount.
     const floor = shading === 'soft' ? Math.max(soften, SOFT_FLOOR) : soften
     const toonMat = getOrBuild(store.toon, mesh, original, buildToon)
+    applyAlphaState(toonMat, original, store, alphaOn)
     const arr = Array.isArray(toonMat) ? toonMat : [toonMat]
     if (mode === 'soft') {
       assignGradient(toonMat, null, floor, true)

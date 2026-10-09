@@ -593,6 +593,23 @@ export const useStore = create((set) => ({
         [uuid]: { outline: true, ...s.meshOverrides[uuid], outlineWidth },
       },
     })),
+  // Switch transparency (alpha textures) on/off for a set of meshes — one entry
+  // per mesh in the per-mesh override map. A character that isn't the active one
+  // keeps its overrides in the roster, so the write goes there instead.
+  setMeshesAlpha: (uuids, alpha, characterId = null) =>
+    set((s) => {
+      const patch = (map) => {
+        const next = { ...map }
+        for (const uuid of uuids) next[uuid] = { outline: true, shading: 'full', ...map[uuid], alpha }
+        return next
+      }
+      if (characterId != null && characterId !== s.activeCharacterId && s.characters[characterId]) {
+        const c = s.characters[characterId]
+        return { characters: { ...s.characters, [characterId]: { ...c, meshOverrides: patch(c.meshOverrides || {}) } } }
+      }
+      return { meshOverrides: patch(s.meshOverrides) }
+    }),
+
   setMeshVisible: (uuid, visible) =>
     set((s) => ({
       meshOverrides: {

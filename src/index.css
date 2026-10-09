@@ -2879,3 +2879,5 @@ body {
 }
 .shape-key-sliders { margin-top: 2px; }
 .shape-key-sliders .morph-row { grid-template-columns: minmax(0, 0.8fr) 1.6fr auto auto; }
+
+.obj-alpha { display: flex; gap: 6px; align-items: center; font-size: 11px; cursor: pointer; }

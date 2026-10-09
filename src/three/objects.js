@@ -738,6 +738,7 @@ function applyObjectStyle(entry, opts) {
       // globally unique regardless of whether the mesh belongs to a
       // character or a prop.
       overrides: use.overrides || {},
+      transparencyDefault: use.transparencyDefault,
     },
   )
   const width = use.outlineWidth != null ? use.outlineWidth : 0.0025
@@ -1233,6 +1234,12 @@ export function getObjectsForSave(meshOverrides) {
 // Look up an object's own ordered mesh list by id (same order used when the
 // record was built above) — used on load to remap saved per-part overrides
 // back onto the freshly-created meshes' (new) uuids.
+// A prop's meshes + recorded materials in the shape the material helpers take.
+export function getObjectMaterialModelById(id) {
+  const entry = o.objects.find((e) => e.id === id)
+  return entry && entry.materials ? { meshes: entry.meshes, materials: entry.materials } : null
+}
+
 export function getObjectMeshesById(id) {
   const entry = o.objects.find((e) => e.id === id)
   return (entry && entry.meshes) || []
