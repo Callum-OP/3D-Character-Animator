@@ -320,7 +320,7 @@ export default function MeshPanel() {
                           }
                         }
                       }}
-                      title={`Save all shape key values on “${selectedMesh.name}” at the current insert time`}
+                      title={`Save all shape key values on “${selectedMesh.name}” at the current insert time (Key position in Animate also saves them for the whole character)`}
                     >
                       Key
                     </button>

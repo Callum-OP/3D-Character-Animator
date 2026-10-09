@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store.js'
 import EditableValue from './EditableValue.jsx'
+import ShapeKeyPicker from './ShapeKeyPicker.jsx'
 import { applyKeyClick, isTimeSelected, pruneSelection, timesToDelete } from './keySelection.js'
 import {
   selectClip,
@@ -130,6 +131,31 @@ function captureCurrentPose() {
     quat: bone.quaternion.toArray(),
     pos: bone.position.toArray(),
   }))
+}
+
+// The character's shape-key layout right now, as [{ meshIndex, list: [{ morphName, value }] }]
+// ready for addShapeKeysAtTime. A shape key is included if it is currently
+// above 0 OR already has keys on the timeline — so one that was brought back
+// down to 0 still gets its 0-key and ramps down instead of holding its old
+// value (a track with a single key holds across the whole clip). Characters
+// whose shape keys were never touched add nothing to the timeline.
+function captureShapeKeys() {
+  const meshes = getCurrentModel()?.meshes || []
+  const existing = useStore.getState().animData.morphs || {}
+  const out = []
+  meshes.forEach((mesh, meshIndex) => {
+    const dict = mesh.morphTargetDictionary
+    const influences = mesh.morphTargetInfluences
+    if (!dict || !influences) return
+    const tracks = existing[meshIndex] || {}
+    const list = []
+    for (const [morphName, idx] of Object.entries(dict)) {
+      const value = influences[idx] ?? 0
+      if (value > 1e-4 || tracks[morphName]?.length) list.push({ morphName, value })
+    }
+    if (list.length) out.push({ meshIndex, list })
+  })
+  return out
 }
 
 // True if a mesh/morph track map has at least one non-empty entry.
@@ -549,6 +575,8 @@ function ObjectMovementEditor({ onScrub, onCharacterKeyframe, onCharacterTrackCh
         <p className="panel-hint">
           Move the character in the scene and key its position at the current character playhead.
         </p>
+
+        <ShapeKeyPicker />
 
         <div className="kf-actions">
           <button className="btn secondary" onClick={onKeyframe} disabled={!selected || characterPlaying}>
@@ -1168,6 +1196,10 @@ export default function AnimationPanel() {
   }
 
   function onSourceChange(next) {
+    if (next === 'clip' && !activeClipName) {
+      onUseDefaultClip()
+      return
+    }
     stop()
     st().setPlayback('stopped')
     st().setCurrentTime(0)
@@ -1184,16 +1216,29 @@ export default function AnimationPanel() {
     }
   }
 
-  function onClipChange(name) {
-    st().setActiveClipName(name || null)
+  // The character's own editable animation — every character starts on it, so
+  // Key position / Key pose work straight away with no "New animation" step.
+  // Its length is the Duration field next to the clip picker.
+  function onUseDefaultClip() {
     stop()
+    markClipKeysAdopted(null)
+    st().setActiveClipName(null)
+    st().setPlaybackSource('edit')
+    st().setInsertTime(0)
+    st().setCurrentTime(0)
+    setClipBoneWarning(null)
+    const d = selectEdit(st().animData, st().animDuration, { loop, speed })
+    st().setDuration(d)
+    st().setPlayback('paused')
+  }
+
+  function onClipChange(name) {
     if (!name) {
-      st().setPlaybackSource('clip')
-      st().setPlayback('stopped')
-      st().setDuration(0)
-      setClipBoneWarning(null)
+      onUseDefaultClip()
       return
     }
+    st().setActiveClipName(name)
+    stop()
     st().setPlaybackSource('clip')
     adoptClipKeys(name)
     const d = selectClip(name, { loop, speed }, st().animData)
@@ -1326,25 +1371,37 @@ export default function AnimationPanel() {
     store.setPlayback('paused')
   }
 
+  // Key position saves the whole character at this time: where it stands, its
+  // body pose AND its current shape-key (face) layout — same idea as keying a
+  // pose, so there's no separate shape-key step to remember. Returns how many
+  // shape-key values were keyed.
   function onCharacterKeyframe({ time, pos, quat }) {
+    // Read the live values first: re-arming the clip below scrubs the character.
+    const shapes = captureShapeKeys()
+    // No clip chosen = the default clip (a legacy/loaded project may still say 'clip').
+    if (source === 'clip' && !activeClipName) st().setPlaybackSource('edit')
+    const shapeCount = shapes.reduce((n, e) => n + e.list.length, 0)
     if (source === 'clip' && activeClipName) {
       if (isClipKeysAdopted(activeClipName)) {
         // The clip remembers its keys: add to them and rebuild the clip (a key
         // past the end lengthens it) instead of converting it to a bake.
         st().addRootKeyframe(time, pos, quat, st().rippleRootEdit)
         st().addKeyframesAtTime(captureCurrentPose(), time)
+        st().addShapeKeysAtTime(shapes, time)
         rebakeAdoptedClip(time)
         updateRootMotionTrack(st().animData.root)
         refreshCharacterAtTime(time)
-        return
+        return shapeCount
       }
-      onBake({ keyPosition: { time, pos, quat }, time })
-      return
+      onBake({ keyPosition: { time, pos, quat, shapes }, time })
+      return shapeCount
     }
     st().addRootKeyframe(time, pos, quat, st().rippleRootEdit)
     st().addKeyframesAtTime(captureCurrentPose(), time)
+    st().addShapeKeysAtTime(shapes, time)
     updateRootMotionTrack(st().animData.root)
     refreshCharacterAtTime(time)
+    return shapeCount
   }
 
   // Called after position keys are deleted or moved. Position keys carry a
@@ -1590,6 +1647,7 @@ export default function AnimationPanel() {
     if (keyPosition) {
       st().addRootKeyframe(keyPosition.time, keyPosition.pos, keyPosition.quat, st().rippleRootEdit)
       st().addKeyframesAtTime(captureCurrentPose(), keyPosition.time)
+      st().addShapeKeysAtTime(keyPosition.shapes, keyPosition.time)
       const keyedData = st().animData
       updateRootMotionTrack(keyedData.root)
       selectEdit(keyedData, editDuration, { loop, speed })
@@ -1871,7 +1929,7 @@ export default function AnimationPanel() {
       <div className="seg">
         <button
           className={'seg-btn' + (source === 'clip' ? ' active' : '')}
-          disabled={!hasClips}
+          disabled={!hasClips && !hasBones}
           onClick={() => onSourceChange('clip')}
           title="Choose and play a built-in or imported motion clip"
         >
@@ -1916,6 +1974,22 @@ export default function AnimationPanel() {
           onChange={onImportClipFile}
         />
       </div>
+
+      {source === 'edit' && hasBones && (
+        <div className="kf-numbers" style={{ marginTop: 8 }}>
+          <label>
+            Duration
+            <input
+              type="number"
+              min={0.1}
+              step={0.1}
+              value={animDuration}
+              onChange={(e) => st().setAnimDuration(Math.max(0.1, Number(e.target.value)))}
+            />
+            s
+          </label>
+        </div>
+      )}
 
       {source === 'edit' && hasBones && (
         <div className="kf-actions" style={{ marginTop: 8 }}>
@@ -2374,20 +2448,6 @@ export default function AnimationPanel() {
             A keyframe is a snapshot at a moment in time. Pose the character, add a
             keyframe, move the time, pose differently, add another — <b>Play</b>{' '}
             smoothly blends between them.
-          </div>
-
-          <div className="kf-numbers">
-            <label>
-              Duration
-              <input
-                type="number"
-                min={0.1}
-                step={0.1}
-                value={animDuration}
-                onChange={(e) => st().setAnimDuration(Math.max(0.1, Number(e.target.value)))}
-              />
-              s
-            </label>
           </div>
 
           <div className="kf-actions">

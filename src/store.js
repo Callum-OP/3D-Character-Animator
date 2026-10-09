@@ -124,7 +124,7 @@ function defaultCharacterFields(modelInfo) {
       modelInfo.bones.some((b) => !b.deform)
     ),
     playback: 'stopped',
-    playbackSource: modelInfo && modelInfo.clipNames && modelInfo.clipNames.length ? 'clip' : 'edit',
+    playbackSource: 'edit', // every character starts on its own editable default clip — keying works straight away
     activeClipName: null,
     importedClipNames: [],
     duration: 0,
@@ -135,6 +135,44 @@ function defaultCharacterFields(modelInfo) {
     dangleEnabled: true,
     dangleChains: [],
   }
+}
+
+// A position key is saved together with a full-body pose key AND the character's
+// shape-key layout at the same time. These keep the shape keys in step when a
+// position key is deleted or moved.
+function morphsWithoutTimes(morphs, times) {
+  if (!morphs) return morphs
+  const near = (k) => times.some((t) => Math.abs(k.time - t) <= 1e-6)
+  const out = {}
+  for (const [meshIndex, byName] of Object.entries(morphs)) {
+    const kept = {}
+    for (const [morphName, keys] of Object.entries(byName || {})) {
+      const next = (keys || []).filter((k) => !near(k))
+      if (next.length) kept[morphName] = next
+    }
+    if (Object.keys(kept).length) out[meshIndex] = kept
+  }
+  return out
+}
+
+function morphsMovedTime(morphs, fromTime, toTime) {
+  if (!morphs) return morphs
+  const near = (t) => Math.abs(t - fromTime) <= 1e-6
+  const out = {}
+  for (const [meshIndex, byName] of Object.entries(morphs)) {
+    const moved = {}
+    for (const [morphName, keys] of Object.entries(byName || {})) {
+      const moving = (keys || []).filter((k) => near(k.time)).map((k) => ({ ...k, time: toTime }))
+      if (!moving.length) {
+        moved[morphName] = keys
+        continue
+      }
+      const kept = keys.filter((k) => !near(k.time) && Math.abs(k.time - toTime) > 1e-6)
+      moved[morphName] = [...kept, ...moving].sort((a, b) => a.time - b.time)
+    }
+    out[meshIndex] = moved
+  }
+  return out
 }
 
 export const useStore = create((set) => ({
@@ -1174,7 +1212,12 @@ export const useStore = create((set) => ({
         if (kept.length) tracks[name] = kept
       }
       return {
-        animData: { ...s.animData, root: (s.animData.root || []).filter((k) => !near(k)), tracks },
+        animData: {
+          ...s.animData,
+          root: (s.animData.root || []).filter((k) => !near(k)),
+          tracks,
+          morphs: morphsWithoutTimes(s.animData.morphs, [time]),
+        },
       }
     }),
   // Batch delete (multi-select): same as deleteRootKeyframe for each time, but one
@@ -1188,7 +1231,12 @@ export const useStore = create((set) => ({
         if (kept.length) tracks[name] = kept
       }
       return {
-        animData: { ...s.animData, root: (s.animData.root || []).filter((k) => !near(k)), tracks },
+        animData: {
+          ...s.animData,
+          root: (s.animData.root || []).filter((k) => !near(k)),
+          tracks,
+          morphs: morphsWithoutTimes(s.animData.morphs, times),
+        },
       }
     }),
   moveRootKeyframe: (fromTime, toTime) =>
@@ -1211,7 +1259,7 @@ export const useStore = create((set) => ({
         const kept = keys.filter((key) => !near(key.time) && Math.abs(key.time - toTime) > 1e-6)
         tracks[name] = [...kept, ...moving].sort((a, b) => a.time - b.time)
       }
-      return { animData: { ...s.animData, root, tracks } }
+      return { animData: { ...s.animData, root, tracks, morphs: morphsMovedTime(s.animData.morphs, fromTime, toTime) } }
     }),
 
   // Remove every keyframe (joints, position, parts, cameras, lights) at a given time.
@@ -1326,6 +1374,27 @@ export const useStore = create((set) => ({
       }
       existingMorphs[meshIndex] = meshMorphs
       return { animData: { ...s.animData, morphs: existingMorphs } }
+    }),
+
+  // Key the shape-key layout of SEVERAL meshes at once (one store update, so
+  // one undo step): `entries` = [{ meshIndex, list: [{ morphName, value }] }].
+  // Used by "Key position", which saves the whole character's pose, position
+  // and face/shape-key layout together.
+  addShapeKeysAtTime: (entries, time) =>
+    set((s) => {
+      if (!entries || !entries.length) return {}
+      const morphs = { ...(s.animData.morphs || {}) }
+      for (const { meshIndex, list } of entries) {
+        const meshMorphs = { ...(morphs[meshIndex] || {}) }
+        for (const { morphName, value } of list) {
+          const keys = (meshMorphs[morphName] || []).filter((k) => k.time !== time)
+          keys.push({ time, value })
+          keys.sort((a, b) => a.time - b.time)
+          meshMorphs[morphName] = keys
+        }
+        morphs[meshIndex] = meshMorphs
+      }
+      return { animData: { ...s.animData, morphs } }
     }),
 
   // Insert N blank frames at `atTime`: every keyframe (joints, root, parts,

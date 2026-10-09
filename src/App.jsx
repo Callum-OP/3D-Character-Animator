@@ -1,3 +1,4 @@
+import { PRIVACY_POLICY_URL } from './links.js'
 import Viewport from './three/Viewport.jsx'
 import TitleBar from './panels/TitleBar.jsx'
 import MaterialPanel from './panels/MaterialPanel.jsx'
@@ -193,6 +194,9 @@ function AppInner() {
             </div>
             <p className="drawer-copy">Tune the stage around your scene. These choices affect the viewport and exports.</p>
             <ViewPanel />
+            <p className="drawer-copy drawer-legal">
+              <a href={PRIVACY_POLICY_URL} target="_blank" rel="noopener noreferrer">Privacy policy</a>
+            </p>
           </aside>
         </div>
       )}

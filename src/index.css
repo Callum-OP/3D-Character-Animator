@@ -2859,3 +2859,23 @@ body {
   font-size: 12px;
   text-align: center;
 }
+.drawer-legal { margin-top: 12px; font-size: 0.85em; }
+.drawer-legal a { color: inherit; text-decoration: underline; }
+
+
+/* Animate panel: shape key drop-down + equipped slider */
+.shape-key-picker { margin: 6px 0 8px; }
+.shape-key-row { display: flex; gap: 6px; align-items: center; }
+.shape-key-row .select { flex: 1 1 auto; min-width: 0; }
+.shape-key-filter {
+  flex: 0 0 34%;
+  min-width: 0;
+  padding: 6px 8px;
+  background: var(--panel-bg);
+  color: var(--text);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+.shape-key-sliders { margin-top: 2px; }
+.shape-key-sliders .morph-row { grid-template-columns: minmax(0, 0.8fr) 1.6fr auto auto; }

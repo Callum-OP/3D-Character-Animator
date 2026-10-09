@@ -1,3 +1,4 @@
+import { PRIVACY_POLICY_URL } from '../links.js'
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store.js'
 import {
@@ -579,6 +580,12 @@ export default function TitleBar({ onOpenSettings }) {
           {openMenu === 'help' && (
             <div className="titlebar-dropdown" role="menu">
               <button role="menuitem" onClick={() => { setOpenMenu(null); toggleHelp() }}>Help &amp; Shortcuts (?)</button>
+              <button
+                role="menuitem"
+                onClick={() => { setOpenMenu(null); window.open(PRIVACY_POLICY_URL, '_blank', 'noopener,noreferrer') }}
+              >
+                Privacy Policy
+              </button>
               <div className="titlebar-dropdown-sep" />
               <div className="titlebar-dropdown-label">Animare 3D Animator</div>
             </div>
