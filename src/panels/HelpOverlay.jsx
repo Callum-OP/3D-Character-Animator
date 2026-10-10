@@ -38,8 +38,10 @@ export default function HelpOverlay() {
               <li>
                 <b>Pose it.</b> In <b>Pose</b> mode, click a dot on the character
                 (or a name in the Pose list), then drag the coloured ring — or the
-                X/Y/Z sliders — to bend that joint. <b>Mirror</b> swaps the
-                left and right sides of a pose.
+                X/Y/Z sliders — to bend that joint. Shift or Ctrl-click more
+                joints to rotate or move them together (Rotate / Move buttons
+                above the view). <b>Mirror</b> swaps the left and right sides
+                of a pose.
               </li>
               <li>
                 <b>Adjust its parts (optional).</b> In <b>Mesh</b> mode, click a

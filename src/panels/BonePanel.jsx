@@ -473,8 +473,8 @@ export default function BonePanel() {
       </div>
 
       {selectedBoneNames.length > 1 && (
-        <div className="bone-count" title="Drag the rotate gizmo to bend every selected joint by the same amount">
-          {selectedBoneNames.length} joints selected — drag the gizmo to rotate them together
+        <div className="bone-count" title="Rotate turns every selected joint by the same amount; Move drags them all by the same offset">
+          {selectedBoneNames.length} joints selected — drag the gizmo to rotate or move them together
         </div>
       )}
 
@@ -612,7 +612,7 @@ export default function BonePanel() {
       <div className="pose-hint">
         {boneViewMode === 'parts'
           ? 'Click a highlighted body part to select it, then use the Rotate/Move toggle and drag the gizmo. Esc deselects · Ctrl+Z undoes · Ctrl+Shift+Z redoes. Switch to "Bones" for fine per-joint control.'
-          : 'Click a bone dot or a name to select, then drag the ring gizmo or the X/Y/Z sliders to bend it. Shift/Ctrl-click another bone (dot or name) to rotate several joints together. Esc deselects · Ctrl+Z undoes · Ctrl+Shift+Z redoes · hold Shift while dragging the gizmo to snap.'}
+          : 'Click a bone dot or a name to select, then drag the ring gizmo or the X/Y/Z sliders to bend it. Shift/Ctrl-click another bone (dot or name) to rotate or move several joints together. Esc deselects · Ctrl+Z undoes · Ctrl+Shift+Z redoes · hold Shift while dragging the gizmo to snap.'}
       </div>
     </div>
   )

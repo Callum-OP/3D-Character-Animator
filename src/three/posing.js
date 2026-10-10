@@ -197,9 +197,10 @@ const p = {
   onGizmoModeChange: null, // (mode) => void — keeps the store's gizmo toggle in sync
 
   selected: null, // selected Bone (or null) — the PRIMARY bone (leader) when multiple are selected
-  selectedBones: [], // full multi-selection (rotate-only group gizmo); [] or [selected] outside multi-select
-  rotatePivot: null, // shared THREE.Object3D the rotate gizmo attaches to when >1 bones are selected
+  selectedBones: [], // full multi-selection (group Move / Rotate gizmo); [] or [selected] outside multi-select
+  rotatePivot: null, // shared THREE.Object3D the Move / Rotate gizmo attaches to when >1 bones are selected
   pivotStartQuat: null, // rotatePivot's quaternion at drag start (multi-select rotate)
+  groupMove: null, // { pivotStart, entries, before } during a multi-bone Move drag
   pivotBoneStarts: null, // Map<Bone, { localQuat, worldQuat, parentWorldQuat }> captured at drag start
   enabled: true, // false outside Bone mode: overlay hidden, gizmo detached, no picking
   overlayVisible: true, // the user's "Show joints" toggle (independent of mode)
@@ -254,14 +255,12 @@ export function initPosing(refs) {
   })
   transform.addEventListener('objectChange', () => {
     p.gizmoMovedDuringDrag = true // a real drag happened, not just a press on the handle's pick padding
-    // Multi-select is checked FIRST and is the only thing that can make this
-    // group-rotate — regardless of whether the user's remembered single-bone
-    // preference (p.gizmoMode) happens to be Move or Rotate. See
-    // attachGizmoToSelected(): a multi-selection always shows the rotate
-    // widget without ever touching p.gizmoMode, so that preference is still
-    // there, untouched, the next time only one bone is selected.
+    // Multi-select is checked FIRST: a group drags (Move) or turns (Rotate)
+    // together, following the same gizmo choice as a single bone.
     if (p.selectedBones.length > 1) {
-      applyGroupRotationDelta() // several bones selected → same delta on all of them
+      // several bones selected → the same rotation, or the same move, on all of them
+      if (p.gizmoMode === 'translate') applyGroupMove()
+      else applyGroupRotationDelta()
     } else if (p.gizmoMode === 'translate') {
       solveIk() // drag the proxy → CCD-solve the ancestor chain toward it
     } else if (p.selected) {
@@ -273,7 +272,8 @@ export function initPosing(refs) {
   transform.addEventListener('mouseDown', () => {
     if (!p.selected) return
     if (p.selectedBones.length > 1) {
-      beginGroupRotateDrag()
+      if (p.gizmoMode === 'translate') beginGroupMoveDrag()
+      else beginGroupRotateDrag()
     } else if (p.gizmoMode === 'translate') {
       p.ikDragBefore = new Map(p.ikChain.map((b) => [b, b.quaternion.clone()]))
     } else {
@@ -281,8 +281,10 @@ export function initPosing(refs) {
     }
   })
   transform.addEventListener('mouseUp', () => {
-    if (p.selectedBones.length > 1) commitGroupRotateUndo()
-    else if (p.gizmoMode === 'translate') commitIkDragUndo()
+    if (p.selectedBones.length > 1) {
+      if (p.gizmoMode === 'translate') commitGroupMoveUndo()
+      else commitGroupRotateUndo()
+    } else if (p.gizmoMode === 'translate') commitIkDragUndo()
     else commitDragUndo()
     p.requestRender()
   })
@@ -296,11 +298,11 @@ export function initPosing(refs) {
   p.scene.add(ikProxy)
   p.ikProxy = ikProxy
 
-  // Shared pivot the rotate gizmo attaches to when several bones are selected
-  // at once (shift/ctrl-click) — see selectBones(). Parked at the group's
-  // average world position; dragging it applies the SAME rotation delta to
-  // every selected bone (see applyGroupRotationDelta), like a mini rigid-body
-  // rotate. Added directly to the scene (no parent transform), same as
+  // Shared pivot the gizmo attaches to when several bones are selected at once
+  // (shift/ctrl-click) — see selectBones(). Parked at the group's average world
+  // position; rotating it applies the SAME rotation delta to every selected bone
+  // (applyGroupRotationDelta), moving it drags them all by the same offset
+  // (applyGroupMove). Added directly to the scene (no parent transform), same as
   // objects.js's multi-object pivot, so its own quaternion IS its world one.
   const rotatePivot = new THREE.Object3D()
   rotatePivot.name = '(multi-bone pivot)'
@@ -504,14 +506,10 @@ export function updateBoneHelpers() {
   col.needsUpdate = true
 }
 
-// Select a bone by name (or null to deselect). Idempotent: safe to call from
-// both the panel and the viewport pick path. While suspended (animation playing)
-// we remember the selection but don't attach the gizmo.
-export function selectBone(name) {
-  const bone = name ? p.boneMap.get(name) || null : null
-  p.selected = bone
-  p.selectedBones = bone ? [bone] : []
-  p.ikChain = bone ? buildIkChain(bone) : []
+// The IK chain (and, for a topmost limb joint, the limb tip to aim with) that
+// Move mode uses for one bone — shared by single-bone Move and group Move.
+function ikSetupFor(bone) {
+  let chain = buildIkChain(bone)
   // A bone like an upper arm/leg with no shoulder/hip-equivalent link above
   // it (either the rig has none, or that link isn't recognisable by name)
   // gets an empty chain from buildIkChain — there'd be nothing for Move mode
@@ -519,21 +517,34 @@ export function selectBone(name) {
   // specific case, let the clicked bone rotate itself (it's a real limb
   // joint, just the topmost one available) and aim the drag at that limb's
   // tip (hand/foot) instead of the bone's own position, which never moves.
-  p.ikTipRef = null
-  if (bone && p.ikChain.length === 0) {
+  let tipRef = null
+  if (chain.length === 0) {
     const slot = slotFor(bone)
     const role = slot ? slot.split('.')[0] : null
     if (IK_LIMB_ROLES.has(role)) {
-      p.ikChain = [bone]
-      p.ikTipRef = findLimbTip(bone)
+      chain = [bone]
+      tipRef = findLimbTip(bone)
     } else if (p.looseIk) {
       // Unclassifiable rig and this bone has no ancestor bones to recruit
       // either (it's at or near the skeleton root) — still give it a
       // one-link "chain" of itself so Move rotates it toward the drag target
       // instead of doing nothing.
-      p.ikChain = [bone]
+      chain = [bone]
     }
   }
+  return { chain, tipRef }
+}
+
+// Select a bone by name (or null to deselect). Idempotent: safe to call from
+// both the panel and the viewport pick path. While suspended (animation playing)
+// we remember the selection but don't attach the gizmo.
+export function selectBone(name) {
+  const bone = name ? p.boneMap.get(name) || null : null
+  p.selected = bone
+  p.selectedBones = bone ? [bone] : []
+  const ik = bone ? ikSetupFor(bone) : { chain: [], tipRef: null }
+  p.ikChain = ik.chain
+  p.ikTipRef = ik.tipRef
   if (!p.suspended && p.enabled) {
     attachGizmoToSelected()
   } else if (!bone && p.transform) {
@@ -548,10 +559,8 @@ export function selectBone(name) {
 // together with one gizmo — mirrors objects.js's selectObjects() for scene
 // objects. 0 or 1 names fall back to the plain selectBone() path unchanged
 // (same behaviour, same IK-move support, as before multi-select existed).
-// Move mode's IK solver targets one bone's own ancestor chain and has no
-// sensible generalisation to a group, so a multi-selection always drives the
-// ROTATE gizmo — the same rigid rotation delta is applied to every selected
-// bone, regardless of what gizmo mode was active before the selection grew.
+// A group uses whichever gizmo is active: Rotate applies the same rotation to
+// every selected bone, Move drags them all by the same offset (see applyGroupMove).
 export function selectBones(names) {
   const list = Array.isArray(names) ? names : names != null ? [names] : []
   const bones = []
@@ -571,11 +580,7 @@ export function selectBones(names) {
   p.selectedBones = bones
   p.ikChain = []
   p.ikTipRef = null
-  // Deliberately doesn't touch p.gizmoMode or the toolbar toggle here — see
-  // attachGizmoToSelected(), which shows the rotate widget for a multi-
-  // selection without disturbing the user's remembered single-bone
-  // preference (Rotate or Move), so it's exactly as they left it once the
-  // selection drops back to one bone.
+  // The group keeps whichever gizmo (Move or Rotate) is active.
   const center = new THREE.Vector3()
   for (const b of bones) center.add(b.getWorldPosition(new THREE.Vector3()))
   center.divideScalar(bones.length)
@@ -649,12 +654,11 @@ function commitGroupRotateUndo() {
 function attachGizmoToSelected() {
   if (!p.transform) return
   if (p.selectedBones.length > 1) {
-    // Group-rotate only, regardless of the remembered single-bone gizmoMode
-    // preference — this sets the WIDGET's mode for the multi-selection's
-    // lifetime only. It deliberately never touches p.gizmoMode itself, so
-    // whatever the user last had (Rotate or Move) is exactly what comes
-    // back the next time only one bone is selected.
-    p.transform.setMode('rotate')
+    // A group follows the same Move / Rotate choice as a single bone: Rotate
+    // turns them all together, Move drags them all by the same offset (see
+    // beginGroupMoveDrag). The widget sits at the group's centre, un-rotated.
+    centerGroupPivot()
+    p.transform.setMode(p.gizmoMode === 'translate' ? 'translate' : 'rotate')
     p.transform.attach(p.rotatePivot)
     return
   }
@@ -705,11 +709,6 @@ export function resumePosing() {
 // capped by its reach and each joint's own limb limits). Bones have no resize
 // gizmo — there's nothing on a bone to resize.
 export function setBoneGizmoMode(mode) {
-  // Move (IK) targets one bone's own ancestor chain and has no sensible
-  // generalisation to a group — a multi-bone selection always stays on
-  // Rotate (see selectBones); ignore an attempted switch to Move until the
-  // selection is back down to one bone.
-  if (p.selectedBones.length > 1 && mode === 'translate') return
   p.gizmoMode = mode === 'translate' ? 'translate' : 'rotate'
   if (p.transform) p.transform.setMode(p.gizmoMode)
   if (p.selected) attachGizmoToSelected()
@@ -834,7 +833,7 @@ export function resetBone(name) {
 // Look up a live Bone Object3D by name on the currently active character —
 // used by the Objects panel to attach a prop (gun, shield, hat...) to a bone
 // so it follows posing/animation automatically via the normal scene graph.
-// Names of every bone the rotate gizmo currently drives together (length 0
+// Names of every bone the gizmo currently drives together (length 0
 // or 1 outside a multi-selection) — used by the Pose panel's "N joints
 // selected" hint and by tests proving a multi-select actually took.
 export function getSelectedBoneNames() {
@@ -1376,35 +1375,11 @@ function solveIk() {
   if (!effector || !p.model) return
   // Normally the effector's own position is what CCD tries to move — its
   // ancestors rotate, it doesn't. In the self-inclusive-chain case (see
-  // selectBone) the effector IS one of the joints being rotated, so its own
+  // ikSetupFor) the effector IS one of the joints being rotated, so its own
   // position barely changes; the limb's actual tip is what the drag should
   // be judged against instead.
   const posRef = p.ikTipRef || effector
-  const target = p.ikProxy.position // ikProxy is a scene-root child, so this IS its world position
-  if (p.ikChain.length) {
-    for (let iter = 0; iter < IK_ITERATIONS; iter++) {
-      for (const joint of p.ikChain) {
-        posRef.getWorldPosition(_effPos)
-        joint.getWorldPosition(_jPos)
-        _toEff.copy(_effPos).sub(_jPos)
-        _toTarget.copy(target).sub(_jPos)
-        if (_toEff.lengthSq() < 1e-10 || _toTarget.lengthSq() < 1e-10) continue
-        _toEff.normalize()
-        _toTarget.normalize()
-        _deltaQuat.setFromUnitVectors(_toEff, _toTarget)
-
-        joint.getWorldQuaternion(_jWorldQuat)
-        _newWorldQuat.copy(_deltaQuat).multiply(_jWorldQuat)
-        if (joint.parent) joint.parent.getWorldQuaternion(_parentWorldQuat)
-        else _parentWorldQuat.identity()
-        joint.quaternion.copy(_parentWorldQuat.invert().multiply(_newWorldQuat))
-
-        clampBoneLocal(joint) // each step stays inside the joint's natural range
-        joint.updateWorldMatrix(true, true) // so the next joint/iteration sees the new pose
-      }
-    }
-    updateBoneHelpers()
-  }
+  ccdSolve(p.ikChain, posRef, p.ikProxy.position) // ikProxy is a scene-root child, so this IS its world position
   // Keep the gizmo glued to the bone it's actually moving, rather than
   // letting it drift toward wherever the mouse currently is. Without this,
   // dragging past the chain's reach (or dragging a bone with no eligible
@@ -1412,6 +1387,94 @@ function solveIk() {
   // further from the model the longer the drag continues, since nothing
   // was otherwise pulling the proxy itself back toward the actual result.
   posRef.getWorldPosition(p.ikProxy.position)
+}
+
+// One CCD solve: swing each joint of `chain` so `posRef` heads for `target`.
+function ccdSolve(chain, posRef, target) {
+  if (!chain.length) return
+  for (let iter = 0; iter < IK_ITERATIONS; iter++) {
+    for (const joint of chain) {
+      posRef.getWorldPosition(_effPos)
+      joint.getWorldPosition(_jPos)
+      _toEff.copy(_effPos).sub(_jPos)
+      _toTarget.copy(target).sub(_jPos)
+      if (_toEff.lengthSq() < 1e-10 || _toTarget.lengthSq() < 1e-10) continue
+      _toEff.normalize()
+      _toTarget.normalize()
+      _deltaQuat.setFromUnitVectors(_toEff, _toTarget)
+
+      joint.getWorldQuaternion(_jWorldQuat)
+      _newWorldQuat.copy(_deltaQuat).multiply(_jWorldQuat)
+      if (joint.parent) joint.parent.getWorldQuaternion(_parentWorldQuat)
+      else _parentWorldQuat.identity()
+      joint.quaternion.copy(_parentWorldQuat.invert().multiply(_newWorldQuat))
+
+      clampBoneLocal(joint) // each step stays inside the joint's natural range
+      joint.updateWorldMatrix(true, true) // so the next joint/iteration sees the new pose
+    }
+  }
+  updateBoneHelpers()
+}
+
+// --- Group Move -------------------------------------------------------------
+// With several bones selected, Move drags them all by the same offset: each
+// bone gets its own IK solve toward (where it started + the pivot's offset), so
+// e.g. both hands follow one drag. Bones are solved parents-first and over two
+// passes so a selected bone sitting on another's chain still ends up on target.
+// A bone with no chain to swing (such as the hips) stays put, as in single Move.
+const _gDelta = new THREE.Vector3()
+const _gTarget = new THREE.Vector3()
+
+function boneDepth(bone) {
+  let d = 0
+  for (let b = bone.parent; b; b = b.parent) d++
+  return d
+}
+
+function beginGroupMoveDrag() {
+  const entries = []
+  const affected = new Set()
+  for (const bone of [...p.selectedBones].sort((a, b) => boneDepth(a) - boneDepth(b))) {
+    const { chain, tipRef } = ikSetupFor(bone)
+    const posRef = tipRef || bone
+    entries.push({ chain, posRef, start: posRef.getWorldPosition(new THREE.Vector3()) })
+    for (const joint of chain) affected.add(joint)
+  }
+  const before = new Map()
+  for (const joint of affected) before.set(joint, joint.quaternion.clone())
+  p.groupMove = { pivotStart: p.rotatePivot.position.clone(), entries, before }
+}
+
+function applyGroupMove() {
+  const g = p.groupMove
+  if (!g) return
+  _gDelta.copy(p.rotatePivot.position).sub(g.pivotStart)
+  for (let pass = 0; pass < 2; pass++) {
+    for (const e of g.entries) ccdSolve(e.chain, e.posRef, _gTarget.copy(e.start).add(_gDelta))
+  }
+}
+
+function commitGroupMoveUndo() {
+  const g = p.groupMove
+  p.groupMove = null
+  if (!g) return
+  const changes = []
+  for (const [bone, before] of g.before) {
+    const after = bone.quaternion.clone()
+    if (!after.equals(before)) changes.push({ bone, before, after })
+  }
+  if (changes.length) pushUndo(changes)
+  centerGroupPivot() // glue the widget to where the group ended up
+}
+
+// Park the shared pivot at the group's average world position, un-rotated.
+function centerGroupPivot() {
+  if (p.selectedBones.length < 2) return
+  const center = new THREE.Vector3()
+  for (const b of p.selectedBones) center.add(b.getWorldPosition(new THREE.Vector3()))
+  p.rotatePivot.position.copy(center.divideScalar(p.selectedBones.length))
+  p.rotatePivot.quaternion.identity()
+  p.rotatePivot.updateMatrixWorld(true)
 }
 
 function commitIkDragUndo() {
@@ -1448,6 +1511,17 @@ export function simulateGroupRotateForTest(deltaQuat) {
   p.transform.dispatchEvent({ type: 'dragging-changed', value: true })
   p.transform.dispatchEvent({ type: 'mouseDown' })
   p.rotatePivot.quaternion.copy(deltaQuat)
+  p.transform.dispatchEvent({ type: 'objectChange' })
+  p.transform.dispatchEvent({ type: 'mouseUp' })
+  p.transform.dispatchEvent({ type: 'dragging-changed', value: false })
+}
+
+// Same idea for a multi-bone Move drag: the pivot is dragged by `offset`.
+export function simulateGroupMoveForTest(offset) {
+  if (!p.transform || p.selectedBones.length <= 1) return
+  p.transform.dispatchEvent({ type: 'dragging-changed', value: true })
+  p.transform.dispatchEvent({ type: 'mouseDown' })
+  p.rotatePivot.position.add(offset)
   p.transform.dispatchEvent({ type: 'objectChange' })
   p.transform.dispatchEvent({ type: 'mouseUp' })
   p.transform.dispatchEvent({ type: 'dragging-changed', value: false })
