@@ -14,6 +14,10 @@ export default function ViewPanel() {
   const solidBackground = useStore((s) => s.solidBackground)
   const backgroundColor = useStore((s) => s.backgroundColor)
   const showStats = useStore((s) => s.showStats)
+  const dofEnabled = useStore((s) => s.dofEnabled)
+  const blurEnabled = useStore((s) => s.blurEnabled)
+  const setDofEnabled = useStore((s) => s.setDofEnabled)
+  const setBlurEnabled = useStore((s) => s.setBlurEnabled)
   const performanceMode = useStore((s) => s.performanceMode)
   const performanceBackgroundObjects = useStore((s) => s.performanceBackgroundObjects)
   const performanceLowPoly = useStore((s) => s.performanceLowPoly)
@@ -142,6 +146,25 @@ export default function ViewPanel() {
           />
           Background colour
         </label>
+      )}
+
+      <label
+        className="toggle-row"
+        title="Blur things nearer or further than the focus distance, like a shallow camera lens"
+      >
+        <input type="checkbox" checked={dofEnabled} onChange={(e) => setDofEnabled(e.target.checked)} />
+        Depth of field
+      </label>
+
+      <label className="toggle-row" title="Soften the whole view with a flat blur">
+        <input type="checkbox" checked={blurEnabled} onChange={(e) => setBlurEnabled(e.target.checked)} />
+        Blur
+      </label>
+      {(dofEnabled || blurEnabled) && (
+        <p className="panel-hint">
+          Camera effects apply to the whole view. Fine-tune focus distance, aperture and blur
+          strength in Scene ▸ Cameras.
+        </p>
       )}
 
       <label className="toggle-row">
