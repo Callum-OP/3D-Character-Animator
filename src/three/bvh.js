@@ -558,6 +558,45 @@ export async function parseBVH(file) {
   }
 }
 
+// Which way does this character face, as a yaw about world Y measured from +Z
+// (the way BVH data faces)? Read from the rest pose's left/right bone pairs — the
+// character's left side points along its forward × up, so a character facing +Z
+// has its left on +X. Returns 0 (assume +Z) when no left/right pair can be found
+// or the character is within a few degrees of +Z, so ordinary characters get
+// exactly what they got before.
+//
+// Mocap is authored facing +Z. Without this, a character that is actually
+// authored facing -Z (VRM 0.x and many Blender/Sketchfab exports, or one turned
+// around in the scene) gets the motion applied in world space: arms and legs
+// swing to its back instead of its front.
+const FACING_SNAP = (12 * Math.PI) / 180
+export function detectFacingYaw(tgtBones, restP, preferred = null) {
+  const fallback = buildSlotFallbackMap(tgtBones)
+  const slotOf = (b) => classifyBone(b.name) || fallback.get(b.name) || null
+  const bySlot = new Map()
+  const consider = (b) => {
+    const slot = slotOf(b)
+    if (slot && !bySlot.has(slot)) bySlot.set(slot, b)
+  }
+  // Bones the mapping actually drives win over lookalikes (twist/helper bones).
+  if (preferred) for (const b of preferred) consider(b)
+  for (const b of tgtBones) consider(b)
+  for (const base of ['upperLeg', 'upperArm', 'shoulder', 'foot', 'hand']) {
+    const left = bySlot.get(`${base}.L`)
+    const right = bySlot.get(`${base}.R`)
+    const pl = left && restP.get(left)
+    const pr = right && restP.get(right)
+    if (!pl || !pr) continue
+    const lx = pl.x - pr.x
+    const lz = pl.z - pr.z
+    if (Math.hypot(lx, lz) < 0.02) continue // pair is not spread sideways — no signal
+    // forward = left × up = (-lz, 0, lx)
+    const yaw = Math.atan2(-lz, lx)
+    return Math.abs(yaw) < FACING_SNAP ? 0 : yaw
+  }
+  return 0
+}
+
 // Retarget a parsed BVH onto the model using a confirmed name map. Returns
 // { clip, matched, total }; the clip has plain `Bone.quaternion` tracks plus a
 // `.position` track on the hip bone carrying the mocap's root translation
@@ -568,7 +607,10 @@ export async function parseBVH(file) {
 // rest bone direction. That way an A-pose character correctly follows T-pose
 // mocap (without it, the A-pose arm droop is baked into every frame). A yaw
 // correction from the hip's first frame keeps the character facing where its
-// rest pose faces, even when the mocap data faces sideways.
+// rest pose faces, even when the mocap data faces sideways. The whole motion is
+// also turned to the direction the character itself faces (see detectFacingYaw),
+// so characters authored facing -Z or turned around still swing their limbs to
+// their FRONT.
 export function retargetParsed(parsed, model, names, hip, clipName) {
   const target = model.skinnedMeshes && model.skinnedMeshes[0]
   if (!target) throw new Error('This model has no skinned mesh to retarget mocap onto.')
@@ -677,6 +719,11 @@ export function retargetParsed(parsed, model, names, hip, clipName) {
   const out = new Map()
   for (const b of mapped) out.set(b, new Float32Array(numFrames * 4))
 
+  // The mocap's world frame faces +Z; carry it into the direction this character
+  // actually faces. `faceQ` turns source-world vectors into target-world ones.
+  const faceQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), detectFacingYaw(tgtBones, restTgtP, mapped))
+  const faceInv = faceQ.clone().invert()
+
   // --- Rest alignment (auto T-pose) ---
   // For each mapped bone, the world rotation swinging its rest bone direction
   // (towards its nearest mapped descendant) onto the source's rest direction.
@@ -723,7 +770,7 @@ export function retargetParsed(parsed, model, names, hip, clipName) {
       const childS = srcByName.get(names[childT.name])
       if (!childS || childS === srcBone) continue
       tDir.copy(restTgtP.get(childT)).sub(restTgtP.get(b))
-      sDir.copy(restSrcP.get(childS)).sub(restSrcP.get(srcBone))
+      sDir.copy(restSrcP.get(childS)).sub(restSrcP.get(srcBone)).applyQuaternion(faceQ)
       if (tDir.lengthSq() < 1e-10 || sDir.lengthSq() < 1e-10) continue
       align.set(b, new THREE.Quaternion().setFromUnitVectors(tDir.normalize(), sDir.normalize()))
     }
@@ -787,7 +834,7 @@ export function retargetParsed(parsed, model, names, hip, clipName) {
     // character's hip height, yaw-corrected, re-anchored on the target hip's
     // rest position, then expressed in the hip's parent space.
     if (hipPos) {
-      srcHip.getWorldPosition(hipW).sub(srcHipStart).multiplyScalar(hipScale).applyQuaternion(yawFix)
+      srcHip.getWorldPosition(hipW).sub(srcHipStart).multiplyScalar(hipScale).applyQuaternion(yawFix).applyQuaternion(faceQ)
       hipW.add(restTgtP.get(tgtHip)).applyMatrix4(hipParentInv)
       const o = i * 3
       hipPos[o] = hipW.x
@@ -804,8 +851,9 @@ export function retargetParsed(parsed, model, names, hip, clipName) {
         srcBone.getWorldQuaternion(curSrcW)
         // delta = curSrc * restSrc⁻¹  (world-space rotation since the mocap rest)
         D.copy(restSrcW.get(srcBone)).invert().premultiply(curSrcW)
-        // desiredWorld = yawFix * delta * align * restTargetWorld
-        desired.copy(yawFix).multiply(D)
+        // desiredWorld = yawFix * (face * delta * face⁻¹) * align * restTargetWorld
+        // — the mocap's world-space delta, re-expressed in the direction the character faces
+        desired.copy(yawFix).multiply(faceQ).multiply(D).multiply(faceInv)
         const A = align.get(b)
         if (A) desired.multiply(A)
         desired.multiply(restTgtW.get(b))
