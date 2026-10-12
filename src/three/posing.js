@@ -840,6 +840,35 @@ export function getSelectedBoneNames() {
   return p.selectedBones.map((b) => b.name)
 }
 
+// World-space box around the selected joint(s) for framing the camera: each
+// joint plus the bone above it and the bones directly below it, so a joint
+// frames as the little stretch of limb it belongs to rather than a single point.
+// Null when nothing is selected.
+export function getBoneFramingBounds(names = null) {
+  const bones = names ? names.map((n) => p.boneMap.get(n)).filter(Boolean) : p.selectedBones
+  if (!bones.length) return null
+  const box = new THREE.Box3()
+  const pos = new THREE.Vector3()
+  const add = (b) => box.expandByPoint(b.getWorldPosition(pos))
+  const childPos = new THREE.Vector3()
+  for (const b of bones) {
+    b.updateWorldMatrix(true, true)
+    const here = b.getWorldPosition(new THREE.Vector3())
+    add(b)
+    if (b.parent && b.parent.isBone) add(b.parent)
+    // Child bones, minus strays: some rigs hang an unrelated bone (a second
+    // skeleton's root, say) under a joint, far from it. Keep children within a few
+    // times the distance of the nearest one so a limb frames as a limb.
+    const kids = b.children.filter((c) => c.isBone)
+    const dists = kids.map((c) => c.getWorldPosition(childPos).distanceTo(here))
+    const nearest = dists.length ? Math.min(...dists.filter((d) => d > 1e-6), Infinity) : Infinity
+    kids.forEach((c, i) => {
+      if (dists[i] <= nearest * 4 || nearest === Infinity) add(c)
+    })
+  }
+  return box
+}
+
 export function getBoneByName(name) {
   return name ? p.boneMap.get(name) || null : null
 }

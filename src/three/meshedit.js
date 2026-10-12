@@ -408,6 +408,21 @@ export function selectMesh(uuid) {
   m.requestRender()
 }
 
+// World-space bounds of a part, for framing the camera on it. A skinned part is
+// measured from its POSED vertices (a plain Box3.setFromObject would read the
+// rest-pose geometry and frame the wrong spot on a posed character).
+export function getMeshWorldBounds(uuid) {
+  const mesh = uuid ? m.meshByUuid.get(uuid) || null : null
+  if (!mesh) return null
+  if (m.scene) m.scene.updateMatrixWorld(true)
+  else mesh.updateWorldMatrix(true, false)
+  if (mesh.isSkinnedMesh) {
+    const { geometry } = refreshPosedProxy(mesh)
+    return geometry.boundingBox.clone().applyMatrix4(mesh.matrixWorld)
+  }
+  return new THREE.Box3().setFromObject(mesh)
+}
+
 export function setMeshVisible(uuid, visible) {
   const mesh = uuid ? m.meshByUuid.get(uuid) || null : null
   if (!mesh || mesh.visible === visible) return

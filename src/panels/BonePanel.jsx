@@ -13,7 +13,7 @@ import {
   applyLimitsToPose,
 } from '../three/posing.js'
 import { downloadPose, readPoseFile } from '../three/poses.js'
-import { collectActiveDangleDescendants, resetActiveDangle } from '../three/scene.js'
+import { collectActiveDangleDescendants, resetActiveDangle, setCameraToBones } from '../three/scene.js'
 import { performUndo, performRedo } from '../three/undoPriority.js'
 import EditableValue from './EditableValue.jsx'
 
@@ -471,6 +471,18 @@ export default function BonePanel() {
           )
         })}
       </div>
+
+      {selectedBoneNames.length > 0 && (
+        <div className="kf-actions" style={{ marginTop: 6 }}>
+          <button
+            className="btn secondary"
+            onClick={() => setCameraToBones(selectedBoneNames)}
+            title="Frame the selected joint in the viewport and orbit around it (F)"
+          >
+            {selectedBoneNames.length > 1 ? 'Set camera to joints' : 'Set camera to joint'}
+          </button>
+        </div>
+      )}
 
       {selectedBoneNames.length > 1 && (
         <div className="bone-count" title="Rotate turns every selected joint by the same amount; Move drags them all by the same offset">

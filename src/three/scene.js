@@ -39,6 +39,7 @@ import {
   suspendPosing,
   resumePosing,
   getBoneByName,
+  getBoneFramingBounds,
   setViewCamera as setPosingViewCamera,
   refreshPoseOverlays,
 } from './posing.js'
@@ -130,6 +131,9 @@ import {
   registerObjectMeshes,
   unregisterObjectMeshes,
   setMeshVisible as setMeshVisibleInScene,
+  getMeshWorldBounds,
+  getMeshByUuid,
+  isObjectMesh,
   setViewCamera as setMeshEditViewCamera,
 } from './meshedit.js'
 import {
@@ -183,6 +187,7 @@ import {
   scrubObjectAnimation,
 } from './objects.js'
 import { getPose, applyPose } from './posing.js'
+import { detectFacingYaw } from './bvh.js'
 import { useStore, captureCharacterRecord } from '../store.js'
 import { clearUndoHistory, pushUndoBatch, runWithoutHistoryCapture } from './undoHistory.js'
 import { pushSceneHistory } from './sceneHistory.js'
@@ -3176,7 +3181,15 @@ export function disposeCurrentModel() {
 function frameCameraToObject(object) {
   const box = new THREE.Box3().setFromObject(object)
   if (box.isEmpty()) return
+  placeCameraOnBox(box)
+  placeShadowUnder(box)
+}
 
+// Aim the orbit camera at `box` from a 3/4 angle, far enough back that the
+// largest dimension fits. `yaw` turns that viewing angle about the vertical
+// axis (used to look at a character from the way it faces). Moves nothing but
+// the camera — no ground or shadow changes, so it's safe for framing a part.
+function placeCameraOnBox(box, yaw = 0) {
   const size = box.getSize(new THREE.Vector3())
   const center = box.getCenter(new THREE.Vector3())
 
@@ -3188,6 +3201,7 @@ function frameCameraToObject(object) {
 
   // Place the camera off to the front-side at a pleasant 3/4 angle.
   const dir = new THREE.Vector3(0.5, 0.35, 1).normalize()
+  if (yaw) dir.applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw)
   state.camera.position.copy(center.clone().add(dir.multiplyScalar(dist)))
 
   // Adjust clipping planes to the model's scale so it never gets clipped.
@@ -3197,8 +3211,6 @@ function frameCameraToObject(object) {
 
   state.controls.target.copy(center)
   state.controls.update()
-
-  placeShadowUnder(box)
 }
 
 // Park the ground shadows under the model and size the shadow camera. Scale-aware
@@ -3777,6 +3789,60 @@ export function setCameraToObject(id) {
   const object = getObjectRootById(id)
   if (!object) return
   commitFramingChange(() => frameCameraToObject(object))
+}
+
+// Which way the active character faces (yaw about Y from +Z), so framing one of
+// its parts looks at it from the front even when the model is authored facing -Z.
+function activeCharacterFacingYaw() {
+  const model = state.characters.get(state.activeCharacterId)
+  if (!model || !model.bones || !model.bones.length) return 0
+  model.root.updateMatrixWorld(true)
+  const restP = new Map(model.bones.map((b) => [b, b.getWorldPosition(new THREE.Vector3())]))
+  return detectFacingYaw(model.bones, restP)
+}
+
+// Frame one mesh part (Mesh mode's selection). Same orbit-around-it behaviour as
+// "Set camera to object", without touching the ground or shadows.
+export function setCameraToMesh(uuid) {
+  const box = getMeshWorldBounds(uuid)
+  if (!box || box.isEmpty()) return false
+  const mesh = getMeshByUuid(uuid)
+  const yaw = mesh && !isObjectMesh(mesh) ? activeCharacterFacingYaw() : 0
+  commitFramingChange(() => placeCameraOnBox(box, yaw))
+  return true
+}
+
+// Frame the selected joint(s) (Pose mode's selection) — the joint and the stretch
+// of limb around it, never tighter than a small fraction of the whole character.
+export function setCameraToBones(names = null) {
+  const box = getBoneFramingBounds(names)
+  if (!box || box.isEmpty()) return false
+  const size = box.getSize(new THREE.Vector3())
+  const minSize = Math.max(state.modelRadius * 0.18, 0.05)
+  const extra = (minSize - Math.max(size.x, size.y, size.z)) / 2
+  if (extra > 0) box.expandByScalar(extra)
+  commitFramingChange(() => placeCameraOnBox(box, activeCharacterFacingYaw()))
+  return true
+}
+
+// What the "frame selected" button / F key would frame right now: the selected
+// part in Mesh mode, the selected joint(s) in Pose mode, else the selected
+// object. Null when nothing is selected to frame.
+export function getFramingTarget() {
+  const s = useStore.getState()
+  if (s.mode === 'mesh' && s.selectedMeshUuid) return { kind: 'mesh', uuid: s.selectedMeshUuid }
+  if (s.mode === 'bone' && s.selectedBoneNames.length > 0) return { kind: 'bones', names: s.selectedBoneNames }
+  if (s.selectedObjectId != null) return { kind: 'object', id: s.selectedObjectId }
+  return null
+}
+
+export function setCameraToSelection() {
+  const target = getFramingTarget()
+  if (!target) return false
+  if (target.kind === 'mesh') return setCameraToMesh(target.uuid)
+  if (target.kind === 'bones') return setCameraToBones(target.names)
+  setCameraToObject(target.id)
+  return true
 }
 
 export function setCameraToTarget(kind, id) {

@@ -26,6 +26,8 @@ import {
   setViewCameraById,
   setCameraToObject,
   setCameraToTarget,
+  setCameraToSelection,
+  getFramingTarget,
   setActiveCharacter,
   dollyViewport,
   syncActiveDangleConfig,
@@ -696,6 +698,12 @@ function Viewport() {
       } else if (plainKey && s.mode === 'object' && GIZMO_KEYS[e.key.toLowerCase()]) {
         if (s.selectedCameraId != null) s.setCameraGizmoMode(GIZMO_KEYS[e.key.toLowerCase()])
         else s.setObjectMode(GIZMO_KEYS[e.key.toLowerCase()])
+      } else if (plainKey && e.key.toLowerCase() === 'f') {
+        // Frame the selection: the selected camera/light, else the part (Mesh mode),
+        // joint (Pose mode) or object.
+        if (s.selectedCameraId != null) setCameraToTarget('camera', s.selectedCameraId)
+        else if (s.selectedLightId != null) setCameraToTarget('light', s.selectedLightId)
+        else setCameraToSelection()
       } else if (plainKey && e.key.toLowerCase() === 'h') {
         toggleCurrentVisibility(s)
       } else if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
@@ -754,6 +762,10 @@ function Viewport() {
   const sceneLights = useStore((s) => s.sceneLights)
   const selectedObjectId = useStore((s) => s.selectedObjectId)
   const hasCharacter = Boolean(modelInfo)
+  // What "frame selected" would aim at beyond objects: the selected mesh part (Mesh
+  // mode) or joint (Pose mode). Re-evaluated when the selection or mode changes.
+  const framingTarget = mode === 'mesh' && selectedMeshUuid ? 'mesh' : mode === 'bone' && selectedBoneNames.length > 0 ? 'bones' : null
+  const framingKind = framingTarget
   const hasSceneContent =
     hasCharacter || sceneObjects.length > 0 || sceneCameras.length > 0 || sceneLights.length > 0
   const modeButtons = hasCharacter ? MODE_BUTTONS : MODE_BUTTONS.filter((b) => b.value === 'view' || b.value === 'object' || b.value === 'mesh')
@@ -910,16 +922,20 @@ function Viewport() {
           <button
             className="zoom-toolbar-btn"
             title={
-              selectedObjectId != null || selectedCameraId != null || selectedLightId != null
-                ? 'Frame selected item and orbit around it'
-                : 'Select an item to frame it'
+              framingKind === 'mesh'
+                ? 'Frame the selected part and orbit around it (F)'
+                : framingKind === 'bones'
+                  ? 'Frame the selected joint and orbit around it (F)'
+                  : selectedObjectId != null || selectedCameraId != null || selectedLightId != null
+                    ? 'Frame selected item and orbit around it (F)'
+                    : 'Select an item to frame it'
             }
             aria-label="Frame selected item"
-            disabled={selectedObjectId == null && selectedCameraId == null && selectedLightId == null}
+            disabled={selectedObjectId == null && selectedCameraId == null && selectedLightId == null && !framingKind}
             onClick={() => {
               if (selectedCameraId != null) setCameraToTarget('camera', selectedCameraId)
               else if (selectedLightId != null) setCameraToTarget('light', selectedLightId)
-              else setCameraToObject(selectedObjectId)
+              else setCameraToSelection()
             }}
           >
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden="true">

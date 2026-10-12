@@ -15,6 +15,7 @@ import {
   getCurrentModel,
   requestRender,
   setMeshVisibleByUuid,
+  setCameraToMesh,
 } from '../three/scene.js'
 import { getObjectMeshesInfo } from '../three/objects.js'
 import { performUndo, performRedo } from '../three/undoPriority.js'
@@ -337,6 +338,13 @@ export default function MeshPanel() {
               title="Put only this part back where it started"
             >
               Reset this part
+            </button>
+            <button
+              className="btn secondary"
+              onClick={() => setCameraToMesh(selectedMesh.uuid)}
+              title="Frame this part in the viewport and orbit around it (F)"
+            >
+              Set camera to part
             </button>
             {!isPropPart && (
               <button

@@ -121,6 +121,10 @@ export default function HelpOverlay() {
                 <b>W / E / R</b> — move, rotate or resize (Object &amp; Mesh mode)
               </li>
               <li>
+                <b>F</b> — frame the selected object, part or joint (also the camera
+                button beside the zoom controls)
+              </li>
+              <li>
                 <b>H</b> — hide / show the selected object, character or mesh part
               </li>
               <li>
