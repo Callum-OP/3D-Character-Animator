@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import { markHistoryAction, pushUndoBatch, registerUndoHistory } from './undoHistory.js'
+import { showMarquee, hideMarquee, pointInRect } from './marquee.js'
 
 // ---------------------------------------------------------------------------
 // Mesh editing (Mesh mode)
@@ -36,6 +37,12 @@ import { markHistoryAction, pushUndoBatch, registerUndoHistory } from './undoHis
 //
 // Edits are stored on the pivot groups, captured relative to their own rest
 // transform, so reset and save/load are exact.
+//
+// Multi-select (Shift/Ctrl-click, or Shift/Ctrl-drag a box) works the same way
+// objects.js and posing.js do it: TransformControls can only attach to one
+// Object3D, so with 2+ parts selected the gizmo sits on an invisible group
+// pivot at their centroid. Dragging it is turned into a world-space delta
+// matrix that is re-applied to every selected part's own pivot Group.
 // ---------------------------------------------------------------------------
 
 const DRAG_SLOP_PX = 4 // pointer travel above this is an orbit-drag, not a click
@@ -48,7 +55,8 @@ const m = {
   renderer: null,
   controls: null,
   requestRender: () => {},
-  onSelect: null, // (meshUuid|null) => void — reports picks up to the store
+  onSelect: null, // (meshUuid|null, additive) => void — reports picks up to the store
+  onSelectMany: null, // (meshUuids[], additive) => void — reports a box-select up to the store
   onChange: null, // () => void — any transform edit; the panel re-reads values
   onVisibilityChange: null,
 
@@ -62,8 +70,14 @@ const m = {
   meshByUuid: new Map(),
   rest: new Map(), // Mesh -> { pivot, position, quaternion, scale } (see setMeshEditModel)
 
-  selected: null, // selected Mesh (or null)
-  box: null, // THREE.BoxHelper highlight around the selection
+  selected: null, // primary selected Mesh (the last one picked), or null
+  selectedList: [], // every selected Mesh (always includes `selected` when non-empty)
+  boxes: new Map(), // Mesh -> BoxHelper/Box3Helper highlight around that selected part
+  groupPivot: null, // invisible Object3D the gizmo attaches to when 2+ parts are selected
+  groupStartMatrix: null, // groupPivot's matrix at the start of the current group drag
+  groupStarts: null, // Map(Mesh -> world Matrix4 of its pivot) at drag start
+  groupBefore: null, // [{ obj, before }] pivot snapshots at drag start, for undo
+  marquee: null, // { x0, y0 } screen-space start point while Shift/Ctrl-dragging a box-select
   enabled: false, // true only while the app is in Mesh mode
   suspended: false, // true while animation playback drives the parts
   undoStack: [],
@@ -88,6 +102,7 @@ export function initMeshEdit(refs) {
   m.controls = refs.controls
   m.requestRender = refs.requestRender
   m.onSelect = refs.onSelect
+  m.onSelectMany = refs.onSelectMany || null
   m.onChange = refs.onChange || null
   m.onVisibilityChange = refs.onVisibilityChange || null
 
@@ -99,17 +114,21 @@ export function initMeshEdit(refs) {
   })
   transform.addEventListener('objectChange', () => {
     m.gizmoMovedDuringDrag = true // a real drag happened, not just a press on the handle's pick padding
+    if (isGroupSelection() && m.groupStartMatrix) applyGroupDelta()
     notifyChange()
     m.requestRender()
   })
   transform.addEventListener('mouseDown', () => {
-    if (m.selected) {
+    if (isGroupSelection()) {
+      beginGroupDrag()
+    } else if (m.selected) {
       const rest = m.rest.get(m.selected)
       if (rest) m.dragBefore = snapshot(rest.pivot)
     }
   })
   transform.addEventListener('mouseUp', () => {
-    commitDragUndo()
+    if (isGroupSelection()) commitGroupUndo()
+    else commitDragUndo()
     m.requestRender()
   })
   m.transform = transform
@@ -119,11 +138,19 @@ export function initMeshEdit(refs) {
   m.scene.add(helper)
   m.helper = helper
 
+  // Invisible anchor for the group gizmo — never rendered, never a mesh part.
+  const groupPivot = new THREE.Object3D()
+  groupPivot.visible = false
+  m.scene.add(groupPivot)
+  m.groupPivot = groupPivot
+
   const dom = m.renderer.domElement
   m._onPointerDown = onPointerDown
   m._onPointerUp = onPointerUp
+  m._onPointerMove = onPointerMove
   dom.addEventListener('pointerdown', m._onPointerDown)
   dom.addEventListener('pointerup', m._onPointerUp)
+  dom.addEventListener('pointermove', m._onPointerMove)
 }
 
 // Bind mesh editing to a freshly loaded model: give every part a dedicated
@@ -170,12 +197,8 @@ export function unregisterObjectMeshes(objectId) {
   m.objectMeshGroups.delete(objectId)
   const removed = new Set(meshes)
   m.objectMeshes = m.objectMeshes.filter((mesh) => !removed.has(mesh))
+  dropFromSelection(removed)
   for (const mesh of meshes) {
-    if (m.selected === mesh) {
-      m.selected = null
-      if (m.transform) m.transform.detach()
-      removeSelectionBox()
-    }
     m.meshByUuid.delete(mesh.uuid)
     m.rest.delete(mesh)
     m.posedProxies.delete(mesh)
@@ -360,13 +383,7 @@ export function getMeshPivot(mesh) {
 // their edits) just because the user switched characters.
 export function clearMeshEditModel() {
   const oldMeshes = m.meshes
-  const selectedWasCharacterPart = m.selected && oldMeshes.includes(m.selected)
-  if (selectedWasCharacterPart) {
-    if (m.transform) m.transform.detach()
-    m.selected = null
-    m.dragBefore = null
-    removeSelectionBox()
-  }
+  dropFromSelection(new Set(oldMeshes))
   disposePosedProxies() // cheap to rebuild; simplest to drop proxies for everyone on a switch
 
   // Undo/redo batches reference pivots directly, so batches belonging to the
@@ -393,18 +410,43 @@ export function setMeshEditEnabled(enabled) {
     if (enabled && m.selected && !m.suspended) attachToSelected()
     else m.transform.detach()
   }
-  updateSelectionBox()
+  updateSelectionBoxes()
   m.requestRender()
 }
 
 export function selectMesh(uuid) {
-  const mesh = uuid ? m.meshByUuid.get(uuid) || null : null
-  m.selected = mesh
+  selectMeshes(uuid ? [uuid] : [])
+}
+
+// Select several parts at once (shift/ctrl-click, or a box-select). With 0 or
+// 1 parts this is exactly the old single-select; with 2+ the gizmo attaches to
+// a shared group pivot at their centroid so one drag edits them all. The LAST
+// uuid becomes the primary part (the one the panel's single-part controls
+// read), matching how bones and objects treat their own multi-selections.
+export function selectMeshes(uuids) {
+  const list = []
+  const seen = new Set()
+  for (const uuid of Array.isArray(uuids) ? uuids : uuids != null ? [uuids] : []) {
+    const mesh = m.meshByUuid.get(uuid)
+    if (mesh && !seen.has(mesh)) {
+      seen.add(mesh)
+      list.push(mesh)
+    }
+  }
+  applySelection(list)
+}
+
+function applySelection(list) {
+  m.selectedList = list
+  m.selected = list.length ? list[list.length - 1] : null
+  m.dragBefore = null
+  clearGroupDrag()
+  if (list.length > 1) placeGroupPivot()
   if (m.transform) {
-    if (mesh && m.enabled && !m.suspended) attachToSelected()
+    if (m.selected && m.enabled && !m.suspended) attachToSelected()
     else m.transform.detach()
   }
-  updateSelectionBox()
+  updateSelectionBoxes()
   m.requestRender()
 }
 
@@ -423,12 +465,131 @@ export function getMeshWorldBounds(uuid) {
   return new THREE.Box3().setFromObject(mesh)
 }
 
+// Test hook: replay a group-gizmo drag — press, let the caller move/rotate/scale
+// the invisible group pivot (what dragging the gizmo does), fire the change, and
+// release — on the real TransformControls instance, without a full raycaster/DOM
+// harness for the gizmo handles themselves. Mirrors objects.js's
+// simulateGizmoDragForTest and posing.js's simulateGroupRotateForTest.
+export function simulateGroupDragForTest(mutatePivot) {
+  if (!m.transform || !m.groupPivot || !isGroupSelection()) return false
+  m.transform.dispatchEvent({ type: 'mouseDown' })
+  mutatePivot(m.groupPivot)
+  m.transform.dispatchEvent({ type: 'objectChange' })
+  m.transform.dispatchEvent({ type: 'mouseUp' })
+  return true
+}
+
+export function getSelectedMeshUuids() {
+  return m.selectedList.map((mesh) => mesh.uuid)
+}
+
+function isGroupSelection() {
+  return m.selectedList.length > 1 && !!m.groupPivot
+}
+
+// Selected parts that are removed out from under the selection (a prop deleted,
+// the active character swapped) just fall out of it; whatever is left stays.
+function dropFromSelection(removed) {
+  if (!m.selectedList.some((mesh) => removed.has(mesh))) return
+  applySelection(m.selectedList.filter((mesh) => !removed.has(mesh)))
+}
+
+const _gc = new THREE.Vector3()
+const _gw = new THREE.Vector3()
+function placeGroupPivot() {
+  _gc.set(0, 0, 0)
+  for (const mesh of m.selectedList) {
+    const rest = m.rest.get(mesh)
+    if (!rest) continue
+    rest.pivot.updateWorldMatrix(true, false)
+    _gc.add(rest.pivot.getWorldPosition(_gw))
+  }
+  _gc.divideScalar(m.selectedList.length)
+  m.groupPivot.position.copy(_gc)
+  m.groupPivot.quaternion.identity()
+  m.groupPivot.scale.set(1, 1, 1)
+  m.groupPivot.updateMatrix()
+  m.groupPivot.updateMatrixWorld(true)
+}
+
+function clearGroupDrag() {
+  m.groupStartMatrix = null
+  m.groupStarts = null
+  m.groupBefore = null
+}
+
+function beginGroupDrag() {
+  m.groupPivot.updateMatrix()
+  m.groupStartMatrix = m.groupPivot.matrix.clone()
+  m.groupStarts = new Map()
+  m.groupBefore = []
+  for (const mesh of m.selectedList) {
+    const rest = m.rest.get(mesh)
+    if (!rest) continue
+    rest.pivot.updateWorldMatrix(true, false)
+    m.groupStarts.set(mesh, rest.pivot.matrixWorld.clone())
+    m.groupBefore.push({ obj: rest.pivot, before: snapshot(rest.pivot) })
+  }
+}
+
+// Re-apply the group pivot's drag to every selected part:
+//   delta = groupPivot.matrix * inverse(groupPivot.matrix at drag start)
+//   part's new WORLD matrix = delta * its world matrix at drag start
+// then convert that back into the part pivot's LOCAL transform under its own
+// parent (parts live under different parents — character armature, each prop —
+// so this can't be done in one shared space).
+const _gDelta = new THREE.Matrix4()
+const _gInv = new THREE.Matrix4()
+const _gNext = new THREE.Matrix4()
+function applyGroupDelta() {
+  m.groupPivot.updateMatrix()
+  _gDelta.multiplyMatrices(m.groupPivot.matrix, _gInv.copy(m.groupStartMatrix).invert())
+  for (const mesh of m.selectedList) {
+    const rest = m.rest.get(mesh)
+    const start = m.groupStarts && m.groupStarts.get(mesh)
+    if (!rest || !start) continue
+    _gNext.multiplyMatrices(_gDelta, start)
+    const parent = rest.pivot.parent
+    if (parent) {
+      parent.updateWorldMatrix(true, false)
+      _gNext.premultiply(_gInv.copy(parent.matrixWorld).invert())
+    }
+    _gNext.decompose(rest.pivot.position, rest.pivot.quaternion, rest.pivot.scale)
+  }
+}
+
+function commitGroupUndo() {
+  const before = m.groupBefore
+  clearGroupDrag()
+  if (!before) return
+  const batch = []
+  for (const { obj, before: b } of before) {
+    const after = snapshot(obj)
+    if (!sameSnapshot(b, after)) batch.push({ obj, before: b, after })
+  }
+  if (batch.length) pushUndo(batch)
+}
+
 export function setMeshVisible(uuid, visible) {
   const mesh = uuid ? m.meshByUuid.get(uuid) || null : null
   if (!mesh || mesh.visible === visible) return
   const beforeVisible = mesh.visible
   mesh.visible = visible
   pushUndo([{ mesh, beforeVisible, afterVisible: visible }])
+  notifyChange()
+  m.requestRender()
+}
+
+// Show/hide several parts as ONE undo step.
+export function setMeshesVisible(uuids, visible) {
+  const batch = []
+  for (const uuid of uuids || []) {
+    const mesh = m.meshByUuid.get(uuid)
+    if (!mesh || mesh.visible === visible) continue
+    batch.push({ mesh, beforeVisible: mesh.visible, afterVisible: visible })
+    mesh.visible = visible
+  }
+  if (batch.length) pushUndo(batch)
   notifyChange()
   m.requestRender()
 }
@@ -446,6 +607,10 @@ export function resumeMeshEdit() {
 }
 
 function attachToSelected() {
+  if (isGroupSelection()) {
+    m.transform.attach(m.groupPivot)
+    return
+  }
   const rest = m.rest.get(m.selected)
   if (rest) m.transform.attach(rest.pivot)
 }
@@ -460,7 +625,9 @@ export function updateMeshEditHelpers() {
   // Box3Helper (used for a skinned/posed part) has no per-frame update() —
   // it just sits under the pivot and follows gizmo drags via the transform
   // hierarchy. Only the rest-pose BoxHelper needs re-reading each frame.
-  if (m.box && m.box.visible && typeof m.box.update === 'function') m.box.update()
+  for (const box of m.boxes.values()) {
+    if (box.visible && typeof box.update === 'function') box.update()
+  }
 }
 
 export function getMeshDelta(uuid) {
@@ -529,6 +696,23 @@ export function resetMesh(uuid) {
   m.requestRender()
 }
 
+// Put several parts back to rest as ONE undo step (the multi-selection's
+// "Reset selected").
+export function resetMeshes(uuids) {
+  const batch = []
+  for (const uuid of uuids || []) {
+    const mesh = m.meshByUuid.get(uuid)
+    const rest = mesh && m.rest.get(mesh)
+    if (!rest || isAtRest(rest.pivot, rest)) continue
+    batch.push({ obj: rest.pivot, before: snapshot(rest.pivot), after: restSnapshot(rest) })
+    applySnapshot(rest.pivot, rest)
+  }
+  if (batch.length) pushUndo(batch)
+  if (isGroupSelection()) placeGroupPivot()
+  notifyChange()
+  m.requestRender()
+}
+
 export function resetAllMeshes() {
   const batch = []
   for (const mesh of m.meshes) {
@@ -554,6 +738,7 @@ export function undo() {
   const batch = m.undoStack.pop()
   if (!batch) return
   for (const entry of batch) applyHistoryEntry(entry, 'before')
+  if (isGroupSelection()) placeGroupPivot() // keep the group gizmo on the parts after undo/redo
   markHistoryAction(batch)
   m.redoStack.push(batch)
   notifyChange()
@@ -564,6 +749,7 @@ export function redo() {
   const batch = m.redoStack.pop()
   if (!batch) return
   for (const entry of batch) applyHistoryEntry(entry, 'after')
+  if (isGroupSelection()) placeGroupPivot() // keep the group gizmo on the parts after undo/redo
   markHistoryAction(batch)
   m.undoStack.push(batch)
   notifyChange()
@@ -669,7 +855,10 @@ export function disposeMeshEdit() {
   if (dom) {
     dom.removeEventListener('pointerdown', m._onPointerDown)
     dom.removeEventListener('pointerup', m._onPointerUp)
+    dom.removeEventListener('pointermove', m._onPointerMove)
   }
+  hideMarquee()
+  m.marquee = null
   clearMeshEditModel()
   m.objectMeshes = []
   m.objectMeshGroups = new Map()
@@ -678,6 +867,13 @@ export function disposeMeshEdit() {
   m.undoStack = []
   m.redoStack = []
   m.selected = null
+  m.selectedList = []
+  clearGroupDrag()
+  removeAllSelectionBoxes()
+  if (m.groupPivot) {
+    if (m.scene) m.scene.remove(m.groupPivot)
+    m.groupPivot = null
+  }
   m.suspended = false
   if (m.helper) {
     m.scene.remove(m.helper)
@@ -764,50 +960,65 @@ function notifyChange() {
 // picking, expressed in the PIVOT's local space (mesh's own local transform
 // relative to its pivot is fixed forever — see setMeshEditModel — so this
 // still tracks live gizmo drags for free once parented under the pivot).
-function updateSelectionBox() {
-  const show = m.enabled && !!m.selected
-  if (show) {
-    const wantsSkinBox = m.selected.isSkinnedMesh
-    const haveSkinBox = m.box instanceof THREE.Box3Helper
-    if (wantsSkinBox) {
-      m.scene.updateMatrixWorld(true)
-      const { geometry } = refreshPosedProxy(m.selected)
-      const box = geometry.boundingBox.clone().applyMatrix4(m.selected.matrix)
-      if (!haveSkinBox) {
-        removeSelectionBox()
-        m.box = new THREE.Box3Helper(box, HIGHLIGHT_COLOR)
-        m.box.material.transparent = true
-        m.box.material.opacity = 0.7
-        m.box.material.depthTest = false
-        excludeFromOutline(m.box)
-        const rest = m.rest.get(m.selected)
-        ;(rest ? rest.pivot : m.scene).add(m.box)
-      } else {
-        m.box.box.copy(box)
-      }
-    } else {
-      if (haveSkinBox) removeSelectionBox()
-      if (!m.box) {
-        m.box = new THREE.BoxHelper(m.selected, HIGHLIGHT_COLOR)
-        m.box.material.transparent = true
-        m.box.material.opacity = 0.7
-        m.box.material.depthTest = false
-        excludeFromOutline(m.box)
-        m.scene.add(m.box)
-      } else {
-        m.box.setFromObject(m.selected)
-      }
-    }
+//
+// One highlight box per selected part (a multi-selection shows them all).
+function updateSelectionBoxes() {
+  const show = m.enabled
+  const wanted = new Set(show ? m.selectedList : [])
+  for (const mesh of [...m.boxes.keys()]) {
+    if (!wanted.has(mesh)) removeSelectionBox(mesh)
   }
-  if (m.box) m.box.visible = show
+  for (const mesh of wanted) ensureSelectionBox(mesh)
+  for (const box of m.boxes.values()) box.visible = show
 }
 
-function removeSelectionBox() {
-  if (!m.box) return
-  if (m.box.parent) m.box.parent.remove(m.box)
-  m.box.geometry.dispose()
-  m.box.material.dispose()
-  m.box = null
+function styleBox(box) {
+  box.material.transparent = true
+  box.material.opacity = 0.7
+  box.material.depthTest = false
+  excludeFromOutline(box)
+}
+
+function ensureSelectionBox(mesh) {
+  let box = m.boxes.get(mesh)
+  if (mesh.isSkinnedMesh) {
+    m.scene.updateMatrixWorld(true)
+    const { geometry } = refreshPosedProxy(mesh)
+    const bounds = geometry.boundingBox.clone().applyMatrix4(mesh.matrix)
+    if (box instanceof THREE.Box3Helper) {
+      box.box.copy(bounds)
+      return
+    }
+    if (box) removeSelectionBox(mesh)
+    box = new THREE.Box3Helper(bounds, HIGHLIGHT_COLOR)
+    styleBox(box)
+    const rest = m.rest.get(mesh)
+    ;(rest ? rest.pivot : m.scene).add(box)
+    m.boxes.set(mesh, box)
+    return
+  }
+  if (box instanceof THREE.BoxHelper) {
+    box.setFromObject(mesh)
+    return
+  }
+  if (box) removeSelectionBox(mesh)
+  box = new THREE.BoxHelper(mesh, HIGHLIGHT_COLOR)
+  styleBox(box)
+  m.scene.add(box)
+  m.boxes.set(mesh, box)
+}
+
+function removeSelectionBox(mesh) {
+  const box = m.boxes.get(mesh)
+  if (!box) return
+  if (box.parent) box.parent.remove(box)
+  box.geometry.dispose()
+  box.material.dispose()
+  m.boxes.delete(mesh)
+}
+
+function removeAllSelectionBoxes() {
+  for (const mesh of [...m.boxes.keys()]) removeSelectionBox(mesh)
 }
 
 // ---------------------------------------------------------------------------
@@ -943,17 +1154,70 @@ function isMeshEffectivelyVisible(mesh) {
   return true
 }
 
+// Is this pointer event a Shift/Ctrl/Cmd press (additive pick / box-select)?
+function isAdditive(e) {
+  return !!(e.shiftKey || e.ctrlKey || e.metaKey)
+}
+
+function hasPickableMeshes() {
+  return !!(m.meshes.length || m.objectMeshes.length)
+}
+
 function onPointerDown(e) {
   m.pointerDown = { x: e.clientX, y: e.clientY, axis: m.transform ? m.transform.axis : null }
   m.gizmoMovedDuringDrag = false
+
+  // Shift/Ctrl/Cmd held (and not grabbing the gizmo) arms a possible
+  // box-select — same arming rule as bone mode in posing.js. It only becomes
+  // one in onPointerUp if the drag actually travels past DRAG_SLOP_PX (the
+  // SAME threshold the click-vs-drag check uses, so a shaky click can't read
+  // as a tiny box one way and a plain click the other); a modifier-click that
+  // barely moves falls through to the normal additive single pick. Shift is
+  // included because on macOS Ctrl+click/drag is the system's secondary-click
+  // gesture and isn't reliably delivered as a left-button drag everywhere.
+  if (
+    e.button === 0 &&
+    isAdditive(e) &&
+    m.enabled &&
+    !m.suspended &&
+    hasPickableMeshes() &&
+    (!m.transform || m.transform.axis === null)
+  ) {
+    m.marquee = { x0: e.clientX, y0: e.clientY }
+    if (m.controls) m.controls.enabled = false // no orbit/pan while dragging the box
+  }
+}
+
+// Drives the box-select rectangle while a marquee drag is in progress.
+function onPointerMove(e) {
+  if (!m.marquee || !m.renderer) return
+  const container = m.renderer.domElement.parentElement
+  if (!container) return
+  const rect = container.getBoundingClientRect()
+  showMarquee(container, m.marquee.x0 - rect.left, m.marquee.y0 - rect.top, e.clientX - rect.left, e.clientY - rect.top)
 }
 
 function onPointerUp(e) {
   const down = m.pointerDown
   m.pointerDown = null
+
+  if (m.marquee) {
+    const { x0, y0 } = m.marquee
+    m.marquee = null
+    hideMarquee()
+    if (m.controls) m.controls.enabled = !m.controls.locked
+    if (Math.abs(e.clientX - x0) + Math.abs(e.clientY - y0) > DRAG_SLOP_PX) {
+      // A real box-select drag — resolve it and skip the single-pick logic.
+      const rect = m.renderer.domElement.getBoundingClientRect()
+      const uuids = pickMeshUuidsInRect(x0 - rect.left, y0 - rect.top, e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height)
+      if (m.onSelectMany) m.onSelectMany(uuids, e.shiftKey)
+      return
+    }
+    // Too small to count as a drag — fall through as a plain (additive) click.
+  }
+
   if (m.suspended) return
-  const pickable = m.meshes.length || m.objectMeshes.length
-  if (!m.enabled || !down || e.button !== 0 || !pickable) return
+  if (!m.enabled || !down || e.button !== 0 || !hasPickableMeshes()) return
   // See the matching comment in posing.js: the gizmo's invisible pick padding
   // is bigger than what's drawn, so only treat this as "gizmo, not a pick"
   // once it actually moved something — a press-and-release on the padding
@@ -961,10 +1225,21 @@ function onPointerUp(e) {
   if (down.axis !== null && m.gizmoMovedDuringDrag) return
   if (Math.abs(e.clientX - down.x) + Math.abs(e.clientY - down.y) > DRAG_SLOP_PX) return
 
+  const hit = pickMeshAt(e.clientX, e.clientY)
+  const additive = isAdditive(e)
+  // An additive click on empty space must not wipe the selection you've been
+  // building — only a plain click on nothing deselects.
+  if (!hit && additive) return
+  m.onSelect(hit ? hit.uuid : null, additive)
+}
+
+// Raycast the pointer position against every pickable part (character AND
+// props, posed skins via their proxies — see the posed-skin block above).
+function pickMeshAt(clientX, clientY) {
   const rect = m.renderer.domElement.getBoundingClientRect()
   _ndc.set(
-    ((e.clientX - rect.left) / rect.width) * 2 - 1,
-    -((e.clientY - rect.top) / rect.height) * 2 + 1,
+    ((clientX - rect.left) / rect.width) * 2 - 1,
+    -((clientY - rect.top) / rect.height) * 2 + 1,
   )
   m.raycaster.setFromCamera(_ndc, m.camera)
 
@@ -995,8 +1270,51 @@ function onPointerUp(e) {
     }
   }
   const hits = m.raycaster.intersectObjects(targets, false)
-  const hit = hits.length ? proxyToMesh.get(hits[0].object) || hits[0].object : null
-  m.onSelect(hit ? hit.uuid : null)
+  return hits.length ? proxyToMesh.get(hits[0].object) || hits[0].object : null
+}
+
+// Box-select: every visible part whose (posed) bounding-box CENTRE projects
+// inside the screen-space rectangle — the same "one representative point per
+// thing" rule bone dots (posing.js) and props (objects.js) use. A centre test
+// rather than "touches the rectangle" is deliberate: boxing the eyes and
+// eyebrows shouldn't also grab the big face/body mesh they happen to sit on.
+// Coordinates are in the canvas's own pixel space (rectW/rectH = its size).
+const _boxC = new THREE.Vector3()
+const _boxBounds = new THREE.Box3()
+const BOX_SELECT_SAMPLES = 400 // posed-vertex samples per skinned part (bounds only need to be close)
+
+function posedWorldCentre(mesh, out) {
+  mesh.updateMatrixWorld()
+  const pos = mesh.geometry.attributes.position
+  if (mesh.isSkinnedMesh) {
+    const step = Math.max(1, Math.floor(pos.count / BOX_SELECT_SAMPLES))
+    _boxBounds.makeEmpty()
+    for (let i = 0; i < pos.count; i += step) {
+      _skinTarget.fromBufferAttribute(pos, i)
+      mesh.applyBoneTransform(i, _skinTarget)
+      _boxBounds.expandByPoint(_skinTarget)
+    }
+    _boxBounds.getCenter(out)
+  } else {
+    if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox()
+    mesh.geometry.boundingBox.getCenter(out)
+  }
+  return out.applyMatrix4(mesh.matrixWorld)
+}
+
+export function pickMeshUuidsInRect(x0, y0, x1, y1, rectW, rectH) {
+  if (!m.camera) return []
+  m.scene.updateMatrixWorld(true)
+  const uuids = []
+  for (const mesh of m.meshes.concat(m.objectMeshes)) {
+    if (!isMeshEffectivelyVisible(mesh)) continue
+    posedWorldCentre(mesh, _boxC).project(m.camera)
+    if (_boxC.z > 1) continue // behind the camera
+    const sx = (_boxC.x * 0.5 + 0.5) * rectW
+    const sy = (-_boxC.y * 0.5 + 0.5) * rectH
+    if (pointInRect(sx, sy, x0, y0, x1, y1)) uuids.push(mesh.uuid)
+  }
+  return uuids
 }
 
 function excludeFromOutline(obj3d) {

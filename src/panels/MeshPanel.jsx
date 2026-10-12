@@ -5,6 +5,7 @@ import {
   setMeshDelta,
   getMeshKeyValue,
   resetMesh,
+  resetMeshes,
   resetAllMeshes,
   getLinkedMorphTargets,
   getMeshIndex,
@@ -16,6 +17,9 @@ import {
   requestRender,
   setMeshVisibleByUuid,
   setCameraToMesh,
+
+  setMeshesVisibleByUuids,
+  applyModelMaterials,
 } from '../three/scene.js'
 import { getObjectMeshesInfo } from '../three/objects.js'
 import { performUndo, performRedo } from '../three/undoPriority.js'
@@ -37,11 +41,14 @@ import {
   isClothShrinkwrap,
 } from '../three/clothmod.js'
 import EditableValue from './EditableValue.jsx'
+import ColorControl from './ColorControl.jsx'
 
 // Side-panel section for Mesh mode: pick a part of the character (eyes, hair,
-// clothing…) and move, rotate or resize it. Click a part in the viewport or in
-// the list below; values are offsets from where the part started, so 0 / 0° /
-// 1× always means "untouched".
+// clothing…) and move, rotate, resize or recolour it. Click a part in the
+// viewport or in the list below; Shift/Ctrl-click adds more parts, and
+// Shift/Ctrl-dragging a box in the viewport selects every part inside it.
+// Values are offsets from where the part started, so 0 / 0° / 1× always means
+// "untouched".
 const MODES = [
   { value: 'translate', label: 'Move', title: 'Drag arrows to move the part (W)' },
   { value: 'rotate', label: 'Rotate', title: 'Drag rings to turn the part (E)' },
@@ -53,7 +60,10 @@ const AXES = ['X', 'Y', 'Z']
 export default function MeshPanel() {
   const modelInfo = useStore((s) => s.modelInfo)
   const selectedMeshUuid = useStore((s) => s.selectedMeshUuid)
+  const selectedMeshUuids = useStore((s) => s.selectedMeshUuids)
   const setSelectedMeshUuid = useStore((s) => s.setSelectedMeshUuid)
+  const toggleMeshSelection = useStore((s) => s.toggleMeshSelection)
+  const setMeshesColor = useStore((s) => s.setMeshesColor)
   const meshGizmoMode = useStore((s) => s.meshGizmoMode)
   const setMeshGizmoMode = useStore((s) => s.setMeshGizmoMode)
   const meshOverrides = useStore((s) => s.meshOverrides)
@@ -93,6 +103,26 @@ export default function MeshPanel() {
   const keyCount = selectedIndex >= 0 ? (animData.meshes?.[selectedIndex] || []).length : 0
   const snap = (t) => Math.round(t * animFps) / animFps
   const objectPartGroups = getObjectMeshesInfo()
+  const multi = selectedMeshUuids.length > 1
+  // The colour controls edit EVERY selected part; what they show is the
+  // primary (last-picked) part's current colour.
+  const colorOverride = selectedMeshUuid ? meshOverrides[selectedMeshUuid] : null
+
+  function applyColor(patch) {
+    if (!selectedMeshUuids.length) return
+    setMeshesColor(selectedMeshUuids, patch)
+    applyModelMaterials()
+  }
+
+  // Row click in the lists below: plain click selects just that part (or, if
+  // it's the only one selected, deselects it); Shift/Ctrl/Cmd-click adds or
+  // removes it from the selection — the same behaviour as the Objects panel.
+  function onRowClick(e, uuid) {
+    const additive = e.shiftKey || e.ctrlKey || e.metaKey
+    if (additive) toggleMeshSelection(uuid, true)
+    else if (selectedMeshUuids.length <= 1) setSelectedMeshUuid(uuid === selectedMeshUuid ? null : uuid)
+    else setSelectedMeshUuid(uuid)
+  }
 
   function forceRerender() {
     setMorphVersion((v) => v + 1)
@@ -224,7 +254,32 @@ export default function MeshPanel() {
         </button>
       </div>
 
-      {selectedMesh && delta && (
+      {multi && (
+        <div className="joint-controls">
+          <div className="pose-msg">
+            {selectedMeshUuids.length} parts selected — drag the 3D gizmo to move, rotate or
+            resize them together.
+          </div>
+          <div className="kf-actions" style={{ marginTop: 6 }}>
+            <button
+              className="btn secondary"
+              onClick={() => resetMeshes(selectedMeshUuids)}
+              title="Put every selected part back where it started (one undo step)"
+            >
+              Reset selected
+            </button>
+            <button
+              className="btn secondary"
+              onClick={() => setSelectedMeshUuid(selectedMeshUuid)}
+              title="Keep only the last part you picked"
+            >
+              Select only last
+            </button>
+          </div>
+        </div>
+      )}
+
+      {selectedMesh && delta && !multi && (
         <div className="joint-controls">
           <div className="joint-header">
             <span className="joint-name" title={selectedMesh.name}>
@@ -359,7 +414,24 @@ export default function MeshPanel() {
         </div>
       )}
 
-      {selectedMesh && !isPropPart && (
+      {selectedMeshUuids.length > 0 && (
+        <div className="joint-controls" style={{ marginTop: 10 }}>
+          <div className="joint-header">
+            <span className="joint-name">Colour</span>
+            <span className="joint-parent">
+              {multi ? `${selectedMeshUuids.length} parts` : selectedMesh?.name}
+            </span>
+          </div>
+          <ColorControl
+            color={colorOverride?.color || null}
+            solid={!!colorOverride?.solid}
+            onChange={applyColor}
+            onClear={() => applyColor({ color: null })}
+          />
+        </div>
+      )}
+
+      {selectedMesh && !isPropPart && !multi && (
         <div className="joint-controls" style={{ marginTop: 10 }}>
           <div className="joint-header">
             <span className="joint-name">Cloth</span>
@@ -485,11 +557,9 @@ export default function MeshPanel() {
           return (
             <div
               key={mesh.uuid}
-              className={'obj-row' + (mesh.uuid === selectedMeshUuid ? ' selected' : '')}
+              className={'obj-row' + (selectedMeshUuids.includes(mesh.uuid) ? ' selected' : '') + (multi && mesh.uuid === selectedMeshUuid ? ' obj-row-primary' : '')}
               title={mesh.name}
-              onClick={() =>
-                setSelectedMeshUuid(mesh.uuid === selectedMeshUuid ? null : mesh.uuid)
-              }
+              onClick={(e) => onRowClick(e, mesh.uuid)}
             >
               <span className="obj-name" style={hidden ? { opacity: 0.45 } : undefined}>
                 {mesh.name}
@@ -499,7 +569,10 @@ export default function MeshPanel() {
                 title={hidden ? 'Show this part' : 'Hide this part'}
                 onClick={(e) => {
                   e.stopPropagation()
-                  setMeshVisibleByUuid(mesh.uuid, hidden)
+                  // Eye on a part that's part of a multi-selection flips the
+                  // whole selection together.
+                  if (selectedMeshUuids.length > 1 && selectedMeshUuids.includes(mesh.uuid)) setMeshesVisibleByUuids(selectedMeshUuids, hidden)
+                  else setMeshVisibleByUuid(mesh.uuid, hidden)
                 }}
               >
                 {hidden ? '🙈' : '👁'}
@@ -519,11 +592,9 @@ export default function MeshPanel() {
             return (
               <div
                 key={part.uuid}
-                className={'obj-row' + (part.uuid === selectedMeshUuid ? ' selected' : '')}
+                className={'obj-row' + (selectedMeshUuids.includes(part.uuid) ? ' selected' : '') + (multi && part.uuid === selectedMeshUuid ? ' obj-row-primary' : '')}
                 title={part.name}
-                onClick={() =>
-                  setSelectedMeshUuid(part.uuid === selectedMeshUuid ? null : part.uuid)
-                }
+                onClick={(e) => onRowClick(e, part.uuid)}
               >
                 <span className="obj-name" style={hidden ? { opacity: 0.45 } : undefined}>
                   {part.name}
@@ -533,7 +604,8 @@ export default function MeshPanel() {
                   title={hidden ? 'Show this part' : 'Hide this part'}
                   onClick={(e) => {
                     e.stopPropagation()
-                    setMeshVisibleByUuid(part.uuid, hidden)
+                    if (selectedMeshUuids.length > 1 && selectedMeshUuids.includes(part.uuid)) setMeshesVisibleByUuids(selectedMeshUuids, hidden)
+                    else setMeshVisibleByUuid(part.uuid, hidden)
                   }}
                 >
                   {hidden ? '🙈' : '👁'}
@@ -545,7 +617,9 @@ export default function MeshPanel() {
       ))}
 
       <div className="pose-hint">
-        Click a part or a name to select, then drag the gizmo. W/E/R switch
+        Click a part or a name to select, then drag the gizmo. Shift/Ctrl-click
+        adds more parts; Shift/Ctrl-drag a box in the viewport to select every
+        part inside it (Shift also keeps the current selection). W/E/R switch
         Move/Rotate/Resize · Esc deselects · Ctrl+Z undoes. Parts attached to the
         skeleton keep following it — an offset eye still turns with the head.
         Object parts don't have shape keys, cloth or keyframing, but move,

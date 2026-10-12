@@ -105,6 +105,10 @@ export default function HelpOverlay() {
                 <b>Click a part</b> — select it to move / resize (Mesh mode)
               </li>
               <li>
+                <b>Shift / Ctrl-click a part, or Shift / Ctrl-drag a box</b> — select several
+                parts and move / rotate / resize them together (Mesh mode)
+              </li>
+              <li>
                 <b>Click a prop, camera or light</b> — select it to move / rotate /
                 resize (Object mode). Shift / Ctrl-click to select more than one.
               </li>

@@ -59,11 +59,12 @@ export function hideGizmosForShot() {
     lightId: s.selectedLightId,
     boneName: s.selectedBoneName,
     meshUuid: s.selectedMeshUuid,
+    meshUuids: s.selectedMeshUuids || [],
   }
   if (prev.objectId != null) s.setSelectedObjectId(null)
   if (prev.cameraId != null) s.setSelectedCameraId(null)
   if (prev.boneName != null) s.setSelectedBoneName(null)
-  if (prev.meshUuid != null) s.setSelectedMeshUuid(null)
+  if (prev.meshUuid != null || prev.meshUuids.length) s.setSelectedMeshUuid(null)
   if (prev.lightId != null) {
     s.setSelectedLightId(null)
     selectLight(null)
@@ -73,7 +74,8 @@ export function hideGizmosForShot() {
     if (prev.objectId != null) s2.setSelectedObjectId(prev.objectId)
     if (prev.cameraId != null) s2.setSelectedCameraId(prev.cameraId)
     if (prev.boneName != null) s2.setSelectedBoneName(prev.boneName)
-    if (prev.meshUuid != null) s2.setSelectedMeshUuid(prev.meshUuid)
+    if (prev.meshUuids.length > 1) s2.setMeshSelection(prev.meshUuids, false)
+    else if (prev.meshUuid != null) s2.setSelectedMeshUuid(prev.meshUuid)
     if (prev.lightId != null) {
       s2.setSelectedLightId(prev.lightId)
       selectLight(prev.lightId)

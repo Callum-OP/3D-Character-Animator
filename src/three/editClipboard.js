@@ -7,6 +7,7 @@ import {
   pasteCopiedCharacter,
   hasCopiedCharacterData,
   setMeshVisibleByUuid,
+  setMeshesVisibleByUuids,
   setObjectVisibleById,
 } from './scene.js'
 import { applyPose, getPose, resetPose } from './posing.js'
@@ -80,7 +81,11 @@ export function cutCurrentEdit(state = useStore.getState()) {
 export function toggleCurrentVisibility(state = useStore.getState()) {
   if (state.mode === 'mesh' && state.selectedMeshUuid) {
     const hidden = state.meshOverrides[state.selectedMeshUuid]?.visible === false
-    setMeshVisibleByUuid(state.selectedMeshUuid, hidden)
+    // With several parts selected, H flips them all to the primary part's
+    // opposite state (so a mixed selection ends up uniform), as one undo step.
+    const group = state.selectedMeshUuids || []
+    if (group.length > 1) setMeshesVisibleByUuids(group, hidden)
+    else setMeshVisibleByUuid(state.selectedMeshUuid, hidden)
     return { type: 'mesh', visible: hidden }
   }
   if (state.mode === 'object' && state.selectedObjectId != null) {

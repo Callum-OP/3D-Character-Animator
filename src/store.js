@@ -72,6 +72,7 @@ const CHARACTER_FIELDS = [
   'selectedBoneName',
   'selectedBoneNames',
   'selectedMeshUuid',
+  'selectedMeshUuids',
   'boneFilter',
   'deformOnly',
   'playback',
@@ -116,6 +117,7 @@ function defaultCharacterFields(modelInfo) {
     selectedBoneName: null,
     selectedBoneNames: [],
     selectedMeshUuid: null,
+    selectedMeshUuids: [],
     boneFilter: '',
     deformOnly: !!(
       modelInfo &&
@@ -610,6 +612,34 @@ export const useStore = create((set) => ({
       return { meshOverrides: patch(s.meshOverrides) }
     }),
 
+  // Recolour a set of meshes — one entry per mesh in the per-mesh override map,
+  // so it saves/loads, copies with a character and applies to props exactly
+  // like the other per-mesh settings. `patch` is { color?: '#rrggbb'|null,
+  // solid?: bool }; color: null clears the tint (and the solid flag) so the
+  // part goes back to its loaded colours. 'solid' replaces the texture with the
+  // flat colour instead of multiplying (tinting) it. A character that isn't the
+  // active one keeps its overrides in the roster, so the write goes there.
+  setMeshesColor: (uuids, patch, characterId = null) =>
+    set((s) => {
+      const write = (map) => {
+        const next = { ...map }
+        for (const uuid of uuids) {
+          const merged = { outline: true, shading: 'full', ...map[uuid], ...patch }
+          if (merged.color == null) {
+            delete merged.color
+            delete merged.solid
+          }
+          next[uuid] = merged
+        }
+        return next
+      }
+      if (characterId != null && characterId !== s.activeCharacterId && s.characters[characterId]) {
+        const c = s.characters[characterId]
+        return { characters: { ...s.characters, [characterId]: { ...c, meshOverrides: write(c.meshOverrides || {}) } } }
+      }
+      return { meshOverrides: write(s.meshOverrides) }
+    }),
+
   setMeshVisible: (uuid, visible) =>
     set((s) => ({
       meshOverrides: {
@@ -740,7 +770,8 @@ export const useStore = create((set) => ({
     }),
 
   // ---- Mesh editing (Mesh mode) ----
-  selectedMeshUuid: null, // uuid of the part the mesh gizmo is attached to
+  selectedMeshUuid: null, // "primary" part — last one picked; drives the panel's single-part controls
+  selectedMeshUuids: [], // full multi-selection (group gizmo); always includes selectedMeshUuid when non-empty
   meshGizmoMode: 'translate', // 'translate' | 'rotate' | 'scale'
   // When on, dragging a shape key also drives same-named shape keys on other
   // meshes of this character that sit close by (e.g. teeth/eyes/eyebrows
@@ -750,7 +781,40 @@ export const useStore = create((set) => ({
   // so the transform fields can re-read the selected part's values.
   meshVersion: 0,
 
-  setSelectedMeshUuid: (selectedMeshUuid) => set({ selectedMeshUuid }),
+  setSelectedMeshUuid: (selectedMeshUuid) =>
+    set({ selectedMeshUuid, selectedMeshUuids: selectedMeshUuid != null ? [selectedMeshUuid] : [] }),
+
+  // Shift/Ctrl-click: add or remove one part from the current selection
+  // instead of replacing it, so several parts can be moved/rotated/resized/
+  // recoloured together. A plain click (additive=false) behaves like
+  // setSelectedMeshUuid. Mirrors toggleBoneSelection / toggleObjectSelection.
+  toggleMeshSelection: (uuid, additive) =>
+    set((s) => {
+      if (!additive) {
+        return { selectedMeshUuid: uuid, selectedMeshUuids: uuid != null ? [uuid] : [] }
+      }
+      if (uuid == null) return {}
+      const already = s.selectedMeshUuids.includes(uuid)
+      const selectedMeshUuids = already
+        ? s.selectedMeshUuids.filter((u) => u !== uuid)
+        : [...s.selectedMeshUuids, uuid]
+      const selectedMeshUuid = already
+        ? (s.selectedMeshUuid === uuid ? selectedMeshUuids[selectedMeshUuids.length - 1] ?? null : s.selectedMeshUuid)
+        : uuid
+      return { selectedMeshUuid, selectedMeshUuids }
+    }),
+
+  // Box/marquee-select: set the whole selection from everything the drag
+  // rectangle enclosed. `additive` (Shift held at release) merges with the
+  // current selection instead of replacing it.
+  setMeshSelection: (uuids, additive) =>
+    set((s) => {
+      const merged = additive ? [...new Set([...s.selectedMeshUuids, ...uuids])] : [...uuids]
+      return {
+        selectedMeshUuid: merged.length ? merged[merged.length - 1] : null,
+        selectedMeshUuids: merged,
+      }
+    }),
   setMeshGizmoMode: (meshGizmoMode) => set({ meshGizmoMode }),
   setLinkedShapeKeys: (linkedShapeKeys) => set({ linkedShapeKeys }),
   bumpMeshVersion: () => set((s) => ({ meshVersion: s.meshVersion + 1 })),

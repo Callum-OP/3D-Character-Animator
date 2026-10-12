@@ -134,6 +134,8 @@ import {
   getMeshWorldBounds,
   getMeshByUuid,
   isObjectMesh,
+
+  setMeshesVisible as setMeshesVisibleInScene,
   setViewCamera as setMeshEditViewCamera,
 } from './meshedit.js'
 import {
@@ -442,7 +444,10 @@ export function initScene(container) {
     renderer,
     controls,
     requestRender,
-    onSelect: (uuid) => useStore.getState().setSelectedMeshUuid(uuid),
+    // Shift/Ctrl-click adds/removes a part (same wiring as bones above).
+    onSelect: (uuid, additive) => useStore.getState().toggleMeshSelection(uuid, additive),
+    // Box/marquee-select (Shift/Ctrl-drag) — see meshedit.js's onPointerUp.
+    onSelectMany: (uuids, additive) => useStore.getState().setMeshSelection(uuids, additive),
     onChange: () => useStore.getState().bumpMeshVersion(),
     onVisibilityChange: (uuid, visible) => useStore.getState().setMeshVisible(uuid, visible),
   })
@@ -1488,6 +1493,7 @@ export function pasteCopiedCharacter() {
     selectedBoneName: null,
     selectedBoneNames: [],
     selectedMeshUuid: null,
+    selectedMeshUuids: [],
     poseClipboard: null,
     playback: 'stopped',
     currentTime: 0,
@@ -2002,6 +2008,14 @@ export function setObjectVisibleById(id, visible, recordHistory = true) {
 export function setMeshVisibleByUuid(uuid, visible) {
   setMeshVisibleInScene(uuid, visible)
   useStore.getState().setMeshVisible(uuid, visible)
+}
+
+// Show/hide several parts at once (a multi-selection's eye icon / H key) as a
+// single undo step.
+export function setMeshesVisibleByUuids(uuids, visible) {
+  setMeshesVisibleInScene(uuids, visible)
+  const st = useStore.getState()
+  for (const uuid of uuids) st.setMeshVisible(uuid, visible)
 }
 
 export function copyObjectById(id) {
@@ -3487,6 +3501,14 @@ export function getTransparentMeshUuidsForObject(object) {
   if (!object) return []
   const model = object.isCharacter ? state.characters.get(object.id) : getObjectMaterialModelById(object.id)
   return getTransparentMeshes(model).map((mesh) => mesh.uuid)
+}
+
+// uuids of EVERY mesh of a scene object (character or model prop) — what the
+// Objects panel's colour picker recolours as a whole.
+export function getMeshUuidsForObject(object) {
+  if (!object) return []
+  const model = object.isCharacter ? state.characters.get(object.id) : getObjectMaterialModelById(object.id)
+  return model && model.meshes ? model.meshes.map((mesh) => mesh.uuid) : []
 }
 
 export function applyModelMaterials() {

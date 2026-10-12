@@ -52,7 +52,7 @@ import {
   symmetrisePose,
 } from './posing.js'
 import {
-  selectMesh,
+  selectMeshes,
   setMeshEditEnabled,
   setMeshGizmoMode,
 } from './meshedit.js'
@@ -407,12 +407,16 @@ function Viewport() {
   }, [mode])
 
   // --- Mesh editing: push selection / gizmo mode into the mesh-edit manager ---
-  const selectedMeshUuid = useStore((s) => s.selectedMeshUuid)
+  // selectedMeshUuids can hold several uuids (shift/ctrl-click or a box-select)
+  // — selectMeshes() attaches the gizmo to all of them via a shared group pivot
+  // when there's more than one, or behaves like a plain single-select otherwise.
+  const selectedMeshUuid = useStore((s) => s.selectedMeshUuid) // primary part
+  const selectedMeshUuids = useStore((s) => s.selectedMeshUuids)
   const meshGizmoMode = useStore((s) => s.meshGizmoMode)
 
   useEffect(() => {
-    selectMesh(selectedMeshUuid)
-  }, [selectedMeshUuid])
+    selectMeshes(selectedMeshUuids)
+  }, [selectedMeshUuids])
 
   useEffect(() => {
     setMeshGizmoMode(meshGizmoMode)

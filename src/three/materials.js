@@ -443,7 +443,11 @@ export function normalizeTransparency(material) {
  * @param {'unlit'|'toon'|'soft'|'standard'} opts.mode
  * @param {number} [opts.toonSteps]  shadow band count (Cartoon mode only)
  * @param {number} [opts.soften]     global shadow lift, 0..1
- * @param {object} [opts.overrides]  { [mesh.uuid]: { outline?, shading? } }
+ * @param {object} [opts.overrides]  { [mesh.uuid]: { outline?, shading?, color?, solid? } }
+ *                                    `color` ('#rrggbb') recolours that mesh: it
+ *                                    tints (multiplies) the loaded texture, or
+ *                                    with `solid` replaces the texture with the
+ *                                    flat colour (alpha cut-outs are kept).
  * @param {object} [opts.rimLight]   { color, direction, sideOnly,
  *                                     soft: { enabled, intensity, width },
  *                                     hard: { enabled, intensity, width } }
@@ -485,12 +489,22 @@ export function applyMaterials(model, opts) {
       })
       updateStyleControls(unlitMat, { colorGrading })
       applyAlphaState(unlitMat, original, store, alphaOn)
+      applyColorOverride(unlitMat, original, ov)
       mesh.material = unlitMat
       continue
     }
-    // Standard mode keeps the untouched PBR originals.
+    // Standard mode keeps the untouched PBR originals — except a recoloured
+    // mesh, which gets its own per-mesh copy: originals can be shared between
+    // meshes (and are never mutated), so tinting one in place would recolour
+    // every mesh that happens to share its material.
     if (mode === 'standard') {
-      const arr = Array.isArray(original) ? original : [original]
+      const recoloured = !!(ov && ov.color)
+      const target = recoloured ? getOrBuild(tintedCache(store), mesh, original, buildTinted) : original
+      if (recoloured) {
+        applyAlphaState(target, original, store, alphaOn)
+        applyColorOverride(target, original, ov)
+      }
+      const arr = Array.isArray(target) ? target : [target]
       for (const m of arr) {
         if (!m) continue
         installRimLight(m)
@@ -502,7 +516,7 @@ export function applyMaterials(model, opts) {
           shadowStrength,
         })
       }
-      mesh.material = original
+      mesh.material = target
       continue
     }
     // Cartoon (hard cel bands) and Soft Anime (smooth painterly ramp) both
@@ -528,6 +542,7 @@ export function applyMaterials(model, opts) {
       colorGrading: gradeValue(colorGrading),
       shadowStrength,
     })
+    applyColorOverride(toonMat, original, ov)
     mesh.material = toonMat
   }
 }
@@ -565,6 +580,10 @@ export function disposeGeneratedMaterials(model) {
   disposeCache(model.materials.toon)
   model.materials.unlit.clear()
   model.materials.toon.clear()
+  if (model.materials.tinted) {
+    disposeCache(model.materials.tinted)
+    model.materials.tinted.clear()
+  }
 }
 
 // --- internals ---------------------------------------------------------------
@@ -590,6 +609,47 @@ function assignGradient(material, steps, floor, smooth) {
       m.needsUpdate = true
     }
   }
+}
+
+// Per-mesh copy of an original material, used only in Standard mode for meshes
+// the user has recoloured. Textures are shared by reference (Material.clone
+// copies the references, not the images). userData is reset because
+// Material.copy JSON-clones it — which would carry over the "rim light already
+// installed" flag without the onBeforeCompile hook that flag stands for.
+function buildTinted(src) {
+  const m = src.clone()
+  m.userData = {}
+  return m
+}
+
+function tintedCache(store) {
+  if (!store.tinted) store.tinted = new Map()
+  return store.tinted
+}
+
+// Apply (or clear) a mesh's colour override on its CURRENT material(s).
+// `target` and `original` line up (same array shape). The loaded colour/map
+// are always read back from the untouched original, so removing the override
+// restores the part exactly, and repeated applies never drift.
+//   color  → material.color; since three multiplies colour × map, a textured
+//            mesh is tinted rather than replaced…
+//   solid  → …unless the override also asks for a flat colour, which drops the
+//            colour map (alphaMap is kept, so cut-out shapes stay cut out).
+function applyColorOverride(target, original, ov) {
+  const targets = Array.isArray(target) ? target : [target]
+  const originals = Array.isArray(original) ? original : [original]
+  const color = ov && ov.color
+  targets.forEach((t, i) => {
+    const src = originals[i]
+    if (!t || !src || !t.color || !src.color) return
+    if (color) t.color.set(color)
+    else t.color.copy(src.color)
+    const wantMap = color && ov.solid ? null : src.map || null
+    if ((t.map || null) !== wantMap) {
+      t.map = wantMap
+      t.needsUpdate = true // a map appearing/disappearing changes the shader
+    }
+  })
 }
 
 function buildUnlit(src) {

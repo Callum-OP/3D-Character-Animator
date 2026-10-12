@@ -15,6 +15,7 @@ import {
   scrubAllTimeline,
   setCameraToObject,
   getTransparentMeshUuidsForObject,
+  getMeshUuidsForObject,
   applyModelMaterials,
 } from '../three/scene.js'
 import {
@@ -27,6 +28,7 @@ import {
 } from '../three/objects.js'
 import RadialScale from './RadialScale.jsx'
 import TransformEditor from './TransformEditor.jsx'
+import ColorControl from './ColorControl.jsx'
 
 // Side-panel section: add props / backgrounds around the character, then move,
 // rotate or resize the selected one. Objects are independent of the character —
@@ -61,6 +63,7 @@ export default function ObjectsPanel() {
   const characterRoster = useStore((s) => s.characters)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const setMeshesAlpha = useStore((s) => s.setMeshesAlpha)
+  const setMeshesColor = useStore((s) => s.setMeshesColor)
   const setSelectedObjectId = useStore((s) => s.setSelectedObjectId)
   const toggleObjectSelection = useStore((s) => s.toggleObjectSelection)
   const setObjectMode = useStore((s) => s.setObjectMode)
@@ -92,6 +95,29 @@ export default function ObjectsPanel() {
     if (!file) return
     setMsg(null)
     addImageFile(file).catch((err) => setMsg(err.message || String(err)))
+  }
+
+  // Colour: recolours every part of each selected model/character (images have
+  // no meshes, so they're skipped). Stored per mesh in the same override map as
+  // the Parts panel's colour, so the two always agree.
+  const colourTargets = sceneObjects.filter(
+    (o) => selectedObjectIds.includes(o.id) && o.kind !== 'image' && getMeshUuidsForObject(o).length > 0,
+  )
+  const colourPrimary = colourTargets.find((o) => o.id === selectedObjectId) || colourTargets[0] || null
+  const colourSource = colourPrimary
+    ? (colourPrimary.isCharacter && colourPrimary.id !== activeCharacterId
+        ? characterRoster[colourPrimary.id]?.meshOverrides || {}
+        : meshOverrides)
+    : {}
+  const colourOverride = colourPrimary
+    ? getMeshUuidsForObject(colourPrimary).map((uuid) => colourSource[uuid]).find((ov) => ov && ov.color) || null
+    : null
+
+  function applyObjectColor(patch) {
+    for (const o of colourTargets) {
+      setMeshesColor(getMeshUuidsForObject(o), patch, o.isCharacter ? o.id : null)
+    }
+    applyModelMaterials()
   }
 
   function confirmDeleteObject(object) {
@@ -199,6 +225,23 @@ export default function ObjectsPanel() {
             <div className="pose-msg" style={{ marginTop: 10 }}>
               {selectedObjectIds.length} objects selected — drag the 3D gizmo to{' '}
               {objectMode === 'translate' ? 'move' : objectMode === 'rotate' ? 'rotate' : 'resize'} them all together.
+            </div>
+          )}
+
+          {colourTargets.length > 0 && (
+            <div className="joint-controls" style={{ marginTop: 10 }}>
+              <div className="joint-header">
+                <span className="joint-name">Colour</span>
+                <span className="joint-parent">
+                  {colourTargets.length > 1 ? `${colourTargets.length} objects` : colourTargets[0].name}
+                </span>
+              </div>
+              <ColorControl
+                color={colourOverride?.color || null}
+                solid={!!colourOverride?.solid}
+                onChange={applyObjectColor}
+                onClear={() => applyObjectColor({ color: null })}
+              />
             </div>
           )}
 

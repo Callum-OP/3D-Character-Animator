@@ -2881,3 +2881,36 @@ body {
 .shape-key-sliders .morph-row { grid-template-columns: minmax(0, 0.8fr) 1.6fr auto auto; }
 
 .obj-alpha { display: flex; gap: 6px; align-items: center; font-size: 11px; cursor: pointer; }
+
+/* Colour picker row (Parts panel + Objects panel) */
+.color-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.color-control-label {
+  font-size: 11px;
+  opacity: 0.8;
+}
+.color-control-swatch {
+  width: 34px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+}
+.color-control-solid {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.color-control-reset {
+  font-size: 11px;
+  padding: 2px 8px;
+}
