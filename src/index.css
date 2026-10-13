@@ -2914,3 +2914,54 @@ body {
   font-size: 11px;
   padding: 2px 8px;
 }
+
+/* Right-click menu over the viewport */
+.ctx-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 170px;
+  padding: 4px;
+  background: var(--panel-bg-2);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+  font-size: 13px;
+}
+.ctx-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  width: 100%;
+  padding: 6px 10px;
+  background: none;
+  border: none;
+  border-radius: 5px;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ctx-item:hover:not(:disabled),
+.ctx-item:focus-visible {
+  background: rgba(255, 255, 255, 0.09);
+  outline: none;
+}
+.ctx-item:disabled {
+  color: var(--text-dim);
+  opacity: 0.55;
+  cursor: default;
+}
+.ctx-item.danger:hover:not(:disabled) {
+  background: rgba(255, 90, 60, 0.2);
+  color: #ff8a73;
+}
+.ctx-shortcut {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.ctx-sep {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--panel-border);
+}

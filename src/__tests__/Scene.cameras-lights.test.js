@@ -123,7 +123,7 @@ describe('placed lights', () => {
     }])
   })
 
-  it('interpolates animated position, color, and intensity and keeps the bulb color in sync', () => {
+  it('interpolates animated position, color, and intensity (the ghost source sphere stays white)', () => {
     const light = addLight({ recordUndo: false })
     const lightObject = getLightById(light.id)
     sampleLightTracks({
@@ -136,7 +136,7 @@ describe('placed lights', () => {
     expect(lightObject.position.toArray()).toEqual([2, 1, 3])
     expect(lightObject.intensity).toBe(3)
     expect(lightObject.color.r).toBeCloseTo(0.5)
-    expect(lightObject.children[0].material.color.equals(lightObject.color)).toBe(true)
+    expect(lightObject.children[0].material.color.getHex()).toBe(0xffffff) // the source sphere is always plain white, whatever colour the light is
     expect(getLightKeyValue(light.id).intensity).toBe(3)
   })
 

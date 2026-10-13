@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import React from 'react'
 import {
   initScene,
@@ -89,6 +89,8 @@ import {
   pickLightId,
 } from './lights.js'
 import StatsOverlay from '../panels/StatsOverlay.jsx'
+import ViewportContextMenu from '../panels/ViewportContextMenu.jsx'
+import { createRightClickGesture, resolveContextTarget, selectContextTarget, getContextMenuItems, runContextMenuAction } from './contextMenu.js'
 
 // The viewport's mode switcher. 'view' is look-only (no picking at all);
 // 'object' does prop/camera/light picking. Number keys jump straight to a
@@ -670,6 +672,54 @@ function Viewport() {
     }
   }, [])
 
+  // --- Right-click menu (Object mode) ---------------------------------------
+  // Right-click (without dragging — the right button also pans the view) on a
+  // prop / character / camera / light to select it and get Copy, Paste, Hide/Show
+  // and Delete; on empty space, just Paste when there's something to paste.
+  const [ctxMenu, setCtxMenu] = useState(null) // { x, y, items, target }
+  const closeCtxMenu = useCallback(() => setCtxMenu(null), [])
+
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const gesture = createRightClickGesture({
+      onOpen(e) {
+        const s = useStore.getState()
+        if (s.mode !== 'object' || s.viewCameraId != null) return
+        const rect = el.getBoundingClientRect()
+        const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1
+        const ndcY = -((e.clientY - rect.top) / rect.height) * 2 + 1
+        const target = resolveContextTarget(ndcX, ndcY, s, { pickCameraId, pickLightId, pickObjectId, isCharacterId, setActiveCharacter })
+        selectContextTarget(target)
+        const state = useStore.getState()
+        const items = getContextMenuItems(target, state)
+        if (items.length) setCtxMenu({ x: e.clientX, y: e.clientY, items, target })
+        else setCtxMenu(null)
+      },
+    })
+    function onContextMenu(e) {
+      // Our own menu replaces the browser's, in Object mode only.
+      if (useStore.getState().mode === 'object') e.preventDefault()
+    }
+    el.addEventListener('pointerdown', gesture.pointerDown)
+    el.addEventListener('pointermove', gesture.pointerMove)
+    el.addEventListener('pointerup', gesture.pointerUp)
+    el.addEventListener('pointercancel', gesture.cancel)
+    el.addEventListener('contextmenu', onContextMenu)
+    return () => {
+      el.removeEventListener('pointerdown', gesture.pointerDown)
+      el.removeEventListener('pointermove', gesture.pointerMove)
+      el.removeEventListener('pointerup', gesture.pointerUp)
+      el.removeEventListener('pointercancel', gesture.cancel)
+      el.removeEventListener('contextmenu', onContextMenu)
+    }
+  }, [])
+
+  // A mode change makes the menu's target stale — drop it.
+  useEffect(() => {
+    setCtxMenu(null)
+  }, [mode])
+
   // Keyboard: 1/2/3 switch mode, W/E/R pick the Mesh-mode gizmo tool, Esc
   // deselects, Ctrl/Cmd+Z undoes an edit — a selected prop/image/camera/light
   // always undoes its own move/rotate/resize first (it's independent of
@@ -784,6 +834,14 @@ function Viewport() {
       {/* Three.js appends its canvas into this inner host; React-managed overlays
           live as siblings so React never fights the imperatively-added canvas. */}
       <div ref={containerRef} className="viewport-canvas-host" />
+
+      {ctxMenu && (
+        <ViewportContextMenu
+          menu={ctxMenu}
+          onClose={closeCtxMenu}
+          onAction={(actionId) => runContextMenuAction(actionId, ctxMenu.target)}
+        />
+      )}
 
       {hasSceneContent && !shotActive && (
         <div className="mode-toolbar seg" title="What clicking and dragging does in the view">
