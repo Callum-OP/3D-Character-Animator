@@ -12,6 +12,7 @@ import {
   setCameraUniformScale,
   commitCameraTransform,
 } from '../three/cameras.js'
+import { attachCameraToObject } from '../three/scene.js'
 import EditableValue from './EditableValue.jsx'
 import TransformEditor from './TransformEditor.jsx'
 import RadialScale from './RadialScale.jsx'
@@ -29,6 +30,8 @@ const MODES = [
 
 export default function CamerasPanel() {
   const sceneCameras = useStore((s) => s.sceneCameras)
+  const sceneObjects = useStore((s) => s.sceneObjects)
+  const cameraAttachments = useStore((s) => s.cameraAttachments)
   const sceneClipboardType = useStore((s) => s.sceneClipboardType)
   const selectedCameraId = useStore((s) => s.selectedCameraId)
   const setSelectedCameraId = useStore((s) => s.setSelectedCameraId)
@@ -254,6 +257,29 @@ export default function CamerasPanel() {
                   label="Field of view (degrees)"
                 />
               </label>
+
+              <label className="morph-label" style={{ display: 'block', marginTop: 6 }}>
+                Attach to
+                <select
+                  className="select"
+                  aria-label="Attach camera to object"
+                  style={{ marginLeft: 6 }}
+                  value={cameraAttachments[selected.id] ?? ''}
+                  onChange={(e) => attachCameraToObject(selected.id, e.target.value === '' ? null : Number(e.target.value))}
+                >
+                  <option value="">Nothing (free-standing)</option>
+                  {sceneObjects.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="radio-hint" style={{ marginTop: 2, marginBottom: 4 }}>
+                {cameraAttachments[selected.id] != null
+                  ? 'Follows that object when it moves, rotates or is animated. Its position below is now relative to the object.'
+                  : 'Pick a prop or character and this camera will ride along with it, staying where it is for now.'}
+              </div>
 
               <div className="kf-actions" style={{ marginTop: 6 }}>
                 <button

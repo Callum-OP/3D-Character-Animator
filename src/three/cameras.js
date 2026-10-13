@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import { pushSceneHistory } from './sceneHistory.js'
 import { useStore } from '../store.js'
+import { createMount, reparentKeepingWorld, setObjectWorldTransform, registerFollower, unregisterFollower } from './attach.js'
 
 // ---------------------------------------------------------------------------
 // Scene cameras
@@ -143,6 +144,7 @@ export function removeCamera(id) {
 }
 
 function detachCameraEntry(entry) {
+  releaseCameraAttachment(entry) // back into the scene (same world spot) before it's removed
   if (c.selected === entry.rig) {
     c.transform.detach()
     c.selected = null
@@ -261,8 +263,9 @@ export function snapCameraToView(id) {
   const entry = c.cameras.find((e) => e.id === id)
   if (!entry) return
   const before = cameraSnapshot(entry.rig)
-  entry.rig.position.copy(c.camera.position)
-  entry.rig.quaternion.copy(c.camera.quaternion)
+  // The viewport camera's transform is in WORLD space; an attached camera's rig
+  // is relative to its object, so convert.
+  setObjectWorldTransform(entry.rig, c.camera.position, c.camera.quaternion)
   const after = cameraSnapshot(entry.rig)
   if (!sameCameraSnapshot(before, after)) {
     pushSceneHistory(
@@ -461,7 +464,16 @@ export function getCamerasData() {
     position: entry.rig.position.toArray(),
     quaternion: entry.rig.quaternion.toArray(),
     scale: entry.body.scale.toArray(),
+    // Which object it's attached to (index into the scene's object list — ids
+    // aren't stable across a reload). position/quaternion are then relative to it.
+    attachedObjectIndex: attachedObjectIndexOf(entry.attach?.objectId),
   }))
+}
+
+function attachedObjectIndexOf(objectId) {
+  if (objectId == null) return null
+  const idx = useStore.getState().sceneObjects.findIndex((o) => o.id === objectId)
+  return idx < 0 ? null : idx
 }
 
 // Recreate cameras from saved data. Returns UI metadata for the store.
@@ -494,6 +506,7 @@ export function clearCameras() {
   if (c.transform) c.transform.detach()
   c.selected = null
   for (const entry of c.cameras) {
+    releaseCameraAttachment(entry)
     c.scene?.remove?.(entry.rig)
     disposeBody(entry.body)
   }
@@ -519,6 +532,47 @@ export function disposeCameras() {
   c.camera = null
   c.renderer = null
   c.controls = null
+}
+
+// --- attaching to an object ---------------------------------------------------
+
+// Parent a camera rig under `root` (a prop's or character's root Object3D) so it
+// follows that object — a chase cam, a head cam, a camera riding a vehicle. By
+// default the camera stays exactly where it is in the world; `keepLocal` is for
+// project load, where the saved position/rotation are ALREADY relative to the
+// object. Attaching to another object just re-parents.
+export function attachCameraToRoot(id, root, objectId, { keepLocal = false } = {}) {
+  const entry = c.cameras.find((e) => e.id === id)
+  if (!entry || !root) return false
+  if (entry.attach) releaseCameraAttachment(entry, { silent: true })
+  const mount = createMount()
+  root.add(mount)
+  if (keepLocal) mount.add(entry.rig)
+  else reparentKeepingWorld(entry.rig, mount)
+  const follower = { mount, release: () => releaseCameraAttachment(entry) }
+  registerFollower(follower)
+  entry.attach = { mount, objectId, follower }
+  useStore.getState().setCameraAttachment(id, objectId)
+  c.requestRender()
+  return true
+}
+
+export function detachCameraFromObject(id) {
+  const entry = c.cameras.find((e) => e.id === id)
+  if (entry) releaseCameraAttachment(entry)
+}
+
+// Put an attached camera back into the scene at its current world position.
+function releaseCameraAttachment(entry, { silent = false } = {}) {
+  const a = entry.attach
+  if (!a) return
+  entry.attach = null
+  unregisterFollower(a.follower)
+  if (c.scene) reparentKeepingWorld(entry.rig, c.scene)
+  if (a.mount.parent) a.mount.parent.remove(a.mount)
+  if (silent) return
+  useStore.getState().setCameraAttachment(entry.id, null)
+  c.requestRender?.()
 }
 
 // --- internals ---------------------------------------------------------------

@@ -2,13 +2,14 @@ import * as THREE from 'three'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import { pushSceneHistory } from './sceneHistory.js'
 import { useStore } from '../store.js'
+import { createMount, reparentKeepingWorld, registerFollower, unregisterFollower } from './attach.js'
 
 // ---------------------------------------------------------------------------
 // Scene lights
 //
 // Placeable point lights on top of the app's built-in key light + ambient fill
 // (see scene.js setLightSettings). Each is a THREE.PointLight plus a small
-// unlit "bulb" sphere so it's visible and selectable, moved with the shared
+// ghost "source" sphere shown only while it's selected, moved with the shared
 // translate/rotate/scale TransformControls gizmo — like a prop, but lighting
 // instead of geometry.
 //
@@ -34,6 +35,7 @@ const l = {
   lights: [], // { id, name, light, bulb, directional, directionLocal }
   selected: null, // selected light (THREE.PointLight | THREE.DirectionalLight) or null
   enabled: true,
+  viewCamera: null, // the camera being looked THROUGH (a placed camera), or null/free camera
   gizmoGrabbed: false, // true once per interaction that actually MOVED something via the gizmo (see objectChange)
   draggingViaGizmo: false, // true between dragging-changed(true) and (false) — not by itself proof of an actual move
   onChange: null, // called after anything a rim-follow could care about changes (colour/position/type)
@@ -93,7 +95,7 @@ export function addLight({ recordUndo = true, data = null } = {}) {
   light.castShadow = data?.castShadow ?? false
   light.visible = data?.visible !== false
 
-  const bulb = makeBulb(scale, light.color)
+  const bulb = makeBulb(scale)
   light.add(bulb)
 
   l.scene.add(light)
@@ -160,6 +162,7 @@ export function removeLight(id) {
 }
 
 function detachLightEntry(entry) {
+  releaseLightAttachment(entry) // back into the scene (same world spot) before it's removed
   if (l.selected === entry.light) {
     l.transform.detach()
     l.selected = null
@@ -245,9 +248,10 @@ export function setLightDirectional(id, directional) {
 
   old.remove(entry.bulb)
   next.add(entry.bulb)
-  l.scene.remove(old)
+  const parent = old.parent || l.scene // stays under its mount if it's attached to an object
+  parent.remove(old)
   if (old.target && old.target.parent) l.scene.remove(old.target)
-  l.scene.add(next)
+  parent.add(next)
 
   entry.light = next
   entry.directional = directional
@@ -404,15 +408,49 @@ export function getLightById(id) {
 
 const _lightPickNdc = new THREE.Vector2()
 const _lightRaycaster = new THREE.Raycaster()
+// Click-to-select a light. Done in SCREEN space — the nearest visible light whose
+// position is within LIGHT_PICK_PX pixels of the click — rather than by raycasting
+// a sphere, so the click target is a small fixed size however big the light's
+// source is, and can't block clicks on anything near it.
+const LIGHT_PICK_PX = 14
+const _lightProj = new THREE.Vector3()
 export function pickLightId(ndcX, ndcY) {
   if (!l.camera || !l.lights.length) return null
-  _lightPickNdc.set(ndcX, ndcY)
-  _lightRaycaster.setFromCamera(_lightPickNdc, l.camera)
-  const bulbs = l.lights.filter((entry) => entry.light.visible && entry.bulb.visible).map((entry) => entry.bulb)
-  const hit = _lightRaycaster.intersectObjects(bulbs, true)[0]
-  if (!hit) return null
-  const entry = l.lights.find((candidate) => candidate.bulb === hit.object || candidate.bulb.getObjectById(hit.object.id))
-  return entry ? entry.id : null
+  l.scene.updateMatrixWorld(true)
+  const rect = l.renderer?.domElement?.getBoundingClientRect?.()
+  const w = rect && rect.width ? rect.width : 800
+  const h = rect && rect.height ? rect.height : 600
+  let best = null
+  let bestDist = LIGHT_PICK_PX
+  for (const entry of l.lights) {
+    if (!entry.light.visible) continue
+    entry.light.getWorldPosition(_lightProj).project(l.camera)
+    if (_lightProj.z > 1) continue // behind the camera
+    const dx = ((_lightProj.x - ndcX) * w) / 2
+    const dy = ((_lightProj.y - ndcY) * h) / 2
+    const dist = Math.hypot(dx, dy)
+    if (dist <= bestDist) {
+      best = entry
+      bestDist = dist
+    }
+  }
+  return best ? best.id : null
+}
+
+// Per-frame: show the ghost source sphere on the selected light (and only while
+// editing — not when looking through a placed camera), and let the source size
+// soften that light's shadows. A bigger source blurs the shadow edge more
+// (shadow.radius is the PCF sample spread, 1 = the normal crisp edge), which is
+// the visible effect of a larger emitter. Scale 1 = unchanged from before.
+export function updateLightSources() {
+  const freeView = !l.viewCamera || l.viewCamera === l.camera
+  for (const entry of l.lights) {
+    entry.bulb.visible = !!(l.enabled && freeView && l.selected === entry.light && entry.light.visible)
+    const sc = entry.light.scale
+    const size = (sc.x + sc.y + sc.z) / 3
+    const radius = Math.min(10, Math.max(1, 1 + 3 * (size - 1)))
+    if (entry.light.shadow && entry.light.shadow.radius !== radius) entry.light.shadow.radius = radius
+  }
 }
 
 function updateDirectionalTargets() {
@@ -438,7 +476,6 @@ export function setLightColor(id, hex) {
   const entry = l.lights.find((e) => e.id === id)
   if (!entry) return
   entry.light.color.set(hex)
-  entry.bulb.material.color.set(hex) // bulb material holds its own copy, not a live reference
   l.requestRender()
   if (l.onChange) l.onChange()
 }
@@ -516,7 +553,6 @@ export function applyLightsPlaybackSnapshot(snap) {
     if (s.quat) s.entry.light.quaternion.copy(s.quat)
     if (s.scale) s.entry.light.scale.copy(s.scale)
     s.entry.light.color.copy(s.color)
-    s.entry.bulb.material.color.copy(s.color)
     s.entry.light.intensity = s.intensity
   }
   updateDirectionalTargets()
@@ -551,7 +587,6 @@ function sampleLightKeys(entry, keys, t) {
     if (k.quat) entry.light.quaternion.fromArray(k.quat)
     if (k.scale) entry.light.scale.fromArray(k.scale)
     entry.light.color.set(k.color)
-    entry.bulb.material.color.set(k.color)
     entry.light.intensity = k.intensity
   }
   if (t <= keys[0].time) return apply(keys[0])
@@ -581,7 +616,6 @@ function sampleLightKeys(entry, keys, t) {
   _c0.set(k0.color)
   _c1.set(k1.color)
   entry.light.color.copy(_c0).lerp(_c1, f)
-  entry.bulb.material.color.copy(entry.light.color)
   entry.light.intensity = k0.intensity + (k1.intensity - k0.intensity) * f
 }
 
@@ -598,7 +632,17 @@ export function getLightsData() {
     position: entry.light.position.toArray(),
     quaternion: entry.light.quaternion.toArray(),
     scale: entry.light.scale.toArray(),
+    // Which object it's attached to, as an index into the scene's object list
+    // (ids aren't stable across a reload). position/quaternion above are then
+    // relative to that object.
+    attachedObjectIndex: attachedObjectIndexOf(entry.attach?.objectId),
   }))
+}
+
+export function attachedObjectIndexOf(objectId) {
+  if (objectId == null) return null
+  const idx = useStore.getState().sceneObjects.findIndex((o) => o.id === objectId)
+  return idx < 0 ? null : idx
 }
 
 export function applyLightsData(list) {
@@ -647,6 +691,7 @@ export function clearLights() {
   if (l.transform) l.transform.detach()
   l.selected = null
   for (const entry of l.lights) {
+    releaseLightAttachment(entry)
     l.scene?.remove?.(entry.light)
     if (entry.light.target && entry.light.target.parent) l.scene?.remove?.(entry.light.target)
     disposeLightEntry(entry)
@@ -657,7 +702,8 @@ export function clearLights() {
 
 // Swap the camera the gizmo raycasts/sizes against (view-through-camera mode).
 export function setViewCamera(camera) {
-  if (l.transform) l.transform.camera = camera
+  l.viewCamera = camera
+  if (l.transform) l.transform.camera = camera || l.camera // never leave the gizmo without a camera
 }
 
 export function disposeLights() {
@@ -676,17 +722,84 @@ export function disposeLights() {
   l.getPlacement = null
 }
 
+// --- attaching to an object ---------------------------------------------------
+
+// Parent a light under `root` (a prop's or character's root Object3D) so it
+// follows that object. By default the light stays exactly where it is in the
+// world; `keepLocal` is for project load, where the saved position/rotation are
+// ALREADY relative to the object. Attaching to another object just re-parents.
+export function attachLightToRoot(id, root, objectId, { keepLocal = false } = {}) {
+  const entry = l.lights.find((e) => e.id === id)
+  if (!entry || !root) return false
+  if (entry.attach) releaseLightAttachment(entry, { silent: true })
+  const mount = createMount()
+  root.add(mount)
+  if (keepLocal) mount.add(entry.light)
+  else reparentKeepingWorld(entry.light, mount)
+  if (keepLocal && entry.directional) {
+    // Loading re-aims a directional light at the scene origin from wherever it
+    // now is IN THE WORLD (the saved aim isn't stored), same as an unattached one.
+    l.scene.updateMatrixWorld(true)
+    const wp = entry.light.getWorldPosition(new THREE.Vector3())
+    const wq = entry.light.getWorldQuaternion(new THREE.Quaternion())
+    entry.directionLocal = new THREE.Vector3().sub(wp).applyQuaternion(wq.invert())
+  }
+  const follower = { mount, release: () => releaseLightAttachment(entry) }
+  registerFollower(follower)
+  entry.attach = { mount, objectId, follower }
+  useStore.getState().setLightAttachment(id, objectId)
+  updateDirectionalTargets()
+  l.requestRender()
+  if (l.onChange) l.onChange()
+  return true
+}
+
+export function detachLightFromObject(id) {
+  const entry = l.lights.find((e) => e.id === id)
+  if (entry) releaseLightAttachment(entry)
+}
+
+// Put an attached light back into the scene at its current world position.
+function releaseLightAttachment(entry, { silent = false } = {}) {
+  const a = entry.attach
+  if (!a) return
+  entry.attach = null
+  unregisterFollower(a.follower)
+  if (l.scene) reparentKeepingWorld(entry.light, l.scene)
+  if (a.mount.parent) a.mount.parent.remove(a.mount)
+  if (silent) return
+  useStore.getState().setLightAttachment(entry.id, null)
+  updateDirectionalTargets()
+  l.requestRender?.()
+  if (l.onChange) l.onChange()
+}
+
 // --- internals ---------------------------------------------------------------
 
-// A small unlit sphere marking the light's position, tinted to match its
-// colour at creation time (setLightColor keeps it in sync — the material
-// holds its own copy of the colour, not a live reference to the light's).
-function makeBulb(sceneScale, color) {
-  const r = Math.max(sceneScale, 0.5) * 0.06
-  const geo = new THREE.SphereGeometry(r, 12, 8)
-  const mat = new THREE.MeshBasicMaterial({ color, toneMapped: false })
+// The light's SOURCE SIZE, drawn as a ghost sphere. A light's `scale` is the size
+// of its emitter: at scale 1 the sphere has radius SOURCE_BASE * scene size, and
+// resizing the light resizes the sphere (and softens its shadows — see
+// updateLightSources). It only exists on screen while the light is selected, so
+// it never shows in the preview or an exported video, and it isn't raycastable:
+// clicking a light is done in screen space (pickLightId), so a big source can
+// never block clicks on what's behind it.
+const SOURCE_BASE = 0.05
+const SOURCE_OPACITY = 0.4
+
+function makeBulb(sceneScale) {
+  const r = Math.max(sceneScale, 0.5) * SOURCE_BASE
+  const geo = new THREE.SphereGeometry(r, 24, 16)
+  const mat = new THREE.MeshBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: SOURCE_OPACITY,
+    depthWrite: false,
+    toneMapped: false,
+  })
   const mesh = new THREE.Mesh(geo, mat)
   mesh.userData.isLightBulb = true
+  mesh.visible = false
+  mesh.raycast = () => {} // never a click target for anything
   excludeFromOutline(mesh)
   return mesh
 }

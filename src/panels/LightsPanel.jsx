@@ -16,7 +16,7 @@ import {
   setLightUniformScale,
   commitLightTransform,
 } from '../three/lights.js'
-import { applyModelMaterials } from '../three/scene.js'
+import { applyModelMaterials, attachLightToObject } from '../three/scene.js'
 import EditableValue from './EditableValue.jsx'
 import TransformEditor from './TransformEditor.jsx'
 import RadialScale from './RadialScale.jsx'
@@ -29,6 +29,8 @@ import { copySceneItem, hasSceneClipboard, pasteSceneItem } from '../three/scene
 // character/cameras — key it at two times and it glides between them on Play.
 export default function LightsPanel() {
   const sceneLights = useStore((s) => s.sceneLights)
+  const sceneObjects = useStore((s) => s.sceneObjects)
+  const lightAttachments = useStore((s) => s.lightAttachments)
   const sceneClipboardType = useStore((s) => s.sceneClipboardType)
   const selectedLightId = useStore((s) => s.selectedLightId)
   const setSelectedLightId = useStore((s) => s.setSelectedLightId)
@@ -195,7 +197,7 @@ export default function LightsPanel() {
               <RadialScale
                 value={scaleDragging ? scaleValue : (getLightTransform(selected.id)?.scale[0] || 1)}
                 getValue={() => getLightTransform(selected.id)?.scale[0] || 1}
-                label="Light size"
+                label="Source size"
                 onDragStart={(value) => {
                   scaleBefore.current = snapshotLightTransform(selected.id)
                   setScaleValue(value)
@@ -211,6 +213,10 @@ export default function LightsPanel() {
                   setScaleDragging(false)
                 }}
               />
+              <div className="radio-hint" style={{ marginTop: 2, marginBottom: 4 }}>
+                How big the light itself is — shown as a ghost sphere while selected. A bigger source
+                gives softer shadow edges (when Cast shadows is on). It does not change how far the light reaches.
+              </div>
 
               <label className="slider-row">
                 <span className="slider-label">Color</span>
@@ -254,6 +260,30 @@ export default function LightsPanel() {
                 {selected.directional
                   ? 'Aimed at the scene origin \u2014 drag it around to change the angle it shines from, like a sun or a rim/fill light.'
                   : 'Shines outward in every direction and fades with distance, like a lamp or bulb.'}
+              </div>
+
+
+              <label className="morph-label" style={{ display: 'block', marginTop: 6 }}>
+                Attach to
+                <select
+                  className="select"
+                  aria-label="Attach light to object"
+                  style={{ marginLeft: 6 }}
+                  value={lightAttachments[selected.id] ?? ''}
+                  onChange={(e) => attachLightToObject(selected.id, e.target.value === '' ? null : Number(e.target.value))}
+                >
+                  <option value="">Nothing (free-standing)</option>
+                  {sceneObjects.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="radio-hint" style={{ marginTop: 2, marginBottom: 4 }}>
+                {lightAttachments[selected.id] != null
+                  ? 'Follows that object when it moves, rotates or is animated. Its position below is now relative to the object.'
+                  : 'Pick a prop or character and this light will ride along with it, staying where it is for now.'}
               </div>
 
               <label className="morph-label" style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>

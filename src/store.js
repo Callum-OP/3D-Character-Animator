@@ -1013,6 +1013,24 @@ export const useStore = create((set) => ({
   sceneClipboardType: null,
   setSceneClipboardType: (sceneClipboardType) => set({ sceneClipboardType }),
   sceneCameras: [], // [{ id, name, fov }] — placeable cameras, independent of the model
+  // Which scene object (prop/character id) each camera / light is attached to —
+  // { [cameraId]: objectId }. Absent = free-standing.
+  cameraAttachments: {},
+  lightAttachments: {},
+  setCameraAttachment: (id, objectId) =>
+    set((s) => {
+      const next = { ...s.cameraAttachments }
+      if (objectId == null) delete next[id]
+      else next[id] = objectId
+      return { cameraAttachments: next }
+    }),
+  setLightAttachment: (id, objectId) =>
+    set((s) => {
+      const next = { ...s.lightAttachments }
+      if (objectId == null) delete next[id]
+      else next[id] = objectId
+      return { lightAttachments: next }
+    }),
   selectedCameraId: null, // camera the gizmo is attached to
   cameraGizmoMode: 'translate', // 'translate' | 'rotate'
   viewCameraId: null, // camera the viewport looks through (null = free view)

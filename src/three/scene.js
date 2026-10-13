@@ -51,6 +51,8 @@ import {
   setActiveCameraBody,
   getCamerasData,
   applyCamerasData,
+  attachCameraToRoot,
+  detachCameraFromObject,
   clearCameras,
   disposeCameras,
   setViewCamera as setCamerasViewCamera,
@@ -69,9 +71,12 @@ import {
   getLightById,
   getLightsData,
   applyLightsData,
+  attachLightToRoot,
+  detachLightFromObject,
   clearLights,
   disposeLights,
   setViewCamera as setLightsViewCamera,
+  updateLightSources,
 } from './lights.js'
 import {
   initClothMod,
@@ -191,6 +196,7 @@ import {
 import { getPose, applyPose } from './posing.js'
 import { detectFacingYaw } from './bvh.js'
 import { useStore, captureCharacterRecord } from '../store.js'
+import { releaseFollowersOf } from './attach.js'
 import { clearUndoHistory, pushUndoBatch, runWithoutHistoryCapture } from './undoHistory.js'
 import { pushSceneHistory } from './sceneHistory.js'
 
@@ -751,6 +757,7 @@ function renderOnce() {
   followIdleClothPose() // keep enabled-but-not-draping cloth tracking the body/gizmo, not frozen
   updateBoneHelpers() // park bone dots on their (possibly just-moved) bones
   updateMeshEditHelpers() // keep the part-selection box hugging its mesh
+  updateLightSources() // ghost source sphere on the selected light + size-driven shadow softness
   const camera = state.viewCamera || state.camera
   if (camera === state.camera) updateFreeCameraClipping()
   const restoreCulling = applyRenderCulling(camera)
@@ -1675,6 +1682,7 @@ function detachCharacterSoft(id) {
   if (!isAnyPlaying()) setContinuousRender(false)
   clearClothForMeshes(model.meshes, { restoreVisible: true })
   clearDangle(id)
+  releaseFollowersOf(model.root)
   const detachedIds = detachObjectsForCharacter(id)
   for (const objId of detachedIds) useStore.getState().setObjectAttachment(objId, null)
   clearCharacterObject(id)
@@ -1760,6 +1768,7 @@ function disposeCharacter(id) {
   if (!isAnyPlaying()) setContinuousRender(false)
   clearClothForMeshes(model.meshes) // only THIS character's cloth, others keep simulating
   clearDangle(id) // only THIS character's dangle chains
+  releaseFollowersOf(model.root) // lights/cameras mounted on it go back to the scene
   // Props riding this character's bones -> back into the scene, not disposed
   // along with the skeleton (disposeObject below would otherwise free their
   // geometry too, since a bone's children are part of its subtree).
@@ -2764,12 +2773,14 @@ export function applySceneData(json) {
   if (Array.isArray(json.cameras)) {
     clearCameras()
     const metas = applyCamerasData(json.cameras)
-    useStore.setState({ sceneCameras: metas, selectedCameraId: null, viewCameraId: null })
+    useStore.setState({ sceneCameras: metas, selectedCameraId: null, viewCameraId: null, cameraAttachments: {} })
+    reapplyCameraAttachments(json.cameras, metas)
   }
   if (Array.isArray(json.lights)) {
     clearLights()
     const metas = applyLightsData(json.lights)
-    useStore.setState({ sceneLights: metas, selectedLightId: null })
+    useStore.setState({ sceneLights: metas, selectedLightId: null, lightAttachments: {} })
+    reapplyLightAttachments(json.lights, metas)
   }
   if (json.viewportCamera) applyViewportCameraData(json.viewportCamera)
   requestRender()
@@ -3142,13 +3153,15 @@ export async function applyProjectData(record) {
   // 4b. Recreate the placed cameras (procedural — no blobs involved).
   if (Array.isArray(record.cameras) && record.cameras.length) {
     const metas = applyCamerasData(record.cameras)
-    useStore.setState({ sceneCameras: metas, selectedCameraId: null, viewCameraId: null })
+    useStore.setState({ sceneCameras: metas, selectedCameraId: null, viewCameraId: null, cameraAttachments: {} })
+    reapplyCameraAttachments(record.cameras, metas)
   }
 
   // 4c. Recreate the placed lights (procedural — no blobs involved).
   if (Array.isArray(record.lights) && record.lights.length) {
     const metas = applyLightsData(record.lights)
-    useStore.setState({ sceneLights: metas, selectedLightId: null })
+    useStore.setState({ sceneLights: metas, selectedLightId: null, lightAttachments: {} })
+    reapplyLightAttachments(record.lights, metas)
     // Light ids aren't stable across a save/load (each restore mints new
     // ones) — st.rimFollowLightIndex is the saved light's position in the
     // list instead, remapped to whatever id it got this time.
@@ -3865,6 +3878,42 @@ export function setCameraToSelection() {
   if (target.kind === 'bones') return setCameraToBones(target.names)
   setCameraToObject(target.id)
   return true
+}
+
+// --- Attaching lights / cameras to objects -----------------------------------
+// Parent a light or camera under a prop's or character's root so it rides along
+// with that object. `objectId` is a scene-object id (prop or character); null
+// detaches it again, leaving it where it is in the world.
+export function attachLightToObject(lightId, objectId) {
+  if (objectId == null) return detachLightFromObject(lightId)
+  const root = getObjectRootById(objectId)
+  if (root) attachLightToRoot(lightId, root, objectId)
+}
+
+export function attachCameraToObject(cameraId, objectId) {
+  if (objectId == null) return detachCameraFromObject(cameraId)
+  const root = getObjectRootById(objectId)
+  if (root) attachCameraToRoot(cameraId, root, objectId)
+}
+
+// On load, saved attachments are an index into the scene-object list (ids don't
+// survive a reload). Objects are restored before lights/cameras, so by now that
+// index points at the same object again. The saved transform is already relative
+// to the object, hence keepLocal.
+function reapplyAttachments(saved, metas, attach) {
+  const objects = useStore.getState().sceneObjects
+  saved.forEach((item, i) => {
+    const idx = item && item.attachedObjectIndex
+    const target = idx != null ? objects[idx] : null
+    const root = target ? getObjectRootById(target.id) : null
+    if (root && metas[i]) attach(metas[i].id, root, target.id, { keepLocal: true })
+  })
+}
+function reapplyLightAttachments(saved, metas) {
+  reapplyAttachments(saved, metas, attachLightToRoot)
+}
+function reapplyCameraAttachments(saved, metas) {
+  reapplyAttachments(saved, metas, attachCameraToRoot)
 }
 
 export function setCameraToTarget(kind, id) {

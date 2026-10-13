@@ -3,6 +3,7 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 import { disposeObject } from './loadModel.js'
 import { markHistoryAction, pushUndoBatch, registerUndoHistory } from './undoHistory.js'
 import { useStore } from '../store.js'
+import { releaseFollowersOf } from './attach.js'
 import {
   sampleCameraTracks,
   getCamerasPlaybackSnapshot,
@@ -609,6 +610,7 @@ export function removeObject(id) {
   const idx = o.objects.findIndex((e) => e.id === id)
   if (idx < 0) return
   const entry = o.objects[idx]
+  releaseFollowersOf(entry.root) // lights/cameras mounted on it go back to the scene, not into the bin
   useStore.getState().removeObjectAnimationTrack(entry.animationKey)
   if (o.selected === entry.root) {
     o.transform.detach()
@@ -636,6 +638,7 @@ export function detachObjectSoft(id) {
   const index = o.objects.findIndex((e) => e.id === id)
   if (index < 0) return null
   const entry = o.objects[index]
+  releaseFollowersOf(entry.root)
   const world = {
     position: new THREE.Vector3(),
     quaternion: new THREE.Quaternion(),
