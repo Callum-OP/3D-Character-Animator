@@ -5,7 +5,7 @@ import { setUndoHistoryLimit } from './three/undoHistory.js'
 // in their own local-storage record so opening a project cannot overwrite the
 // user's preferred viewport and look defaults.
 const APP_SETTINGS_FIELDS = [
-  'undoLimit', 'settingsVersion',
+  'undoLimit', 'cameraIgnoresUndo', 'settingsVersion',
   'exportScale', 'exportImageResolution', 'exportVideoResolution', 'exportAspect',
   'exportVideoFps', 'exportVideoQuality', 'exportVideoFormat',
   'showGrid', 'showGround', 'solidBackground', 'backgroundColor', 'showShadow',
@@ -321,7 +321,11 @@ export const useStore = create((set) => ({
   loading: false,
   loadError: null,
 
-  setLoading: (loading) => set({ loading, loadError: null }),
+  // A non-fatal heads-up after an import that worked (e.g. textures it refers to weren't
+  // provided). Cleared when the next import starts.
+  loadNotice: null,
+  setLoadNotice: (loadNotice) => set({ loadNotice }),
+  setLoading: (loading) => set(loading ? { loading, loadError: null, loadNotice: null } : { loading, loadError: null }),
   setLoadError: (loadError) => set({ loadError, loading: false }),
   // Replaces the ACTIVE character's data in place (legacy single-character
   // load path, still used when re-loading over the currently active
@@ -400,6 +404,11 @@ export const useStore = create((set) => ({
   settingsVersion: 2, // bump when a default changes in a way saved settings should pick up
   showStats: false, // FPS / memory readout overlay
   undoLimit: 100,
+  // When on, nothing about the camera is recorded in undo/redo: view orbit/zoom/
+  // framing, placed cameras (add/delete/move/aim) and camera keyframes, so Ctrl+Z
+  // never moves or removes a camera, and Redo isn't wiped by camera moves.
+  cameraIgnoresUndo: false,
+  setCameraIgnoresUndo: (cameraIgnoresUndo) => set({ cameraIgnoresUndo: !!cameraIgnoresUndo }),
   performanceMode: false, // reserved master for performance controls
   performanceBackgroundObjects: false, // hide distant props from the viewport; characters are unaffected
   performanceLowPoly: false, // stronger global viewport resolution reduction
@@ -893,6 +902,14 @@ export const useStore = create((set) => ({
       selectedBoneName: null, selectedBoneNames: [], // mutually exclusive with bone/camera/light selection
       selectedCameraId: null,
       selectedLightId: null,
+      // …and with a selected mesh PART. Mesh mode has its own Move/Rotate/Resize gizmo
+      // on the picked part, and nothing else clears it when a new object is selected —
+      // so importing/pasting an object while in Mesh mode left that gizmo sitting on the
+      // previously selected part, with the new object's gizmo hidden (Object-mode only).
+      // The new object is the selection now: drop the part and show its gizmo.
+      selectedMeshUuid: null,
+      selectedMeshUuids: [],
+      mode: s.mode === 'mesh' ? 'object' : s.mode,
     })),
   setObjectVisible: (id, visible) =>
     set((s) => ({

@@ -37,7 +37,7 @@ import {
 import RadialScale from '../panels/RadialScale.jsx'
 import { getSelectedUniformScale, setSelectedUniformScale, commitUniformScale, snapshotObject } from './objects.js'
 import { useStore } from '../store.js'
-import { SUPPORTED_EXTENSION_RE, SUPPORTED_EXTENSIONS } from './loadModel.js'
+import { modelFileFromDrop, modelFileFromInput, MODEL_ACCEPT } from './modelBundle.js'
 import {
   selectBones,
   setTransformSpace,
@@ -794,21 +794,25 @@ function Viewport() {
     setDragOver(false)
   }
 
+  // Accepts a single model, several files at once (a model plus its textures), a
+  // whole FOLDER, or a .zip — modelFileFromDrop packs them into one file (see
+  // modelBundle.js). It reads the drop synchronously, before anything is awaited.
   function onDrop(e) {
     e.preventDefault()
     setDragOver(false)
-    const file = e.dataTransfer.files && e.dataTransfer.files[0]
-    if (!file) return
-    if (!SUPPORTED_EXTENSION_RE.test(file.name)) {
-      const list = SUPPORTED_EXTENSIONS.map((e) => '.' + e).join(', ')
-      useStore.getState().setLoadError('Unsupported file. Drop a ' + list + ' file.')
-      return
-    }
-    importModelAuto(file).catch(() => {}) // error is surfaced via the store
+    modelFileFromDrop(e.dataTransfer)
+      .then((file) => importModelAuto(file))
+      .catch((err) => {
+        // importModelAuto reports its own failures through the store; this is for
+        // "nothing droppable here" (no model in the files, etc.).
+        if (!useStore.getState().loadError) useStore.getState().setLoadError(err.message || String(err))
+      })
   }
 
   const loading = useStore((s) => s.loading)
   const loadError = useStore((s) => s.loadError)
+  const loadNotice = useStore((s) => s.loadNotice)
+  const setLoadNotice = useStore((s) => s.setLoadNotice)
   const showStats = useStore((s) => s.showStats)
   // Preview / Record film the viewport, so the on-canvas toolbars step aside.
   const shotActive = useStore((s) => s.recording || s.previewing)
@@ -834,6 +838,15 @@ function Viewport() {
       {/* Three.js appends its canvas into this inner host; React-managed overlays
           live as siblings so React never fights the imperatively-added canvas. */}
       <div ref={containerRef} className="viewport-canvas-host" />
+
+      {loadNotice && (
+        <div className="ve-notice" role="status">
+          <span>{loadNotice}</span>
+          <button className="ve-notice-close" aria-label="Dismiss" onClick={() => setLoadNotice(null)}>
+            ×
+          </button>
+        </div>
+      )}
 
       {ctxMenu && (
         <ViewportContextMenu
@@ -963,15 +976,21 @@ function Viewport() {
             ref={emptyModelInputRef}
             className="visually-hidden"
             type="file"
-            accept=".glb,.gltf,.fbx,model/gltf-binary,model/gltf+json"
+            accept={MODEL_ACCEPT}
+            multiple
             aria-label="Choose a 3D model file"
             onChange={(event) => {
-              const file = event.target.files?.[0]
+              const picked = Array.from(event.target.files || [])
               event.target.value = ''
-              if (file) importModelAuto(file).catch(() => {})
+              if (!picked.length) return
+              modelFileFromInput(picked)
+                .then((file) => importModelAuto(file))
+                .catch((err) => {
+                  if (!useStore.getState().loadError) useStore.getState().setLoadError(err.message || String(err))
+                })
             }}
           />
-          {!loadError && <div className="ve-formats">GLB · glTF · FBX <span>·</span> Press ? for help</div>}
+          {!loadError && <div className="ve-formats">FBX · GLB · glTF · OBJ · DAE · STL · PLY · ZIP / folder <span>·</span> Press ? for help</div>}
         </div>
       )}
 

@@ -1,6 +1,17 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { SimplifyModifier } from 'three/examples/jsm/modifiers/SimplifyModifier.js'
+import {
+  readBundle,
+  pickMainModelPath,
+  createResourceResolver,
+  planLooseTextures,
+  planExtraMaps,
+  mimeOf,
+  extOf,
+  stemOf,
+  isImageName,
+} from './modelBundle.js'
 
 export const IMPORT_DECIMATION_LEVELS = [
   { minVertices: 150_000, level: 1, reduction: 0.2 },
@@ -74,8 +85,10 @@ async function getFbxLoader() {
   return fbxLoader
 }
 
-// Supported input extensions, in the order we advertise them to the user.
-export const SUPPORTED_EXTENSIONS = ['glb', 'gltf', 'fbx']
+// Supported input extensions, in the order we advertise them to the user. A .zip
+// is a bundle: a model plus the textures/materials/buffers it references (see
+// modelBundle.js — folders and multi-file picks are packed into one too).
+export const SUPPORTED_EXTENSIONS = ['glb', 'gltf', 'fbx', 'obj', 'dae', 'stl', 'ply', 'zip']
 
 // A single regex used both to validate drops and to strip the extension off the
 // display name. Built from SUPPORTED_EXTENSIONS so the two never drift apart.
@@ -107,20 +120,22 @@ export const SUPPORTED_EXTENSION_RE = new RegExp(
  */
 export async function loadModel(file, { autoDecimate = true } = {}) {
   const ext = extensionOf(file.name)
+  if (ext === 'zip') return loadBundleFile(file, { autoDecimate })
   const url = URL.createObjectURL(file)
   try {
+    if (ext === 'obj' || ext === 'dae' || ext === 'stl' || ext === 'ply' || ext === 'fbx') {
+      // A lone file of these formats goes down the same code path as a bundle, just with
+      // nothing else in it — so anything it refers to that ISN'T there (textures, an .mtl)
+      // is found out and reported (info.bundle.missingTextures / missingFiles) instead of
+      // silently loading untextured.
+      const files = new Map([[file.name, new Uint8Array(await file.arrayBuffer())]])
+      return await loadFromFiles(files, file.name, { autoDecimate, displayName: file.name })
+    }
     if (ext === 'glb' || ext === 'gltf') {
       const gltf = await gltfLoader.loadAsync(url)
       const root = gltf.scene || (gltf.scenes && gltf.scenes[0])
       if (autoDecimate) applyImportOptimization(root)
       return parseRoot(root, gltf.animations, file.name, ext, gltf)
-    }
-    if (ext === 'fbx') {
-      // FBXLoader resolves to the model Group directly; clips live on .animations.
-      const loader = await getFbxLoader()
-      const group = await loader.loadAsync(url)
-      if (autoDecimate) applyImportOptimization(group)
-      return parseRoot(group, group.animations, file.name, ext, group)
     }
     throw new Error(
       `Unsupported file type ".${ext}". Supported: ${SUPPORTED_EXTENSIONS.map((e) => '.' + e).join(', ')}.`,
@@ -139,6 +154,257 @@ export async function loadModel(file, { autoDecimate = true } = {}) {
     // The blob is fully parsed into GPU/CPU memory by now; free the URL handle.
     URL.revokeObjectURL(url)
   }
+}
+
+// ---------------------------------------------------------------------------
+// Loading from a bundle (a zip of a model + its textures/materials/buffers)
+//
+// Every loader asks for its extra files by NAME relative to the model. Handing
+// the model over as a blob URL gives those names nothing to resolve against, so
+// instead each loader is created with a LoadingManager whose URL modifier looks
+// the request up inside the bundle and returns a blob URL for it — the technique
+// three.js documents for loading assets from zips and drag-and-drop.
+// ---------------------------------------------------------------------------
+
+const BUNDLE_SCHEME = 'bundle:/'
+
+async function loadBundleFile(file, { autoDecimate }) {
+  let files
+  try {
+    files = readBundle(await file.arrayBuffer())
+  } catch (err) {
+    throw new Error('Failed to load model: could not read the zip (' + String(err && err.message ? err.message : err) + ')')
+  }
+  const main = pickMainModelPath(files)
+  if (!main) {
+    throw new Error(
+      'Failed to load model: no 3D model found inside the zip. Supported: ' +
+        SUPPORTED_EXTENSIONS.filter((e) => e !== 'zip').map((e) => '.' + e).join(', ') + '.',
+    )
+  }
+  return loadFromFiles(files, main, { autoDecimate, displayName: file.name })
+}
+
+async function loadFromFiles(files, mainPath, { autoDecimate, displayName }) {
+  const ext = extOf(mainPath)
+  const resolver = createResourceResolver(files.keys())
+  const mainDir = mainPath.includes('/') ? mainPath.slice(0, mainPath.lastIndexOf('/') + 1) : ''
+  const base = BUNDLE_SCHEME + mainDir
+
+  const blobUrls = new Map() // bundle path -> blob URL, created on first request
+  const served = new Set() // bundle paths a loader actually asked for
+  const missing = new Set()
+  const manager = new THREE.LoadingManager()
+  manager.setURLModifier((url) => {
+    // Anything that isn't one of our bundle URLs (data:, blob:, http…) passes straight through.
+    if (!url.startsWith(BUNDLE_SCHEME)) return url
+    const key = resolver.find(url.slice(BUNDLE_SCHEME.length))
+    if (!key) {
+      missing.add(url.slice(BUNDLE_SCHEME.length))
+      return url
+    }
+    served.add(key)
+    if (!blobUrls.has(key)) blobUrls.set(key, URL.createObjectURL(new Blob([files.get(key)], { type: mimeOf(key) })))
+    return blobUrls.get(key)
+  })
+  const { TGALoader } = await import('three/examples/jsm/loaders/TGALoader.js')
+  manager.addHandler(/\.tga$/i, new TGALoader(manager))
+
+  // Loaders start fetching textures during parse and finish later; the blob URLs
+  // must outlive that. A sentinel item keeps the manager "busy" across the parse
+  // so onLoad fires exactly once, after the last texture has settled.
+  const idle = new Promise((resolve) => {
+    manager.onLoad = resolve
+  })
+  manager.itemStart('bundle:parse')
+  let result
+  try {
+    result = await parseMainModel(ext, files.get(mainPath), mainPath, base, files, manager)
+    if (autoDecimate) applyImportOptimization(result.root)
+  } catch (err) {
+    manager.itemEnd('bundle:parse')
+    revokeAll(blobUrls)
+    const msg = String(err && err.message ? err.message : err)
+    if (/draco/i.test(msg) || /KHR_draco/i.test(msg)) {
+      throw new Error(
+        'This file uses Draco compression, which is not supported yet. ' +
+          'Re-export from Blender with "Compression" unchecked.',
+      )
+    }
+    throw new Error('Failed to load model: ' + msg)
+  }
+  manager.itemEnd('bundle:parse')
+  await Promise.race([idle, new Promise((r) => setTimeout(r, 60_000))])
+
+  let loose = { colour: 0, extra: 0 }
+  try {
+    loose = await applyLooseTextures(result.root, files, served, manager)
+  } finally {
+    revokeAll(blobUrls)
+  }
+
+  const parsed = parseRoot(result.root, result.animations, displayName, ext, result.source)
+  parsed.info.bundle = {
+    files: files.size,
+    texturesFound: served.size + loose.colour + loose.extra,
+    missingTextures: [...missing].filter(isImageName),
+    missingFiles: result.missingFiles || [],
+    looseTexturesApplied: loose.colour,
+    extraMapsApplied: loose.extra,
+  }
+  return parsed
+}
+
+function revokeAll(blobUrls) {
+  for (const url of blobUrls.values()) URL.revokeObjectURL(url)
+  blobUrls.clear()
+}
+
+const textDecoder = new TextDecoder()
+
+async function parseMainModel(ext, bytes, mainPath, base, files, manager) {
+  const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+  if (ext === 'fbx') {
+    const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js')
+    const group = new FBXLoader(manager).parse(buffer, base)
+    return { root: group, animations: group.animations, source: group }
+  }
+  if (ext === 'glb' || ext === 'gltf') {
+    const loader = new GLTFLoader(manager)
+    loader.register((parser) => new GLTFSpecularGlossinessExtension(parser))
+    const gltf = await loader.parseAsync(ext === 'glb' ? buffer : textDecoder.decode(bytes), base)
+    const root = gltf.scene || (gltf.scenes && gltf.scenes[0])
+    return { root, animations: gltf.animations, source: gltf }
+  }
+  if (ext === 'obj') {
+    const { OBJLoader } = await import('three/examples/jsm/loaders/OBJLoader.js')
+    const text = textDecoder.decode(bytes)
+    const loader = new OBJLoader(manager)
+    // The .mtl the OBJ names (mtllib), else the only .mtl in the bundle.
+    const named = /^\s*mtllib\s+(.+?)\s*$/im.exec(text)
+    const mtlKeys = [...files.keys()].filter((k) => extOf(k) === 'mtl')
+    const mtlKey = (named && createResourceResolver(mtlKeys).find(named[1].trim())) || (mtlKeys.length === 1 ? mtlKeys[0] : null)
+    if (mtlKey) {
+      const { MTLLoader } = await import('three/examples/jsm/loaders/MTLLoader.js')
+      const mtlDir = mtlKey.includes('/') ? mtlKey.slice(0, mtlKey.lastIndexOf('/') + 1) : ''
+      const creator = new MTLLoader(manager).parse(textDecoder.decode(files.get(mtlKey)), BUNDLE_SCHEME + mtlDir)
+      creator.preload()
+      loader.setMaterials(creator)
+    }
+    const group = loader.parse(text)
+    // An .mtl the OBJ asks for that wasn't provided: every material falls back to plain grey.
+    const missingFiles = named && !mtlKey ? [named[1].trim()] : []
+    return { root: group, animations: [], source: group, missingFiles }
+  }
+  if (ext === 'dae') {
+    const { ColladaLoader } = await import('three/examples/jsm/loaders/ColladaLoader.js')
+    const collada = new ColladaLoader(manager).parse(textDecoder.decode(bytes), base)
+    return { root: collada.scene, animations: collada.animations || [], source: collada }
+  }
+  if (ext === 'stl') {
+    const { STLLoader } = await import('three/examples/jsm/loaders/STLLoader.js')
+    const geometry = new STLLoader(manager).parse(buffer)
+    const material = new THREE.MeshStandardMaterial({ color: 0xcccccc, vertexColors: !!geometry.hasColors })
+    const group = new THREE.Group()
+    group.add(Object.assign(new THREE.Mesh(geometry, material), { name: stemOf(mainPath) }))
+    return { root: group, animations: [], source: group }
+  }
+  if (ext === 'ply') {
+    const { PLYLoader } = await import('three/examples/jsm/loaders/PLYLoader.js')
+    const geometry = new PLYLoader(manager).parse(buffer)
+    if (!geometry.getAttribute('normal')) geometry.computeVertexNormals()
+    const material = new THREE.MeshStandardMaterial({ color: 0xcccccc, vertexColors: !!geometry.getAttribute('color') })
+    const group = new THREE.Group()
+    group.add(Object.assign(new THREE.Mesh(geometry, material), { name: stemOf(mainPath) }))
+    return { root: group, animations: [], source: group }
+  }
+  throw new Error(`Unsupported file type ".${ext}".`)
+}
+
+// Pair up images nothing referenced with the model's materials (see
+// planLooseTextures / planExtraMaps for the rules): colour pictures for plain
+// materials, and normal / specular / roughness / metalness / AO / emissive maps
+// for whichever material they're named after. Returns { colour, extra } — how many
+// of each got applied.
+const EXTRA_SLOTS = {
+  normal: 'normalMap',
+  specular: 'specularMap', // Phong-family materials only (an OBJ's default material is one)
+  roughness: 'roughnessMap',
+  metalness: 'metalnessMap',
+  ao: 'aoMap',
+  emissive: 'emissiveMap',
+}
+const COLOR_SPACE_ROLES = new Set(['emissive'])
+
+async function applyLooseTextures(root, files, served, manager) {
+  const candidates = [...files.keys()].filter((k) => isImageName(k) && !served.has(k))
+  if (!candidates.length) return { colour: 0, extra: 0 }
+
+  const entries = new Map() // material -> { id, names, textured, has, material }
+  root.traverse((obj) => {
+    if (!obj.isMesh) return
+    for (const material of Array.isArray(obj.material) ? obj.material : [obj.material]) {
+      if (!material || !('map' in material) || material.isShaderMaterial) continue
+      if (!entries.has(material)) {
+        const has = {}
+        for (const [role, slot] of Object.entries(EXTRA_SLOTS)) has[role] = !(slot in material) || !!material[slot]
+        entries.set(material, { id: entries.size, names: [material.name], textured: !!material.map || !!material.vertexColors, has, material })
+      }
+      entries.get(material).names.push(obj.name)
+    }
+  })
+  const list = [...entries.values()]
+  const colourPlan = planLooseTextures(list, candidates)
+  const extraPlan = planExtraMaps(list, candidates)
+  if (!colourPlan.length && !extraPlan.length) return { colour: 0, extra: 0 }
+
+  const textures = new Map() // image path -> Promise<Texture>
+  const loadTexture = (path, srgb) => {
+    const key = path + (srgb ? '#srgb' : '')
+    if (!textures.has(key)) {
+      const url = URL.createObjectURL(new Blob([files.get(path)], { type: mimeOf(path) }))
+      const loader = extOf(path) === 'tga' ? manager.getHandler('.tga') : new THREE.TextureLoader(manager)
+      textures.set(
+        key,
+        loader.loadAsync(url).then((tex) => {
+          if (srgb) tex.colorSpace = THREE.SRGBColorSpace
+          tex.wrapS = tex.wrapT = THREE.RepeatWrapping
+          URL.revokeObjectURL(url)
+          return tex
+        }),
+      )
+    }
+    return textures.get(key)
+  }
+  const byId = new Map(list.map((e) => [e.id, e]))
+
+  let colour = 0
+  for (const { id, path } of colourPlan) {
+    const { material } = byId.get(id)
+    try {
+      material.map = await loadTexture(path, true)
+      if (material.color) material.color.set(0xffffff) // grey default would otherwise dim the picture
+      material.needsUpdate = true
+      colour++
+    } catch {
+      // an undecodable image just leaves the material as it was
+    }
+  }
+  let extra = 0
+  for (const { id, role, path } of extraPlan) {
+    const { material } = byId.get(id)
+    const slot = EXTRA_SLOTS[role]
+    if (!slot || !(slot in material) || material[slot]) continue
+    try {
+      material[slot] = await loadTexture(path, COLOR_SPACE_ROLES.has(role))
+      if (role === 'emissive' && material.emissive) material.emissive.set(0xffffff)
+      material.needsUpdate = true
+      extra++
+    } catch {
+      // as above
+    }
+  }
+  return { colour, extra }
 }
 
 // SimplifyModifier intentionally removes skin attributes, so applying it to a

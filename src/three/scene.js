@@ -197,6 +197,7 @@ import { getPose, applyPose } from './posing.js'
 import { detectFacingYaw } from './bvh.js'
 import { useStore, captureCharacterRecord } from '../store.js'
 import { releaseFollowersOf } from './attach.js'
+import { describeMissingFiles } from './modelBundle.js'
 import { clearUndoHistory, pushUndoBatch, runWithoutHistoryCapture } from './undoHistory.js'
 import { pushSceneHistory } from './sceneHistory.js'
 
@@ -723,7 +724,11 @@ function sameViewportView(a, b) {
 }
 
 function commitViewportView(before, after = snapshotViewportView()) {
-  if (!sameViewportView(before, after)) return
+  if (useStore.getState().cameraIgnoresUndo) return // setting: the camera stays out of undo/redo
+  // Record a step only when the view really moved. (This used to be inverted: orbits
+  // recorded nothing while every plain click on the canvas recorded an empty step that
+  // undid to nothing — and wiped the redo history.)
+  if (!before || !after || sameViewportView(before, after)) return
   pushSceneHistory(
     () => applyViewportView(before),
     () => applyViewportView(after),
@@ -1805,7 +1810,7 @@ export async function addObjectFile(file, { animationKey } = {}) {
   return meta
 }
 
-// Import a model file (.glb/.gltf/.fbx) without the caller having to say
+// Import a model file (.fbx/.glb/.gltf/.obj/.dae/.stl/.ply, or a .zip bundle) without the caller having to say
 // whether it's a character or a prop: parse it once just to check for a
 // skeleton, dispose that throwaway parse immediately (nothing from it is
 // added to the scene — this is purely a probe, so it must not leak), then
@@ -1849,12 +1854,16 @@ export async function importModelAuto(file) {
   try {
     const probe = await loadModel(file, { autoDecimate: false })
     const isRigged = !!(probe.info?.bones?.length)
+    // Computed from the probe, shown once the real import has succeeded.
+    const notice = describeMissingFiles(probe.info?.name || file.name, probe.info?.bundle)
     disposeObject(probe.root)
     if (isRigged) {
       const parsed = await loadModelFile(file, { addNew: true })
+      useStore.getState().setLoadNotice(notice)
       return { kind: 'character', name: parsed.info.name }
     }
     const meta = await addObjectFile(file)
+    useStore.getState().setLoadNotice(notice)
     return { kind: 'object', name: meta.name }
   } catch (error) {
     if (useStore.getState().loading) useStore.getState().setLoadError(error.message || String(error))

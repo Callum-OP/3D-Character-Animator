@@ -268,7 +268,7 @@ export function addImage(map, name, aspect, file, animationKey = null) {
   }
   o.objects.push(entry)
   o.requestRender()
-  return { id, animationKey: entry.animationKey, name, format, kind: 'image' }
+  return { id, animationKey: entry.animationKey, name, format: 'image', kind: 'image' }
 }
 
 // ---------------------------------------------------------------------------
@@ -1520,4 +1520,8 @@ function excludeFromOutline(obj3d) {
     const mats = Array.isArray(obj.material) ? obj.material : [obj.material]
     for (const m of mats) m.userData.outlineParameters = { visible: false }
   })
+}
+// Test hook: the TransformControls instance behind the Object-mode gizmo.
+export function __getObjectGizmoForTest() {
+  return o.transform
 }

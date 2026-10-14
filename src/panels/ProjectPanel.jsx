@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store.js'
+import { modelFileFromInput, MODEL_ACCEPT } from '../three/modelBundle.js'
 import {
   importModelAuto,
   setActiveCharacter,
@@ -84,9 +85,14 @@ export default function ProjectPanel() {
   }, [lastProjectSave])
 
   function onPickModel(e) {
-    const file = e.target.files && e.target.files[0]
+    const picked = Array.from(e.target.files || [])
     e.target.value = ''
-    if (file) importModelAuto(file).catch(() => {})
+    if (!picked.length) return
+    modelFileFromInput(picked)
+      .then((file) => importModelAuto(file))
+      .catch((err) => {
+        if (!useStore.getState().loadError) useStore.getState().setLoadError(err.message || String(err))
+      })
   }
 
   function confirmDeleteCharacter(id) {
@@ -248,12 +254,13 @@ export default function ProjectPanel() {
           onClick={() => fileInputRef.current?.click()}
           disabled={loading}
         >
-          {loading ? 'Loading…' : '＋ Load object or character (.glb / .gltf / .fbx)'}
+          {loading ? 'Loading…' : '＋ Load object or character (.fbx / .glb / .obj / folder / .zip…)'}
         </button>
         <input
           ref={fileInputRef}
           type="file"
-          accept=".glb,.gltf,.fbx,model/gltf-binary,model/gltf+json"
+          accept={MODEL_ACCEPT}
+          multiple
           style={{ display: 'none' }}
           onChange={onPickModel}
         />

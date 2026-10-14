@@ -1,4 +1,5 @@
 import { useStore } from '../store.js'
+import { hasUndoHistory, clearUndoHistory } from '../three/undoHistory.js'
 import EditableValue from './EditableValue.jsx'
 
 // Side-panel section: viewport display toggles (grid, ground shadow, background,
@@ -41,6 +42,24 @@ export default function ViewPanel() {
   const setPerformanceEffects = useStore((s) => s.setPerformanceEffects)
   const setAutoDecimate = useStore((s) => s.setAutoDecimate)
   const setUndoLimit = useStore((s) => s.setUndoLimit)
+  const cameraIgnoresUndo = useStore((s) => s.cameraIgnoresUndo)
+  const setCameraIgnoresUndo = useStore((s) => s.setCameraIgnoresUndo)
+
+  // History recorded under the old setting still holds (or lacks) camera steps, and
+  // replaying those against the new setting is what made undo misbehave — so a change
+  // starts a clean history. Nothing to lose when there's no history yet: no prompt then.
+  function onToggleCameraIgnoresUndo(next) {
+    if (
+      hasUndoHistory() &&
+      !window.confirm(
+        'Changing this clears your undo and redo history, so steps recorded under the old setting can\'t cause problems. Continue?',
+      )
+    ) {
+      return
+    }
+    setCameraIgnoresUndo(next)
+    clearUndoHistory()
+  }
 
   return (
     <div className="panel">
@@ -271,6 +290,21 @@ export default function ViewPanel() {
           onChange={(e) => setUndoLimit(e.target.value)}
         />
       </label>
+
+      <label className="toggle-row" title="Keep the camera out of undo and redo">
+        <input
+          type="checkbox"
+          checked={cameraIgnoresUndo}
+          onChange={(e) => onToggleCameraIgnoresUndo(e.target.checked)}
+        />
+        Camera is not affected by undo / redo
+      </label>
+      <p className="panel-hint">
+        Orbiting, zooming and framing the view, placed cameras (adding, deleting, moving, aiming)
+        and camera keyframes are left out of undo history, so Ctrl+Z only steps back through your
+        other edits and never moves a camera. Changing this clears the undo/redo history, so steps
+        recorded under the old setting can't interfere.
+      </p>
     </div>
   )
 }

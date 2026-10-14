@@ -2965,3 +2965,33 @@ body {
   margin: 4px 2px;
   background: var(--panel-border);
 }
+
+/* Non-fatal import notice (e.g. textures the model refers to weren't provided) */
+.ve-notice {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  max-width: min(560px, calc(100% - 32px));
+  padding: 10px 12px;
+  background: var(--panel-bg-2);
+  border: 1px solid var(--panel-border);
+  border-left: 3px solid #f0b429;
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.ve-notice-close {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}

@@ -29,6 +29,7 @@ import {
 import RadialScale from './RadialScale.jsx'
 import TransformEditor from './TransformEditor.jsx'
 import ColorControl from './ColorControl.jsx'
+import { modelFileFromInput, MODEL_ACCEPT } from '../three/modelBundle.js'
 
 // Side-panel section: add props / backgrounds around the character, then move,
 // rotate or resize the selected one. Objects are independent of the character —
@@ -82,11 +83,13 @@ export default function ObjectsPanel() {
   const [keyAttachmentAtPlayhead, setKeyAttachmentAtPlayhead] = useState(false)
 
   function onPick(e) {
-    const file = e.target.files && e.target.files[0]
+    const picked = Array.from(e.target.files || [])
     e.target.value = ''
-    if (!file) return
+    if (!picked.length) return
     setMsg(null)
-    addObjectFile(file).catch((err) => setMsg(err.message || String(err)))
+    modelFileFromInput(picked)
+      .then((file) => addObjectFile(file))
+      .catch((err) => setMsg(err.message || String(err)))
   }
 
   function onPickImage(e) {
@@ -180,7 +183,8 @@ export default function ObjectsPanel() {
       <input
         ref={fileRef}
         type="file"
-        accept=".glb,.gltf,.fbx,model/gltf-binary,model/gltf+json"
+        accept={MODEL_ACCEPT}
+        multiple
         style={{ display: 'none' }}
         onChange={onPick}
       />

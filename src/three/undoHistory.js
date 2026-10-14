@@ -52,6 +52,15 @@ export function isHistoryCaptureSuspended() {
 
 // Empty every undo/redo stack (New Project / loading a project: nothing from
 // the old scene can be meaningfully undone into the new one).
+// Whether there is anything at all to undo or redo, in any domain.
+export function hasUndoHistory() {
+  for (const getStacks of histories.values()) {
+    const stacks = getStacks()
+    if (stacks.undo.length || stacks.redo.length) return true
+  }
+  return false
+}
+
 export function clearUndoHistory() {
   for (const getStacks of histories.values()) {
     const stacks = getStacks()

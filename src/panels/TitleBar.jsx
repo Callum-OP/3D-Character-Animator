@@ -25,6 +25,7 @@ import {
   saveProjectAs,
 } from '../three/projectStore.js'
 import { pickFileWithInput } from '../three/fsAccess.js'
+import { modelFileFromInput, MODEL_ACCEPT } from '../three/modelBundle.js'
 import { exportAnimationBVH, play, pause, stop, selectClip, selectEdit } from '../three/animation.js'
 import { runExportShot, canRecordVideo } from '../three/exportShot.js'
 import {
@@ -34,6 +35,7 @@ import {
 } from '../three/posing.js'
 import { startObjectAnimation, stopObjectAnimation } from '../three/objects.js'
 import { performUndo, performRedo } from '../three/undoPriority.js'
+import { addLightAndSelect, addCameraAndSelect } from '../three/addSceneItems.js'
 import {
   canCopyCurrentEdit,
   canPasteCurrentEdit,
@@ -62,6 +64,7 @@ export default function TitleBar({ onOpenSettings }) {
   const [msg, setMsg] = useState(null)
   const rootRef = useRef(null)
   const modelInputRef = useRef(null)
+  const modelFolderInputRef = useRef(null)
   const bvhInputRef = useRef(null)
 
   const current = useStore((s) => s.currentProject)
@@ -263,11 +266,18 @@ export default function TitleBar({ onOpenSettings }) {
     setOpenMenu(null)
     modelInputRef.current?.click()
   }
+  function onPickImportModelFolder() {
+    setOpenMenu(null)
+    modelFolderInputRef.current?.click()
+  }
+  // Handles a single file, several files picked together (a model + its textures)
+  // and a picked folder — all packed into one file by modelFileFromInput.
   function onImportModelFile(e) {
-    const file = e.target.files && e.target.files[0]
+    const picked = Array.from(e.target.files || []) // copy before the input is cleared
     e.target.value = ''
-    if (!file) return
+    if (!picked.length) return
     withMenuClosed(async () => {
+      const file = await modelFileFromInput(picked)
       const { kind, name } = await importModelAuto(file)
       setMsg(kind === 'character' ? `Imported "${name}" as a new character.` : `Imported "${name}" as an object.`)
     })
@@ -400,6 +410,16 @@ export default function TitleBar({ onOpenSettings }) {
     }
   }
 
+  function onAddLight() {
+    setOpenMenu(null)
+    addLightAndSelect()
+  }
+
+  function onAddCamera() {
+    setOpenMenu(null)
+    addCameraAndSelect()
+  }
+
   function onToggleAllVisibility() {
     setOpenMenu(null)
     const visible = anyObjectHidden
@@ -421,7 +441,8 @@ export default function TitleBar({ onOpenSettings }) {
 
   return (
     <div className="titlebar" ref={rootRef}>
-      <input ref={modelInputRef} type="file" accept=".glb,.gltf,.fbx" style={{ display: 'none' }} onChange={onImportModelFile} />
+      <input ref={modelInputRef} type="file" accept={MODEL_ACCEPT} multiple style={{ display: 'none' }} onChange={onImportModelFile} />
+      <input ref={modelFolderInputRef} type="file" webkitdirectory="" directory="" multiple style={{ display: 'none' }} onChange={onImportModelFile} />
       <input ref={bvhInputRef} type="file" accept=".bvh" style={{ display: 'none' }} onChange={onImportBVHFile} />
 
       <div className="titlebar-brand">
@@ -473,7 +494,10 @@ export default function TitleBar({ onOpenSettings }) {
               <button role="menuitem" onClick={() => setFileView('root')}>◂ Back</button>
               <div className="titlebar-dropdown-sep" />
               <button role="menuitem" onClick={onPickImportModel} title="Rigged files (with bones) come in as a new character; everything else as an object">
-                Import Model… (.glb/.gltf/.fbx)
+                Import Model… (.fbx .glb .gltf .obj .dae .stl .ply .zip)
+              </button>
+              <button role="menuitem" onClick={onPickImportModelFolder} title="Pick a model's folder — its textures and materials come along">
+                Import Model Folder…
               </button>
               <button role="menuitem" onClick={onPickImportBVH} disabled={!hasCharacter} title={hasCharacter ? 'Applies to the active character, using the best-guess bone mapping' : 'Load a character first'}>
                 Import Animation… (.bvh)
@@ -547,6 +571,9 @@ export default function TitleBar({ onOpenSettings }) {
                   {anyObjectHidden ? 'Unhide All' : 'Hide All'}
                 </button>
               )}
+              <div className="titlebar-dropdown-sep" />
+              <button role="menuitem" onClick={onAddLight}>Add Light</button>
+              <button role="menuitem" onClick={onAddCamera}>Add Camera</button>
             </div>
           )}
         </div>

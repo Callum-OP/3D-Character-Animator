@@ -27,6 +27,31 @@ const COALESCE_MS = 400 // rapid edits (dragging a slider, nudging a key) merge 
 let applying = false
 let lastRecord = { batch: null, at: 0 }
 
+// "Camera is not affected by undo/redo": camera keyframes (animData.cameras) and
+// camera cuts (animData.cuts) are left out of this history. The timeline data is
+// replaced wholesale on every edit, but the parts an edit didn't touch keep their
+// identity, so "only the camera parts changed" is a cheap reference comparison.
+const CAMERA_PARTS = ['cameras', 'cuts']
+function onlyCameraPartsDiffer(a, b) {
+  if (!a || !b) return false
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)])
+  for (const key of keys) {
+    if (CAMERA_PARTS.includes(key)) continue
+    if (a[key] !== b[key]) return false
+  }
+  return true
+}
+// `animData` with its camera parts swapped for the ones currently live, so an
+// undo/redo leaves the camera exactly as it is.
+function keepCameraParts(snapAnimData, liveAnimData) {
+  const next = { ...snapAnimData }
+  for (const key of CAMERA_PARTS) {
+    if (liveAnimData && key in liveAnimData) next[key] = liveAnimData[key]
+    else delete next[key]
+  }
+  return next
+}
+
 function charSnap(s) {
   return { animData: s.animData, animDuration: s.animDuration }
 }
@@ -40,7 +65,11 @@ function record(s, prev) {
   // loaded, replaced, removed) is not a keyframe edit.
   const sameCharacter =
     s.activeCharacterId === prev.activeCharacterId && s.modelInfo === prev.modelInfo
-  const charChanged = sameCharacter && s.animData !== prev.animData
+  const ignoreCamera = !!s.cameraIgnoresUndo
+  const charChanged =
+    sameCharacter &&
+    s.animData !== prev.animData &&
+    !(ignoreCamera && onlyCameraPartsDiffer(prev.animData, s.animData))
   const objChanged = s.objectAnimData !== prev.objectAnimData
   if (!charChanged && !objChanged) return
 
@@ -88,16 +117,21 @@ function applyBatch(batch, which) {
   let touchedActiveChar = false
   if (batch.char) {
     const snap = batch.char[which]
+    const ignoreCamera = !!s.cameraIgnoresUndo
     if (batch.characterId === s.activeCharacterId) {
-      patch.animData = snap.animData
+      patch.animData = ignoreCamera ? keepCameraParts(snap.animData, s.animData) : snap.animData
       patch.animDuration = snap.animDuration
       touchedActiveChar = true
     } else if (s.characters[batch.characterId]) {
       // That character isn't the one on screen any more; its saved timeline
       // lives in the per-character registry.
+      const live = s.characters[batch.characterId]
       patch.characters = {
         ...s.characters,
-        [batch.characterId]: { ...s.characters[batch.characterId], animData: snap.animData },
+        [batch.characterId]: {
+          ...live,
+          animData: ignoreCamera ? keepCameraParts(snap.animData, live.animData) : snap.animData,
+        },
       }
     }
   }

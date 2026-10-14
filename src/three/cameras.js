@@ -99,7 +99,7 @@ export function addCamera(fov, { recordUndo = true, position, quaternion, bodySc
   c.requestRender()
   const meta = { id, name, fov: camera.fov }
   if (recordUndo) {
-    pushSceneHistory(
+    pushCameraHistory(
       () => {
         detachCameraEntry(entry)
         useStore.getState().removeSceneCamera(id)
@@ -125,7 +125,7 @@ export function removeCamera(id) {
   const viewCameraId = store.viewCameraId
   detachCameraEntry(entry)
   store.removeSceneCamera(id)
-  pushSceneHistory(
+  pushCameraHistory(
     () => {
       attachCameraEntry(entry, idx)
       if (meta) {
@@ -192,7 +192,7 @@ function commitCameraDrag() {
   if (!rig || !before) return
   const after = cameraSnapshot(rig)
   if (sameCameraSnapshot(before, after)) return
-  pushSceneHistory(
+  pushCameraHistory(
     () => applyCameraSnapshot(rig, before),
     () => applyCameraSnapshot(rig, after),
   )
@@ -268,7 +268,7 @@ export function snapCameraToView(id) {
   setObjectWorldTransform(entry.rig, c.camera.position, c.camera.quaternion)
   const after = cameraSnapshot(entry.rig)
   if (!sameCameraSnapshot(before, after)) {
-    pushSceneHistory(
+    pushCameraHistory(
       () => applyCameraSnapshot(entry.rig, before),
       () => applyCameraSnapshot(entry.rig, after),
     )
@@ -307,7 +307,7 @@ export function setCameraTransform(id, transform) {
   const after = cameraSnapshot(entry.rig)
   c.requestRender()
   if (!sameCameraSnapshot(before, after)) {
-    pushSceneHistory(
+    pushCameraHistory(
       () => applyCameraSnapshot(entry.rig, before),
       () => applyCameraSnapshot(entry.rig, after),
     )
@@ -352,7 +352,7 @@ export function commitCameraTransform(id, before) {
   if (!entry || !before) return
   const after = cameraSnapshot(entry.rig)
   if (sameCameraSnapshot(before, after)) return
-  pushSceneHistory(
+  pushCameraHistory(
     () => applyCameraSnapshot(entry.rig, before),
     () => applyCameraSnapshot(entry.rig, after),
   )
@@ -573,6 +573,18 @@ function releaseCameraAttachment(entry, { silent = false } = {}) {
   if (silent) return
   useStore.getState().setCameraAttachment(entry.id, null)
   c.requestRender?.()
+}
+
+// Every camera edit goes through here. With "Camera is not affected by undo/redo"
+// on, nothing is recorded — but a recorded batch's `discard` hook is also what
+// frees a deleted camera's body, and nothing will ever call it now, so run it
+// straight away.
+function pushCameraHistory(undo, redo, discard) {
+  if (useStore.getState().cameraIgnoresUndo) {
+    if (discard) discard()
+    return
+  }
+  pushSceneHistory(undo, redo, discard)
 }
 
 // --- internals ---------------------------------------------------------------
