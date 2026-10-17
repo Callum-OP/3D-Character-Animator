@@ -3252,13 +3252,15 @@ function placeCameraOnBox(box, yaw = 0) {
 
 // Park the ground shadows under the model and size the shadow camera. Scale-aware
 // so it works for both metre-scale glTF and centimetre-scale FBX.
+// Park the ground, grid, and shadows at y = 0, scale-aware for the model size.
 function placeShadowUnder(box) {
   const size = box.getSize(new THREE.Vector3())
   const center = box.getCenter(new THREE.Vector3())
   const maxDim = Math.max(size.x, size.y, size.z)
   state.modelCenter.copy(center)
   state.modelRadius = Math.max(maxDim, 0.5)
-  state.groundY = box.min.y
+  state.groundY = 0 // Ground floor is fixed at y = 0
+  
   // A newly framed model starts from the default fit; the next shadow pass
   // refits to every caster and re-probes the floor under the character.
   state.shadowFit = null
@@ -3268,20 +3270,27 @@ function placeShadowUnder(box) {
   if (state.ground) {
     const r = maxDim * 6
     state.ground.scale.set(r, r, 1)
-    // A hair below the shadow planes so they never z-fight with it.
-    state.ground.position.set(center.x, box.min.y - maxDim * 0.002, center.z)
+    // Ground plane sits right at y = 0
+    state.ground.position.set(center.x, 0, center.z)
   }
+  
+  // The grid sits right above the ground plane at y = 0
+  if (state.gridHelper) state.gridHelper.position.y = 0
+  
   if (state.shadow) {
-    // Much smaller now — just the contact footprint under the feet.
     const footprint = Math.max(size.x, size.z) * 0.7
     state.shadow.scale.set(footprint, footprint, 1)
-    state.shadow.position.set(center.x, box.min.y + maxDim * 0.001, center.z)
+    // Blob shadow sits slightly above y = 0 so it renders on top of the ground
+    state.shadow.position.set(center.x, 0.002, center.z)
   }
+  
   if (state.shadowReceiver) {
     const r = maxDim * 6
     state.shadowReceiver.scale.set(r, r, 1)
-    state.shadowReceiver.position.set(center.x, box.min.y, center.z)
+    // Real shadow receiver sits right at y = 0 (or a tiny hair above if needed to prevent z-fighting)
+    state.shadowReceiver.position.set(center.x, 0, center.z)
   }
+  
   positionLight()
 }
 
