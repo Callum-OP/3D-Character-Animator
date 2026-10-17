@@ -254,7 +254,7 @@ export default function ProjectPanel() {
           onClick={() => fileInputRef.current?.click()}
           disabled={loading}
         >
-          {loading ? 'Loading…' : '＋ Load object or character (.fbx / .glb / .obj / folder / .zip…)'}
+          {loading ? 'Loading…' : '＋ Load object or character (.fbx / .glb / .blend / folder / .zip / .rar…)'}
         </button>
         <input
           ref={fileInputRef}

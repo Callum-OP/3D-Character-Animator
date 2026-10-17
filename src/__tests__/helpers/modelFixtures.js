@@ -199,3 +199,41 @@ export const OBJ_MULTI = (materials = ['Body', 'Hat'], mtl = 'missing.mtl') => {
   }
   return enc(lines.join('\n') + '\n')
 }
+
+// A minimal self-contained binary glTF (.glb): one triangle, one material, no external files.
+// What a fake "Blender" hands back in the .blend tests.
+export function triangleGlb({ materialName = 'Mat' } = {}) {
+  const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0])
+  const bin = new Uint8Array(positions.buffer.slice(0))
+  const json = {
+    asset: { version: '2.0' },
+    scene: 0,
+    scenes: [{ nodes: [0] }],
+    nodes: [{ mesh: 0, name: 'Tri' }],
+    meshes: [{ primitives: [{ attributes: { POSITION: 0 }, material: 0 }] }],
+    materials: [{ name: materialName }],
+    buffers: [{ byteLength: bin.byteLength }],
+    bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: bin.byteLength }],
+    accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: 'VEC3', min: [0, 0, 0], max: [1, 1, 0] }],
+  }
+  let jsonBytes = new TextEncoder().encode(JSON.stringify(json))
+  const pad = (n) => (4 - (n % 4)) % 4
+  const jsonPadded = new Uint8Array(jsonBytes.length + pad(jsonBytes.length)).fill(0x20)
+  jsonPadded.set(jsonBytes)
+  const binPadded = new Uint8Array(bin.length + pad(bin.length))
+  binPadded.set(bin)
+  const total = 12 + 8 + jsonPadded.length + 8 + binPadded.length
+  const out = new Uint8Array(total)
+  const v = new DataView(out.buffer)
+  v.setUint32(0, 0x46546c67, true) // 'glTF'
+  v.setUint32(4, 2, true)
+  v.setUint32(8, total, true)
+  v.setUint32(12, jsonPadded.length, true)
+  v.setUint32(16, 0x4e4f534a, true) // 'JSON'
+  out.set(jsonPadded, 20)
+  const o = 20 + jsonPadded.length
+  v.setUint32(o, binPadded.length, true)
+  v.setUint32(o + 4, 0x004e4942, true) // 'BIN\0'
+  out.set(binPadded, o + 8)
+  return out
+}

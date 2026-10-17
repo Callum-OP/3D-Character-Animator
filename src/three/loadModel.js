@@ -1,8 +1,9 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { SimplifyModifier } from 'three/examples/jsm/modifiers/SimplifyModifier.js'
+import { convertBlendToGlb } from './blendImport.js'
 import {
-  readBundle,
+  readArchive,
   pickMainModelPath,
   createResourceResolver,
   planLooseTextures,
@@ -88,7 +89,7 @@ async function getFbxLoader() {
 // Supported input extensions, in the order we advertise them to the user. A .zip
 // is a bundle: a model plus the textures/materials/buffers it references (see
 // modelBundle.js — folders and multi-file picks are packed into one too).
-export const SUPPORTED_EXTENSIONS = ['glb', 'gltf', 'fbx', 'obj', 'dae', 'stl', 'ply', 'zip']
+export const SUPPORTED_EXTENSIONS = ['glb', 'gltf', 'fbx', 'obj', 'dae', 'stl', 'ply', 'blend', 'zip', 'rar']
 
 // A single regex used both to validate drops and to strip the extension off the
 // display name. Built from SUPPORTED_EXTENSIONS so the two never drift apart.
@@ -120,7 +121,11 @@ export const SUPPORTED_EXTENSION_RE = new RegExp(
  */
 export async function loadModel(file, { autoDecimate = true } = {}) {
   const ext = extensionOf(file.name)
-  if (ext === 'zip') return loadBundleFile(file, { autoDecimate })
+  if (ext === 'zip' || ext === 'rar') return loadBundleFile(file, { autoDecimate })
+  if (ext === 'blend') {
+    const files = new Map([[file.name, new Uint8Array(await file.arrayBuffer())]])
+    return loadBlend(file, files, file.name, { autoDecimate })
+  }
   const url = URL.createObjectURL(file)
   try {
     if (ext === 'obj' || ext === 'dae' || ext === 'stl' || ext === 'ply' || ext === 'fbx') {
@@ -171,18 +176,45 @@ const BUNDLE_SCHEME = 'bundle:/'
 async function loadBundleFile(file, { autoDecimate }) {
   let files
   try {
-    files = readBundle(await file.arrayBuffer())
+    files = await readArchive(await file.arrayBuffer())
   } catch (err) {
-    throw new Error('Failed to load model: could not read the zip (' + String(err && err.message ? err.message : err) + ')')
+    const why = String(err && err.message ? err.message : err)
+    // the RAR reader's own messages are already complete sentences
+    throw new Error(/^(This RAR|could not read the RAR)/.test(why) ? 'Failed to load model: ' + why : 'Failed to load model: could not read the archive (' + why + ')')
   }
   const main = pickMainModelPath(files)
   if (!main) {
     throw new Error(
-      'Failed to load model: no 3D model found inside the zip. Supported: ' +
+      'Failed to load model: no 3D model found inside the archive. Supported: ' +
         SUPPORTED_EXTENSIONS.filter((e) => e !== 'zip').map((e) => '.' + e).join(', ') + '.',
     )
   }
+  if (extOf(main) === 'blend') return loadBlend(file, files, main, { autoDecimate })
   return loadFromFiles(files, main, { autoDecimate, displayName: file.name })
+}
+
+// A .blend: Blender (desktop app) converts it to a .glb, which then loads like any other.
+// The converted .glb — not the .blend — is what a saved project keeps (parsed.persistFile),
+// so reopening a project never needs Blender again.
+async function loadBlend(sourceFile, files, mainPath, { autoDecimate }) {
+  let converted
+  try {
+    converted = await convertBlendToGlb(sourceFile, files, mainPath, sourceFile.name)
+  } catch (err) {
+    throw new Error(String(err && err.message ? err.message : err))
+  }
+  const parsed = await loadModel(converted.file, { autoDecimate })
+  parsed.info.name = cleanName(sourceFile.name)
+  parsed.info.convertedFrom = 'blend'
+  parsed.info.bundle = {
+    ...(parsed.info.bundle || {}),
+    converted: 'blender',
+    blenderVersion: converted.blenderVersion,
+    conversionWarnings: converted.warnings,
+    missingTextures: converted.warnings.filter((w) => /texture not found/i.test(w)).map((w) => w.replace(/^.*texture not found:\s*/i, '')),
+  }
+  parsed.persistFile = converted.file
+  return parsed
 }
 
 async function loadFromFiles(files, mainPath, { autoDecimate, displayName }) {

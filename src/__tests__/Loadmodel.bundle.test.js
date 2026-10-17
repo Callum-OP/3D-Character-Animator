@@ -182,11 +182,11 @@ describe('other formats', () => {
 
 describe('errors and clean-up', () => {
   it('a zip with no model in it says so', async () => {
-    await expect(loadModel(zipFile({ 'readme.txt': PNG_1PX, 'a.png': PNG_1PX }), opts)).rejects.toThrow(/no 3D model found inside the zip/)
+    await expect(loadModel(zipFile({ 'readme.txt': PNG_1PX, 'a.png': PNG_1PX }), opts)).rejects.toThrow(/no 3D model found inside the archive/)
   })
 
   it('a file that is not really a zip is a readable error', async () => {
-    await expect(loadModel(new File(['definitely not a zip'], 'broken.zip'), opts)).rejects.toThrow(/could not read the zip/)
+    await expect(loadModel(new File(['definitely not a zip'], 'broken.zip'), opts)).rejects.toThrow(/could not read the archive/)
   })
 
   it('a corrupt model inside a zip is reported, not swallowed', async () => {

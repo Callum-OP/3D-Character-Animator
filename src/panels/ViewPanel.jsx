@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { useStore } from '../store.js'
 import { hasUndoHistory, clearUndoHistory } from '../three/undoHistory.js'
 import EditableValue from './EditableValue.jsx'
@@ -305,6 +306,66 @@ export default function ViewPanel() {
         other edits and never moves a camera. Changing this clears the undo/redo history, so steps
         recorded under the old setting can't interfere.
       </p>
+
+      <BlenderSettings />
+    </div>
+  )
+}
+// Desktop app only: where Blender is, for opening .blend files. The app runs the user's
+// own Blender in the background to convert the file; nothing is bundled.
+export function BlenderSettings() {
+  const bridge = typeof window !== 'undefined' && window.animare && window.animare.blender
+  const [status, setStatus] = useState(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!bridge) return undefined
+    let alive = true
+    bridge.status().then((s) => alive && setStatus(s)).catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [bridge])
+
+  if (!bridge) return null
+
+  async function choose() {
+    setError('')
+    const next = await bridge.choose()
+    if (next && next.error) setError(next.error)
+    setStatus(next)
+  }
+  async function reset() {
+    setError('')
+    setStatus(await bridge.clear())
+  }
+
+  let summary = 'Checking…'
+  if (status) {
+    if (status.available) summary = `Found Blender ${status.version}`
+    else if (status.tooOld) summary = `Blender ${status.version} is too old (2.80 or newer needed)`
+    else summary = 'Blender not found'
+  }
+
+  return (
+    <div className="blender-settings" style={{ marginTop: 12 }}>
+      <div className="panel-subhead">Open .blend files</div>
+      <p className="panel-hint">
+        .blend files are converted by your own copy of Blender, run in the background (free from
+        blender.org). {summary}
+        {status && status.path ? ` — ${status.path}` : ''}
+      </p>
+      <div className="kf-actions">
+        <button className="btn secondary" onClick={choose}>
+          Choose Blender…
+        </button>
+        {status && status.source === 'chosen' && (
+          <button className="btn secondary" onClick={reset} title="Go back to finding Blender automatically">
+            Auto-detect
+          </button>
+        )}
+      </div>
+      {error && <p className="panel-hint" role="alert">{error}</p>}
     </div>
   )
 }

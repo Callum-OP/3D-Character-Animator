@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { zipSync } from 'three/examples/jsm/libs/fflate.module.js'
-import { readBundle, classifyTexture, planExtraMaps, planLooseTextures, isColorImageCandidate } from '../three/modelBundle.js'
+import { readArchive, classifyTexture, planExtraMaps, planLooseTextures, isColorImageCandidate } from '../three/modelBundle.js'
 import { imageBytes } from './helpers/modelFixtures.js'
 
 const zipBuffer = (files) => {
@@ -9,49 +9,49 @@ const zipBuffer = (files) => {
 }
 const text = (s) => new Uint8Array(new TextEncoder().encode(s))
 
-describe('readBundle: zips inside zips', () => {
-  it('opens a zip that holds another zip, placing the inner contents beside it', () => {
+describe('readArchive: archives inside archives', () => {
+  it('opens a zip that holds another zip, placing the inner contents beside it', async () => {
     const inner = zipSync({ 'detective.obj': text('OBJ') }, { level: 0 })
-    const files = readBundle(zipBuffer({ 'source/detective.zip': inner, 'textures/a.png': imageBytes(1) }))
+    const files = await readArchive(zipBuffer({ 'source/detective.zip': inner, 'textures/a.png': imageBytes(1) }))
     expect([...files.keys()].sort()).toEqual(['source/detective.obj', 'textures/a.png'])
     expect(new TextDecoder().decode(files.get('source/detective.obj'))).toBe('OBJ')
   })
 
-  it('keeps the inner zip\'s own folders', () => {
+  it('keeps the inner zip\'s own folders', async () => {
     const inner = zipSync({ 'mesh/model.obj': text('x'), 'mesh/model.mtl': text('y') }, { level: 0 })
-    const files = readBundle(zipBuffer({ 'dl/pack.zip': inner }))
+    const files = await readArchive(zipBuffer({ 'dl/pack.zip': inner }))
     expect([...files.keys()].sort()).toEqual(['dl/mesh/model.mtl', 'dl/mesh/model.obj'])
   })
 
-  it('goes several levels deep', () => {
+  it('goes several levels deep', async () => {
     const l3 = zipSync({ 'deep.obj': text('x') }, { level: 0 })
     const l2 = zipSync({ 'l3.zip': l3 }, { level: 0 })
-    const files = readBundle(zipBuffer({ 'l2.zip': l2 }))
+    const files = await readArchive(zipBuffer({ 'l2.zip': l2 }))
     expect([...files.keys()]).toEqual(['deep.obj'])
   })
 
-  it('stops at a sensible depth rather than unpacking forever', () => {
+  it('stops at a sensible depth rather than unpacking forever', async () => {
     let z = zipSync({ 'bottom.obj': text('x') }, { level: 0 })
     for (let i = 0; i < 6; i++) z = zipSync({ [`z${i}.zip`]: z }, { level: 0 })
-    const files = readBundle(zipBuffer({ 'top.zip': z }))
+    const files = await readArchive(zipBuffer({ 'top.zip': z }))
     expect([...files.keys()].some((k) => k.endsWith('bottom.obj'))).toBe(false) // beyond the cap: left as a file
     expect([...files.keys()].some((k) => k.endsWith('.zip'))).toBe(true)
   })
 
-  it('a ".zip" that is not really a zip is kept as an ordinary file, not an error', () => {
-    const files = readBundle(zipBuffer({ 'fake.zip': text('not a zip at all'), 'a.png': imageBytes(2) }))
+  it('a ".zip" that is not really a zip is kept as an ordinary file, not an error', async () => {
+    const files = await readArchive(zipBuffer({ 'fake.zip': text('not a zip at all'), 'a.png': imageBytes(2) }))
     expect([...files.keys()].sort()).toEqual(['a.png', 'fake.zip'])
   })
 
-  it('does not let an inner file overwrite one that is already there', () => {
+  it('does not let an inner file overwrite one that is already there', async () => {
     const inner = zipSync({ 'a.png': imageBytes(9) }, { level: 0 })
-    const files = readBundle(zipBuffer({ 'src/a.png': imageBytes(1), 'src/pack.zip': inner }))
+    const files = await readArchive(zipBuffer({ 'src/a.png': imageBytes(1), 'src/pack.zip': inner }))
     expect(files.get('src/a.png')).toEqual(imageBytes(1))
   })
 
-  it('still drops macOS junk, including inside nested zips', () => {
+  it('still drops macOS junk, including inside nested zips', async () => {
     const inner = zipSync({ 'a.obj': text('x'), '__MACOSX/._a.obj': text('j') }, { level: 0 })
-    const files = readBundle(zipBuffer({ 'p.zip': inner, '.DS_Store': text('j') }))
+    const files = await readArchive(zipBuffer({ 'p.zip': inner, '.DS_Store': text('j') }))
     expect([...files.keys()]).toEqual(['a.obj'])
   })
 })

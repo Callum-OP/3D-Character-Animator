@@ -19,6 +19,12 @@ export function installImageStubs() {
     const url = typeof input === 'string' ? input : input.url
     const blob = blobs.get(url)
     if (blob) return new Response(await blob.arrayBuffer(), { status: 200 })
+    // The RAR reader's WebAssembly module: in the app this is a normal asset fetch.
+    if (/unrar\.wasm($|\?)/.test(url)) {
+      const fs = await import('node:fs')
+      const file = new URL('../../../node_modules/node-unrar-js/esm/js/unrar.wasm', import.meta.url)
+      return new Response(fs.readFileSync(file), { status: 200 })
+    }
     return realFetch(input, init)
   })
   const proto = HTMLImageElement.prototype

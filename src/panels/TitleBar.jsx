@@ -494,7 +494,7 @@ export default function TitleBar({ onOpenSettings }) {
               <button role="menuitem" onClick={() => setFileView('root')}>◂ Back</button>
               <div className="titlebar-dropdown-sep" />
               <button role="menuitem" onClick={onPickImportModel} title="Rigged files (with bones) come in as a new character; everything else as an object">
-                Import Model… (.fbx .glb .gltf .obj .dae .stl .ply .zip)
+                Import Model… (.fbx .glb .gltf .obj .dae .stl .ply .blend .zip .rar)
               </button>
               <button role="menuitem" onClick={onPickImportModelFolder} title="Pick a model's folder — its textures and materials come along">
                 Import Model Folder…

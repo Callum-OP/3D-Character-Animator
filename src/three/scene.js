@@ -197,7 +197,7 @@ import { getPose, applyPose } from './posing.js'
 import { detectFacingYaw } from './bvh.js'
 import { useStore, captureCharacterRecord } from '../store.js'
 import { releaseFollowersOf } from './attach.js'
-import { describeMissingFiles } from './modelBundle.js'
+import { describeMissingFiles, describeBlendConversion } from './modelBundle.js'
 import { clearUndoHistory, pushUndoBatch, runWithoutHistoryCapture } from './undoHistory.js'
 import { pushSceneHistory } from './sceneHistory.js'
 
@@ -1082,7 +1082,7 @@ export async function loadModelFile(file, { addNew = false } = {}) {
   store.setLoading(true)
   try {
     const parsed = await loadModel(file, { autoDecimate: store.autoDecimate })
-    parsed.file = file // retain the source blob so the model can be saved to a project
+    parsed.file = parsed.persistFile || file // retain the source blob so the model can be saved to a project (a .blend's converted .glb)
     prepareModelTextures(parsed)
 
     let id
@@ -1799,7 +1799,7 @@ function disposeCharacter(id) {
 export async function addObjectFile(file, { animationKey } = {}) {
   const shouldFrameInitialObject = state.characters.size === 0 && useStore.getState().sceneObjects.length === 0
   const parsed = await loadModel(file)
-  const meta = addObject(parsed, parsed.info.name, parsed.info.format, file, animationKey)
+  const meta = addObject(parsed, parsed.info.name, parsed.info.format, parsed.persistFile || file, animationKey)
   registerObjectMeshes(meta.id, parsed.meshes) // makes its parts pickable/editable in Mesh mode
   useStore.getState().addSceneObject(meta) // sets selectedObjectId = meta.id
   if (state.characters.size === 0) useStore.getState().setMode('object')
@@ -1855,7 +1855,8 @@ export async function importModelAuto(file) {
     const probe = await loadModel(file, { autoDecimate: false })
     const isRigged = !!(probe.info?.bones?.length)
     // Computed from the probe, shown once the real import has succeeded.
-    const notice = describeMissingFiles(probe.info?.name || file.name, probe.info?.bundle)
+    const noticeName = probe.info?.name || file.name
+    const notice = [describeMissingFiles(noticeName, probe.info?.bundle), describeBlendConversion(noticeName, probe.info?.bundle)].filter(Boolean).join(' ') || null
     disposeObject(probe.root)
     if (isRigged) {
       const parsed = await loadModelFile(file, { addNew: true })

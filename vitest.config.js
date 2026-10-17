@@ -8,6 +8,7 @@ export default defineConfig({
   plugins: [react()],
   test: {
     environment: 'jsdom',
+    server: { deps: { inline: ['node-unrar-js'] } }, // its ES build uses extension-less imports
     globals: true,
   },
 })

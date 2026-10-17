@@ -1,4 +1,5 @@
 import { zipSync, unzipSync } from 'three/examples/jsm/libs/fflate.module.js'
+import { isRarBytes } from './archive.js'
 
 // ---------------------------------------------------------------------------
 // Models that come as a FOLDER (or a zip of one)
@@ -19,8 +20,11 @@ import { zipSync, unzipSync } from 'three/examples/jsm/libs/fflate.module.js'
 // ---------------------------------------------------------------------------
 
 // Main-model formats, in the order we prefer one when a folder holds several.
-export const MODEL_EXTENSIONS = ['fbx', 'glb', 'gltf', 'dae', 'obj', 'ply', 'stl']
-export const BUNDLE_EXTENSIONS = ['zip']
+// .blend is last: it needs Blender (desktop app), so any other format in the folder wins.
+export const MODEL_EXTENSIONS = ['fbx', 'glb', 'gltf', 'dae', 'obj', 'ply', 'stl', 'blend']
+// Archives: a bundle of a model plus its textures. Read by readArchive (zip via fflate, rar via
+// WebAssembly UnRAR); both kinds may sit inside each other.
+export const BUNDLE_EXTENSIONS = ['zip', 'rar']
 export const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'tga', 'tif', 'tiff']
 // Everything besides images that a model can pull in by name.
 const SUPPORT_EXTENSIONS = ['mtl', 'bin']
@@ -36,7 +40,7 @@ export const isImageName = (name) => IMAGE_EXTENSIONS.includes(extOf(name))
 const isSupportName = (name) => SUPPORT_EXTENSIONS.includes(extOf(name))
 // 3D program project files people often have next to an export — can't be opened
 // here, so say what to do instead of a vague "no model found".
-const UNSUPPORTED_MODEL_EXTENSIONS = ['blend', 'max', 'ma', 'mb', 'c4d', '3ds', 'usd', 'usda', 'usdc', 'usdz', 'abc', 'skp', 'lwo', 'x3d', '3mf', 'off']
+const UNSUPPORTED_MODEL_EXTENSIONS = ['max', 'ma', 'mb', 'c4d', '3ds', 'usd', 'usda', 'usdc', 'usdz', 'abc', 'skp', 'lwo', 'x3d', '3mf', 'off']
 const isJunkPath = (path) => /(^|\/)(__MACOSX|\.DS_Store|Thumbs\.db|desktop\.ini)(\/|$)/i.test(path) || /(^|\/)\._/.test(path)
 
 // The string for a file input's `accept` — models, a zip bundle, and the loose
@@ -233,7 +237,11 @@ export async function bundleModelFiles(rawEntries) {
   // the folder rides along too — the model, or its textures, may be packed in it
   // ("source/model.zip" beside a "textures" folder is a common download layout);
   // loadModel unpacks it.
-  const wanted = entries.filter((e) => e === main || isImageName(e.path) || isSupportName(e.path) || zips.includes(e))
+  // (A .blend can also pull in other .blend files — linked libraries — so those come too.)
+  const wantsBlendLibraries = !!main && extOf(main.path) === 'blend'
+  const wanted = entries.filter(
+    (e) => e === main || isImageName(e.path) || isSupportName(e.path) || zips.includes(e) || (wantsBlendLibraries && extOf(e.path) === 'blend'),
+  )
   const data = {}
   for (const e of wanted) data[e.path] = new Uint8Array(await e.file.arrayBuffer())
   // level 0: stored, not compressed — textures are already compressed, and this keeps import instant.
@@ -252,28 +260,37 @@ export async function modelFileFromDrop(dataTransfer) {
 
 // --- Reading a bundle --------------------------------------------------------
 
-// A .zip's contents as Map<path, Uint8Array>, junk and folders dropped. Zips
-// found INSIDE it are opened too, their contents placed in the folder the inner
-// zip sat in (so "source/model.zip" holding "model.obj" gives "source/model.obj")
-// — downloads are often a zip of folders where the model itself is yet another
-// zip. Nesting is capped so a zip bomb can't run away.
+// An archive's contents as Map<path, Uint8Array>, junk and folders dropped. The format is
+// recognised from the file's own bytes (not its name — a "zip" that is really a RAR is
+// common), and archives found INSIDE it are opened too, their contents placed in the
+// folder the inner archive sat in ("source/model.zip" holding "model.obj" gives
+// "source/model.obj"): downloads are often a zip of folders where the model itself is
+// yet another zip — or a .rar next to a textures folder. Nesting is capped so an
+// archive bomb can't run away.
 const MAX_NESTED_DEPTH = 3
 const MAX_BUNDLE_BYTES = 2 * 1024 * 1024 * 1024
 
-export function readBundle(arrayBuffer, depth = 0, budget = { bytes: 0 }) {
+export async function readArchive(arrayBuffer, depth = 0, budget = { bytes: 0 }) {
+  const bytes = new Uint8Array(arrayBuffer)
+  let entries
+  if (isRarBytes(bytes)) {
+    const { extractRar } = await import('./archive.js')
+    entries = await extractRar(arrayBuffer)
+  } else {
+    entries = new Map(Object.entries(unzipSync(bytes)))
+  }
   const files = new Map()
-  const raw = unzipSync(new Uint8Array(arrayBuffer))
-  for (const [rawPath, bytes] of Object.entries(raw)) {
+  for (const [rawPath, data] of entries) {
     const path = rawPath.replace(/\\/g, '/')
     if (path.endsWith('/') || isJunkPath(path)) continue
-    budget.bytes += bytes.length
-    if (budget.bytes > MAX_BUNDLE_BYTES) throw new Error('The zip is too large to open.')
+    budget.bytes += data.length
+    if (budget.bytes > MAX_BUNDLE_BYTES) throw new Error('The archive is too large to open.')
     if (BUNDLE_EXTENSIONS.includes(extOf(path)) && depth < MAX_NESTED_DEPTH) {
       let inner = null
       try {
-        inner = readBundle(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), depth + 1, budget)
+        inner = await readArchive(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength), depth + 1, budget)
       } catch {
-        inner = null // not actually a readable zip — keep it as an ordinary file
+        inner = null // not actually a readable archive — keep it as an ordinary file
       }
       if (inner) {
         const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/') + 1) : ''
@@ -283,7 +300,7 @@ export function readBundle(arrayBuffer, depth = 0, budget = { bytes: 0 }) {
         continue
       }
     }
-    files.set(path, bytes)
+    files.set(path, data)
   }
   return files
 }
@@ -484,4 +501,16 @@ export function describeMissingFiles(name, bundle) {
     `Imported "${name}", but it refers to ${parts.join(' and ')} that ${one ? "wasn't" : "weren't"} included, so it may look plain. ` +
     `Import the model's whole folder or .zip — or pick the model and ${one ? 'that file' : 'those files'} together — to bring ${one ? 'it' : 'them'} in.`
   )
+}
+
+// After a .blend was converted by Blender: what to tell the user (null when it all went
+// through cleanly). Blender's glTF exporter only carries over basic materials, so say so.
+export function describeBlendConversion(name, bundle) {
+  if (!bundle || bundle.converted !== 'blender') return null
+  // Missing textures are reported by describeMissingFiles; this covers everything else.
+  const warnings = (bundle.conversionWarnings || []).filter((w) => !/texture not found/i.test(w))
+  if (!warnings.length) return null
+  const shown = warnings.slice(0, 3).join('; ')
+  const more = warnings.length > 3 ? ` (and ${warnings.length - 3} more)` : ''
+  return `Converted "${name}" with Blender, with ${warnings.length === 1 ? 'a warning' : 'warnings'}: ${shown}${more}.`
 }

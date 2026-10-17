@@ -14,6 +14,7 @@ const path = require('node:path')
 const fs = require('node:fs')
 const fsp = require('node:fs/promises')
 const { pathToFileURL } = require('node:url')
+const { registerBlenderIpc } = require('./blender.cjs')
 
 const DIST = path.join(__dirname, '..', 'dist')
 const DEV_URL = process.env.ELECTRON_START_URL || ''
@@ -101,6 +102,9 @@ function registerFileIpc() {
   })
 
   ipcMain.handle('animare:base-name', (_e, filePath) => path.basename(filePath))
+
+  // Opening .blend files by running the user's own Blender (see blender.cjs).
+  registerBlenderIpc({ ipcMain, dialog, app })
 }
 
 function hardenSession() {

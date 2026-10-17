@@ -216,7 +216,7 @@ describe('bundleModelFiles', () => {
   })
 
   it('a folder with only an unsupported 3D project file says what to do', async () => {
-    await expect(bundleModelFiles([entry('scene.blend'), entry('a.png')])).rejects.toThrow(/\.blend.*Export it as \.fbx or \.glb/)
+    await expect(bundleModelFiles([entry('scene.max'), entry('a.png')])).rejects.toThrow(/\.max.*Export it as \.fbx or \.glb/)
   })
 })
 

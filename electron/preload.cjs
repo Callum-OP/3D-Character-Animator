@@ -31,4 +31,16 @@ contextBridge.exposeInMainWorld('animare', {
 
   // Basename of a path, for display (e.g. Recent Projects list).
   baseName: (path) => ipcRenderer.invoke('animare:base-name', path),
+
+  // .blend import: runs the user's own Blender, headless, to convert the file to glTF.
+  blender: {
+    // → { available, path, source, version, tooOld }
+    status: () => ipcRenderer.invoke('animare:blender-status'),
+    // Native "find blender.exe" dialog; remembered. → status (plus `error` if it wasn't Blender)
+    choose: () => ipcRenderer.invoke('animare:blender-choose'),
+    // Forget the chosen path and go back to auto-detecting.
+    clear: () => ipcRenderer.invoke('animare:blender-clear'),
+    // payload: { main, files: [{ path, data }] } → { ok, glb, warnings } | { ok:false, error, code }
+    convert: (payload) => ipcRenderer.invoke('animare:blender-convert', payload),
+  },
 })

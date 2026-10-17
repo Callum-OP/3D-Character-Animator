@@ -990,7 +990,7 @@ function Viewport() {
                 })
             }}
           />
-          {!loadError && <div className="ve-formats">FBX · GLB · glTF · OBJ · DAE · STL · PLY · ZIP / folder <span>·</span> Press ? for help</div>}
+          {!loadError && <div className="ve-formats">FBX · GLB · glTF · OBJ · DAE · STL · PLY · BLEND · ZIP · RAR / folder <span>·</span> Press ? for help</div>}
         </div>
       )}
 
