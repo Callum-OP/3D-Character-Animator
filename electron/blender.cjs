@@ -86,7 +86,9 @@ def relink_textures(root):
             continue
         if os.path.exists(bpy.path.abspath(raw)):
             continue
-        base = os.path.basename(raw.replace('\\', '/'))
+        # Newer Blenders can hand back a path with nothing after the last slash for a missing
+        # file, so fall back to the image's own name rather than reporting an empty one.
+        base = os.path.basename(raw.replace('\\', '/').rstrip('/')) or os.path.basename(img.filepath.replace('\\', '/').rstrip('/')) or img.name
         stem = os.path.splitext(base)[0]
         found = best(by_name.get(base.lower()), raw) or best(by_norm.get(norm_name(base)), raw) or best(by_stem.get(norm_name(stem)), raw)
         if found:
@@ -303,7 +305,10 @@ function candidatePaths({ platform = process.platform, env = process.env, home =
   }
 
   if (platform === 'win32') {
-    const roots = [env.ProgramFiles, env['ProgramFiles(x86)'], 'C:\\Program Files'].filter(Boolean)
+    // Only fall back to the default location when the environment says nothing, so a
+    // caller-supplied env (tests, odd setups) is never second-guessed by the real machine.
+    const roots = [env.ProgramFiles, env['ProgramFiles(x86)']].filter(Boolean)
+    if (!roots.length) roots.push('C:\\Program Files')
     for (const root of [...new Set(roots)]) {
       const base = path.join(root, 'Blender Foundation')
       const dirs = listDirs(base).filter((d) => /^Blender/i.test(d)).sort((a, b) => versionKey(b) - versionKey(a))
