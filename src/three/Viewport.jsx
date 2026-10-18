@@ -7,10 +7,9 @@ import {
   setGridVisible,
   setGroundVisible,
   setBackground,
-  setShadowVisible,
-  setShadowMapping,
-  setShadowSoftness,
-  setShadowStrength,
+  setShadowSettings,
+  setRealisticToneMapping,
+  setNightSettings,
   setPerformanceMode,
   setPerformanceBackgroundObjects,
   setPerformanceLowPoly,
@@ -271,27 +270,20 @@ function Viewport() {
     setBackground(solidBackground, backgroundColor)
   }, [solidBackground, backgroundColor])
 
-  const showShadow = useStore((s) => s.showShadow)
-  const shadowMapping = useStore((s) => s.shadowMapping)
-  const shadowSoftness = useStore((s) => s.shadowSoftness)
-  const shadowStrength = useStore((s) => s.shadowStrength)
+  const shadows = useStore((s) => s.shadows)
+  const night = useStore((s) => s.night)
   const performanceMode = useStore((s) => s.performanceMode)
   const performanceBackgroundObjects = useStore((s) => s.performanceBackgroundObjects)
   const performanceLowPoly = useStore((s) => s.performanceLowPoly)
   const performanceResolution = useStore((s) => s.performanceResolution)
   const performanceEffects = useStore((s) => s.performanceEffects)
   useEffect(() => {
-    setShadowVisible(showShadow)
-  }, [showShadow])
+    setNightSettings(night)
+  }, [night])
+  // One effect for every shadow control: the whole setup goes to the scene in one call.
   useEffect(() => {
-    setShadowMapping(shadowMapping)
-  }, [shadowMapping])
-  useEffect(() => {
-    setShadowSoftness(shadowSoftness)
-  }, [shadowSoftness])
-  useEffect(() => {
-    setShadowStrength(shadowStrength)
-  }, [shadowStrength])
+    setShadowSettings(shadows)
+  }, [shadows])
   useEffect(() => {
     setPerformanceMode(performanceMode)
   }, [performanceMode])
@@ -323,6 +315,9 @@ function Viewport() {
 
   // All material/shading/outline-width state funnels through applyModelMaterials.
   const materialMode = useStore((s) => s.materialMode)
+  useEffect(() => {
+    setRealisticToneMapping(materialMode === 'realistic')
+  }, [materialMode])
   const toonSteps = useStore((s) => s.toonSteps)
   const colorGrading = useStore((s) => s.colorGrading)
   const ambientOcclusionStrength = useStore((s) => s.ambientOcclusionStrength)

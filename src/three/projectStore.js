@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// Project file I/O — Blender / Clip Studio Paint style.
+// Project file I/O — projects are real files on disk.
 //
 // A project is a real file on disk (.3dcp — JSON with any Blob/File fields
 // embedded as base64). There is no separate in-app "saved projects" list
@@ -11,8 +11,7 @@
 //   Save      — write back to the same file you opened/last saved to.
 //   Save As…  — pick a new location on disk and remember it as "current".
 //
-// On top of that we keep a small "Recent Projects" list (à la Blender's
-// splash screen / CSP's start menu) so the last several files you touched
+// On top of that we keep a small "Recent Projects" list (like a start screen) so the last several files you touched
 // are one click away.
 //
 // Three environments, three ways of remembering "the file":
@@ -352,7 +351,7 @@ async function writeToHandle(handle, record) {
 }
 
 // Save straight back to a known handle (no dialog) — this is "Save" once a
-// project already has a file on disk, exactly like Ctrl+S in Blender/CSP.
+// project already has a file on disk, exactly like Ctrl+S.
 export async function saveProjectToHandle(handle, record) {
   await writeToHandle(handle, record)
   if (isNativeHandle(handle)) {

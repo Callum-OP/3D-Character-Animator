@@ -1,6 +1,6 @@
 import { useState } from 'react'
 
-// A collapsible section header, Blender-"properties tab" style. Wraps any
+// A collapsible section header. Wraps any
 // panel(s) so the sidebar reads as a short list of categories instead of a
 // long wall of always-open panels. Open/closed state persists per-section
 // for the session (not saved), defaultOpen controls the first render.

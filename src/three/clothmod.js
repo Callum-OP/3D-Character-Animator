@@ -612,7 +612,7 @@ export function enableCloth(mesh, otherMeshes, { pinTop = 0.12, preset = 'cotton
   // normal cling, using the collider's fixed per-triangle outward normal
   // (not the point-to-particle direction) so it forces the cloth to stay
   // OUTSIDE the body even if a fast-moving vertex has tunnelled through —
-  // a soft physical analog of Blender's Shrinkwrap modifier, good for
+  // a soft shrink-wrap effect, good for
   // skin-tight garments (t-shirts, gloves) rather than free-hanging cloth.
   if (shrinkwrap) {
     sim.setParam('shrinkwrap', true)

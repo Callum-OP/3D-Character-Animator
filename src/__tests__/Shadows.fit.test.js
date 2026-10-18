@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { fitShadowExtents, needsRefit, collectFloorReceivers, probeFloor, probeFloorY } from '../three/shadowFit.js'
 import { migrateAppSettings } from '../store.js'
+import { DEFAULT_SHADOWS } from '../three/shadowSettings.js'
 
 const sphere = (x, y, z, r) => new THREE.Sphere(new THREE.Vector3(x, y, z), r)
 
@@ -116,21 +117,33 @@ describe('floor probe reports whether a real surface exists (so the stand-in pla
 })
 
 describe('app settings migration', () => {
-  it('drops the faint 0.15 shadow defaults saved by older versions', () => {
-    const out = migrateAppSettings({ shadowStrength: 0.15, shadowSoftness: 0.15, showGrid: false })
-    expect(out.shadowStrength).toBeUndefined()
-    expect(out.shadowSoftness).toBeUndefined()
+  it('moves old flat shadow settings into the shadows object, keeping only on/off and blob-vs-real', () => {
+    const out = migrateAppSettings({
+      showShadow: false, shadowMapping: true, shadowSoftness: 0.9, shadowStrength: 0.9, shadowType: 'uniform',
+      shadowQuality: 'ultra', shadowTint: '#ff0000', showGrid: false, settingsVersion: 2,
+    })
+    // the old look came from the old (confusing) controls: it resets to the realistic default
+    expect(out.shadows).toEqual({ ...DEFAULT_SHADOWS, enabled: false })
     expect(out.showGrid).toBe(false)
+    for (const k of ['showShadow', 'shadowMapping', 'shadowSoftness', 'shadowStrength', 'shadowType', 'shadowQuality', 'shadowTint']) {
+      expect(out[k]).toBeUndefined()
+    }
   })
 
-  it('keeps values the user actually chose', () => {
-    const out = migrateAppSettings({ shadowStrength: 0.7, shadowSoftness: 0.2 })
-    expect(out.shadowStrength).toBe(0.7)
-    expect(out.shadowSoftness).toBe(0.2)
+  it('keeps the cheap blob choice', () => {
+    expect(migrateAppSettings({ showShadow: true, shadowMapping: false }).shadows).toEqual({ ...DEFAULT_SHADOWS, quality: 'blob' })
   })
 
-  it('does not touch settings already at the current version', () => {
-    const out = migrateAppSettings({ settingsVersion: 2, shadowStrength: 0.15 })
-    expect(out.shadowStrength).toBe(0.15)
+  it('settings from before any shadow field existed just get the realistic default', () => {
+    expect(migrateAppSettings({ showGrid: true }).shadows).toEqual(DEFAULT_SHADOWS)
+  })
+
+  it('cleans up (rather than trusts) an existing shadows object', () => {
+    const out = migrateAppSettings({ settingsVersion: 3, shadows: { size: 999, darkness: -4, quality: 'banana', tint: 'red' } })
+    expect(out.shadows).toEqual({ ...DEFAULT_SHADOWS, size: 30, darkness: 0 })
+  })
+
+  it('does not carry the stored settingsVersion forward', () => {
+    expect(migrateAppSettings({ settingsVersion: 2 }).settingsVersion).toBeUndefined()
   })
 })

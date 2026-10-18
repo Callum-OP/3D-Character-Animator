@@ -1,17 +1,20 @@
 import { useStore } from '../store.js'
 import EditableValue from './EditableValue.jsx'
 import { setMeshVisibleByUuid } from '../three/scene.js'
+import ShadowPanel, { NightPanel } from './ShadowPanel.jsx'
+import { PRESET_SHADOW_STYLE, DEFAULT_SHADOW_STYLE } from '../three/shadowSettings.js'
 
 // Side-panel section: material mode + key-light controls.
-// Unlit shows raw Blender colours (no lighting), Cartoon adds stepped anime
+// Unlit shows the raw base colours (no lighting), Cartoon adds stepped anime
 // shading, Soft Anime adds a smooth painterly ramp + optional rim glow,
-// Standard is the original PBR. The light sliders only affect
-// Cartoon/Soft/Standard, so they're disabled in Unlit mode.
+// Studio is PBR with soft, even fill lighting and Realistic is PBR with natural, filmic
+// contrast. The light sliders only affect everything except Unlit, so they're disabled there.
 const MODES = [
   { value: 'unlit', label: 'Flat colour', hint: 'Exact colours, no lighting' },
   { value: 'toon', label: 'Cartoon', hint: 'Hard-edged anime cel shading' },
   { value: 'soft', label: 'Soft Anime', hint: 'Smooth, gentle anime shading' },
-  { value: 'standard', label: 'Realistic', hint: 'Full 3D PBR lighting' },
+  { value: 'standard', label: 'Studio', hint: 'Full 3D PBR lighting with soft, even studio fill' },
+  { value: 'realistic', label: 'Realistic', hint: 'Full 3D PBR lighting with natural, filmic contrast' },
 ]
 
 const TOON_STEP_OPTIONS = [2, 3, 4, 5]
@@ -46,10 +49,10 @@ const LIGHT_PRESETS = [
 // Unlit/Cartoon/Soft styles (it only matters in Realistic) or per-mesh
 // overrides, so switching styles never clobbers a model-specific fix.
 // ---------------------------------------------------------------------------
-export const STYLE_PRESETS = [
+const BASE_STYLE_PRESETS = [
   {
     label: 'Flat Colour',
-    hint: 'Exact Blender colours, no shading at all.',
+    hint: 'Exact original colours, no shading at all.',
     config: {
       materialMode: 'unlit',
       colorGrading: 'none',
@@ -117,7 +120,7 @@ export const STYLE_PRESETS = [
       rimSoftWidth: 0.6,
       rimHardEnabled: true,
       rimHardIntensity: 0.4,
-      rimHardWidth: 0.35,
+      rimHardWidth: 0.2,
       rimSideOnly: true,
       rimLightColor: '#fff2d8',
       lightIntensity: 2.2,
@@ -146,22 +149,21 @@ export const STYLE_PRESETS = [
     },
   },
   {
-    label: 'Toy / Figure',
-    hint: 'Bright, even product-shot lighting so the model reads clearly from every angle.',
+    label: 'Realistic',
+    hint: 'Natural daylight look: a strong key light, gentle sky fill, filmic contrast and realistic shadows. No outline.',
     config: {
-      materialMode: 'standard',
+      materialMode: 'realistic',
       colorGrading: 'none',
       envLightingEnabled: true,
-      envLightingIntensity: 0.8,
-      outlineEnabled: true,
-      outlineWidth: 0.0015,
-      lightIntensity: 1.8,
-      lightAzimuth: 35,
+      envLightingIntensity: 0.6,
+      outlineEnabled: false,
+      lightIntensity: 2.6,
+      lightAzimuth: 40,
       lightElevation: 50,
     },
   },
   {
-    label: 'Realistic Studio',
+    label: 'Studio',
     hint: 'Softer key light plus all-round fill, so PBR/realistic models don\u2019t get harsh, uncanny shadows across the face.',
     config: {
       materialMode: 'standard',
@@ -256,6 +258,14 @@ export const STYLE_PRESETS = [
   },
 ]
 
+// Every style preset also names a shadow style (see shadowSettings.js), so switching look
+// switches the shadows too. The style only sets light size / contact-hardening / darkness (the
+// store applies it); they stay ordinary controls in Look > Shadows afterwards.
+export const STYLE_PRESETS = BASE_STYLE_PRESETS.map((p) => ({
+  ...p,
+  config: { ...p.config, shadowStyle: PRESET_SHADOW_STYLE[p.label] || DEFAULT_SHADOW_STYLE },
+}))
+
 export default function MaterialPanel() {
   const modelInfo = useStore((s) => s.modelInfo)
   const materialMode = useStore((s) => s.materialMode)
@@ -264,8 +274,6 @@ export default function MaterialPanel() {
   const ambientOcclusionStrength = useStore((s) => s.ambientOcclusionStrength)
   const backlightColor = useStore((s) => s.backlightColor)
   const backlightFalloff = useStore((s) => s.backlightFalloff)
-  const shadowSoftness = useStore((s) => s.shadowSoftness)
-  const shadowStrength = useStore((s) => s.shadowStrength)
   const lightIntensity = useStore((s) => s.lightIntensity)
   const lightAzimuth = useStore((s) => s.lightAzimuth)
   const lightElevation = useStore((s) => s.lightElevation)
@@ -304,8 +312,6 @@ export default function MaterialPanel() {
   const setAmbientOcclusionStrength = useStore((s) => s.setAmbientOcclusionStrength)
   const setBacklightColor = useStore((s) => s.setBacklightColor)
   const setBacklightFalloff = useStore((s) => s.setBacklightFalloff)
-  const setShadowSoftness = useStore((s) => s.setShadowSoftness)
-  const setShadowStrength = useStore((s) => s.setShadowStrength)
   const setLightIntensity = useStore((s) => s.setLightIntensity)
   const setLightAzimuth = useStore((s) => s.setLightAzimuth)
   const setLightElevation = useStore((s) => s.setLightElevation)
@@ -335,6 +341,7 @@ export default function MaterialPanel() {
 
   const lit = materialMode !== 'unlit' // lights only matter for toon/soft/standard
   const rimCapable = materialMode === 'toon' || materialMode === 'soft'
+  const pbr = materialMode === 'standard' || materialMode === 'realistic'
   const meshes = modelInfo?.meshes || []
 
   function applyLightPreset(p) {
@@ -406,42 +413,6 @@ export default function MaterialPanel() {
         </select>
         <span className="radio-hint">Use grading for a restrained shot mood without overpowering the original colours.</span>
       </label>
-
-      <details className="look-disclosure">
-        <summary>Depth, shadow &amp; softness</summary>
-        <div className="light-controls">
-          <Slider label="Surface depth" min={0} max={1} step={0.05} value={ambientOcclusionStrength} onChange={setAmbientOcclusionStrength} format={(v) => Math.round(v * 100) + '%'} toInput={(v) => Math.round(v * 100)} fromInput={(v) => v / 100} />
-          <Slider label="Shadow edge softness" min={0} max={1} step={0.05} value={shadowSoftness} onChange={setShadowSoftness} format={(v) => Math.round(v * 100) + '%'} toInput={(v) => Math.round(v * 100)} fromInput={(v) => v / 100} />
-          <Slider label="Shadow darkness" min={0} max={1} step={0.05} value={shadowStrength} onChange={setShadowStrength} format={(v) => Math.round(v * 100) + '%'} toInput={(v) => Math.round(v * 100)} fromInput={(v) => v / 100} />
-          <label className="slider-row">
-            <span className="slider-label">Backlight colour</span>
-            <input type="color" value={backlightColor} onChange={(e) => setBacklightColor(e.target.value)} />
-          </label>
-          <Slider label="Edge light reach" min={0} max={1} step={0.05} value={backlightFalloff} onChange={setBacklightFalloff} format={(v) => Math.round(v * 100) + '%'} toInput={(v) => Math.round(v * 100)} fromInput={(v) => v / 100} />
-          <div className="radio-hint">A restrained edge light separates silhouettes without washing out timing or pose reads.</div>
-          <label className="toggle-row" style={{ padding: 0, marginTop: 8 }}>
-            <input
-              type="checkbox"
-              checked={softenEnabled}
-              onChange={(e) => setSoftenEnabled(e.target.checked)}
-            />
-            Soften shading
-          </label>
-          <Slider
-            label="Softness amount"
-            min={0}
-            max={1}
-            step={0.05}
-            value={softenAmount}
-            disabled={!softenEnabled}
-            onChange={setSoftenAmount}
-            format={(v) => Math.round(v * 100) + '%'}
-            toInput={(v) => Math.round(v * 100)}
-            fromInput={(v) => v / 100}
-          />
-          <div className="radio-hint">Lifts toon shadows and thins the outline everywhere.</div>
-        </div>
-      </details>
 
       {sceneLights.length > 0 && characterOrder.length > 0 && (
         <div className="light-controls">
@@ -587,7 +558,7 @@ export default function MaterialPanel() {
         </div>
         <div className={'light-controls' + (lit ? '' : ' disabled')}>
           <div className="field-label" style={{ marginTop: 4 }}>
-            Light {lit ? '' : '(only affects Cartoon / Soft Anime / Realistic)'}
+            Light {lit ? '' : '(only affects Cartoon / Soft Anime / Studio / Realistic)'}
           </div>
 
         <label className="toggle-row" style={{ padding: 0, marginBottom: 4 }} title="Turn off the built-in key + ambient light, e.g. to light the scene only with placed lights or the studio environment map">
@@ -646,12 +617,12 @@ export default function MaterialPanel() {
         />
         </div>
         </div>
-        <div className={'light-controls' + (materialMode === 'standard' ? '' : ' disabled')}>
+        <div className={'light-controls' + (pbr ? '' : ' disabled')}>
           <label className="toggle-row" style={{ padding: 0 }}>
           <input
             type="checkbox"
             checked={envLightingEnabled}
-            disabled={materialMode !== 'standard'}
+            disabled={!pbr}
             onChange={(e) => setEnvLightingEnabled(e.target.checked)}
           />
           Studio environment lighting
@@ -663,16 +634,60 @@ export default function MaterialPanel() {
           max={2}
           step={0.05}
           value={envLightingIntensity}
-          disabled={materialMode !== 'standard' || !envLightingEnabled}
+          disabled={!pbr || !envLightingEnabled}
           onChange={setEnvLightingIntensity}
           format={(v) => v.toFixed(2)}
         />
         <div className="radio-hint" style={{ marginTop: 2 }}>
-          {materialMode === 'standard'
-            ? 'Soft all-round studio fill (like Blender\u2019s Material Preview) so the character reads well from every angle, even without extra lights.'
-            : 'Only affects Realistic mode.'}
+          {pbr
+            ? 'Soft all-round studio fill so the character reads well from every angle, even without extra lights.'
+            : 'Only affects Studio and Realistic modes.'}
         </div>
         </div>
+
+      <details className="look-disclosure">
+        <summary>Shadows</summary>
+        <ShadowPanel />
+      </details>
+
+      <details className="look-disclosure">
+        <summary>Night mode</summary>
+        <NightPanel />
+      </details>
+
+      <details className="look-disclosure">
+        <summary>Depth &amp; edge light</summary>
+        <div className="light-controls">
+          <Slider label="Surface depth" min={0} max={1} step={0.05} value={ambientOcclusionStrength} onChange={setAmbientOcclusionStrength} format={(v) => Math.round(v * 100) + '%'} toInput={(v) => Math.round(v * 100)} fromInput={(v) => v / 100} />
+          <label className="slider-row">
+            <span className="slider-label">Backlight colour</span>
+            <input type="color" value={backlightColor} onChange={(e) => setBacklightColor(e.target.value)} />
+          </label>
+          <Slider label="Edge light reach" min={0} max={1} step={0.05} value={backlightFalloff} onChange={setBacklightFalloff} format={(v) => Math.round(v * 100) + '%'} toInput={(v) => Math.round(v * 100)} fromInput={(v) => v / 100} />
+          <div className="radio-hint">A restrained edge light separates silhouettes without washing out timing or pose reads.</div>
+          <label className="toggle-row" style={{ padding: 0, marginTop: 8 }}>
+            <input
+              type="checkbox"
+              checked={softenEnabled}
+              onChange={(e) => setSoftenEnabled(e.target.checked)}
+            />
+            Soften shading
+          </label>
+          <Slider
+            label="Softness amount"
+            min={0}
+            max={1}
+            step={0.05}
+            value={softenAmount}
+            disabled={!softenEnabled}
+            onChange={setSoftenAmount}
+            format={(v) => Math.round(v * 100) + '%'}
+            toInput={(v) => Math.round(v * 100)}
+            fromInput={(v) => v / 100}
+          />
+          <div className="radio-hint">Lifts toon shadows and thins the outline everywhere.</div>
+        </div>
+      </details>
 
       <details className="look-disclosure">
         <summary>Outline</summary>

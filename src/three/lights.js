@@ -498,11 +498,32 @@ export function setLightCastShadow(id, castShadow) {
 // re-apply shadow settings on the new light object). Directional lights need
 // an explicit orthographic shadow-camera frustum sized to the scene — the
 // three.js default is a tiny 5-unit box that clips most characters.
+// Shadow-map resolution for placed lights (follows the Shadow quality setting; see
+// setPlacedLightShadowSize). Point lights render six faces, so this stays well below
+// the key light's resolution.
+let placedShadowSize = 1024
+
+export function setPlacedLightShadowSize(size) {
+  const next = Math.max(256, Math.round(size) || 1024)
+  if (next === placedShadowSize) return
+  placedShadowSize = next
+  for (const entry of l.lights) {
+    const shadow = entry.light.shadow
+    if (!shadow || shadow.mapSize.x === next) continue
+    shadow.mapSize.set(next, next)
+    if (shadow.map) {
+      shadow.map.dispose()
+      shadow.map = null
+    }
+  }
+  if (l.requestRender) l.requestRender()
+}
+
 function applyShadowSettings(entry, castShadow, scale) {
   const light = entry.light
   light.castShadow = castShadow
   if (!castShadow) return
-  light.shadow.mapSize.set(512, 512)
+  light.shadow.mapSize.set(placedShadowSize, placedShadowSize)
   light.shadow.bias = -0.001
   if (entry.directional) {
     const cam = light.shadow.camera

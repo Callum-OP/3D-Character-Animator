@@ -3,7 +3,17 @@ import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.j
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { loadModel, disposeObject } from './loadModel.js'
-import { installShadowDarkening, setShadowDarkness } from './shadowDarkening.js'
+import {
+  installShadowDarkening,
+  setShadowDarkness,
+  setShadowTint as setShadowTintUniform,
+  setNightLook,
+  revertShadowFilter,
+  isShadowFilterInstalled,
+  shadowFilterA,
+  shadowFilterB,
+} from './shadowDarkening.js'
+import { resolveShadowQuality, computeShadowFilter, chooseShadowMapSize, normalizeShadows, normalizeNight, shadowsFromProject } from './shadowSettings.js'
 import { VideoCapture, findVideoConfig, webCodecsAvailable } from './videoCapture.js'
 import { computeOutputSize, videoBitrate, pickVideoFormat, MAX_VIDEO_SIDE } from './exportSize.js'
 import { fitShadowExtents, needsRefit, collectFloorReceivers, probeFloor } from './shadowFit.js'
@@ -14,6 +24,8 @@ import {
   updateRimLightMaterials,
   restoreOriginalMaterials,
   disposeGeneratedMaterials,
+  setSelfShadowEnabled,
+  syncMeshMaterialFlags,
 } from './materials.js'
 import {
   initOutline,
@@ -77,6 +89,7 @@ import {
   disposeLights,
   setViewCamera as setLightsViewCamera,
   updateLightSources,
+  setPlacedLightShadowSize,
 } from './lights.js'
 import {
   initClothMod,
@@ -199,6 +212,7 @@ import { useStore, captureCharacterRecord } from '../store.js'
 import { releaseFollowersOf } from './attach.js'
 import { describeMissingFiles, describeBlendConversion } from './modelBundle.js'
 import { clearUndoHistory, pushUndoBatch, runWithoutHistoryCapture } from './undoHistory.js'
+import { withExportSafeMaterials } from './materialUserData.js'
 import { pushSceneHistory } from './sceneHistory.js'
 
 // ---------------------------------------------------------------------------
@@ -231,8 +245,14 @@ const state = {
   shadowFloorY: null, // height the shadow receiver/blob currently sits at (follows the surface under the character)
   shadowFloorProbeAt: 0,
   shadowSurfaceBelow: false, // a real receiving mesh is under the active character
-  shadowOn: true, // master ground-shadow toggle
-  shadowMap: false, // real shadow mapping vs blob
+  // The complete shadow setup (see three/shadowSettings.js). Set only through setShadowSettings();
+  // shadowOn / shadowMap are derived from it there (master switch / real shadow mapping vs blob).
+  shadowCfg: normalizeShadows(null),
+  nightCfg: normalizeNight(null),
+  bgSolid: false,
+  bgColor: '#000000',
+  shadowOn: true,
+  shadowMap: true,
   dirLight: null,
   ambientLight: null,
   defaultLightingOn: true,
@@ -275,8 +295,8 @@ const state = {
   resizeObserver: null,
 }
 
-const SHADOW_MAP_SIZE = 2048
-const SHADOW_MAP_SIZE_PERFORMANCE = 1024
+// Fallback map size; the real one follows the Shadow quality setting (see shadowSettings.js).
+const SHADOW_MAP_SIZE = 4096
 
 export function initScene(container) {
   installShadowDarkening() // before any material compiles
@@ -324,6 +344,26 @@ export function initScene(container) {
   container.appendChild(renderer.domElement)
   state.renderer = renderer
 
+  // Safety net for the custom shadow filter (see shadowDarkening.js): if the GPU or
+  // driver refuses to link a shader, fall back to three's stock shadow filtering and
+  // rebuild every material once, instead of leaving objects invisible.
+  renderer.debug.onShaderError = (gl, program, glVertexShader, glFragmentShader) => {
+    console.error(
+      'Shader failed to compile:',
+      gl.getProgramInfoLog(program),
+      gl.getShaderInfoLog(glVertexShader),
+      gl.getShaderInfoLog(glFragmentShader),
+    )
+    if (!revertShadowFilter()) return
+    console.warn('Switched to the standard shadow filter after a shader error.')
+    applyShadowFilter() // the standard filter wants a plain blur radius, not the contact-hardening one
+    state.scene?.traverse((obj) => {
+      const mats = Array.isArray(obj.material) ? obj.material : obj.material ? [obj.material] : []
+      for (const m of mats) m.needsUpdate = true
+    })
+    requestRender()
+  }
+
   // Wrap the renderer for the (optional) inverted-hull outline pass.
   initOutline(renderer)
 
@@ -338,8 +378,7 @@ export function initScene(container) {
 
   // --- Environment (studio) lighting ---
   // A soft, neutral studio-room environment map baked once via PMREM, used as
-  // image-based fill lighting — the same idea as Blender's "Material Preview"
-  // viewport shading, which lights the scene with a generic studio HDRI so
+  // image-based fill lighting: a generic studio environment lights the scene so
   // nothing ever looks unlit/flat even before any lights are placed. It only
   // affects materials that read scene.environment (Standard mode); Toon/Unlit
   // are untouched. Off by default so it never changes an existing project's
@@ -582,8 +621,7 @@ export function initScene(container) {
   const dirLight = new THREE.DirectionalLight(0xffffff, 2.0)
   dirLight.position.set(2, 4, 3)
   dirLight.castShadow = false // enabled only in "realistic shadows" mode
-  // 2048² keeps contact shadows crisp (512² made them soft, blocky and faint).
-  // applyShadowMode drops this to 1024² in performance mode.
+  // Resolution follows the Shadow quality setting (applyShadowMode); performance mode drops it.
   dirLight.shadow.mapSize.set(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE)
   dirLight.shadow.bias = -0.0005
   scene.add(dirLight)
@@ -650,10 +688,8 @@ export function initScene(container) {
   setDefaultLightingEnabled(s.defaultLightingEnabled)
   setEnvironmentLighting(s.envLightingEnabled, s.envLightingIntensity)
   setOutlineEnabled(s.outlineEnabled)
-  setShadowVisible(s.showShadow)
-  setShadowMapping(s.shadowMapping)
-  setShadowSoftness(s.shadowSoftness)
-  setShadowStrength(s.shadowStrength)
+  setShadowSettings(s.shadows)
+  setNightSettings(s.night)
   setDepthOfField(s.dofEnabled, s.dofFocusDistance, s.dofAperture, s.dofMaxBlur)
   setBlurEffect(s.blurEnabled, s.blurAmount)
 
@@ -2374,9 +2410,11 @@ export async function exportSceneModel(format = 'glb', name = 'scene', poseMode 
 
     const binary = format !== 'gltf'
     const exporter = new GLTFExporter()
-    const result = await new Promise((resolve, reject) => {
+    // The app's live shader state lives on material.userData and would otherwise be
+    // written into the file (bloating it and breaking re-import) — hide it while exporting.
+    const result = await withExportSafeMaterials(exportGroup, () => new Promise((resolve, reject) => {
       exporter.parse(exportGroup, resolve, reject, { binary, onlyVisible: true })
-    })
+    }))
 
     const blob = binary
       ? new Blob([result], { type: 'model/gltf-binary' })
@@ -2849,11 +2887,8 @@ function collectSettings() {
     limbLimits: s.limbLimits,
     solidBackground: s.solidBackground,
     backgroundColor: s.backgroundColor,
-    showShadow: s.showShadow,
-    shadowMapping: s.shadowMapping,
-    shadowSoftness: s.shadowSoftness,
-    shadowStrength: s.shadowStrength,
-    shadowDefaultsVersion: 2, // projects saved before this carry the faint 0.15 defaults
+    shadows: s.shadows,
+    night: s.night,
     performanceMode: s.performanceMode,
     performanceBackgroundObjects: s.performanceBackgroundObjects,
     performanceLowPoly: s.performanceLowPoly,
@@ -2920,6 +2955,7 @@ export function getProjectData() {
       pose: getPose(),
       meshEdits: getMeshEditsData(),
       meshOverridesByIndex: meshOverridesByIndexFor(model, live.meshOverrides),
+      nightImmune: isNightImmune(model) || undefined,
       animData: live.animData,
       // BVH imports, ragdoll bakes, combined/trimmed clips — anything NOT
       // baked into the model file itself, so it isn't lost on reload.
@@ -3042,6 +3078,7 @@ export async function applyProjectData(record) {
       }
     }
     applyMeshEditsData(c.meshEdits)
+    if (c.nightImmune) setObjectNightImmuneById(id, true)
     if (c.meshOverridesByIndex) {
       useStore.setState({ meshOverrides: meshOverridesFromIndex(model, c.meshOverridesByIndex) })
     }
@@ -3082,9 +3119,6 @@ export async function applyProjectData(record) {
     })
   }
   const patch = {}
-  // Projects saved while the shadow defaults were 0.15/0.15 stored those values
-  // even though the user never chose them — keep the current settings instead.
-  const oldShadowDefaults = st.shadowDefaultsVersion == null
   for (const k of [
     'materialMode', 'toonSteps', 'colorGrading',
     'ambientOcclusionStrength', 'backlightColor', 'backlightFalloff', 'lightLinks',
@@ -3094,13 +3128,18 @@ export async function applyProjectData(record) {
     'lightIntensity', 'lightAzimuth', 'lightElevation', 'defaultLightingEnabled',
     'envLightingEnabled', 'envLightingIntensity',
     'outlineEnabled', 'outlineWidth', 'outlineColor', 'outlineOpacity', 'softenEnabled', 'softenAmount',
-    'showGrid', 'showGround', 'limbLimits', 'solidBackground', 'backgroundColor', 'showShadow', 'shadowMapping',
-    'shadowSoftness', 'shadowStrength', 'autoDecimate',
+    'showGrid', 'showGround', 'limbLimits', 'solidBackground', 'backgroundColor', 'autoDecimate',
     'animFps', 'animDuration', 'boneViewMode',
   ]) {
-    if (oldShadowDefaults && (k === 'shadowStrength' || k === 'shadowSoftness') && st[k] === 0.15) continue
     if (st[k] !== undefined) patch[k] = st[k]
   }
+  // Shadows: new projects carry a `shadows` object; projects saved by the old shadow system
+  // carry loose showShadow / shadowSoftness / ... fields, converted here. A project that says
+  // nothing about shadows leaves the current setup alone.
+  // Night mode is per project: one that never used it opens in daylight.
+  patch.night = normalizeNight(st.night)
+  const loadedShadows = shadowsFromProject(st, useStore.getState().shadows)
+  if (loadedShadows) patch.shadows = loadedShadows
   // Per-project: a save from before this existed (or a project that never
   // turned it on) opens with it OFF, rather than inheriting the last project's.
   patch.stopAtFirstClipEnd = st.stopAtFirstClipEnd === true
@@ -3143,6 +3182,7 @@ export async function applyProjectData(record) {
       if (style !== 'auto') setObjectStyleById(meta.id, style)
       if (obj.outline) setObjectOutlineById(meta.id, true)
       if (obj.castShadow === false) setObjectCastShadowById(meta.id, false)
+      if (obj.nightImmune) setObjectNightImmuneById(meta.id, true)
     }
   }
 
@@ -3292,6 +3332,7 @@ function placeShadowUnder(box) {
   }
   
   positionLight()
+  if (realShadowsOn()) applyShadowMapSize() // a new subject can change how wide the shadow camera is
 }
 
 // Position the key light along its direction, high and far enough out to cast
@@ -3323,6 +3364,7 @@ function positionLight() {
   // acne away without peter-panning, however far the frustum was stretched.
   const texel = (half * 2) / (dl.shadow.mapSize.x || SHADOW_MAP_SIZE)
   dl.shadow.normalBias = Math.max(texel * 2, r * 0.004)
+  applyShadowFilter() // texel size and depth range just changed
 }
 
 // ---------------------------------------------------------------------------
@@ -3344,16 +3386,6 @@ export function setGroundVisible(visible) {
 // a ragdolling character falls onto.
 export function getGroundY() {
   return state.groundY
-}
-
-export function setShadowVisible(visible) {
-  state.shadowOn = visible
-  applyShadowMode()
-}
-
-export function setShadowMapping(on) {
-  state.shadowMap = on
-  applyShadowMode()
 }
 
 function getPerformancePixelRatio() {
@@ -3403,25 +3435,197 @@ export function setPerformanceEffects(on) {
   applyPerformanceSettings()
 }
 
-// Blur amount for the real cast shadow's edge, 0 (crisp/hard) – 1 (very soft).
-// Maps onto the light's shadow.radius (PCF sample spread) and blurSamples (how
-// many taps go into that spread) — more samples keeps a wide blur from looking
-// noisy/banded.
-export function setShadowSoftness(softness) {
-  state.shadowSoftness = softness
-  const dl = state.dirLight
-  if (dl) {
-    dl.shadow.radius = Math.min(8, softness * 12)
-    dl.shadow.blurSamples = Math.round(8 + softness * 16)
-  }
+// ---------------------------------------------------------------------------
+// Shadows. ONE entry point, setShadowSettings(), takes the complete setup from the store
+// (see three/shadowSettings.js for what each field means) and everything below derives from
+// it: the key light's shadow map, its filter, how dark/tinted shadows are, the blob fallback
+// and the catch-all receiver plane.
+// ---------------------------------------------------------------------------
+
+// Real shadow-map shadows are in use (rather than the blob, or nothing).
+function realShadowsOn() {
+  return !(state.performanceMode && state.performanceEffects) && state.shadowOn && state.shadowMap
+}
+
+// What the current Shadow quality setting means on this GPU.
+function getShadowQuality() {
+  return resolveShadowQuality(state.shadowCfg.quality, {
+    maxTextureSize: state.renderer?.capabilities?.maxTextureSize,
+    performance: state.performanceMode,
+  })
+}
+
+export function setShadowSettings(next) {
+  const cfg = normalizeShadows(next)
+  state.shadowCfg = cfg
+  state.shadowOn = cfg.enabled
+  state.shadowMap = cfg.quality !== 'blob'
+  setShadowTintUniform(cfg.tint)
+  setSelfShadowEnabled(cfg.selfShadow)
+  syncAllMeshFlags()
+  applyShadowMode()
+}
+
+// Re-apply the settings-driven material flags (self-shadowing, night immunity) to every mesh.
+function syncAllMeshFlags() {
+  if (!state.scene) return
+  const meshes = []
+  state.scene.traverse((o) => {
+    if (o.isMesh) meshes.push(o)
+  })
+  syncMeshMaterialFlags(meshes)
   requestRender()
 }
 
-// Darkness of the real cast shadow, 0 (barely visible) – 1 (solid black).
-export function setShadowStrength(strength) {
-  state.shadowStrength = strength
-  if (state.shadowReceiver) state.shadowReceiver.material.opacity = strength
+// ---------------------------------------------------------------------------
+// Night mode: a dark wash over everything, as if a huge object blocked the light. It is a
+// multiplier at the end of every lit AND flat material (shadowDarkening.js), so it needs no
+// lights; the solid background colour is darkened to match. Objects flagged nightImmune
+// (see setObjectNightImmuneById) are skipped.
+// ---------------------------------------------------------------------------
+export function setNightSettings(next) {
+  const cfg = normalizeNight(next)
+  state.nightCfg = cfg
+  setNightLook(cfg.enabled ? cfg.strength : 0, cfg.tint)
+  applyBackgroundColour()
+  requestRender()
+}
+
+export function getNightSettings() {
+  return state.nightCfg
+}
+
+// The background shows through where nothing is drawn, so it gets the same wash.
+function applyBackgroundColour() {
+  if (!state.scene || !state.bgSolid) return
+  const c = new THREE.Color(state.bgColor)
+  const n = state.nightCfg
+  if (n && n.enabled && n.strength > 0) {
+    const t = new THREE.Color(1, 1, 1)
+    const probe = new THREE.Color(n.tint)
+    const luma = 0.2126 * probe.r + 0.7152 * probe.g + 0.0722 * probe.b
+    if (luma > 1e-4) t.setRGB(Math.min(2, probe.r / luma), Math.min(2, probe.g / luma), Math.min(2, probe.b / luma))
+    const k = 1 - n.strength
+    c.setRGB(c.r * k * (1 + (t.r - 1) * n.strength), c.g * k * (1 + (t.g - 1) * n.strength), c.b * k * (1 + (t.b - 1) * n.strength))
+  }
+  state.scene.background = c
+}
+
+// Make one object / character ignore Night mode (updates the scene + the store).
+export function setObjectNightImmuneById(id, immune) {
+  const model = state.characters.get(id) || getObjectMaterialModelById(id)
+  if (model && model.meshes) {
+    for (const mesh of model.meshes) {
+      if (immune) mesh.userData.nightImmune = true
+      else delete mesh.userData.nightImmune
+    }
+    syncMeshMaterialFlags(model.meshes)
+  }
+  useStore.getState().setObjectNightImmune(id, !!immune)
+  requestRender()
+}
+
+// Does anything in this object / character ignore Night mode? (for saving)
+function isNightImmune(model) {
+  return !!(model && model.meshes && model.meshes.some((m) => m.userData && m.userData.nightImmune))
+}
+
+// Current (normalised) shadow setup. Mainly for tests and debugging.
+export function getShadowSettings() {
+  return state.shadowCfg
+}
+
+// Push size / contact-hardening / quality into the key light and the shared shader uniforms
+// (see computeShadowFilter). Called whenever any input changes, including the shadow camera
+// itself (positionLight), because texel size depends on its extent.
+function applyShadowFilter() {
+  const dl = state.dirLight
+  if (!dl) return
+  const quality = getShadowQuality()
+  if (quality.blob) return
+  const cfg = state.shadowCfg
+  const cam = dl.shadow.camera
+  const filter = computeShadowFilter({
+    contact: cfg.contact,
+    size: cfg.size,
+    mapSize: dl.shadow.mapSize.x || SHADOW_MAP_SIZE,
+    taps: quality.taps,
+    maxBlurCap: quality.maxBlur,
+    half: (cam.right - cam.left) / 2 || 1,
+    depthRange: cam.far - cam.near,
+    modelRadius: state.modelRadius,
+    advanced: isShadowFilterInstalled(),
+  })
+  dl.shadow.radius = filter.radius
+  shadowFilterA.value.set(filter.a[0], filter.a[1], filter.a[2], filter.a[3])
+  shadowFilterB.value.set(filter.b[0], 0, 0, 0)
+}
+
+// How dark and what colour shadows are on the catch-all receiver plane and the blob. (On real
+// surfaces the same two numbers drive the per-pixel darkening in shadowDarkening.js.)
+function applyShadowLook() {
+  const { darkness, tint } = state.shadowCfg
+  if (state.shadowReceiver) {
+    const neutral = new THREE.Color(tint).getHex() === 0xffffff
+    const mat = state.shadowReceiver.material
+    mat.opacity = darkness
+    mat.color.set(neutral ? 0x000000 : tint).multiplyScalar(neutral ? 1 : 0.25)
+  }
+  // The blob texture is already ~55% black at its centre, so scale to land on the same visual
+  // darkness as the real shadow at the default.
+  if (state.shadow) state.shadow.material.opacity = Math.min(1, darkness * 1.1)
+}
+
+// Strength of the per-pixel darkening on real surfaces (see shadowDarkening.js).
+// Only active while real shadow-map shadows are on.
+function updateShadowDarkness() {
+  setShadowDarkness(realShadowsOn() ? state.shadowCfg.darkness : 0)
+  requestRender()
+}
+
+// Make the key light's shadow map the right size for the current quality + light size (see
+// chooseShadowMapSize), reallocating it only if that changed.
+function applyShadowMapSize() {
+  const dl = state.dirLight
+  if (!dl) return
+  const quality = getShadowQuality()
+  if (quality.blob) return
+  const cfg = state.shadowCfg
+  const cam = dl.shadow.camera
+  const size = chooseShadowMapSize({
+    qualityMapSize: quality.mapSize,
+    contact: cfg.contact,
+    size: cfg.size,
+    half: (cam.right - cam.left) / 2 || 1,
+    modelRadius: state.modelRadius,
+    maxBlurCap: quality.maxBlur,
+  })
+  const shadow = dl.shadow
+  if (shadow.mapSize.x !== size) {
+    shadow.mapSize.set(size, size)
+    if (shadow.map) {
+      shadow.map.dispose()
+      shadow.map = null
+    }
+    positionLight() // normal bias depends on texel size (also refreshes the filter)
+  }
+}
+
+function applyShadowMode() {
+  const realOn = realShadowsOn()
+  const blobOn = state.shadowOn && !state.shadowMap
+  if (state.renderer) state.renderer.shadowMap.enabled = realOn
+  if (state.shadow) state.shadow.visible = blobOn
+  applyShadowLook()
+  syncShadowReceiverVisibility()
   updateShadowDarkness()
+  if (state.dirLight) {
+    state.dirLight.castShadow = realOn
+    const quality = getShadowQuality()
+    if (!quality.blob) setPlacedLightShadowSize(quality.lightSize)
+    if (realOn) applyShadowMapSize()
+    applyShadowFilter() // tap count, size and contact-hardening follow the settings
+  }
   requestRender()
 }
 
@@ -3439,40 +3643,6 @@ export function setDofSettings(enabled, focusDistance, aperture, maxBlurPx) {
 // blurPx is a flat screen-space blur radius in pixels, independent of depth.
 export function setBlurSettings(enabled, blurPx) {
   setBlurEffect(enabled, blurPx)
-  requestRender()
-}
-
-// The blob and the real cast-shadow are mutually exclusive: blob when shadows are
-// on but shadow-mapping is off; real shadows when both are on.
-// Strength of the per-pixel darkening on real surfaces (see shadowDarkening.js).
-// Only active while real shadow-map shadows are on.
-function updateShadowDarkness() {
-  const realOn = !(state.performanceMode && state.performanceEffects) && state.shadowOn && state.shadowMap
-  setShadowDarkness(realOn ? state.shadowStrength : 0)
-  requestRender()
-}
-
-function applyShadowMode() {
-  const blobOn = state.shadowOn && !state.shadowMap
-  const realOn = !(state.performanceMode && state.performanceEffects) && state.shadowOn && state.shadowMap
-  if (state.renderer) state.renderer.shadowMap.enabled = realOn
-  if (state.shadow) state.shadow.visible = blobOn
-  syncShadowReceiverVisibility()
-  updateShadowDarkness()
-  if (state.dirLight) {
-    state.dirLight.castShadow = realOn
-    // Resolution follows performance mode. A changed size needs a fresh map.
-    const size = state.performanceMode ? SHADOW_MAP_SIZE_PERFORMANCE : SHADOW_MAP_SIZE
-    const shadow = state.dirLight.shadow
-    if (shadow.mapSize.x !== size) {
-      shadow.mapSize.set(size, size)
-      if (shadow.map) {
-        shadow.map.dispose()
-        shadow.map = null
-      }
-      positionLight() // normal bias depends on texel size
-    }
-  }
   requestRender()
 }
 
@@ -3510,8 +3680,10 @@ export function getStats() {
 
 export function setBackground(solid, color) {
   if (!state.scene) return
+  state.bgSolid = !!solid
+  state.bgColor = color
   if (solid) {
-    state.scene.background = new THREE.Color(color)
+    applyBackgroundColour()
   } else {
     state.scene.background = null // transparent
   }
@@ -3564,7 +3736,7 @@ export function applyModelMaterials() {
     ambientOcclusionStrength: s.ambientOcclusionStrength,
     backlightColor: s.backlightColor,
     backlightFalloff: s.backlightFalloff,
-    shadowStrength: s.shadowStrength,
+    shadowStrength: s.shadows.darkness, // toon styling follows the shadow darkness
     rimLight,
     outlineWidth: s.outlineWidth,
     outlineColor: s.outlineColor,
@@ -3579,7 +3751,7 @@ export function applyModelMaterials() {
     ambientOcclusionStrength: s.ambientOcclusionStrength,
     backlightColor: s.backlightColor,
     backlightFalloff: s.backlightFalloff,
-    shadowStrength: s.shadowStrength,
+    shadowStrength: s.shadows.darkness, // toon styling follows the shadow darkness
     rimLight,
   }
   for (const [id, model] of state.characters) {
@@ -3663,6 +3835,9 @@ export function setDefaultLightingEnabled(enabled) {
 export function setLightSettings(intensity, azimuthDeg, elevationDeg) {
   if (!state.dirLight) return
   state.dirLight.intensity = intensity
+  // The flat fill light follows the brightness a little at the dark end, so a brightness of 0
+  // is properly dim rather than still half-lit. At 1 and above it is the same 0.6 as always.
+  if (state.ambientLight) state.ambientLight.intensity = 0.6 * (0.6 + 0.4 * Math.min(1, Math.max(0, intensity)))
 
   const az = (azimuthDeg * Math.PI) / 180
   const el = (elevationDeg * Math.PI) / 180
@@ -3693,7 +3868,7 @@ function updateLightDrivenMaterials() {
 }
 
 // Toggle the baked studio-room environment map used as image-based fill
-// light (Blender "Material Preview"-style HDRI). `intensity` scales it via
+// light. `intensity` scales it via
 // Scene.environmentIntensity — the key/ambient lights above are unaffected,
 // so this only adds soft all-round fill + reflections on top of them.
 export function setEnvironmentLighting(enabled, intensity = 1) {
@@ -3701,6 +3876,17 @@ export function setEnvironmentLighting(enabled, intensity = 1) {
   state.envLightingOn = !!enabled
   state.scene.environment = enabled ? state.envMap : null
   state.scene.environmentIntensity = intensity
+  requestRender()
+}
+
+// Realistic mode renders with filmic (ACES) tone mapping for natural highlight roll-off and
+// contrast; every other mode stays untouched (no tone mapping), so existing looks don't change.
+export function setRealisticToneMapping(on) {
+  if (!state.renderer) return
+  const next = on ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping
+  if (state.renderer.toneMapping === next) return
+  state.renderer.toneMapping = next
+  state.renderer.toneMappingExposure = 1
   requestRender()
 }
 

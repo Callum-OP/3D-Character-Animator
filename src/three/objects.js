@@ -215,7 +215,7 @@ export function addObject(parsed, name, format, file, animationKey = null) {
     file: file || null,
     meshes,
     materials: materialModel.materials,
-    style: 'auto', // 'auto' | 'unlit' | 'toon' | 'soft' | 'standard'
+    style: 'auto', // 'auto' | 'unlit' | 'toon' | 'soft' | 'standard' | 'realistic'
     outline: false, // props default to no ink outline, even in Cartoon/Soft styles
     castShadow: true,
     attachedBoneName: null, // bone name this prop is parented to, or null
@@ -1055,7 +1055,7 @@ export function getSelectedUniformScale(id) {
 }
 
 // Set the selected object's scale uniformly on all three axes at once —
-// backs the circular resize dial (Blender/Clip Studio style: drag around the
+// backs the circular resize dial (drag around the
 // ring, every side grows or shrinks together instead of one axis at a time).
 export function setSelectedUniformScale(id, value) {
   const root = rootFor(id)
@@ -1226,6 +1226,7 @@ export function getObjectsForSave(meshOverrides) {
       style: e.kind === 'model' ? e.style : undefined,
       outline: e.kind === 'model' ? e.outline : undefined,
       castShadow: e.kind === 'model' ? e.castShadow : undefined,
+      nightImmune: e.kind === 'model' && e.meshes.some((m) => m.userData && m.userData.nightImmune) ? true : undefined,
       // Bone this prop is riding, if any (transform above is already bone-local).
       attachedBoneName: e.attachedBoneName || undefined,
       // Per-part (mesh) visibility/outline/shading overrides — see comment above.

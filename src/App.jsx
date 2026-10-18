@@ -62,7 +62,7 @@ class AppErrorBoundary extends Component {
 
 // Top-level layout: 3D viewport on the left, control sidebar on the right.
 //
-// The sidebar is organised as a short list of Blender-style collapsible
+// The sidebar is organised as a short list of collapsible
 // categories rather than one long stack of always-open panels — the goal is
 // that a newcomer sees "Character", "Pose", "Animate", "Scene", "Look",
 // "Export" and can ignore everything except the one they're in. Only

@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { SimplifyModifier } from 'three/examples/jsm/modifiers/SimplifyModifier.js'
 import { convertBlendToGlb } from './blendImport.js'
+import { sanitizeLoadedMaterials } from './materialUserData.js'
 import {
   readArchive,
   pickMainModelPath,
@@ -480,6 +481,9 @@ export { loadModel as loadGLB }
 // Format-agnostic: works for both glTF scenes and FBX groups.
 function parseRoot(root, animations, fileName, format, source) {
   if (!root) throw new Error('Model contains no scene/root object.')
+  // Files exported by this app carry its internal shader state in their material
+  // extras; it must not be mistaken for live state (see materialUserData.js).
+  sanitizeLoadedMaterials(root)
 
   const skinnedMeshes = []
   const meshes = []

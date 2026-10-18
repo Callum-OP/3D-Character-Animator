@@ -36,8 +36,8 @@ export function turnsToFactor(turns, startValue) {
   return Math.max(0.01, startValue * Math.pow(2, turns))
 }
 
-// A circular drag handle for uniform resizing — similar to the resize ring
-// in Blender/Clip Studio: drag anywhere around the dial and the object grows
+// A circular drag handle for uniform resizing — a resize ring:
+// drag anywhere around the dial and the object grows
 // or shrinks the same amount on every side, instead of nudging one axis at a
 // time. Dragging clockwise scales up; counter-clockwise scales down. Reports
 // live value changes via onChange, and a single onCommit at the end of the

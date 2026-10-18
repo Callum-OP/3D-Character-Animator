@@ -112,6 +112,7 @@ describe('rendering at a fixed export size', () => {
       domElement: canvas,
       ratio: 1.5,
       setPixelRatio(r) { this.ratio = r },
+      render() {}, // scheduled frames (requestRender) draw through this
       setSize(w, h, updateStyle = true) {
         canvas.width = Math.floor(w * this.ratio)
         canvas.height = Math.floor(h * this.ratio)
@@ -130,7 +131,7 @@ describe('rendering at a fixed export size', () => {
       requestRender: () => {},
     })
     const container = { clientWidth: 800, clientHeight: 500 }
-    __setViewCameraRefsForTest(free, { enabled: true, locked: false })
+    __setViewCameraRefsForTest(free, { enabled: true, locked: false, target: new THREE.Vector3() }) // real OrbitControls always has a target
     __setRendererForTest(renderer, container)
     cams = [addCamera(50, { recordUndo: false }).id]
   })

@@ -9,6 +9,7 @@ import {
   setObjectStyleById,
   setObjectOutlineById,
   setObjectCastShadowById,
+  setObjectNightImmuneById,
   setObjectAttachmentById,
   keyObjectAttachmentById,
   clearObjectAttachmentTimeline,
@@ -48,13 +49,15 @@ const STYLE_OPTIONS = [
   { value: 'unlit', label: 'Flat colour' },
   { value: 'toon', label: 'Cartoon' },
   { value: 'soft', label: 'Soft Anime' },
-  { value: 'standard', label: 'Realistic' },
+  { value: 'standard', label: 'Studio' },
+  { value: 'realistic', label: 'Realistic' },
 ]
 
 export default function ObjectsPanel() {
   const modelInfo = useStore((s) => s.modelInfo)
   const boneNames = modelInfo?.bones ? modelInfo.bones.map((b) => b.name) : []
   const sceneObjects = useStore((s) => s.sceneObjects)
+  const nightOn = useStore((s) => s.night.enabled)
   const selectedObjectId = useStore((s) => s.selectedObjectId)
   const selectedObjectIds = useStore((s) => s.selectedObjectIds)
   const globalTime = useStore((s) => s.globalTime)
@@ -376,6 +379,23 @@ export default function ObjectsPanel() {
                   >
                     {o.visible === false ? '🙈' : '👁'}
                   </button>
+                  {(nightOn || o.nightImmune) && (
+                    <button
+                      className="obj-eye"
+                      title={
+                        o.nightImmune
+                          ? 'Ignores Night mode (stays in daylight) — click to darken it with the rest of the scene'
+                          : 'Darkened by Night mode — click to keep this in daylight'
+                      }
+                      aria-pressed={!!o.nightImmune}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setObjectNightImmuneById(o.id, !o.nightImmune)
+                      }}
+                    >
+                      {o.nightImmune ? '☀️' : '🌙'}
+                    </button>
+                  )}
                   <button
                     className="obj-del"
                     title={o.isCharacter ? 'Delete character (Ctrl+Z to undo)' : 'Remove'}

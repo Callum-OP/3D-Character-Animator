@@ -26,7 +26,7 @@ import {
 //   1. A model file straight off disk (.glb/.gltf/.fbx) — any number of
 //      characters can be loaded at once and switched between.
 //   2. The project file itself (whole session — model, props, poses, style),
-//      handled the way Blender / Clip Studio Paint handle documents: it
+//      handled like a normal desktop document: it
 //      lives as a real file on disk, "Save" writes back to that same file,
 //      and a Recent Projects list gives one-click access to what you had
 //      open before. There's no separate in-browser save slot to keep track
@@ -49,8 +49,7 @@ export default function ProjectPanel() {
     info: id === activeCharacterId ? modelInfo : characters[id]?.modelInfo,
   }))
 
-  // The project currently "open" — mirrors Blender's notion of the current
-  // .blend file. `handle` is the FileSystemFileHandle to write straight
+  // The project currently "open". `handle` is the FileSystemFileHandle to write straight
   // back to on "Save" (null until you've opened or saved-as a real file,
   // or in browsers without File System Access support). Lives in the global
   // store (not local state) so the title bar's File menu shares it.
@@ -184,7 +183,7 @@ export default function ProjectPanel() {
       const data = getProjectData()
       if (current?.handle) {
         // Same spot on disk you opened/last saved to — no dialog, just like
-        // Ctrl+S in Blender or Clip Studio Paint.
+        // a normal Ctrl+S.
         const { name } = await saveProjectToHandle(current.handle, { name: current.name, ...data })
         setCurrent((c) => ({ ...c, name }))
         setMsg(`Saved “${name}”.`)

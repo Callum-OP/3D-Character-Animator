@@ -22,7 +22,9 @@ describe('shadow darkening shader patch', () => {
   it('applies the darkening to the final colour, and declares what it uses in every material', () => {
     const opaque = patchOpaqueChunk(THREE.ShaderChunk.opaque_fragment)
     expect(opaque.count).toBe(1)
-    expect(opaque.source).toContain('outgoingLight *= 1.0 - uShadowDarkness * ( 1.0 - dsShadowMin );')
+    // darkening by strength, with the (neutral-by-default) shadow colour applied on top
+    expect(opaque.source).toContain('float dsShadowAmt = uShadowDarkness * ( 1.0 - dsShadowMin );')
+    expect(opaque.source).toContain('outgoingLight *= ( 1.0 - dsShadowAmt ) * mix( vec3( 1.0 ), uShadowTint, 1.0 - dsShadowMin );')
     expect(opaque.source.indexOf('outgoingLight *=')).toBeLessThan(opaque.source.indexOf('gl_FragColor'))
     const common = patchCommonChunk('// common')
     expect(common).toContain('uniform float uShadowDarkness;')

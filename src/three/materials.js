@@ -1,5 +1,6 @@
 import * as THREE from 'three'
-import { shadowDarkness } from './shadowDarkening.js'
+import { addShadowUniforms, shadowFilterKey, setNightImmune } from './shadowDarkening.js'
+import { stripAppMaterialData } from './materialUserData.js'
 
 // ---------------------------------------------------------------------------
 // Material modes + per-mesh shading overrides
@@ -118,27 +119,54 @@ function getSoftGradientMap(floor) {
 // less busy than the full-hemisphere default, especially on rounder meshes.
 // ---------------------------------------------------------------------------
 
+// userData is JSON-copied whenever a material is cloned (and survives export/import
+// as glTF extras), which turns Colors into numbers and Vector3s into plain objects.
+// These put a real Color/Vector3 back so a stale value can never crash a live update.
+function ensureColor(u, key, fallback = 0xffffff) {
+  const v = u[key]
+  if (v && v.isColor) return v
+  u[key] = new THREE.Color(typeof v === 'number' || typeof v === 'string' ? v : fallback)
+  return u[key]
+}
+
+function ensureVector3(u, key, fallback) {
+  const v = u[key]
+  if (v && v.isVector3) return v
+  u[key] = v && typeof v === 'object' ? new THREE.Vector3(v.x || 0, v.y || 0, v.z || 0) : fallback.clone()
+  return u[key]
+}
+
+// True when `material` really carries our rim-light shader hook (not just the flag).
+function hasRimHook(material) {
+  return typeof material.customProgramCacheKey === 'function' &&
+    String(material.customProgramCacheKey()).includes('charanim-rim')
+}
+
 function installRimLight(material) {
   const u = material.userData
-  if (u.rimLightInstalled) return
+  // The flag alone isn't proof: a cloned material (character paste, prop copy) or a
+  // model imported from a file exported by the app keeps the flag in its userData
+  // without the onBeforeCompile hook it stands for. Treat that as "not installed".
+  if (u.rimLightInstalled && hasRimHook(material)) return
+  if (u.rimLightInstalled) stripAppMaterialData(material)
   u.rimLightInstalled = true
-  u.rimColor = u.rimColor || new THREE.Color(0xffffff)
-  u.rimLightDir = u.rimLightDir || new THREE.Vector3(0.3, 0.6, 0.7)
+  ensureColor(u, 'rimColor')
+  ensureVector3(u, 'rimLightDir', new THREE.Vector3(0.3, 0.6, 0.7))
   u.rimSoftIntensity = u.rimSoftIntensity || 0
   u.rimSoftWidth = u.rimSoftWidth != null ? u.rimSoftWidth : 0.5
   u.rimHardIntensity = u.rimHardIntensity || 0
   u.rimHardWidth = u.rimHardWidth != null ? u.rimHardWidth : 0.35
   u.rimSideOnly = u.rimSideOnly || 0
   u.ambientOcclusionStrength = u.ambientOcclusionStrength || 0
-  u.backlightColor = u.backlightColor || new THREE.Color(0xffffff)
+  ensureColor(u, 'backlightColor')
   u.backlightFalloff = u.backlightFalloff != null ? u.backlightFalloff : 0.5
   u.colorGrading = u.colorGrading || 0
   u.shadowStrength = u.shadowStrength != null ? u.shadowStrength : 0.15
   // Stable cache key: the injected code never changes, only the uniforms do,
   // so every toon/soft material can safely share one compiled program variant.
-  material.customProgramCacheKey = () => 'charanim-rim-v4'
+  material.customProgramCacheKey = () => 'charanim-rim-v5' + shadowFilterKey()
   material.onBeforeCompile = (shader) => {
-    shader.uniforms.uShadowDarkness = shadowDarkness // shared: see shadowDarkening.js
+    addShadowUniforms(shader.uniforms, material) // shared shadow uniforms: see shadowDarkening.js
     shader.uniforms.rimColor = { value: u.rimColor }
     shader.uniforms.rimLightDir = { value: u.rimLightDir }
     shader.uniforms.rimSoftIntensity = { value: u.rimSoftIntensity }
@@ -220,12 +248,17 @@ function installRimLight(material) {
           float edgeHard = smoothstep( hardLo, hardLo + 0.08, rimEdgeRaw );
           float litHard = smoothstep( -0.05, 0.05, ndotl );
           float hardTerm = edgeHard * litHard * rimSide * rimHardIntensity;
-          gl_FragColor.rgb += rimColor * ( softTerm + hardTerm );
+          // A rim light is a light: it must be blocked by shadows like the key light is.
+          // (The shadow darkening already ran on outgoingLight; this is added afterwards, so
+          // without this a bright rim line sat untouched on a darkened surface, which read
+          // as a wet, glossy edge, worst with sharp or high-contrast shadows.)
+          float rimShadow = mix( 1.0, dsShadowMin, uShadowDarkness );
+          gl_FragColor.rgb += rimColor * ( softTerm + hardTerm ) * rimShadow;
         }
         float faceTerm = smoothstep(0.15, 0.85, dot(vRimView, rimNormal));
         gl_FragColor.rgb *= 1.0 - styleAmbientOcclusion * (1.0 - faceTerm) * 0.18;
         float backEdge = pow(clamp(1.0 - faceTerm, 0.0, 1.0), mix(1.0, 5.0, styleBacklightFalloff));
-        gl_FragColor.rgb += styleBacklightColor * backEdge * styleBacklightFalloff * 0.35;
+        gl_FragColor.rgb += styleBacklightColor * backEdge * styleBacklightFalloff * 0.35 * mix( 1.0, mix( 1.0, dsShadowMin, uShadowDarkness ), 0.5 );
         if (styleColorGrading > 0.5 && styleColorGrading < 1.5) gl_FragColor.rgb *= vec3(1.03, 0.985, 0.95);
         if (styleColorGrading >= 1.5 && styleColorGrading < 2.5) gl_FragColor.rgb *= vec3(0.96, 0.985, 1.04);
         if (styleColorGrading >= 2.5 && styleColorGrading < 3.5) gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(dot(gl_FragColor.rgb, vec3(0.299, 0.587, 0.114))), 0.85);
@@ -262,17 +295,13 @@ function updateRimLight(material, rim) {
   for (const m of arr) {
     if (!m || !m.userData) continue
     const u = m.userData
-    if (!u.rimColor) u.rimColor = new THREE.Color()
-    u.rimColor.set(rim.color)
+    ensureColor(u, 'rimColor').set(rim.color)
     u.rimSoftIntensity = softAmount
     u.rimSoftWidth = soft.width != null ? soft.width : 0.5
     u.rimHardIntensity = hardAmount
     u.rimHardWidth = hard.width != null ? hard.width : 0.35
     u.rimSideOnly = rim.sideOnly ? 1 : 0
-    if (rim.direction) {
-      if (!u.rimLightDir) u.rimLightDir = new THREE.Vector3()
-      u.rimLightDir.copy(rim.direction)
-    }
+    if (rim.direction) ensureVector3(u, 'rimLightDir', rim.direction).copy(rim.direction)
     const ru = u.rimUniforms
     if (ru) {
       ru.rimColor.value = u.rimColor
@@ -292,8 +321,7 @@ function updateStyleControls(material, style = {}) {
     if (!m?.userData) continue
     const u = m.userData
     u.ambientOcclusionStrength = style.ambientOcclusionStrength || 0
-    if (!u.backlightColor) u.backlightColor = new THREE.Color()
-    u.backlightColor.set(style.backlightColor || '#ffffff')
+    ensureColor(u, 'backlightColor').set(style.backlightColor || '#ffffff')
     u.backlightFalloff = style.backlightFalloff != null ? style.backlightFalloff : 0.5
     u.colorGrading = gradeValue(style.colorGrading)
     u.shadowStrength = style.shadowStrength != null ? style.shadowStrength : 0.15
@@ -313,9 +341,9 @@ function updateStyleControls(material, style = {}) {
 function installStyleGrade(material) {
   const u = material.userData
   u.colorGrading = u.colorGrading || 0
-  material.customProgramCacheKey = () => 'charanim-grade-v1'
+  material.customProgramCacheKey = () => 'charanim-grade-v1' + shadowFilterKey()
   material.onBeforeCompile = (shader) => {
-    shader.uniforms.uShadowDarkness = shadowDarkness
+    addShadowUniforms(shader.uniforms, material)
     shader.uniforms.styleColorGrading = { value: u.colorGrading }
     shader.fragmentShader = shader.fragmentShader.replace(
       '#include <common>',
@@ -433,6 +461,39 @@ export function normalizeTransparency(material) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Per-material flags that follow a setting rather than a style:
+//   self-shadowing  see setSelfShadowEnabled
+//   night immunity  a mesh with userData.nightImmune ignores Night mode (its materials get
+//                   the flag, which switches their night uniform off, see shadowDarkening.js)
+// ---------------------------------------------------------------------------
+let selfShadowOn = true
+
+// With self-shadowing on, a mesh casts its shadow from the surface facing the light (both
+// faces are written to the shadow map), so one part of an object properly shades another
+// part sitting just behind it (an arm over the torso). With it off, three.js's default is
+// used: only the far side is written. That never acne-stripes lit surfaces, but anything
+// closer behind an occluder than the occluder is thick stays lit.
+export function setSelfShadowEnabled(on) {
+  selfShadowOn = on !== false
+}
+
+export function syncMeshMaterialFlags(meshes) {
+  if (!meshes) return
+  for (const mesh of meshes) {
+    if (!mesh) continue
+    const immune = !!(mesh.userData && mesh.userData.nightImmune)
+    const arr = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+    for (const m of arr) {
+      if (!m) continue
+      m.shadowSide = selfShadowOn ? THREE.DoubleSide : null
+      if (immune) m.userData.nightImmune = true
+      else delete m.userData.nightImmune
+      setNightImmune(m, immune) // a live uniform: no recompile either way
+    }
+  }
+}
+
 /**
  * Apply the active material mode + shading controls to every mesh.
  * Non-destructive: originals are kept, generated materials are cached and reused;
@@ -440,7 +501,7 @@ export function normalizeTransparency(material) {
  *
  * @param {object} model  parsed model with .meshes + .materials
  * @param {object} opts
- * @param {'unlit'|'toon'|'soft'|'standard'} opts.mode
+ * @param {'unlit'|'toon'|'soft'|'standard'|'realistic'} opts.mode
  * @param {number} [opts.toonSteps]  shadow band count (Cartoon mode only)
  * @param {number} [opts.soften]     global shadow lift, 0..1
  * @param {object} [opts.overrides]  { [mesh.uuid]: { outline?, shading?, color?, solid? } }
@@ -497,7 +558,7 @@ export function applyMaterials(model, opts) {
     // mesh, which gets its own per-mesh copy: originals can be shared between
     // meshes (and are never mutated), so tinting one in place would recolour
     // every mesh that happens to share its material.
-    if (mode === 'standard') {
+    if (mode === 'standard' || mode === 'realistic') {
       const recoloured = !!(ov && ov.color)
       const target = recoloured ? getOrBuild(tintedCache(store), mesh, original, buildTinted) : original
       if (recoloured) {
@@ -545,6 +606,7 @@ export function applyMaterials(model, opts) {
     applyColorOverride(toonMat, original, ov)
     mesh.material = toonMat
   }
+  syncMeshMaterialFlags(model.meshes)
 }
 
 // Update only the live rim uniforms when a followed scene light moves. The

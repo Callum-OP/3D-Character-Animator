@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { setUndoHistoryLimit } from './three/undoHistory.js'
+import { DEFAULT_NIGHT, normalizeNight, DEFAULT_SHADOWS, normalizeShadows, shadowStyleValues, shadowsFromLegacy } from './three/shadowSettings.js'
 
 // These are app-wide preferences rather than project content. They are kept
 // in their own local-storage record so opening a project cannot overwrite the
@@ -8,8 +9,7 @@ const APP_SETTINGS_FIELDS = [
   'undoLimit', 'cameraIgnoresUndo', 'settingsVersion',
   'exportScale', 'exportImageResolution', 'exportVideoResolution', 'exportAspect',
   'exportVideoFps', 'exportVideoQuality', 'exportVideoFormat',
-  'showGrid', 'showGround', 'solidBackground', 'backgroundColor', 'showShadow',
-  'shadowMapping', 'shadowSoftness', 'shadowStrength', 'showStats',
+  'showGrid', 'showGround', 'solidBackground', 'backgroundColor', 'shadows', 'showStats',
   'performanceMode', 'performanceBackgroundObjects', 'performanceLowPoly',
   'performanceResolution', 'performanceEffects', 'autoDecimate',
   'materialMode', 'toonSteps', 'colorGrading', 'ambientOcclusionStrength',
@@ -395,13 +395,13 @@ export const useStore = create((set) => ({
   showGround: false, // solid ground plane
   solidBackground: false, // false = transparent (the default, for compositing)
   backgroundColor: '#202127',
-  showShadow: true, // ground shadow on/off
-  shadowMapping: true, // true = real cast shadows; false = cheap blob
-  // 0.15/0.15 (briefly the default) made shadows nearly invisible; settingsVersion
-  // below migrates anyone still carrying those values.
-  shadowSoftness: 0.4, // 0 = crisp/hard edge, 1 = very soft/blurred
-  shadowStrength: 0.45, // 0 = barely visible, 1 = solid black
-  settingsVersion: 2, // bump when a default changes in a way saved settings should pick up
+  // Every shadow control lives in this one object (see three/shadowSettings.js for what each
+  // field means). Realistic, contact-hardening shadows are the default.
+  shadows: { ...DEFAULT_SHADOWS },
+  // Night mode: a dark wash over the whole scene (see shadowSettings.js). Saved with the
+  // project; deliberately NOT an app-wide setting, so the app never opens in the dark.
+  night: { ...DEFAULT_NIGHT },
+  settingsVersion: 3, // bump when a default changes in a way saved settings should pick up
   showStats: false, // FPS / memory readout overlay
   undoLimit: 100,
   // When on, nothing about the camera is recorded in undo/redo: view orbit/zoom/
@@ -420,10 +420,16 @@ export const useStore = create((set) => ({
   setShowGround: (showGround) => set({ showGround }),
   setSolidBackground: (solidBackground) => set({ solidBackground }),
   setBackgroundColor: (backgroundColor) => set({ backgroundColor }),
-  setShowShadow: (showShadow) => set({ showShadow }),
-  setShadowMapping: (shadowMapping) => set({ shadowMapping }),
-  setShadowSoftness: (shadowSoftness) => set({ shadowSoftness }),
-  setShadowStrength: (shadowStrength) => set({ shadowStrength }),
+  // Change any part of the shadow setup: setShadows({ size: 6 }), setShadows({ enabled: false }).
+  // Always stored complete and valid (clamped, defaults filled in).
+  setShadows: (patch) => set((s) => ({ shadows: normalizeShadows({ ...s.shadows, ...patch }) })),
+  // Apply a named shadow style (see SHADOW_STYLES): sets size / contact-hardening / darkness only,
+  // so the master switch, quality and colour are left as the user had them.
+  applyShadowStyle: (id) =>
+    set((s) => {
+      const values = shadowStyleValues(id)
+      return Object.keys(values).length ? { shadows: normalizeShadows({ ...s.shadows, ...values }) } : {}
+    }),
   setShowStats: (showStats) => set({ showStats }),
   setUndoLimit: (undoLimit) => {
     const normalized = setUndoHistoryLimit(undoLimit)
@@ -464,9 +470,9 @@ export const useStore = create((set) => ({
   setPreviewing: (previewing) => set({ previewing }),
 
   // ---- Material mode ----
-  // 'unlit' is the default: raw base colour, no lighting — matches Blender's
-  // flat colours exactly and side-steps FBX lighting artifacts.
-  materialMode: 'unlit', // 'unlit' | 'toon' | 'soft' | 'standard'
+  // 'unlit' is the default: raw base colour, no lighting — shows the
+  // model's flat colours exactly and side-steps FBX lighting artifacts.
+  materialMode: 'unlit', // 'unlit' | 'toon' | 'soft' | 'standard' (shown as Studio) | 'realistic'
   toonSteps: 3, // number of shadow bands in toon (Cartoon) mode
   colorGrading: 'none', // 'none' | 'warm' | 'cool' | 'bleach' | 'cinematic'
   ambientOcclusionStrength: 0.15,
@@ -528,8 +534,8 @@ export const useStore = create((set) => ({
   setLightElevation: (lightElevation) => set({ lightElevation }),
   setDefaultLightingEnabled: (defaultLightingEnabled) => set({ defaultLightingEnabled }),
 
-  // ---- Environment (studio HDRI-style) fill lighting — Standard mode only,
-  // like Blender's Material Preview viewport shading. Off by default so it
+  // ---- Environment (studio HDRI-style) fill lighting — Studio / Realistic modes
+  // only. Off by default so it
   // never changes an existing project's look until turned on. ----
   envLightingEnabled: false,
   envLightingIntensity: 1.0,
@@ -576,7 +582,13 @@ export const useStore = create((set) => ({
   // viewport doesn't flash through intermediate states. Per-mesh overrides
   // and env-lighting are deliberately left alone so a model-specific tweak
   // (e.g. a flattened face) survives switching styles.
-  applyStylePreset: (preset) => set({ ...preset }),
+  // A Look preset may carry `shadowStyle: <id>`; it is applied to the shadows object.
+  applyStylePreset: (preset) =>
+    set((s) => {
+      const { shadowStyle, ...rest } = preset || {}
+      const values = shadowStyleValues(shadowStyle)
+      return Object.keys(values).length ? { ...rest, shadows: normalizeShadows({ ...s.shadows, ...values }) } : { ...rest }
+    }),
 
   // Per-mesh overrides, keyed by mesh uuid: { outline: bool, shading: mode }.
   // Absent entry => defaults (outline on, 'full' shading). Cleared on load.
@@ -922,6 +934,12 @@ export const useStore = create((set) => ({
   setObjectOutline: (id, outline) =>
     set((s) => ({
       sceneObjects: s.sceneObjects.map((o) => (o.id === id ? { ...o, outline } : o)),
+    })),
+  setNight: (patch) => set((s) => ({ night: normalizeNight({ ...s.night, ...patch }) })),
+  // Per object or character: ignore Night mode (stays in full daylight).
+  setObjectNightImmune: (id, nightImmune) =>
+    set((s) => ({
+      sceneObjects: s.sceneObjects.map((o) => (o.id === id ? { ...o, nightImmune } : o)),
     })),
   setObjectCastShadow: (id, castShadow) =>
     set((s) => ({
@@ -1583,16 +1601,25 @@ export const useStore = create((set) => ({
 // project store means opening a project never replaces the user's defaults.
 const APP_SETTINGS_STORAGE_KEY = '3d-animator-app-settings'
 
-// v1 -> v2: shadow strength/softness defaulted to 0.15 for a while, which left
-// real shadows almost invisible and that value got saved into every user's
-// settings. Exactly 0.15 is the old default (not a deliberate choice), so drop
-// it and let the new default apply; anything else the user set is kept.
+// v1 -> v2: shadow strength/softness defaulted to 0.15 for a while, which left real shadows
+// almost invisible. v2 -> v3: the shadow controls were rebuilt as one `shadows` object with a
+// realistic default. The old values were the result of the old (confusing) controls rather than
+// a deliberate look, so a v3 start keeps only what is still meaningful (shadows on/off and
+// blob-vs-real) and takes the new realistic defaults for everything else.
 export function migrateAppSettings(saved) {
   const next = { ...saved }
-  if ((next.settingsVersion || 1) < 2) {
-    if (next.shadowStrength === 0.15) delete next.shadowStrength
-    if (next.shadowSoftness === 0.15) delete next.shadowSoftness
+  const legacy = ['showShadow', 'shadowMapping', 'shadowSoftness', 'shadowStrength', 'shadowType', 'shadowQuality', 'shadowTint']
+  if ((next.settingsVersion || 1) < 3 && next.shadows === undefined) {
+    const old = shadowsFromLegacy(next)
+    next.shadows = {
+      ...DEFAULT_SHADOWS,
+      enabled: old.enabled,
+      quality: old.quality === 'blob' ? 'blob' : DEFAULT_SHADOWS.quality,
+    }
+  } else if (next.shadows !== undefined) {
+    next.shadows = normalizeShadows(next.shadows)
   }
+  for (const k of legacy) delete next[k]
   delete next.settingsVersion // the store's current version is re-saved below
   return next
 }

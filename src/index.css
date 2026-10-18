@@ -646,6 +646,11 @@ body {
   border-color: var(--accent);
 }
 
+.preset-btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .preset-btn:disabled {
   opacity: 0.45;
   cursor: default;
@@ -1972,7 +1977,7 @@ input.xform-value {
   color: #ff6b6b;
 }
 
-/* ================= Accordion (Blender-style collapsible categories) ================= */
+/* ================= Accordion (collapsible categories) ================= */
 .acc {
   background: var(--panel-bg-2);
   border: 1px solid var(--panel-border);
@@ -2589,7 +2594,7 @@ body {
   padding: 5px 10px;
 }
 
-/* ================= Radial (Blender/CSP-style) uniform-scale handle ================= */
+/* ================= Radial (ring-style) uniform-scale handle ================= */
 .radial-scale {
   display: flex;
   align-items: center;
