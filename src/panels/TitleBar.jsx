@@ -21,6 +21,7 @@ import {
   openRecentProject,
   openProjectFromDisk,
   openProjectFromFileObject,
+  openProjectFromPath,
   saveProjectToHandle,
   saveProjectAs,
 } from '../three/projectStore.js'
@@ -94,6 +95,36 @@ export default function TitleBar({ onOpenSettings }) {
   const loop = useStore((s) => s.loop)
   const speed = useStore((s) => s.speed)
   const canRecord = canRecordVideo()
+
+  // Desktop build: load a .3dcp the OS opened us with (double-click / "Open with"),
+  // both at launch and while the app is already running.
+  useEffect(() => {
+    const native = typeof window !== 'undefined' ? window.animare : null
+    if (!native?.isElectron || !native.takePendingOpenFile) return
+    let cancelled = false
+    const openPath = async (filePath) => {
+      if (!filePath || cancelled) return
+      setBusy(true)
+      setMsg(null)
+      try {
+        const opened = await openProjectFromPath(filePath)
+        if (cancelled) return
+        await applyProjectData(opened.record)
+        setCurrent({ name: opened.name, handle: opened.handle })
+      } catch (e) {
+        setMsg(e?.message || String(e))
+      } finally {
+        setBusy(false)
+      }
+    }
+    const off = native.onOpenFile?.(openPath)
+    native.takePendingOpenFile().then(openPath).catch(() => {})
+    return () => {
+      cancelled = true
+      off?.()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     if (openMenu !== 'file') return

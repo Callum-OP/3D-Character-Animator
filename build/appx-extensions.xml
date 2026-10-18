@@ -1,0 +1,10 @@
+<uap:Extension Category="windows.fileTypeAssociation">
+  <uap:FileTypeAssociation Name="3dcp">
+    <uap:SupportedFileTypes>
+      <uap:FileType>.3dcp</uap:FileType>
+    </uap:SupportedFileTypes>
+    <uap:DisplayName>Animare 3D Animator Project</uap:DisplayName>
+    <uap:Logo>assets\FileIcon3dcp.png</uap:Logo>
+    <uap:InfoTip>Animare 3D Animator project file</uap:InfoTip>
+  </uap:FileTypeAssociation>
+</uap:Extension>

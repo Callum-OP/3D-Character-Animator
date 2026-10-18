@@ -325,6 +325,19 @@ export async function openProjectFromDisk() {
   throw new Error('FILE_SYSTEM_ACCESS_UNAVAILABLE')
 }
 
+// Open a project straight from an absolute path, with no dialog. Used when the
+// OS launches the desktop app with a .3dcp (double-click / "Open with").
+// Electron only — returns { record, handle, name } like openProjectFromDisk.
+export async function openProjectFromPath(filePath) {
+  const native = nativeBridge()
+  if (!native) throw new Error('Opening a file by path is only available in the desktop app.')
+  const text = await native.readFile(filePath)
+  const record = await readProjectFile({ text: () => Promise.resolve(text) })
+  const name = await native.baseName(filePath)
+  await rememberRecent({ name, handle: filePath })
+  return { record, handle: filePath, name }
+}
+
 // Fallback path for browsers without the picker API: caller supplies the
 // File it got from a normal <input type="file">.
 export async function openProjectFromFileObject(file) {

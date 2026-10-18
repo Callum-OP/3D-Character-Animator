@@ -47,6 +47,45 @@ if (!app.requestSingleInstanceLock()) {
 
 let mainWindow = null
 
+// --- Opening .3dcp files from the OS (double-click / "Open with") -----------
+// Windows hands the file path to the app as a command-line argument: on first
+// launch in process.argv, and for an already-running instance via the
+// 'second-instance' event (single-instance lock above). macOS uses 'open-file'.
+// The path is held in `pendingOpenPath` until the renderer says it is ready
+// (animare:take-pending-open), after which paths are pushed straight to it.
+const PROJECT_EXT = '.3dcp'
+let pendingOpenPath = null
+let rendererReady = false
+
+function findProjectArg(argv) {
+  for (const arg of argv.slice(1)) {
+    if (typeof arg !== 'string' || arg.startsWith('-')) continue
+    if (!arg.toLowerCase().endsWith(PROJECT_EXT)) continue
+    try {
+      if (fs.statSync(arg).isFile()) return path.resolve(arg)
+    } catch {
+      /* not a real file — ignore */
+    }
+  }
+  return null
+}
+
+function openProjectPath(filePath) {
+  if (!filePath) return
+  if (mainWindow && rendererReady && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('animare:open-file', filePath)
+  } else {
+    pendingOpenPath = filePath
+  }
+}
+
+pendingOpenPath = findProjectArg(process.argv)
+
+app.on('open-file', (event, filePath) => {
+  event.preventDefault()
+  if (filePath.toLowerCase().endsWith(PROJECT_EXT)) openProjectPath(path.resolve(filePath))
+})
+
 function isOwnOrigin(url) {
   try {
     const origin = new URL(url).origin
@@ -102,6 +141,15 @@ function registerFileIpc() {
   })
 
   ipcMain.handle('animare:base-name', (_e, filePath) => path.basename(filePath))
+
+  // The renderer calls this once on startup: it returns the .3dcp the app was
+  // launched with (if any) and marks the renderer ready for live open-file pushes.
+  ipcMain.handle('animare:take-pending-open', () => {
+    rendererReady = true
+    const p = pendingOpenPath
+    pendingOpenPath = null
+    return p
+  })
 
   // Opening .blend files by running the user's own Blender (see blender.cjs).
   registerBlenderIpc({ ipcMain, dialog, app })
@@ -177,6 +225,12 @@ function createWindow() {
 
   win.once('ready-to-show', () => win.show())
 
+  // A reload (crash recovery) wipes the renderer's listeners, so wait for it to
+  // check in again before pushing any more open-file requests.
+  wc.on('did-start-loading', () => {
+    rendererReady = false
+  })
+
   // External links open in the system browser, never in-app.
   wc.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url)
@@ -213,7 +267,8 @@ function createWindow() {
   })
 }
 
-app.on('second-instance', () => {
+app.on('second-instance', (_event, argv) => {
+  openProjectPath(findProjectArg(argv))
   if (!mainWindow) return
   if (mainWindow.isMinimized()) mainWindow.restore()
   mainWindow.focus()

@@ -32,6 +32,17 @@ contextBridge.exposeInMainWorld('animare', {
   // Basename of a path, for display (e.g. Recent Projects list).
   baseName: (path) => ipcRenderer.invoke('animare:base-name', path),
 
+  // Opening a .3dcp from the OS (double-click / "Open with" / second launch).
+  // takePendingOpenFile() → the path the app was launched with, or null; call it once on startup.
+  takePendingOpenFile: () => ipcRenderer.invoke('animare:take-pending-open'),
+  // onOpenFile(cb) → calls cb(path) when a file is opened while the app is already running.
+  // Returns an unsubscribe function.
+  onOpenFile: (cb) => {
+    const handler = (_e, filePath) => cb(filePath)
+    ipcRenderer.on('animare:open-file', handler)
+    return () => ipcRenderer.removeListener('animare:open-file', handler)
+  },
+
   // .blend import: runs the user's own Blender, headless, to convert the file to glTF.
   blender: {
     // → { available, path, source, version, tooOld }
