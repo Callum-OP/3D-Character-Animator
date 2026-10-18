@@ -1,6 +1,11 @@
 import * as THREE from 'three'
 import { addShadowUniforms, shadowFilterKey, setNightImmune } from './shadowDarkening.js'
 import { stripAppMaterialData } from './materialUserData.js'
+import {
+  recordMaterialSlots, buildPhysical, applySurface, applyOpacity, applyColorReplace,
+  hasSurface, hasReplace, hasAnySlot, isStyledCopy, markStyledCopy, hasSlotOpacity,
+  applyToonSurface, toonOpacityLook,
+} from './surfaceMaterials.js'
 
 // ---------------------------------------------------------------------------
 // Material modes + per-mesh shading overrides
@@ -384,6 +389,7 @@ export function recordOriginalMaterials(model) {
   for (const mesh of model.meshes) {
     normalizeTransparency(mesh.material)
     originals.set(mesh, mesh.material)
+    recordMaterialSlots(mesh, mesh.material) // names + swatches for the per-material editor
   }
   // What each original material's alpha settings were as loaded (after the
   // fix-up above), so transparency can be switched off and back on without ever
@@ -550,21 +556,19 @@ export function applyMaterials(model, opts) {
       })
       updateStyleControls(unlitMat, { colorGrading })
       applyAlphaState(unlitMat, original, store, alphaOn)
-      applyColorOverride(unlitMat, original, ov)
+      if (applyColorOverride(unlitMat, original, ov)) applyAlphaState(unlitMat, original, store, alphaOn)
       mesh.material = unlitMat
       continue
     }
-    // Standard mode keeps the untouched PBR originals — except a recoloured
-    // mesh, which gets its own per-mesh copy: originals can be shared between
-    // meshes (and are never mutated), so tinting one in place would recolour
-    // every mesh that happens to share its material.
+    // Standard mode keeps the untouched PBR originals — except a recoloured or
+    // restyled mesh, whose changed materials get their own per-mesh copies: originals
+    // can be shared between meshes (and are never mutated), so editing one in place
+    // would change every mesh that happens to share its material. Materials of that
+    // mesh nobody touched keep rendering with the originals.
     if (mode === 'standard' || mode === 'realistic') {
-      const recoloured = !!(ov && ov.color)
-      const target = recoloured ? getOrBuild(tintedCache(store), mesh, original, buildTinted) : original
-      if (recoloured) {
-        applyAlphaState(target, original, store, alphaOn)
-        applyColorOverride(target, original, ov)
-      }
+      const styled = !!(ov && ov.color) || hasAnySlot(ov)
+      const target = styled ? buildStyled(store, mesh, original, ov) : original
+      if (styled) applyAlphaState(target, original, store, alphaOn)
       const arr = Array.isArray(target) ? target : [target]
       for (const m of arr) {
         if (!m) continue
@@ -576,6 +580,10 @@ export function applyMaterials(model, opts) {
           colorGrading: gradeValue(colorGrading),
           shadowStrength,
         })
+      }
+      // After the rim hook: colour-replace chains onto whatever shader hooks exist.
+      if (styled && applyColorOverride(target, original, ov, { surface: true })) {
+        applyAlphaState(target, original, store, alphaOn)
       }
       mesh.material = target
       continue
@@ -603,7 +611,7 @@ export function applyMaterials(model, opts) {
       colorGrading: gradeValue(colorGrading),
       shadowStrength,
     })
-    applyColorOverride(toonMat, original, ov)
+    if (applyColorOverride(toonMat, original, ov, { toon: { soft: mode === 'soft' } })) applyAlphaState(toonMat, original, store, alphaOn)
     mesh.material = toonMat
   }
   syncMeshMaterialFlags(model.meshes)
@@ -646,6 +654,13 @@ export function disposeGeneratedMaterials(model) {
     disposeCache(model.materials.tinted)
     model.materials.tinted.clear()
   }
+  if (model.materials.styled) {
+    // Per-slot copies only — a slot nobody styled holds the ORIGINAL, which is freed with the model.
+    for (const made of model.materials.styled.values()) {
+      for (const entry of made) if (isStyledCopy(entry.mat)) entry.mat.dispose()
+    }
+    model.materials.styled.clear()
+  }
 }
 
 // --- internals ---------------------------------------------------------------
@@ -681,39 +696,73 @@ function assignGradient(material, steps, floor, smooth) {
 function buildTinted(src) {
   const m = src.clone()
   m.userData = {}
-  return m
+  return markStyledCopy(m)
 }
 
-function tintedCache(store) {
-  if (!store.tinted) store.tinted = new Map()
-  return store.tinted
+// The materials a restyled mesh renders with, one per slot, cached per mesh. A slot is
+//   'physical' when it needs lighting-model changes (glossy, metal, cloth, glass…),
+//   'clone'    when only colour / opacity / colour-replace change, and
+//   'orig'     when untouched (the shared original, never mutated).
+// Rebuilt only when a slot's kind changes (e.g. the first time metalness is set).
+function buildStyled(store, mesh, original, ov) {
+  if (!store.styled) store.styled = new Map()
+  const isArr = Array.isArray(original)
+  const srcs = isArr ? original : [original]
+  const prev = store.styled.get(mesh) || []
+  const out = srcs.map((src, i) => {
+    const look = ov && ov.slots ? ov.slots[i] : null
+    const kind = hasSurface(look)
+      ? 'physical'
+      : (ov && ov.color) || (look && (look.color != null || look.opacity != null)) || hasReplace(look)
+        ? 'clone'
+        : 'orig'
+    const have = prev[i]
+    if (have && have.kind === kind && have.src === src) return have
+    if (have && isStyledCopy(have.mat)) have.mat.dispose()
+    if (!src) return { kind: 'orig', src, mat: src }
+    const mat = kind === 'orig' ? src : kind === 'physical' ? buildPhysical(src) : buildTinted(src)
+    return { kind, src, mat }
+  })
+  store.styled.set(mesh, out)
+  const mats = out.map((o) => o.mat)
+  return isArr ? mats : mats[0]
 }
 
-// Apply (or clear) a mesh's colour override on its CURRENT material(s).
-// `target` and `original` line up (same array shape). The loaded colour/map
-// are always read back from the untouched original, so removing the override
-// restores the part exactly, and repeated applies never drift.
-//   color  → material.color; since three multiplies colour × map, a textured
-//            mesh is tinted rather than replaced…
-//   solid  → …unless the override also asks for a flat colour, which drops the
-//            colour map (alphaMap is kept, so cut-out shapes stay cut out).
-function applyColorOverride(target, original, ov) {
+// Recolour (whole mesh, then per-slot on top), restyle and colour-replace each
+// material. Returns true when a slot opacity was just cleared, so the caller can re-run
+// the transparency switch that owns `transparent`.
+function applyColorOverride(target, original, ov, { surface = false, toon = null } = {}) {
   const targets = Array.isArray(target) ? target : [target]
   const originals = Array.isArray(original) ? original : [original]
-  const color = ov && ov.color
+  let opacityCleared = false
   targets.forEach((t, i) => {
     const src = originals[i]
-    if (!t || !src || !t.color || !src.color) return
-    if (color) t.color.set(color)
-    else t.color.copy(src.color)
-    const wantMap = color && ov.solid ? null : src.map || null
-    if ((t.map || null) !== wantMap) {
-      t.map = wantMap
-      t.needsUpdate = true // a map appearing/disappearing changes the shader
+    if (!t || !src) return
+    const look = ov && ov.slots ? ov.slots[i] : null
+    if (t.color && src.color) {
+      const slotColor = look && look.color
+      const color = slotColor || (ov && ov.color)
+      const solid = slotColor ? !!look.solid : !!(ov && ov.solid)
+      if (color) t.color.set(color)
+      else t.color.copy(src.color)
+      const wantMap = color && solid ? null : src.map || null
+      if ((t.map || null) !== wantMap) {
+        t.map = wantMap
+        t.needsUpdate = true // a map appearing/disappearing changes the shader
+      }
+    }
+    if (surface && t.isMeshPhysicalMaterial && isStyledCopy(t)) applySurface(t, src, look)
+    // Toon / anime / soft: the same settings, simulated (see surfaceMaterials.js).
+    if (toon) applyToonSurface(t, src, look, toon)
+    // Never on a shared original: only copies and generated shells get the hook.
+    if (hasReplace(look) || (t.userData && t.userData.recolorUniforms)) applyColorReplace(t, look)
+    const opLook = toon ? toonOpacityLook(look) : look
+    if ((opLook && opLook.opacity != null) || hasSlotOpacity(t)) {
+      if (applyOpacity(t, src, opLook)) opacityCleared = true
     }
   })
+  return opacityCleared
 }
-
 function buildUnlit(src) {
   const m = new THREE.MeshBasicMaterial()
   copyCommon(src, m)

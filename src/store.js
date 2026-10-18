@@ -1,3 +1,4 @@
+import { mergeLook } from './three/surfaceMaterials.js'
 import { create } from 'zustand'
 import { setUndoHistoryLimit } from './three/undoHistory.js'
 import { DEFAULT_NIGHT, normalizeNight, DEFAULT_SHADOWS, normalizeShadows, shadowStyleValues, shadowsFromLegacy } from './three/shadowSettings.js'
@@ -651,6 +652,33 @@ export const useStore = create((set) => ({
             delete merged.solid
           }
           next[uuid] = merged
+        }
+        return next
+      }
+      if (characterId != null && characterId !== s.activeCharacterId && s.characters[characterId]) {
+        const c = s.characters[characterId]
+        return { characters: { ...s.characters, [characterId]: { ...c, meshOverrides: write(c.meshOverrides || {}) } } }
+      }
+      return { meshOverrides: write(s.meshOverrides) }
+    }),
+
+  // Edit ONE material of each target mesh (see three/surfaceMaterials.js): `targets` is
+  // [{ uuid, slot }], `patch` a partial SlotLook where null removes a setting. Lives in
+  // the per-mesh override map, so it saves/loads and copies like the other per-mesh
+  // settings, and the whole-mesh colour (setMeshesColor) is left alone.
+  setMeshesSlot: (targets, patch, characterId = null) =>
+    set((s) => {
+      const write = (map) => {
+        const next = { ...map }
+        for (const { uuid, slot } of targets) {
+          const base = { outline: true, shading: 'full', ...next[uuid] }
+          const slots = { ...(base.slots || {}) }
+          const look = mergeLook(slots[slot], patch)
+          if (look) slots[slot] = look
+          else delete slots[slot]
+          if (Object.keys(slots).length) base.slots = slots
+          else delete base.slots
+          next[uuid] = base
         }
         return next
       }

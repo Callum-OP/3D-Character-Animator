@@ -42,6 +42,7 @@ import {
 } from '../three/clothmod.js'
 import EditableValue from './EditableValue.jsx'
 import ColorControl from './ColorControl.jsx'
+import MaterialEditor from './MaterialEditor.jsx'
 
 // Side-panel section for Mesh mode: pick a part of the character (eyes, hair,
 // clothing…) and move, rotate, resize or recolour it. Click a part in the
@@ -417,7 +418,7 @@ export default function MeshPanel() {
       {selectedMeshUuids.length > 0 && (
         <div className="joint-controls" style={{ marginTop: 10 }}>
           <div className="joint-header">
-            <span className="joint-name">Colour</span>
+            <span className="joint-name">Colour (whole part)</span>
             <span className="joint-parent">
               {multi ? `${selectedMeshUuids.length} parts` : selectedMesh?.name}
             </span>
@@ -429,6 +430,14 @@ export default function MeshPanel() {
             onClear={() => applyColor({ color: null })}
           />
         </div>
+      )}
+
+      {selectedMeshUuids.length > 0 && selectedMeshUuid && (
+        <MaterialEditor
+          selectedMeshUuids={selectedMeshUuids}
+          primaryUuid={selectedMeshUuid}
+          resolveMesh={(uuid) => currentModel?.meshes?.find((m) => m.uuid === uuid) || getMeshByUuid(uuid)}
+        />
       )}
 
       {selectedMesh && !isPropPart && !multi && (

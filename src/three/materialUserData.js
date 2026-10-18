@@ -33,6 +33,7 @@ export const APP_MATERIAL_KEYS = [
   'outlineParameters',
   'rimUniforms',
   'styleUniforms',
+  'recolorUniforms',
 ]
 
 // Remove the app's own keys from one material (or an array of them), in place.
