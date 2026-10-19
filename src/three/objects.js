@@ -1244,6 +1244,12 @@ export function getObjectMaterialModelById(id) {
   return entry && entry.materials ? { meshes: entry.meshes, materials: entry.materials } : null
 }
 
+// The prop (if any) that owns this mesh, as { id, name, meshes, materials } for the material helpers.
+export function getObjectMaterialModelForMesh(mesh) {
+  const entry = o.objects.find((e) => e.meshes && e.meshes.includes(mesh))
+  return entry && entry.materials ? { id: entry.id, name: entry.name, meshes: entry.meshes, materials: entry.materials } : null
+}
+
 export function getObjectMeshesById(id) {
   const entry = o.objects.find((e) => e.id === id)
   return (entry && entry.meshes) || []

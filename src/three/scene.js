@@ -20,6 +20,7 @@ import { fitShadowExtents, needsRefit, collectFloorReceivers, probeFloor } from 
 import {
   recordOriginalMaterials,
   applyMaterials,
+  materialsForExport,
   getTransparentMeshes,
   updateRimLightMaterials,
   restoreOriginalMaterials,
@@ -165,6 +166,7 @@ import {
   clearCopiedObject,
   setObjectVisible,
   setObjectTransform,
+  getObjectMaterialModelForMesh,
   setObjectStyle,
   setObjectOutline,
   applyAllObjectStyles,
@@ -212,6 +214,8 @@ import { releaseFollowersOf } from './attach.js'
 import { describeMissingFiles, describeBlendConversion } from './modelBundle.js'
 import { clearUndoHistory, pushUndoBatch, runWithoutHistoryCapture } from './undoHistory.js'
 import { withExportSafeMaterials } from './materialUserData.js'
+import { buildPartsGroup, safeFileStem } from './extractParts.js'
+import { bakeRegionsForExport } from './regions.js'
 import { pushSceneHistory } from './sceneHistory.js'
 
 // ---------------------------------------------------------------------------
@@ -2404,8 +2408,10 @@ export async function exportSceneModel(format = 'glb', name = 'scene', poseMode 
       const dup = cloneForExport(root, { pose: poseMode, restQuats: model?.__poseRestQuats || null })
       dup.name = objName || dup.name
       root.matrixWorld.decompose(dup.position, dup.quaternion, dup.scale)
+      useExportMaterials(root, dup, model)
       exportGroup.add(dup)
     }
+    const textureReport = checkExportTextures(exportGroup)
 
     const binary = format !== 'gltf'
     const exporter = new GLTFExporter()
@@ -2420,12 +2426,140 @@ export async function exportSceneModel(format = 'glb', name = 'scene', poseMode 
       : new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' })
     const ext = binary ? 'glb' : 'gltf'
     downloadBlob(blob, `${name}_${timestamp()}.${ext}`)
-    return {
-      ok: true,
-      message: `Exported ${items.length} object${items.length === 1 ? '' : 's'} as .${ext}.`,
+    const n = items.length
+    let message = `Exported ${n} object${n === 1 ? '' : 's'} as .${ext}`
+    if (textureReport.embedded) {
+      message += ` with ${textureReport.embedded} texture${textureReport.embedded === 1 ? '' : 's'} embedded in the file`
     }
+    message += '.'
+    if (textureReport.unreadable) {
+      message += ` ${textureReport.unreadable} texture${textureReport.unreadable === 1 ? ' was' : 's were'} not ready to embed and left out.`
+    }
+    return { ok: true, message }
   } catch (err) {
     return { ok: false, message: 'Export failed: ' + (err && err.message ? err.message : String(err)) }
+  }
+}
+
+// Swap the export copy's materials for the model's real ones (see materialsForExport): the
+// viewport may be showing a toon / unlit stand-in, but the FILE should carry the actual
+// materials — textures, roughness / metalness, normal maps and the Material editor's edits.
+// `src` and `dup` are the live root and its export clone; their node trees match one to one.
+function useExportMaterials(src, dup, characterModel) {
+  const s = useStore.getState()
+  let model = characterModel || null
+  let overrides = s.meshOverrides
+  if (model) {
+    const id = [...state.characters.entries()].find(([, c]) => c === model)?.[0]
+    const character = id === s.activeCharacterId ? s : s.characters[id]
+    overrides = character?.meshOverrides || {}
+  }
+  const srcMeshes = []
+  const dupMeshes = []
+  ;(function walk(a, b) {
+    if (a.isMesh) {
+      srcMeshes.push(a)
+      dupMeshes.push(b)
+    }
+    for (let i = 0; i < a.children.length; i++) walk(a.children[i], b.children[i])
+  })(src, dup)
+  for (let i = 0; i < srcMeshes.length; i++) {
+    const mesh = srcMeshes[i]
+    const owner = model && model.meshes.includes(mesh) ? model : getObjectMaterialModelForMesh(mesh)
+    const ov = overrides[mesh.uuid]
+    const material = owner ? materialsForExport(owner, mesh, ov) : null
+    if (material) dupMeshes[i].material = material
+    // Regions are a viewport shader effect: write them as real materials on regrouped faces.
+    const baked = ov && ov.regions ? bakeRegionsForExport(mesh, ov.regions, material || mesh.material) : null
+    if (baked) {
+      dupMeshes[i].geometry = baked.geometry
+      dupMeshes[i].material = baked.material
+    }
+  }
+  // The pink / cyan region highlight is a viewport aid, never part of a file.
+  const helpers = []
+  dup.traverse((o) => {
+    if (o.userData && o.userData.isRegionOverlay) helpers.push(o)
+  })
+  for (const h of helpers) h.parent.remove(h)
+}
+
+// How many distinct textures the export will carry, and how many are not decoded yet (an
+// image still loading would be written as a blank). Surfaced in the export message so a
+// missing texture is never a silent surprise.
+const TEXTURE_SLOTS = ['map', 'normalMap', 'emissiveMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'alphaMap', 'clearcoatMap', 'clearcoatRoughnessMap']
+function checkExportTextures(root) {
+  const seen = new Set()
+  let embedded = 0
+  let unreadable = 0
+  root.traverse((obj) => {
+    if (!obj.isMesh) return
+    for (const mat of Array.isArray(obj.material) ? obj.material : [obj.material]) {
+      if (!mat) continue
+      for (const slot of TEXTURE_SLOTS) {
+        const tex = mat[slot]
+        if (!tex || seen.has(tex)) continue
+        seen.add(tex)
+        const img = tex.image
+        const ready = !!img && (img.width > 0 || img.naturalWidth > 0) && img.complete !== false
+        if (ready) embedded++
+        else unreadable++
+      }
+    }
+  })
+  return { embedded, unreadable }
+}
+
+// Turn parts of the scene into a brand-new object of their own (a car out of a scene full of
+// cars). The parts are baked — world placement, geometry, materials with their textures and
+// any colour / surface edits — into a self-contained .glb that becomes the new object's file,
+// so it saves with the project and behaves like any other imported object. The new object
+// sits exactly where the originals were, with its pivot under its footprint.
+// removeOriginals: hide the source parts (a "move"); false leaves them in place (a "copy").
+export async function extractPartsToObject(uuids, { removeOriginals = true } = {}) {
+  const meshes = [...new Set(uuids || [])].map((u) => getMeshByUuid(u)).filter(Boolean)
+  if (!meshes.length) return { ok: false, message: 'Select one or more parts first.' }
+  if (meshes.some((m) => m.isSkinnedMesh)) {
+    return {
+      ok: false,
+      message: "Parts of a rigged character can't be turned into objects (the skeleton bends them). Parts of objects and scenery can.",
+    }
+  }
+  try {
+    const { GLTFExporter } = await import('three/examples/jsm/exporters/GLTFExporter.js')
+    const s = useStore.getState()
+    const owners = new Map()
+    const materialFor = (mesh) => {
+      let owner = owners.get(mesh)
+      if (owner === undefined) {
+        owner = getObjectMaterialModelForMesh(mesh)
+        if (!owner) for (const c of state.characters.values()) if (c.meshes.includes(mesh)) owner = c
+        owners.set(mesh, owner || null)
+      }
+      return owner ? materialsForExport(owner, mesh, s.meshOverrides[mesh.uuid]) : null
+    }
+    const stem = safeFileStem(meshes.length === 1 ? meshes[0].name : meshes[0].name ? `${meshes[0].name} group` : '', 'Extracted object')
+    const bakeFor = (mesh) => {
+      const ov = s.meshOverrides[mesh.uuid]
+      return ov && ov.regions ? bakeRegionsForExport(mesh, ov.regions, materialFor(mesh) || mesh.material) : null
+    }
+    const { group, pivot } = buildPartsGroup(meshes, materialFor, stem, bakeFor)
+    const textureReport = checkExportTextures(group)
+    const glb = await withExportSafeMaterials(
+      group,
+      () => new Promise((resolve, reject) => new GLTFExporter().parse(group, resolve, reject, { binary: true })),
+    )
+    const file = new File([glb], `${stem}.glb`, { type: 'model/gltf-binary' })
+    const meta = await addObjectFile(file)
+    setObjectTransform(meta.id, { position: pivot.toArray() })
+    if (removeOriginals) setMeshesVisibleByUuids(meshes.map((m) => m.uuid), false)
+    applyModelMaterials()
+    requestRender()
+    let message = `Made "${meta.name}" from ${meshes.length} part${meshes.length === 1 ? '' : 's'}${removeOriginals ? ' (originals hidden)' : ''}.`
+    if (textureReport.unreadable) message += ` ${textureReport.unreadable} texture${textureReport.unreadable === 1 ? ' was' : 's were'} not ready and left out.`
+    return { ok: true, message, id: meta.id }
+  } catch (err) {
+    return { ok: false, message: 'Could not make an object from those parts: ' + (err && err.message ? err.message : String(err)) }
   }
 }
 

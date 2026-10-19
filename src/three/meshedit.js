@@ -1225,6 +1225,14 @@ function onPointerUp(e) {
   if (down.axis !== null && m.gizmoMovedDuringDrag) return
   if (Math.abs(e.clientX - down.x) + Math.abs(e.clientY - down.y) > DRAG_SLOP_PX) return
 
+  // Face-pick mode (region painting): the click chooses a FACE, not a part, and leaves the
+  // selection exactly as it is.
+  if (m.facePick) {
+    const h = pickHitAt(e.clientX, e.clientY)
+    m.facePick(h && !h.proxied ? { mesh: h.object, uuid: h.object.uuid, faceIndex: h.faceIndex } : null)
+    return
+  }
+
   const hit = pickMeshAt(e.clientX, e.clientY)
   const additive = isAdditive(e)
   // An additive click on empty space must not wipe the selection you've been
@@ -1235,7 +1243,21 @@ function onPointerUp(e) {
 
 // Raycast the pointer position against every pickable part (character AND
 // props, posed skins via their proxies — see the posed-skin block above).
+// While a handler is set, a plain click reports { mesh, uuid, faceIndex } (or null on empty
+// space) to it instead of selecting parts. Pass null to go back to normal picking.
+export function setFacePickHandler(fn) {
+  m.facePick = fn || null
+  if (m.renderer && m.renderer.domElement) m.renderer.domElement.style.cursor = fn ? 'crosshair' : ''
+}
+
 function pickMeshAt(clientX, clientY) {
+  const hit = pickHitAt(clientX, clientY)
+  return hit ? hit.object : null
+}
+
+// The nearest intersection under the pointer. `object` is the real part (never a posed proxy);
+// `proxied` marks a skinned part, whose faces are not stable and so cannot be region-picked.
+function pickHitAt(clientX, clientY) {
   const rect = m.renderer.domElement.getBoundingClientRect()
   _ndc.set(
     ((clientX - rect.left) / rect.width) * 2 - 1,
@@ -1270,7 +1292,9 @@ function pickMeshAt(clientX, clientY) {
     }
   }
   const hits = m.raycaster.intersectObjects(targets, false)
-  return hits.length ? proxyToMesh.get(hits[0].object) || hits[0].object : null
+  if (!hits.length) return null
+  const proxied = proxyToMesh.has(hits[0].object)
+  return { ...hits[0], object: proxyToMesh.get(hits[0].object) || hits[0].object, proxied }
 }
 
 // Box-select: every visible part whose (posed) bounding-box CENTRE projects

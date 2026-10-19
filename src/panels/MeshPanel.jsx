@@ -19,6 +19,7 @@ import {
   setCameraToMesh,
 
   setMeshesVisibleByUuids,
+  extractPartsToObject,
   applyModelMaterials,
 } from '../three/scene.js'
 import { getObjectMeshesInfo } from '../three/objects.js'
@@ -43,6 +44,7 @@ import {
 import EditableValue from './EditableValue.jsx'
 import ColorControl from './ColorControl.jsx'
 import MaterialEditor from './MaterialEditor.jsx'
+import RegionEditor from './RegionEditor.jsx'
 
 // Side-panel section for Mesh mode: pick a part of the character (eyes, hair,
 // clothing…) and move, rotate, resize or recolour it. Click a part in the
@@ -77,6 +79,8 @@ export default function MeshPanel() {
   const st = useStore.getState
   useStore((s) => s.meshVersion) // re-render on every mesh edit (gizmo drag, undo…)
   const [, setMorphVersion] = useState(0)
+  const [extracting, setExtracting] = useState(false)
+  const [extractMsg, setExtractMsg] = useState('')
   const [morphEntries, setMorphEntries] = useState([])
   const [morphValues, setMorphValues] = useState({})
   const [clothVersion, setClothVersion] = useState(0)
@@ -108,6 +112,17 @@ export default function MeshPanel() {
   // The colour controls edit EVERY selected part; what they show is the
   // primary (last-picked) part's current colour.
   const colorOverride = selectedMeshUuid ? meshOverrides[selectedMeshUuid] : null
+
+  async function onExtract(removeOriginals) {
+    setExtracting(true)
+    try {
+      const result = await extractPartsToObject(selectedMeshUuids, { removeOriginals })
+      setExtractMsg(result.message)
+      if (result.ok) setSelectedMeshUuid(null)
+    } finally {
+      setExtracting(false)
+    }
+  }
 
   function applyColor(patch) {
     if (!selectedMeshUuids.length) return
@@ -430,6 +445,46 @@ export default function MeshPanel() {
             onClear={() => applyColor({ color: null })}
           />
         </div>
+      )}
+
+      {selectedMeshUuids.length > 0 && (
+        <div className="field" style={{ marginTop: 10 }}>
+          <label className="field-label">Turn into an object</label>
+          <div className="kf-actions">
+            <button
+              className="btn secondary"
+              disabled={extracting}
+              title="Move the selected part(s) out into a new object of their own (the originals are hidden)"
+              onClick={() => onExtract(true)}
+            >
+              {extracting ? 'Working…' : multi ? `Extract ${selectedMeshUuids.length} parts` : 'Extract to object'}
+            </button>
+            <button
+              className="btn secondary"
+              disabled={extracting}
+              title="Make a new object from the selected part(s) and leave the originals where they are"
+              onClick={() => onExtract(false)}
+            >
+              Copy to object
+            </button>
+          </div>
+          <div className="radio-hint" style={{ marginTop: 4 }}>
+            {extractMsg || 'Select several parts (Shift-click) to make them one object, e.g. every piece of one car.'}
+          </div>
+        </div>
+      )}
+
+      {selectedMeshUuids.length === 1 && selectedMeshUuid && (
+        <details className="joint-controls" style={{ marginTop: 10 }}>
+          <summary style={{ cursor: 'pointer' }}>
+            <span className="joint-name">Paint regions</span>{' '}
+            <span className="joint-parent">headlights, windows, trim…</span>
+          </summary>
+          <RegionEditor
+            meshUuid={selectedMeshUuid}
+            resolveMesh={(uuid) => currentModel?.meshes?.find((m) => m.uuid === uuid) || getMeshByUuid(uuid)}
+          />
+        </details>
       )}
 
       {selectedMeshUuids.length > 0 && selectedMeshUuid && (

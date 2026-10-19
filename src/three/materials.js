@@ -1,10 +1,11 @@
 import * as THREE from 'three'
 import { addShadowUniforms, shadowFilterKey, setNightImmune, setShadowImmune } from './shadowDarkening.js'
 import { stripAppMaterialData } from './materialUserData.js'
+import { applyRegionIds } from './regions.js'
 import {
   recordMaterialSlots, buildPhysical, applySurface, applyOpacity, applyColorReplace,
   hasSurface, hasReplace, hasAnySlot, isStyledCopy, markStyledCopy, hasSlotOpacity,
-  applyToonSurface, toonOpacityLook,
+  applyToonSurface, toonOpacityLook, applyRegionLooks, hasRegions,
 } from './surfaceMaterials.js'
 
 // ---------------------------------------------------------------------------
@@ -532,7 +533,11 @@ export function applyMaterials(model, opts) {
   const store = model.materials
 
   for (const mesh of model.meshes) {
-    const ov = overrides[mesh.uuid]
+    const rawOv = overrides[mesh.uuid]
+    // Regions (per-face looks) need the mesh's faces marked; saved regions that no longer fit
+    // this geometry (re-imported, re-decimated) are ignored rather than painted on the wrong faces.
+    const regionsOk = hasRegions(rawOv) && applyRegionIds(mesh, rawOv.regions)
+    const ov = rawOv && rawOv.regions && !regionsOk ? { ...rawOv, regions: undefined } : rawOv
     const shading = (ov && ov.shading) || 'full'
     const original = store.originals.get(mesh)
 
@@ -562,7 +567,7 @@ export function applyMaterials(model, opts) {
     // would change every mesh that happens to share its material. Materials of that
     // mesh nobody touched keep rendering with the originals.
     if (mode === 'standard' || mode === 'realistic') {
-      const styled = !!(ov && ov.color) || hasAnySlot(ov)
+      const styled = !!(ov && ov.color) || hasAnySlot(ov) || hasRegions(ov)
       const target = styled ? buildStyled(store, mesh, original, ov) : original
       if (styled) applyAlphaState(target, original, store, alphaOn)
       const arr = Array.isArray(target) ? target : [target]
@@ -689,6 +694,25 @@ function assignGradient(material, steps, floor, smooth) {
 // copies the references, not the images). userData is reset because
 // Material.copy JSON-clones it — which would carry over the "rim light already
 // installed" flag without the onBeforeCompile hook that flag stands for.
+// The materials a part should be WRITTEN OUT with (exporting the scene, or turning parts into
+// their own object): what Studio mode would show — the model's own PBR materials, with the
+// user's colour / surface edits applied on private copies — rather than the toon / unlit
+// stand-ins the viewport may be using, which would throw away roughness, metalness, normal
+// maps and the Material editor's work. Does not touch the live mesh. (Colour-replace is a
+// viewport shader effect and cannot be written to a file.)
+export function materialsForExport(model, mesh, ov) {
+  const store = model && model.materials
+  const original = store && store.originals.get(mesh)
+  if (!original) return null
+  const styled = !!(ov && ov.color) || hasAnySlot(ov)
+  if (!styled) return original
+  const alphaOn = ov && typeof ov.alpha === 'boolean' ? ov.alpha : true
+  const target = buildStyled(store, mesh, original, ov)
+  applyAlphaState(target, original, store, alphaOn)
+  if (applyColorOverride(target, original, ov, { surface: true, skipRegions: true })) applyAlphaState(target, original, store, alphaOn)
+  return target
+}
+
 function buildTinted(src) {
   const m = src.clone()
   m.userData = {}
@@ -709,7 +733,7 @@ function buildStyled(store, mesh, original, ov) {
     const look = ov && ov.slots ? ov.slots[i] : null
     const kind = hasSurface(look)
       ? 'physical'
-      : (ov && ov.color) || (look && (look.color != null || look.opacity != null)) || hasReplace(look)
+      : (ov && ov.color) || hasRegions(ov) || (look && (look.color != null || look.opacity != null)) || hasReplace(look)
         ? 'clone'
         : 'orig'
     const have = prev[i]
@@ -727,7 +751,7 @@ function buildStyled(store, mesh, original, ov) {
 // Recolour (whole mesh, then per-slot on top), restyle and colour-replace each
 // material. Returns true when a slot opacity was just cleared, so the caller can re-run
 // the transparency switch that owns `transparent`.
-function applyColorOverride(target, original, ov, { surface = false, toon = null } = {}) {
+function applyColorOverride(target, original, ov, { surface = false, toon = null, skipRegions = false } = {}) {
   const targets = Array.isArray(target) ? target : [target]
   const originals = Array.isArray(original) ? original : [original]
   let opacityCleared = false
@@ -752,6 +776,8 @@ function applyColorOverride(target, original, ov, { surface = false, toon = null
     if (toon) applyToonSurface(t, src, look, toon)
     // Never on a shared original: only copies and generated shells get the hook.
     if (hasReplace(look) || (t.userData && t.userData.recolorUniforms)) applyColorReplace(t, look)
+    // Per-face regions (never on a shared original: a mesh with regions always has its own copies)
+    if (!skipRegions && (hasRegions(ov) || (t.userData && t.userData.regionUniforms))) applyRegionLooks(t, ov && ov.regions)
     const opLook = toon ? toonOpacityLook(look) : look
     if ((opLook && opLook.opacity != null) || hasSlotOpacity(t)) {
       if (applyOpacity(t, src, opLook)) opacityCleared = true

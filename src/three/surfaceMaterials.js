@@ -124,10 +124,17 @@ export function mergeLook(look, patch) {
 // Slot info for the UI (name, swatch, the model's own values for each control)
 // ---------------------------------------------------------------------------
 const slotInfo = new WeakMap() // mesh -> [{ name, color, base }]
+const originalMats = new WeakMap() // mesh -> the model's own materials, as loaded (never mutated)
+// The materials the mesh was loaded with — what to read texture colours from, whatever style
+// (toon, unlit, restyled copies) the viewport is currently showing.
+export function getOriginalMaterials(mesh) {
+  return (mesh && originalMats.get(mesh)) || null
+}
 
 const hex = (c) => '#' + c.getHexString()
 export function recordMaterialSlots(mesh, materials) {
   const list = Array.isArray(materials) ? materials : [materials]
+  originalMats.set(mesh, Array.isArray(materials) ? materials.slice() : materials)
   slotInfo.set(
     mesh,
     list.map((m, i) => {
@@ -514,4 +521,103 @@ export function applyToonSurface(mat, src, look, { soft = false } = {}) {
     const ns = o.normalStrength != null ? o.normalStrength : src.normalScale ? src.normalScale.x : 1
     mat.normalScale.set(ns, ns)
   }
+}
+
+// ---------------------------------------------------------------------------
+// Regions — per-face looks (see regions.js)
+//
+// Each vertex carries a `regionId` (0 = none, 1..8). The fragment shader looks that up in
+// small uniform tables: a colour (tint or solid fill), a glow, and optional roughness /
+// metalness. Chained onto the material's other hooks like colour replace is, so install it
+// AFTER the shadow / rim / style hooks. Roughness and metalness only exist in the PBR (Studio)
+// shaders; colour and glow work in every style, including unlit.
+// ---------------------------------------------------------------------------
+const REGION_KEY = 'charanim-regions-v1'
+export const REGION_SLOTS = 8
+
+function hasRegionHook(mat) {
+  return typeof mat.customProgramCacheKey === 'function' && String(mat.customProgramCacheKey()).includes(REGION_KEY)
+}
+
+function ensureRegionUniforms(mat) {
+  const u = mat.userData
+  if (hasRegionHook(mat) && u.regionUniforms && Array.isArray(u.regionUniforms.rgColor.value)) return u.regionUniforms
+  const make = (fill) => ({ value: Array.from({ length: REGION_SLOTS }, () => new THREE.Vector4(...fill)) })
+  const uniforms = { rgColor: make([1, 1, 1, 0]), rgGlow: make([0, 0, 0, 0]), rgSurf: make([-1, -1, 0, 0]) }
+  u.regionUniforms = uniforms
+  const prevCompile = mat.onBeforeCompile
+  const prevKey = mat.customProgramCacheKey
+  mat.customProgramCacheKey = () => String(prevKey.call(mat)) + '|' + REGION_KEY
+  mat.onBeforeCompile = (shader, renderer) => {
+    prevCompile.call(mat, shader, renderer)
+    Object.assign(shader.uniforms, uniforms)
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute float regionId;\nvarying float vRegion;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n  vRegion = regionId;')
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        '#include <common>\nvarying float vRegion;\nuniform vec4 rgColor[ ' + REGION_SLOTS + ' ];\nuniform vec4 rgGlow[ ' + REGION_SLOTS + ' ];\nuniform vec4 rgSurf[ ' + REGION_SLOTS + ' ];',
+      )
+      .replace(
+        '#include <color_fragment>',
+        `#include <color_fragment>
+  int rgI = int( vRegion + 0.5 ) - 1;
+  if ( rgI >= 0 ) {
+    vec4 rgC = rgColor[ rgI ];
+    if ( rgC.w > 1.5 ) diffuseColor.rgb = rgC.rgb;
+    else if ( rgC.w > 0.5 ) diffuseColor.rgb *= rgC.rgb;
+  }`,
+      )
+      .replace(
+        '#include <roughnessmap_fragment>',
+        '#include <roughnessmap_fragment>\n  if ( rgI >= 0 && rgSurf[ rgI ].x >= 0.0 ) roughnessFactor = rgSurf[ rgI ].x;',
+      )
+      .replace(
+        '#include <metalnessmap_fragment>',
+        '#include <metalnessmap_fragment>\n  if ( rgI >= 0 && rgSurf[ rgI ].y >= 0.0 ) metalnessFactor = rgSurf[ rgI ].y;',
+      )
+      .replace(
+        '#include <opaque_fragment>',
+        '  if ( rgI >= 0 ) outgoingLight += rgGlow[ rgI ].rgb * rgGlow[ rgI ].w;\n#include <opaque_fragment>',
+      )
+  }
+  mat.needsUpdate = true
+  return uniforms
+}
+
+const _rgColor = new THREE.Color()
+
+// Feed a mesh's regions to one of its materials (a generated copy / shell, never a shared
+// original). Passing none switches the effect off without recompiling.
+export function applyRegionLooks(mat, regions) {
+  const u = mat.userData
+  const active = regions && regions.some((r) => r.look && (r.look.color || r.look.glow > 0 || r.look.roughness != null || r.look.metalness != null))
+  if (!active) {
+    if (u.regionUniforms && hasRegionHook(mat)) {
+      for (let i = 0; i < REGION_SLOTS; i++) {
+        u.regionUniforms.rgColor.value[i].set(1, 1, 1, 0)
+        u.regionUniforms.rgGlow.value[i].set(0, 0, 0, 0)
+        u.regionUniforms.rgSurf.value[i].set(-1, -1, 0, 0)
+      }
+    }
+    return
+  }
+  const uni = ensureRegionUniforms(mat)
+  for (let i = 0; i < REGION_SLOTS; i++) {
+    const look = (regions[i] && regions[i].look) || {}
+    if (look.color && (look.mode === 'solid' || look.mode === 'tint')) {
+      _rgColor.set(look.color)
+      uni.rgColor.value[i].set(_rgColor.r, _rgColor.g, _rgColor.b, look.mode === 'solid' ? 2 : 1)
+    } else uni.rgColor.value[i].set(1, 1, 1, 0)
+    if (look.glow > 0) {
+      _rgColor.set(look.glowColor || look.color || '#ffffff')
+      uni.rgGlow.value[i].set(_rgColor.r, _rgColor.g, _rgColor.b, look.glow)
+    } else uni.rgGlow.value[i].set(0, 0, 0, 0)
+    uni.rgSurf.value[i].set(look.roughness != null ? look.roughness : -1, look.metalness != null ? look.metalness : -1, 0, 0)
+  }
+}
+
+export function hasRegions(ov) {
+  return !!(ov && ov.regions && ov.regions.length)
 }

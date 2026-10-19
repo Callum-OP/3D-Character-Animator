@@ -974,6 +974,14 @@ export const useStore = create((set) => ({
     set((s) => ({
       sceneObjects: s.sceneObjects.map((o) => (o.id === id ? { ...o, shadowImmune } : o)),
     })),
+  // Regions (per-face looks, see three/regions.js): replace a mesh's whole region list.
+  setMeshRegions: (uuid, regions) =>
+    set((s) => {
+      const base = { outline: true, shading: 'full', ...s.meshOverrides[uuid] }
+      if (regions && regions.length) base.regions = regions
+      else delete base.regions
+      return { meshOverrides: { ...s.meshOverrides, [uuid]: base } }
+    }),
   // Mirror a light's range / cone / preset changes into the panel's list entry.
   patchSceneLight: (id, patch) =>
     set((s) => ({
