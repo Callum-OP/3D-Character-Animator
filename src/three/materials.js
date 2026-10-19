@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { addShadowUniforms, shadowFilterKey, setNightImmune } from './shadowDarkening.js'
+import { addShadowUniforms, shadowFilterKey, setNightImmune, setShadowImmune } from './shadowDarkening.js'
 import { stripAppMaterialData } from './materialUserData.js'
 import {
   recordMaterialSlots, buildPhysical, applySurface, applyOpacity, applyColorReplace,
@@ -469,33 +469,29 @@ export function normalizeTransparency(material) {
 
 // ---------------------------------------------------------------------------
 // Per-material flags that follow a setting rather than a style:
-//   self-shadowing  see setSelfShadowEnabled
 //   night immunity  a mesh with userData.nightImmune ignores Night mode (its materials get
 //                   the flag, which switches their night uniform off, see shadowDarkening.js)
 // ---------------------------------------------------------------------------
-let selfShadowOn = true
-
-// With self-shadowing on, a mesh casts its shadow from the surface facing the light (both
-// faces are written to the shadow map), so one part of an object properly shades another
-// part sitting just behind it (an arm over the torso). With it off, three.js's default is
-// used: only the far side is written. That never acne-stripes lit surfaces, but anything
-// closer behind an occluder than the occluder is thick stays lit.
-export function setSelfShadowEnabled(on) {
-  selfShadowOn = on !== false
-}
+// A mesh casts its shadow from the surface facing the light (both faces are written to the
+// shadow map), so one part of an object properly shades another part sitting just behind it
+// (an arm over the torso). This used to be a setting; it is now always on.
 
 export function syncMeshMaterialFlags(meshes) {
   if (!meshes) return
   for (const mesh of meshes) {
     if (!mesh) continue
     const immune = !!(mesh.userData && mesh.userData.nightImmune)
+    const shadowImmune = !!(mesh.userData && mesh.userData.shadowImmune)
     const arr = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
     for (const m of arr) {
       if (!m) continue
-      m.shadowSide = selfShadowOn ? THREE.DoubleSide : null
+      m.shadowSide = THREE.DoubleSide
       if (immune) m.userData.nightImmune = true
       else delete m.userData.nightImmune
       setNightImmune(m, immune) // a live uniform: no recompile either way
+      if (shadowImmune) m.userData.shadowImmune = true
+      else delete m.userData.shadowImmune
+      setShadowImmune(m, shadowImmune)
     }
   }
 }

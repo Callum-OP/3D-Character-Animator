@@ -12,7 +12,7 @@ import {
   nightTint,
   setNightLook,
 } from '../three/shadowDarkening.js'
-import { syncMeshMaterialFlags, setSelfShadowEnabled } from '../three/materials.js'
+import { syncMeshMaterialFlags } from '../three/materials.js'
 
 describe('night mode shader patch', () => {
   it('multiplies the final light by the night wash, and declares its uniforms', () => {
@@ -97,15 +97,10 @@ describe('per-mesh material flags', () => {
     return mesh
   }
 
-  it('self-shadowing writes both faces to the shadow map; off restores three.js\'s default', () => {
+  it('writes both faces to the shadow map, so parts of an object shade each other', () => {
     const mesh = makeMesh(false)
-    setSelfShadowEnabled(true)
     syncMeshMaterialFlags([mesh])
     expect(mesh.material.shadowSide).toBe(THREE.DoubleSide)
-    setSelfShadowEnabled(false)
-    syncMeshMaterialFlags([mesh])
-    expect(mesh.material.shadowSide).toBeNull()
-    setSelfShadowEnabled(true)
   })
 
   it('night immunity follows the mesh flag, never forcing a recompile', () => {

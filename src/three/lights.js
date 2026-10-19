@@ -7,11 +7,15 @@ import { createMount, reparentKeepingWorld, registerFollower, unregisterFollower
 // ---------------------------------------------------------------------------
 // Scene lights
 //
-// Placeable point lights on top of the app's built-in key light + ambient fill
-// (see scene.js setLightSettings). Each is a THREE.PointLight plus a small
-// ghost "source" sphere shown only while it's selected, moved with the shared
-// translate/rotate/scale TransformControls gizmo — like a prop, but lighting
-// instead of geometry.
+// Placeable lights on top of the app's built-in key light + ambient fill
+// (see scene.js setLightSettings). Each is either a THREE.PointLight (a bulb: shines
+// every way) or, when "Directional", a THREE.SpotLight (a cone aimed in one direction:
+// torch, headlight, floodlight). Both have a RANGE — the distance at which their light
+// (and their shadows) have faded to nothing — so a small bulb lights a room, not a
+// street, and a floodlight reaches further. A small ghost "source" sphere (and, for a
+// cone, an outline of the beam) is shown only while the light is selected; they are
+// moved with the shared translate/rotate/scale TransformControls gizmo — like a prop,
+// but lighting instead of geometry.
 //
 // Position, rotation, size, colour + intensity can be keyframed on the same
 // timeline as the character/cameras (see getLightKeyValue / sampleLightTracks
@@ -20,6 +24,19 @@ import { createMount, reparentKeepingWorld, registerFollower, unregisterFollower
 
 let idCounter = 0
 let nameCounter = 0
+
+// A light's range is the distance (world units) at which it has faded out completely.
+// Three's own falloff window makes that a smooth fade, and shadows fade out with it
+// (see shadowDarkening.js). The default is a plain light bulb.
+export const MIN_LIGHT_RANGE = 0.25
+export const MAX_LIGHT_RANGE = 500
+export const DEFAULT_LIGHT_RANGE = 7.5
+export const DEFAULT_CONE_ANGLE = 45 // degrees, half-angle of the cone
+export const DEFAULT_PENUMBRA = 0.35 // 0 = hard-edged beam .. 1 = fully feathered
+const clampRange = (r) => Math.min(MAX_LIGHT_RANGE, Math.max(MIN_LIGHT_RANGE, Number(r) || DEFAULT_LIGHT_RANGE))
+const clampAngle = (a) => Math.min(89, Math.max(3, Number(a) || DEFAULT_CONE_ANGLE))
+const clampPenumbra = (p) => Math.min(1, Math.max(0, p == null || Number.isNaN(Number(p)) ? DEFAULT_PENUMBRA : Number(p)))
+const rad = (deg) => (deg * Math.PI) / 180
 
 const l = {
   scene: null,
@@ -87,7 +104,8 @@ export function addLight({ recordUndo = true, data = null } = {}) {
 
   const initialColor = data?.color || '#ffffff'
   const initialIntensity = data?.intensity ?? 2
-  const light = new THREE.PointLight(initialColor, initialIntensity, 0, 2)
+  const range = clampRange(data?.range ?? data?.shadowReach ?? DEFAULT_LIGHT_RANGE) // shadowReach: saved by an earlier build
+  const light = new THREE.PointLight(initialColor, initialIntensity, range, 2)
   light.name = name
   if (data?.position) light.position.fromArray(data.position)
   else if (l.getPlacement) light.position.copy(l.getPlacement(scale))
@@ -99,18 +117,22 @@ export function addLight({ recordUndo = true, data = null } = {}) {
   light.add(bulb)
 
   l.scene.add(light)
-  const entry = { id, name, light, bulb, directional: false, directionLocal: null }
+  const cone = makeCone()
+  light.add(cone)
+  const entry = {
+    id, name, light, bulb, cone, directional: false, directionLocal: null,
+    range,
+    angle: clampAngle(data?.angle ?? DEFAULT_CONE_ANGLE),
+    penumbra: clampPenumbra(data?.penumbra),
+  }
   l.lights.push(entry)
   if (data?.directional) setLightDirectional(id, true)
   if (data?.quaternion) entry.light.quaternion.fromArray(data.quaternion)
   if (data?.scale) entry.light.scale.fromArray(data.scale)
-  if (entry.directional) {
-    entry.directionLocal = new THREE.Vector3()
-      .sub(entry.light.position)
-      .applyQuaternion(entry.light.quaternion.clone().invert())
-  }
+  if (entry.directional) aimLight(entry, data?.direction)
+  rebuildCone(entry)
   updateDirectionalTargets()
-  if (data?.castShadow) applyShadowSettings(entry, true, scale)
+  if (data?.castShadow) applyShadowSettings(entry, true)
   l.requestRender()
   const meta = {
     id,
@@ -120,6 +142,7 @@ export function addLight({ recordUndo = true, data = null } = {}) {
     castShadow: entry.light.castShadow,
     directional: entry.directional,
     visible: entry.light.visible,
+    ...shapeMeta(entry),
   }
   if (recordUndo) {
     pushSceneHistory(
@@ -177,6 +200,10 @@ function detachLightEntry(entry) {
 function disposeLightEntry(entry) {
   if (entry.light.target && entry.light.target.parent) entry.light.target.parent.remove(entry.light.target)
   disposeBulb(entry.bulb)
+  if (entry.cone) {
+    entry.cone.geometry.dispose()
+    entry.cone.material.dispose()
+  }
 }
 
 function attachLightEntry(entry, index = l.lights.length) {
@@ -219,12 +246,10 @@ function commitLightDrag() {
     () => applyLightSnapshot(light, after),
   )
 }
-// Swap a light between Point (falls off with distance, shines every direction)
-// and Directional (parallel rays, no falloff — aimed at the scene origin, so
-// dragging it around just changes the angle it comes from, same idea as the
-// key light's Direction/Height sliders). Directional is what you want for a
-// clean rim/fill light; Point is better for something the character stands
-// near, like a lamp.
+// Swap a light between Point (shines every direction, like a bulb) and Directional
+// (a cone aimed one way: torch, headlight, floodlight). A new cone starts aimed at the
+// scene origin; after that the ROTATE gizmo turns the beam, and the aim is saved with
+// the project. Both kinds fade out at their range.
 export function setLightDirectional(id, directional) {
   const entry = l.lights.find((e) => e.id === id)
   if (!entry) return
@@ -236,8 +261,8 @@ export function setLightDirectional(id, directional) {
   const scale = Math.max(l.getSceneScale(), 0.5)
 
   const next = directional
-    ? new THREE.DirectionalLight(old.color.getHex(), old.intensity)
-    : new THREE.PointLight(old.color.getHex(), old.intensity, 0, 2)
+    ? new THREE.SpotLight(old.color.getHex(), old.intensity, entry.range, rad(entry.angle), entry.penumbra, 2)
+    : new THREE.PointLight(old.color.getHex(), old.intensity, entry.range, 2)
   next.name = old.name
   next.position.copy(old.position)
   next.visible = old.visible
@@ -248,6 +273,8 @@ export function setLightDirectional(id, directional) {
 
   old.remove(entry.bulb)
   next.add(entry.bulb)
+  old.remove(entry.cone)
+  next.add(entry.cone)
   const parent = old.parent || l.scene // stays under its mount if it's attached to an object
   parent.remove(old)
   if (old.target && old.target.parent) l.scene.remove(old.target)
@@ -258,7 +285,9 @@ export function setLightDirectional(id, directional) {
   entry.directionLocal = directional
     ? next.target.position.clone().sub(next.position).applyQuaternion(next.quaternion.clone().invert())
     : null
-  applyShadowSettings(entry, old.castShadow, scale)
+  if (directional && entry.directionLocal.lengthSq() < 1e-8) entry.directionLocal.set(0, 0, -1) // sitting on the origin: aim forward
+  applyShadowSettings(entry, old.castShadow)
+  rebuildCone(entry)
 
   if (wasSelected) {
     l.selected = next
@@ -352,6 +381,8 @@ export function getLightClipboardData(id) {
     castShadow: entry.light.castShadow,
     directional: entry.directional,
     visible: entry.light.visible,
+    ...shapeMeta(entry),
+    direction: entry.directionLocal ? entry.directionLocal.toArray() : undefined,
     position: entry.light.position.toArray(),
     quaternion: entry.light.quaternion.toArray(),
     scale: entry.light.scale.toArray(),
@@ -448,10 +479,23 @@ export function updateLightSources() {
     entry.bulb.visible = !!(l.enabled && freeView && l.selected === entry.light && entry.light.visible)
     const sc = entry.light.scale
     const size = (sc.x + sc.y + sc.z) / 3
+    // The beam outline: only for a selected cone, aimed along its saved direction, and
+    // counter-scaled so resizing the light (its source size) does not stretch the cone.
+    const showCone = entry.bulb.visible && entry.directional && !!entry.directionLocal
+    entry.cone.visible = showCone
+    if (showCone) {
+      _coneDir.copy(entry.directionLocal).normalize()
+      entry.cone.quaternion.setFromUnitVectors(_coneForward, _coneDir)
+      entry.cone.scale.setScalar(1 / Math.max(size, 1e-3))
+      entry.cone.material.color.copy(entry.light.color)
+    }
     const radius = Math.min(10, Math.max(1, 1 + 3 * (size - 1)))
     if (entry.light.shadow && entry.light.shadow.radius !== radius) entry.light.shadow.radius = radius
   }
 }
+
+const _coneForward = new THREE.Vector3(0, 0, -1)
+const _coneDir = new THREE.Vector3()
 
 function updateDirectionalTargets() {
   for (const entry of l.lights) {
@@ -490,7 +534,7 @@ export function setLightIntensity(id, intensity) {
 export function setLightCastShadow(id, castShadow) {
   const entry = l.lights.find((e) => e.id === id)
   if (!entry) return
-  applyShadowSettings(entry, castShadow, Math.max(l.getSceneScale(), 0.5))
+  applyShadowSettings(entry, castShadow)
   l.requestRender()
 }
 
@@ -519,22 +563,111 @@ export function setPlacedLightShadowSize(size) {
   if (l.requestRender) l.requestRender()
 }
 
-function applyShadowSettings(entry, castShadow, scale) {
+function applyShadowSettings(entry, castShadow) {
   const light = entry.light
   light.castShadow = castShadow
   if (!castShadow) return
   light.shadow.mapSize.set(placedShadowSize, placedShadowSize)
   light.shadow.bias = -0.001
+  // The shadow camera's far plane follows the light's range (three does that itself while
+  // `distance` is set), and the shaders fade the shadow out with it. A small near plane keeps
+  // tiny lights (an indicator LED) from clipping the things right beside them.
+  light.shadow.camera.near = 0.05
+  light.shadow.camera.updateProjectionMatrix()
+}
+
+// --- Range, cone and presets ---------------------------------------------------
+
+export function getLightShape(id) {
+  const entry = l.lights.find((e) => e.id === id)
+  return entry ? shapeMeta(entry) : null
+}
+
+function shapeMeta(entry) {
+  return { range: entry.range, angle: entry.angle, penumbra: entry.penumbra }
+}
+
+// The distance at which this light (and its shadows) has faded out completely.
+export function setLightRange(id, range) {
+  const entry = l.lights.find((e) => e.id === id)
+  if (!entry) return
+  entry.range = clampRange(range)
+  entry.light.distance = entry.range
+  rebuildCone(entry)
+  l.requestRender()
+}
+
+// Beam width (half-angle, degrees) and edge softness of a Directional (cone) light.
+export function setLightCone(id, { angle, penumbra } = {}) {
+  const entry = l.lights.find((e) => e.id === id)
+  if (!entry) return
+  if (angle != null) entry.angle = clampAngle(angle)
+  if (penumbra != null) entry.penumbra = clampPenumbra(penumbra)
   if (entry.directional) {
-    const cam = light.shadow.camera
-    cam.left = -scale * 2.5
-    cam.right = scale * 2.5
-    cam.top = scale * 2.5
-    cam.bottom = -scale * 2.5
-    cam.near = 0.1
-    cam.far = scale * 10
-    cam.updateProjectionMatrix()
+    entry.light.angle = rad(entry.angle)
+    entry.light.penumbra = entry.penumbra
   }
+  rebuildCone(entry)
+  l.requestRender()
+}
+
+// Intensity is candela, so a light's reach scales with the square of its range: presets are
+// written as "how bright at this range" using this helper so a floodlight actually lights up
+// the distance it claims to.
+const bright = (range, k = 1) => Math.round(2 * k * (range / DEFAULT_LIGHT_RANGE) ** 2 * 100) / 100
+
+export const LIGHT_PRESETS = [
+  { id: 'bulb', label: 'Light bulb', hint: 'Warm household bulb', directional: false, color: '#fff1d6', range: 7.5, intensity: 2, castShadow: true },
+  { id: 'lamp', label: 'Desk lamp', hint: 'Warm cone pointing down at a table', directional: true, color: '#ffe6bd', range: 9, intensity: bright(9, 1.2), angle: 55, penumbra: 0.5, castShadow: true },
+  { id: 'candle', label: 'Candle', hint: 'Tiny warm glow', directional: false, color: '#ffb25a', range: 3, intensity: bright(3, 0.9), castShadow: true },
+  { id: 'fire', label: 'Campfire', hint: 'Big warm orange glow', directional: false, color: '#ff8a3c', range: 11, intensity: bright(11, 1.3), castShadow: true },
+  { id: 'street', label: 'Street lamp', hint: 'Sodium-yellow pool of light', directional: false, color: '#ffd69a', range: 22, intensity: bright(22, 1), castShadow: true },
+  { id: 'flood', label: 'Floodlight', hint: 'Wide, bright, long-reaching cone', directional: true, color: '#f4f7ff', range: 40, intensity: bright(40, 1), angle: 62, penumbra: 0.25, castShadow: true },
+  { id: 'headlight', label: 'Car headlight', hint: 'Narrower beam, soft edge; add two', directional: true, color: '#fffbea', range: 35, intensity: bright(35, 1), angle: 24, penumbra: 0.45, castShadow: true },
+  { id: 'spot', label: 'Stage spotlight', hint: 'Tight, crisp beam', directional: true, color: '#ffffff', range: 50, intensity: bright(50, 1), angle: 14, penumbra: 0.15, castShadow: true },
+  { id: 'torch', label: 'Torch', hint: 'Handheld flashlight', directional: true, color: '#fff5dc', range: 15, intensity: bright(15, 1), angle: 20, penumbra: 0.35, castShadow: true },
+  { id: 'neon', label: 'Neon sign', hint: 'Coloured glow, no shadows', directional: false, color: '#ff3bd4', range: 5, intensity: bright(5, 1), castShadow: false },
+  { id: 'screen', label: 'Screen glow', hint: 'Laptop / TV / monitor spill', directional: false, color: '#9fc4ff', range: 2.5, intensity: bright(2.5, 0.8), castShadow: false },
+  { id: 'led', label: 'Status LED', hint: 'Smoke alarm, power light: tiny and faint, no shadows', directional: false, color: '#ff3a3a', range: 0.6, intensity: 0.02, castShadow: false },
+]
+
+// Make light `id` the given preset (type, colour, brightness, range, cone, shadows). Returns
+// the light's new store entry (without id/name) so the panel can mirror it.
+export function applyLightPreset(id, presetId) {
+  const entry = l.lights.find((e) => e.id === id)
+  const preset = LIGHT_PRESETS.find((p) => p.id === presetId)
+  if (!entry || !preset) return null
+  setLightDirectional(id, preset.directional)
+  entry.light.color.set(preset.color)
+  entry.light.intensity = preset.intensity
+  if (preset.angle != null) entry.angle = clampAngle(preset.angle)
+  if (preset.penumbra != null) entry.penumbra = clampPenumbra(preset.penumbra)
+  setLightCone(id, {})
+  setLightRange(id, preset.range)
+  applyShadowSettings(entry, preset.castShadow)
+  l.requestRender()
+  if (l.onChange) l.onChange()
+  return {
+    color: '#' + entry.light.color.getHexString(),
+    intensity: entry.light.intensity,
+    castShadow: entry.light.castShadow,
+    directional: entry.directional,
+    ...shapeMeta(entry),
+  }
+}
+
+// Aim a cone: restore a saved direction (in the light's own frame), or - for a light
+// that has never been aimed - point it at the scene origin from where it stands.
+function aimLight(entry, saved) {
+  if (Array.isArray(saved) && saved.length === 3) {
+    entry.directionLocal = new THREE.Vector3().fromArray(saved)
+    entry.aimSaved = true
+  } else {
+    entry.directionLocal = new THREE.Vector3()
+      .sub(entry.light.position)
+      .applyQuaternion(entry.light.quaternion.clone().invert())
+  }
+  if (entry.directionLocal.lengthSq() < 1e-8) entry.directionLocal.set(0, 0, -1)
 }
 
 // --- Keyframing ----------------------------------------------------------------
@@ -650,6 +783,9 @@ export function getLightsData() {
     castShadow: entry.light.castShadow,
     directional: entry.directional,
     visible: entry.light.visible,
+    ...shapeMeta(entry),
+    // the beam's aim, in the light's own frame, so a rotated cone reloads pointing the same way
+    direction: entry.directional && entry.directionLocal ? entry.directionLocal.toArray() : undefined,
     position: entry.light.position.toArray(),
     quaternion: entry.light.quaternion.toArray(),
     scale: entry.light.scale.toArray(),
@@ -681,17 +817,19 @@ export function applyLightsData(list) {
     }
     if (item.color) setLightColor(meta.id, item.color)
     if (item.intensity != null) setLightIntensity(meta.id, item.intensity)
+    // range / cone first (shadowReach: the name an earlier build saved the range under)
+    entry.range = clampRange(item.range ?? item.shadowReach ?? DEFAULT_LIGHT_RANGE)
+    entry.light.distance = entry.range
+    if (item.angle != null) entry.angle = clampAngle(item.angle)
+    if (item.penumbra != null) entry.penumbra = clampPenumbra(item.penumbra)
     if (item.directional) setLightDirectional(meta.id, true)
     if (item.castShadow) setLightCastShadow(meta.id, true)
     if (item.position) entry.light.position.fromArray(item.position)
     if (item.quaternion) entry.light.quaternion.fromArray(item.quaternion)
     if (item.scale) entry.light.scale.fromArray(item.scale)
     if (item.visible != null) entry.light.visible = item.visible !== false
-    if (entry.directional) {
-      entry.directionLocal = new THREE.Vector3()
-        .sub(entry.light.position)
-        .applyQuaternion(entry.light.quaternion.clone().invert())
-    }
+    if (entry.directional) aimLight(entry, item.direction)
+    rebuildCone(entry)
     metas.push({
       id: meta.id,
       name: entry.name,
@@ -700,6 +838,7 @@ export function applyLightsData(list) {
       castShadow: entry.light.castShadow,
       directional: entry.directional,
       visible: entry.light.visible,
+      ...shapeMeta(entry),
     })
   }
   updateDirectionalTargets()
@@ -757,9 +896,9 @@ export function attachLightToRoot(id, root, objectId, { keepLocal = false } = {}
   root.add(mount)
   if (keepLocal) mount.add(entry.light)
   else reparentKeepingWorld(entry.light, mount)
-  if (keepLocal && entry.directional) {
-    // Loading re-aims a directional light at the scene origin from wherever it
-    // now is IN THE WORLD (the saved aim isn't stored), same as an unattached one.
+  if (keepLocal && entry.directional && !entry.aimSaved) {
+    // An older project didn't store the aim: re-aim the cone at the scene origin from wherever
+    // it now is IN THE WORLD, same as an unattached one.
     l.scene.updateMatrixWorld(true)
     const wp = entry.light.getWorldPosition(new THREE.Vector3())
     const wq = entry.light.getWorldQuaternion(new THREE.Quaternion())
@@ -828,6 +967,54 @@ function makeBulb(sceneScale) {
 function disposeBulb(bulb) {
   bulb.geometry.dispose()
   bulb.material.dispose()
+}
+
+// The beam outline shown while a cone light is selected: the edge of the cone, plus an inner
+// ring where the soft edge (penumbra) begins. Local -Z is "forward"; updateLightSources
+// turns it to the light's aim. Rebuilt whenever range / angle / softness change.
+function makeCone() {
+  const cone = new THREE.LineSegments(
+    new THREE.BufferGeometry(),
+    new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6, depthWrite: false, toneMapped: false }),
+  )
+  cone.userData.isLightCone = true
+  cone.visible = false
+  cone.frustumCulled = false
+  cone.raycast = () => {} // never a click target
+  excludeFromOutline(cone)
+  return cone
+}
+
+const CONE_SEGMENTS = 32
+export function coneVertices(length, angleDeg, penumbra) {
+  const pts = []
+  const ring = (radius) => {
+    for (let i = 0; i < CONE_SEGMENTS; i++) {
+      const a0 = (i / CONE_SEGMENTS) * Math.PI * 2
+      const a1 = ((i + 1) / CONE_SEGMENTS) * Math.PI * 2
+      pts.push(Math.cos(a0) * radius, Math.sin(a0) * radius, -length, Math.cos(a1) * radius, Math.sin(a1) * radius, -length)
+    }
+  }
+  const outer = length * Math.tan(rad(angleDeg))
+  ring(outer)
+  const inner = length * Math.tan(rad(angleDeg * (1 - penumbra)))
+  if (penumbra > 0.02 && inner > 1e-4) ring(inner)
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2
+    pts.push(0, 0, 0, Math.cos(a) * outer, Math.sin(a) * outer, -length)
+  }
+  return pts
+}
+
+function rebuildCone(entry) {
+  if (!entry.cone) return
+  // Drawn as long as the beam reaches, but never longer than a few characters' height.
+  const length = Math.min(entry.range, Math.max(l.getSceneScale(), 0.5) * 4)
+  entry.cone.geometry.dispose()
+  entry.cone.geometry = new THREE.BufferGeometry().setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute(coneVertices(length, entry.angle, entry.penumbra), 3),
+  )
 }
 
 // Stamp every material in a subtree so the OutlineEffect skips it.

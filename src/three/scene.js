@@ -24,7 +24,6 @@ import {
   updateRimLightMaterials,
   restoreOriginalMaterials,
   disposeGeneratedMaterials,
-  setSelfShadowEnabled,
   syncMeshMaterialFlags,
 } from './materials.js'
 import {
@@ -2956,6 +2955,7 @@ export function getProjectData() {
       meshEdits: getMeshEditsData(),
       meshOverridesByIndex: meshOverridesByIndexFor(model, live.meshOverrides),
       nightImmune: isNightImmune(model) || undefined,
+      shadowImmune: isShadowImmune(model) || undefined,
       animData: live.animData,
       // BVH imports, ragdoll bakes, combined/trimmed clips — anything NOT
       // baked into the model file itself, so it isn't lost on reload.
@@ -3079,6 +3079,7 @@ export async function applyProjectData(record) {
     }
     applyMeshEditsData(c.meshEdits)
     if (c.nightImmune) setObjectNightImmuneById(id, true)
+    if (c.shadowImmune) setObjectShadowImmuneById(id, true)
     if (c.meshOverridesByIndex) {
       useStore.setState({ meshOverrides: meshOverridesFromIndex(model, c.meshOverridesByIndex) })
     }
@@ -3183,6 +3184,7 @@ export async function applyProjectData(record) {
       if (obj.outline) setObjectOutlineById(meta.id, true)
       if (obj.castShadow === false) setObjectCastShadowById(meta.id, false)
       if (obj.nightImmune) setObjectNightImmuneById(meta.id, true)
+      if (obj.shadowImmune) setObjectShadowImmuneById(meta.id, true)
     }
   }
 
@@ -3461,7 +3463,6 @@ export function setShadowSettings(next) {
   state.shadowOn = cfg.enabled
   state.shadowMap = cfg.quality !== 'blob'
   setShadowTintUniform(cfg.tint)
-  setSelfShadowEnabled(cfg.selfShadow)
   syncAllMeshFlags()
   applyShadowMode()
 }
@@ -3523,6 +3524,25 @@ export function setObjectNightImmuneById(id, immune) {
   }
   useStore.getState().setObjectNightImmune(id, !!immune)
   requestRender()
+}
+
+// Make one object / character immune to shadows cast by OTHER objects (it still casts its
+// own, and still follows Night mode). Updates the scene + the store.
+export function setObjectShadowImmuneById(id, immune) {
+  const model = state.characters.get(id) || getObjectMaterialModelById(id)
+  if (model && model.meshes) {
+    for (const mesh of model.meshes) {
+      if (immune) mesh.userData.shadowImmune = true
+      else delete mesh.userData.shadowImmune
+    }
+    syncMeshMaterialFlags(model.meshes)
+  }
+  useStore.getState().setObjectShadowImmune(id, !!immune)
+  requestRender()
+}
+
+function isShadowImmune(model) {
+  return !!(model && model.meshes && model.meshes.some((m) => m.userData && m.userData.shadowImmune))
 }
 
 // Does anything in this object / character ignore Night mode? (for saving)

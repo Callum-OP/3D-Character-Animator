@@ -10,6 +10,7 @@ import {
   setObjectOutlineById,
   setObjectCastShadowById,
   setObjectNightImmuneById,
+  setObjectShadowImmuneById,
   setObjectAttachmentById,
   keyObjectAttachmentById,
   clearObjectAttachmentTimeline,
@@ -396,6 +397,21 @@ export default function ObjectsPanel() {
                       {o.nightImmune ? '☀️' : '🌙'}
                     </button>
                   )}
+                  <button
+                    className="obj-eye"
+                    title={
+                      o.shadowImmune
+                        ? 'Never shadowed by other objects (still follows Night mode) — click to let shadows fall on it again'
+                        : 'Shadows from other objects fall on this — click to make it immune to them (Night mode still applies)'
+                    }
+                    aria-pressed={!!o.shadowImmune}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setObjectShadowImmuneById(o.id, !o.shadowImmune)
+                    }}
+                  >
+                    {o.shadowImmune ? '🔆' : '🕶'}
+                  </button>
                   <button
                     className="obj-del"
                     title={o.isCharacter ? 'Delete character (Ctrl+Z to undo)' : 'Remove'}

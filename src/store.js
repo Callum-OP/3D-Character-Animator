@@ -969,6 +969,16 @@ export const useStore = create((set) => ({
     set((s) => ({
       sceneObjects: s.sceneObjects.map((o) => (o.id === id ? { ...o, nightImmune } : o)),
     })),
+  // Per object or character: never darkened by shadows from other objects.
+  setObjectShadowImmune: (id, shadowImmune) =>
+    set((s) => ({
+      sceneObjects: s.sceneObjects.map((o) => (o.id === id ? { ...o, shadowImmune } : o)),
+    })),
+  // Mirror a light's range / cone / preset changes into the panel's list entry.
+  patchSceneLight: (id, patch) =>
+    set((s) => ({
+      sceneLights: s.sceneLights.map((lt) => (lt.id === id ? { ...lt, ...patch } : lt)),
+    })),
   setObjectCastShadow: (id, castShadow) =>
     set((s) => ({
       sceneObjects: s.sceneObjects.map((o) => (o.id === id ? { ...o, castShadow } : o)),

@@ -57,7 +57,7 @@ describe('shadow filter shader patch', () => {
   it('every shader gets the shared uniforms', () => {
     const uniforms = {}
     addShadowUniforms(uniforms)
-    expect(Object.keys(uniforms).sort()).toEqual(['uNightAmt', 'uNightImmune', 'uNightTint', 'uShadowDarkness', 'uShadowFilterA', 'uShadowFilterB', 'uShadowTint'])
+    expect(Object.keys(uniforms).sort()).toEqual(['uNightAmt', 'uNightImmune', 'uNightTint', 'uShadowDarkness', 'uShadowFilterA', 'uShadowFilterB', 'uShadowImmune', 'uShadowTint'])
     expect(uniforms.uShadowFilterA).toBe(shadowFilterA)
     expect(uniforms.uShadowFilterB).toBe(shadowFilterB)
   })

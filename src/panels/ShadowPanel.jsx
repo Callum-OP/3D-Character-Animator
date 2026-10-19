@@ -51,7 +51,7 @@ export default function ShadowPanel() {
   const setShadows = useStore((s) => s.setShadows)
   const applyShadowStyle = useStore((s) => s.applyShadowStyle)
 
-  const { enabled, quality, size, contact, darkness, tint, selfShadow } = shadows
+  const { enabled, quality, size, contact, darkness, tint } = shadows
   const real = quality !== 'blob'
   const adjustable = enabled && real
   const activeId = detectShadowStyle(shadows)
@@ -59,7 +59,7 @@ export default function ShadowPanel() {
   const qualityInfo = SHADOW_QUALITY.find((q) => q.id === quality) || SHADOW_QUALITY[3]
   const d = DEFAULT_SHADOWS
   const atDefault =
-    enabled === d.enabled && selfShadow === d.selfShadow && quality === d.quality && size === d.size && contact === d.contact && darkness === d.darkness && tint === d.tint
+    enabled === d.enabled && quality === d.quality && size === d.size && contact === d.contact && darkness === d.darkness && tint === d.tint
 
   return (
     <div className="shadow-panel">
@@ -130,19 +130,6 @@ export default function ShadowPanel() {
           onChange={(e) => setShadows({ contact: e.target.checked })}
         />
         Contact-hardening (sharp at contact, softer with distance)
-      </label>
-
-      <label
-        className="toggle-row"
-        title="Parts of one object shade each other: an arm shades the body, a chair leg shades the seat, a roof shades the room beneath it. Switch off for lighter shadows with fewer streaks or speckles on curved surfaces."
-      >
-        <input
-          type="checkbox"
-          checked={selfShadow}
-          disabled={!adjustable}
-          onChange={(e) => setShadows({ selfShadow: e.target.checked })}
-        />
-        Self-shadowing (parts of an object shade each other)
       </label>
 
       <label className="slider-row">

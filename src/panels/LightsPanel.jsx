@@ -7,6 +7,12 @@ import {
   setLightColor,
   setLightIntensity,
   setLightCastShadow,
+  setLightRange,
+  setLightCone,
+  applyLightPreset,
+  LIGHT_PRESETS,
+  MIN_LIGHT_RANGE,
+  MAX_LIGHT_RANGE,
   setLightDirectional,
   getLightKeyValue,
   getLightTransform,
@@ -48,8 +54,12 @@ export default function LightsPanel() {
   const selected = sceneLights.find((lt) => lt.id === selectedLightId) || null
   const keyCount = selected ? (animData.lights?.[selected.name] || []).length : 0
 
-  function onAdd() {
-    const meta = addLight()
+  function onAdd(presetId = null) {
+    let meta = addLight()
+    if (presetId) {
+      const shape = applyLightPreset(meta.id, presetId)
+      if (shape) meta = { ...meta, ...shape }
+    }
     st().addSceneLight(meta)
     selectLight(meta.id)
     setMode('object')
@@ -90,6 +100,31 @@ export default function LightsPanel() {
     if (!selected) return
     setLightIntensity(selected.id, intensity)
     st().setPropLightIntensity(selected.id, intensity)
+  }
+
+  // Log-scaled sliders: what matters is the order of magnitude (a candle vs a floodlight).
+  const logToSlider = (v, min, max) => Math.log(v / min) / Math.log(max / min)
+  const sliderToLog = (t, min, max) => min * Math.pow(max / min, t)
+  const MIN_INTENSITY = 0.01
+  const MAX_INTENSITY = 300
+
+  function onRange(t) {
+    if (!selected) return
+    const range = Math.round(sliderToLog(t, MIN_LIGHT_RANGE, MAX_LIGHT_RANGE) * 100) / 100
+    setLightRange(selected.id, range)
+    st().patchSceneLight(selected.id, { range })
+  }
+
+  function onCone(patch) {
+    if (!selected) return
+    setLightCone(selected.id, patch)
+    st().patchSceneLight(selected.id, patch)
+  }
+
+  function onPreset(presetId) {
+    if (!selected || !presetId) return
+    const meta = applyLightPreset(selected.id, presetId)
+    if (meta) st().patchSceneLight(selected.id, meta)
   }
 
   function onCastShadow(castShadow) {
@@ -138,9 +173,25 @@ export default function LightsPanel() {
         Add and position extra lights alongside the main key light.
       </p>
 
-      <button className="btn" onClick={onAdd} title="Place a light near the character">
+      <button className="btn" onClick={() => onAdd()} title="Place a light near the character">
         + Add light
       </button>
+      <select
+        className="select"
+        aria-label="Add a light from a preset"
+        style={{ marginLeft: 6 }}
+        value=""
+        onChange={(e) => {
+          if (e.target.value) onAdd(e.target.value)
+        }}
+      >
+        <option value="">+ Add from preset…</option>
+        {LIGHT_PRESETS.map((p) => (
+          <option key={p.id} value={p.id} title={p.hint}>
+            {p.directional ? '🔦' : '💡'} {p.label}
+          </option>
+        ))}
+      </select>
       <button
         className="btn secondary"
         style={{ marginTop: 6 }}
@@ -162,7 +213,7 @@ export default function LightsPanel() {
                 onClick={() => onSelect(lt.id)}
               >
                 <span className="obj-name">
-                  {lt.directional ? '📐' : '💡'} {lt.name}
+                  {lt.directional ? '🔦' : '💡'} {lt.name}
                   {rimFollowLight && rimFollowLightId === lt.id && (
                     <span title="Driving the rim light" style={{ marginLeft: 6 }}>🎯</span>
                   )}
@@ -218,6 +269,23 @@ export default function LightsPanel() {
                 gives softer shadow edges (when Cast shadows is on). It does not change how far the light reaches.
               </div>
 
+              <label className="slider-row" title="Turn this light into a ready-made one: bulb, floodlight, headlight, status LED…">
+                <span className="slider-label">Preset</span>
+                <select
+                  className="select"
+                  aria-label="Light preset"
+                  value=""
+                  onChange={(e) => onPreset(e.target.value)}
+                >
+                  <option value="">Choose a preset…</option>
+                  {LIGHT_PRESETS.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.directional ? '🔦' : '💡'} {p.label} — {p.hint}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
               <label className="slider-row">
                 <span className="slider-label">Color</span>
                 <input
@@ -228,23 +296,46 @@ export default function LightsPanel() {
                 />
               </label>
 
-              <label className="slider-row">
+              <label className="slider-row" title="Brightness at one unit away. Bigger lights with a longer range need more.">
                 <span className="slider-label">Intensity</span>
                 <input
                   type="range"
                   min={0}
-                  max={10}
-                  step={0.1}
-                  value={selected.intensity}
-                  onChange={(e) => onIntensity(Number(e.target.value))}
+                  max={1}
+                  step={0.002}
+                  value={Math.min(1, Math.max(0, logToSlider(Math.max(selected.intensity, MIN_INTENSITY), MIN_INTENSITY, MAX_INTENSITY)))}
+                  onChange={(e) => onIntensity(Math.round(sliderToLog(Number(e.target.value), MIN_INTENSITY, MAX_INTENSITY) * 100) / 100)}
                 />
                 <EditableValue
                   value={selected.intensity}
                   min={0}
-                  max={10}
+                  max={MAX_INTENSITY}
                   onChange={onIntensity}
-                  format={(v) => v.toFixed(1)}
+                  format={(v) => (v < 10 ? v.toFixed(2) : v.toFixed(1))}
                   label="Light intensity"
+                />
+              </label>
+
+              <label className="slider-row" title="How far the light reaches: it fades out smoothly and is gone at this distance, and its shadows fade with it. A bulb is a few units; a floodlight tens.">
+                <span className="slider-label">Range</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.002}
+                  value={logToSlider(selected.range ?? 7.5, MIN_LIGHT_RANGE, MAX_LIGHT_RANGE)}
+                  onChange={(e) => onRange(Number(e.target.value))}
+                />
+                <EditableValue
+                  value={selected.range ?? 7.5}
+                  min={MIN_LIGHT_RANGE}
+                  max={MAX_LIGHT_RANGE}
+                  onChange={(v) => {
+                    setLightRange(selected.id, v)
+                    st().patchSceneLight(selected.id, { range: v })
+                  }}
+                  format={(v) => (v < 10 ? v.toFixed(2) : v.toFixed(1))}
+                  label="Light range"
                 />
               </label>
 
@@ -254,13 +345,41 @@ export default function LightsPanel() {
                   checked={!!selected.directional}
                   onChange={(e) => onDirectional(e.target.checked)}
                 />
-                Directional (parallel rays, no falloff)
+                Directional (a cone aimed one way)
               </label>
               <div className="radio-hint" style={{ marginTop: -2, marginBottom: 4 }}>
                 {selected.directional
-                  ? 'Aimed at the scene origin \u2014 drag it around to change the angle it shines from, like a sun or a rim/fill light.'
-                  : 'Shines outward in every direction and fades with distance, like a lamp or bulb.'}
+                  ? 'A beam like a torch, headlight or floodlight. It starts aimed at the scene origin; use the rotate gizmo to point it, and the outline shows the cone while it is selected.'
+                  : 'Shines outward in every direction, like a bulb or a lamp.'}
               </div>
+              {selected.directional && (
+                <>
+                  <label className="slider-row" title="Width of the beam (half-angle)">
+                    <span className="slider-label">Cone angle</span>
+                    <input
+                      type="range"
+                      min={3}
+                      max={89}
+                      step={1}
+                      value={selected.angle ?? 45}
+                      onChange={(e) => onCone({ angle: Number(e.target.value) })}
+                    />
+                    <span style={{ minWidth: 36, textAlign: 'right' }}>{Math.round(selected.angle ?? 45)}°</span>
+                  </label>
+                  <label className="slider-row" title="How soft the edge of the beam is: 0 is a hard spotlight edge, 1 fades from the very centre">
+                    <span className="slider-label">Edge softness</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={selected.penumbra ?? 0.35}
+                      onChange={(e) => onCone({ penumbra: Number(e.target.value) })}
+                    />
+                    <span style={{ minWidth: 36, textAlign: 'right' }}>{(selected.penumbra ?? 0.35).toFixed(2)}</span>
+                  </label>
+                </>
+              )}
 
 
               <label className="morph-label" style={{ display: 'block', marginTop: 6 }}>

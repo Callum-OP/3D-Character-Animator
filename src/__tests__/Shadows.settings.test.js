@@ -95,17 +95,6 @@ describe('opening projects saved by the old shadow system', () => {
   })
 })
 
-describe('self-shadowing setting', () => {
-  it('is on by default and survives normalising / bad input', () => {
-    expect(DEFAULT_SHADOWS.selfShadow).toBe(true)
-    expect(normalizeShadows({}).selfShadow).toBe(true)
-    expect(normalizeShadows({ selfShadow: false }).selfShadow).toBe(false)
-    expect(normalizeShadows({ selfShadow: 'no' }).selfShadow).toBe(true)
-    // an older project's shadows object (no selfShadow field) gets it switched on
-    expect(shadowsFromProject({ shadows: { size: 5 } }, DEFAULT_SHADOWS).selfShadow).toBe(true)
-  })
-})
-
 describe('style tweaks', () => {
   it('Soft shadows are 50% dark', () => {
     expect(SHADOW_STYLES.find((s) => s.id === 'soft').darkness).toBe(0.5)

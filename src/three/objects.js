@@ -1227,6 +1227,7 @@ export function getObjectsForSave(meshOverrides) {
       outline: e.kind === 'model' ? e.outline : undefined,
       castShadow: e.kind === 'model' ? e.castShadow : undefined,
       nightImmune: e.kind === 'model' && e.meshes.some((m) => m.userData && m.userData.nightImmune) ? true : undefined,
+      shadowImmune: e.kind === 'model' && e.meshes.some((m) => m.userData && m.userData.shadowImmune) ? true : undefined,
       // Bone this prop is riding, if any (transform above is already bone-local).
       attachedBoneName: e.attachedBoneName || undefined,
       // Per-part (mesh) visibility/outline/shading overrides — see comment above.

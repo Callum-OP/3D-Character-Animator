@@ -201,7 +201,7 @@ describe('lights attached to an object', () => {
     attachLightToRoot(id, root, 7)
     setLightDirectional(id, true)
     const light = getLightById(id)
-    expect(light.isDirectionalLight).toBe(true)
+    expect(light.isSpotLight).toBe(true)
     expect(light.parent.userData.isAttachMount).toBe(true)
   })
 

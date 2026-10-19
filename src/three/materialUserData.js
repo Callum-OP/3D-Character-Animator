@@ -30,6 +30,7 @@ export const APP_MATERIAL_KEYS = [
   'colorGrading',
   'shadowStrength',
   'nightImmune',
+  'shadowImmune',
   'outlineParameters',
   'rimUniforms',
   'styleUniforms',

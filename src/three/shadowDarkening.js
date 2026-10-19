@@ -26,13 +26,27 @@ export function patchLightsChunk(source) {
     /directLight\.color \*= \( directLight\.visible && receiveShadow \) \? (.+?) : 1\.0;/g,
     (_, shadowCall) => {
       count++
-      // Track how shadowed this pixel is by the strongest shadow-casting light.
-      // Weighted by how much the surface faces that light so the already-dark
-      // far side of an object isn't darkened twice.
+      // Track how much of this pixel's direct light is blocked, over ALL lights: each light
+      // counts in proportion to how much light it would deliver here (brightness x how much
+      // the surface faces it). A spot shadowed from one lamp but lit by another is therefore
+      // only dimmed by the lamp it lost; two lights that fill each other's shadows leave no
+      // dark patch (taking the single worst light instead made every shadow show up, even
+      // where another light lit that very spot). The far side of an object faces no light, so
+      // it carries no weight and isn't darkened twice.
+      // A placed light (point or spot) has a RANGE (its `distance`): its light is gone there, and its
+      // shadow fades out with it, over a long smooth ramp, instead of a small lamp shadowing every
+      // building and the skybox out to the shadow camera's far plane. The sun-like key light (a
+      // directional light) has no range, so it is never faded.
+      const rangeLight = shadowCall.startsWith('getPointShadow') ? 'pointLight' : shadowCall.includes('spotShadowMap') ? 'spotLight' : null
+      const reachFade = rangeLight
+        ? `\n\t\tdsShadow = mix( 1.0, dsShadow, dsReachFade( length( ${rangeLight}.position - geometryPosition ), ${rangeLight}.distance ) );`
+        : ''
       return `{
-		float dsShadow = ( directLight.visible && receiveShadow ) ? ${shadowCall} : 1.0;
+		float dsShadow = ( directLight.visible && receiveShadow && uShadowImmune < 0.5 ) ? ${shadowCall} : 1.0;${reachFade}
+		float dsWeight = dot( directLight.color, vec3( 0.2126, 0.7152, 0.0722 ) ) * saturate( dot( geometryNormal, directLight.direction ) );
+		dsLightSum += dsWeight;
+		dsLitSum += dsWeight * dsShadow;
 		directLight.color *= dsShadow;
-		dsShadowMin = min( dsShadowMin, mix( 1.0, dsShadow, saturate( dot( geometryNormal, directLight.direction ) * 4.0 ) ) );
 	}`
     },
   )
@@ -45,7 +59,9 @@ export function patchOpaqueChunk(source) {
   return {
     source: source.replace(
       needle,
-      `float dsShadowAmt = uShadowDarkness * ( 1.0 - dsShadowMin );
+      `// Fraction of the direct light that actually arrives (1 = unshadowed, or nothing facing a light).
+	dsShadowMin = dsLightSum > 0.0001 ? clamp( dsLitSum / dsLightSum, 0.0, 1.0 ) : 1.0;
+	float dsShadowAmt = uShadowDarkness * ( 1.0 - dsShadowMin );
 	outgoingLight *= ( 1.0 - dsShadowAmt ) * mix( vec3( 1.0 ), uShadowTint, 1.0 - dsShadowMin );
 	// Night mode: a flat dark wash over everything (zero uniforms = no change).
 	float dsNight = uNightAmt * ( 1.0 - uNightImmune );
@@ -62,8 +78,12 @@ uniform float uShadowDarkness;
 uniform vec3 uShadowTint; // luminance-normalised shadow colour (1,1,1 = plain darkening)
 uniform float uNightAmt; // night mode strength, 0 = off
 uniform float uNightImmune; // 1 = this material ignores night mode (its own uniform, see nightImmuneUniform)
+uniform float uShadowImmune; // 1 = this material is never shadowed by other objects (its own uniform, see shadowImmuneUniform)
+float dsReachFade( float dist, float reach ) { return reach > 0.0 ? 1.0 - smoothstep( reach * 0.1, reach, dist ) : 1.0; }
 uniform vec3 uNightTint; // luminance-normalised night colour
 float dsShadowMin = 1.0;
+float dsLightSum = 0.0; // sum over lights of (brightness x facing)
+float dsLitSum = 0.0; // the same, after each light's shadow
 `
 }
 
@@ -125,6 +145,24 @@ export function setNightImmune(material, immune) {
   nightImmuneUniform(material).value = immune ? 1 : 0
 }
 
+// Shadow immunity: a material that is never darkened by shadows cast by other objects (it can
+// still cast its own, and still follows Night mode). Same live per-material uniform as night
+// immunity, so toggling it never recompiles anything.
+const shadowImmuneUniforms = new WeakMap()
+const notShadowImmune = { value: 0 }
+export function shadowImmuneUniform(material) {
+  if (!material) return notShadowImmune
+  let u = shadowImmuneUniforms.get(material)
+  if (!u) {
+    u = { value: material.userData && material.userData.shadowImmune ? 1 : 0 }
+    shadowImmuneUniforms.set(material, u)
+  }
+  return u
+}
+export function setShadowImmune(material, immune) {
+  shadowImmuneUniform(material).value = immune ? 1 : 0
+}
+
 // Give a shader the shared shadow uniforms. Every onBeforeCompile (the built-in
 // default below, and the app's custom-styled materials) must call this, or three
 // fails to upload the uniforms the patched chunks declare.
@@ -132,6 +170,7 @@ export function addShadowUniforms(uniforms, material) {
   uniforms.uNightAmt = nightAmount
   uniforms.uNightImmune = nightImmuneUniform(material)
   uniforms.uNightTint = nightTint
+  uniforms.uShadowImmune = shadowImmuneUniform(material)
   uniforms.uShadowDarkness = shadowDarkness
   uniforms.uShadowTint = shadowTint
   uniforms.uShadowFilterA = shadowFilterA

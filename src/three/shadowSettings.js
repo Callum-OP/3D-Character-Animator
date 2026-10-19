@@ -13,8 +13,6 @@
 //             false = the same blur along the whole edge (stylised, anime-ish)
 //   darkness  0 = invisible .. 1 = solid black
 //   tint      colour the shadows take on (white = neutral). Hue only; darkness is separate
-//   selfShadow  parts of one object shadow each other (an arm shades the body, a chair leg
-//             shades the seat). Off = lighter, more forgiving shadows with fewer artefacts
 //
 // The look is "realistic" by default. Styles are just named bundles of size / contact /
 // darkness, so the active style is *derived* from the values (nudge a slider and the style
@@ -43,7 +41,6 @@ export const DEFAULT_SHADOWS = Object.freeze({
   contact: true,
   darkness: 0.55,
   tint: '#ffffff',
-  selfShadow: true,
 })
 
 // Named bundles of size / contact / darkness. The first one is the default.
@@ -114,7 +111,6 @@ export function normalizeShadows(input) {
     contact: typeof src.contact === 'boolean' ? src.contact : d.contact,
     darkness: clamp(num(src.darkness, d.darkness), 0, 1),
     tint: typeof src.tint === 'string' && HEX.test(src.tint) ? src.tint.toLowerCase() : d.tint,
-    selfShadow: typeof src.selfShadow === 'boolean' ? src.selfShadow : d.selfShadow,
   }
 }
 
