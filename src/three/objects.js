@@ -4,6 +4,7 @@ import { disposeObject } from './loadModel.js'
 import { markHistoryAction, pushUndoBatch, registerUndoHistory } from './undoHistory.js'
 import { useStore } from '../store.js'
 import { releaseFollowersOf } from './attach.js'
+import { getMeshEditsForMeshes, applyMeshEditsToMeshes } from './meshedit.js'
 import {
   sampleCameraTracks,
   getCamerasPlaybackSnapshot,
@@ -1197,6 +1198,8 @@ function commitDragUndo() {
 // so per-part visibility on props actually survives a save→reload round trip
 // instead of silently being dropped (the uuids never match anything after
 // reload, so `applyProjectData` had nothing to restore them from).
+const nonEmpty = (list) => (list && list.length ? list : undefined)
+
 function objectMeshOverridesByIndex(entry, meshOverrides) {
   if (!meshOverrides || !entry.meshes || !entry.meshes.length) return undefined
   const byIndex = {}
@@ -1232,6 +1235,8 @@ export function getObjectsForSave(meshOverrides) {
       attachedBoneName: e.attachedBoneName || undefined,
       // Per-part (mesh) visibility/outline/shading overrides — see comment above.
       meshOverridesByIndex: e.kind === 'model' ? objectMeshOverridesByIndex(e, meshOverrides) : undefined,
+      // Parts moved / rotated / scaled with the gizmo (by index, like the overrides above).
+      meshEdits: e.kind === 'model' ? nonEmpty(getMeshEditsForMeshes(e.meshes)) : undefined,
     }))
 }
 
@@ -1446,6 +1451,7 @@ export function getObjectsData() {
     // together puts the prop right back where it was riding the bone.
     attachedBoneName: e.attachedBoneName || undefined,
     attachedCharacterId: e.attachedCharacterId ?? undefined,
+    meshEdits: e.kind === 'model' ? nonEmpty(getMeshEditsForMeshes(e.meshes)) : undefined,
   }))
 }
 
@@ -1483,6 +1489,7 @@ export function applyObjectsData(list, resolveBone) {
     if (item.position) root.position.fromArray(item.position)
     if (item.quaternion) root.quaternion.fromArray(item.quaternion)
     if (item.scale) root.scale.fromArray(item.scale)
+    if (item.meshEdits) applyMeshEditsToMeshes(entry.meshes || [], item.meshEdits)
   }
   o.requestRender()
 }

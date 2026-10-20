@@ -816,9 +816,12 @@ function applyMeshKey(pivot, k) {
   pivot.scale.fromArray(k.scale)
 }
 
-export function getMeshEditsData() {
+// Which of `meshes` (an ordered list: a character's, or one prop's) have been moved / rotated /
+// scaled away from where they were loaded, keyed by index in that list so the edit can be put
+// back on freshly-loaded meshes.
+export function getMeshEditsForMeshes(meshes) {
   const out = []
-  m.meshes.forEach((mesh, index) => {
+  ;(meshes || []).forEach((mesh, index) => {
     const rest = m.rest.get(mesh)
     if (!rest || isAtRest(rest.pivot, rest)) return
     out.push({
@@ -831,10 +834,18 @@ export function getMeshEditsData() {
   return out
 }
 
+export function getMeshEditsData() {
+  return getMeshEditsForMeshes(m.meshes)
+}
+
 export function applyMeshEditsData(list) {
+  applyMeshEditsToMeshes(m.meshes, list)
+}
+
+export function applyMeshEditsToMeshes(meshes, list) {
   if (!Array.isArray(list)) return
   for (const item of list) {
-    const mesh = m.meshes[item.index]
+    const mesh = meshes[item.index]
     const rest = mesh && m.rest.get(mesh)
     if (!rest) continue
     if (item.position) rest.pivot.position.fromArray(item.position)

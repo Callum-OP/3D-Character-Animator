@@ -3,6 +3,8 @@ import { useStore } from '../store.js'
 import { applyModelMaterials } from '../three/scene.js'
 import { setFacePickHandler } from '../three/meshedit.js'
 import { getOriginalMaterials } from '../three/surfaceMaterials.js'
+import { recordOverrideEdit } from '../three/materialHistory.js'
+import LightFromPart from './LightFromPart.jsx'
 import {
   MAX_REGIONS,
   isRegionCapable,
@@ -36,6 +38,7 @@ const LOOK_PRESETS = [
 ]
 
 const NO_REGIONS = []
+const GLOW_ON_LIGHT = 1.6
 const toHex = (rgb) => '#' + rgb.map((c) => Math.round(Math.min(1, Math.max(0, c)) * 255).toString(16).padStart(2, '0')).join('')
 const CLEAR_LOOK = { mode: null, color: null, glow: null, glowColor: null, roughness: null, metalness: null }
 
@@ -56,6 +59,7 @@ export default function RegionEditor({ meshUuid, resolveMesh }) {
   const [selectedId, setSelectedId] = useState(null)
   const [highlight, setHighlight] = useState(true)
   const [message, setMessage] = useState('')
+  const [glowToo, setGlowToo] = useState(true)
   const meshRef = useRef(null)
 
   const mesh = resolveMesh(meshUuid)
@@ -121,7 +125,7 @@ export default function RegionEditor({ meshUuid, resolveMesh }) {
   }
 
   const commit = (next) => {
-    setMeshRegions(meshUuid, next)
+    recordOverrideEdit([meshUuid], () => setMeshRegions(meshUuid, next))
     applyModelMaterials()
   }
 
@@ -153,6 +157,7 @@ export default function RegionEditor({ meshUuid, resolveMesh }) {
 
   function removeRegion() {
     if (!selected) return
+    if (!window.confirm(`Are you sure you want to delete "${selected.name}"? (Ctrl+Z will bring it back.)`)) return
     commit(regions.filter((r) => r.id !== selected.id))
     setSelectedId(null)
   }
@@ -222,8 +227,17 @@ export default function RegionEditor({ meshUuid, resolveMesh }) {
       )}
 
       {selected && (
-        <div style={{ marginTop: 8 }}>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
+        <div style={{ marginTop: 8, position: 'relative' }}>
+          <button
+            className="obj-del"
+            style={{ position: 'absolute', top: 0, right: 0 }}
+            title="Delete this region"
+            aria-label="Delete this region"
+            onClick={removeRegion}
+          >
+            ×
+          </button>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6, paddingRight: 26 }}>
             <input
               className="text-input"
               aria-label="Region name"
@@ -234,7 +248,6 @@ export default function RegionEditor({ meshUuid, resolveMesh }) {
             <label className="color-control-solid" title="Show this region on the model">
               <input type="checkbox" checked={highlight} onChange={(e) => setHighlight(e.target.checked)} /> Highlight
             </label>
-            <button className="btn secondary" onClick={removeRegion} title="Delete this region">🗑</button>
           </div>
 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 6 }}>
@@ -282,6 +295,20 @@ export default function RegionEditor({ meshUuid, resolveMesh }) {
             </label>
           ))}
           <div className="radio-hint">Roughness and metalness show in Studio / Realistic styles; colour and glow show in every style.</div>
+
+          <LightFromPart
+            uuids={[meshUuid]}
+            regionId={selected.id}
+            label="Turn this region into a light"
+            onCreated={() => {
+              // A lit tail light should also LOOK lit: give the surface a glow in the same colour.
+              if (glowToo && !(look.glow > 0)) patchLook({ glow: GLOW_ON_LIGHT, glowColor: look.glowColor || look.color || null })
+            }}
+          >
+            <label className="color-control-solid" style={{ display: 'block', marginTop: 4 }} title="Also make the surface itself glow, so it looks lit as well as casting light">
+              <input type="checkbox" checked={glowToo} onChange={(e) => setGlowToo(e.target.checked)} /> Also make the surface glow
+            </label>
+          </LightFromPart>
         </div>
       )}
     </div>

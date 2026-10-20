@@ -10,6 +10,7 @@ import {
   setLightRange,
   setLightCone,
   applyLightPreset,
+  lightDataForPreset,
   LIGHT_PRESETS,
   MIN_LIGHT_RANGE,
   MAX_LIGHT_RANGE,
@@ -55,11 +56,7 @@ export default function LightsPanel() {
   const keyCount = selected ? (animData.lights?.[selected.name] || []).length : 0
 
   function onAdd(presetId = null) {
-    let meta = addLight()
-    if (presetId) {
-      const shape = applyLightPreset(meta.id, presetId)
-      if (shape) meta = { ...meta, ...shape }
-    }
+    const meta = addLight({ data: presetId ? lightDataForPreset(presetId) : null })
     st().addSceneLight(meta)
     selectLight(meta.id)
     setMode('object')

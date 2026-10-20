@@ -1,5 +1,6 @@
 const histories = new Map()
 let sequence = 0
+let epoch = 0 // bumped whenever the whole history is thrown away (project load / new project)
 let historyLimit = 100
 
 export function registerUndoHistory(domain, getStacks) {
@@ -61,7 +62,14 @@ export function hasUndoHistory() {
   return false
 }
 
+// Recorders that merge consecutive edits into one step use this to be sure the step they would
+// merge into has not been thrown away since.
+export function getHistoryEpoch() {
+  return epoch
+}
+
 export function clearUndoHistory() {
+  epoch++
   for (const getStacks of histories.values()) {
     const stacks = getStacks()
     stacks.undo.splice(0, stacks.undo.length).forEach(discardBatch)

@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import { pushSceneHistory } from './sceneHistory.js'
+import { getHistorySequence, getHistoryEpoch } from './undoHistory.js'
 import { useStore } from '../store.js'
 import { createMount, reparentKeepingWorld, registerFollower, unregisterFollower } from './attach.js'
 
@@ -126,7 +127,7 @@ export function addLight({ recordUndo = true, data = null } = {}) {
     penumbra: clampPenumbra(data?.penumbra),
   }
   l.lights.push(entry)
-  if (data?.directional) setLightDirectional(id, true)
+  if (data?.directional) swapLightType(id, true) // setup, not an edit: no undo step
   if (data?.quaternion) entry.light.quaternion.fromArray(data.quaternion)
   if (data?.scale) entry.light.scale.fromArray(data.scale)
   if (entry.directional) aimLight(entry, data?.direction)
@@ -251,6 +252,10 @@ function commitLightDrag() {
 // scene origin; after that the ROTATE gizmo turns the beam, and the aim is saved with
 // the project. Both kinds fade out at their range.
 export function setLightDirectional(id, directional) {
+  return recordLightEdit(id, () => swapLightType(id, directional))
+}
+
+function swapLightType(id, directional) {
   const entry = l.lights.find((e) => e.id === id)
   if (!entry) return
   directional = !!directional
@@ -516,26 +521,121 @@ export function consumeLightGizmoGrab() {
   return grabbed
 }
 
-export function setLightColor(id, hex) {
+// --- Undo / redo for a light's settings ----------------------------------------------
+//
+// Colour, brightness, shadows, type (point / cone), range, cone angle + softness, preset: each
+// public setter below records one undo step (the snapshot before and after). Dragging a slider
+// fires many edits, so consecutive edits to the same light merge into one step. Nested calls
+// (a preset calling the other setters, loading a project, an undo itself) are never recorded.
+const LIGHT_COALESCE_MS = 800
+let lightHistoryDepth = 0
+let lastLightEdit = null
+
+function lightProps(entry) {
+  return {
+    color: '#' + entry.light.color.getHexString(),
+    intensity: entry.light.intensity,
+    castShadow: !!entry.light.castShadow,
+    directional: !!entry.directional,
+    range: entry.range,
+    angle: entry.angle,
+    penumbra: entry.penumbra,
+    direction: entry.directionLocal ? entry.directionLocal.toArray() : null,
+  }
+}
+
+const sameLightProps = (a, b) => JSON.stringify(a) === JSON.stringify(b)
+
+function restoreLightProps(id, props) {
   const entry = l.lights.find((e) => e.id === id)
   if (!entry) return
-  entry.light.color.set(hex)
+  lightHistoryDepth++
+  try {
+    setLightDirectional(id, props.directional)
+    if (props.directional && props.direction) entry.directionLocal = new THREE.Vector3().fromArray(props.direction)
+    entry.light.color.set(props.color)
+    entry.light.intensity = props.intensity
+    entry.angle = props.angle
+    entry.penumbra = props.penumbra
+    if (entry.directional) {
+      entry.light.angle = rad(entry.angle)
+      entry.light.penumbra = entry.penumbra
+    }
+    entry.range = props.range
+    entry.light.distance = props.range
+    applyShadowSettings(entry, props.castShadow)
+    rebuildCone(entry)
+  } finally {
+    lightHistoryDepth--
+  }
+  useStore.getState().patchSceneLight(id, {
+    color: props.color,
+    intensity: props.intensity,
+    castShadow: props.castShadow,
+    directional: props.directional,
+    range: props.range,
+    angle: props.angle,
+    penumbra: props.penumbra,
+  })
   l.requestRender()
   if (l.onChange) l.onChange()
 }
 
-export function setLightIntensity(id, intensity) {
+function recordLightEdit(id, fn) {
   const entry = l.lights.find((e) => e.id === id)
-  if (!entry) return
-  entry.light.intensity = intensity
-  l.requestRender()
+  if (!entry || lightHistoryDepth > 0) return fn()
+  const before = lightProps(entry)
+  lightHistoryDepth++
+  let result
+  try {
+    result = fn()
+  } finally {
+    lightHistoryDepth--
+  }
+  const after = lightProps(entry)
+  if (sameLightProps(before, after)) return result
+  const now = Date.now()
+  if (lastLightEdit && lastLightEdit.id === id && lastLightEdit.epoch === getHistoryEpoch() && lastLightEdit.seq === getHistorySequence() && now - lastLightEdit.time < LIGHT_COALESCE_MS) {
+    lastLightEdit.after = after
+    lastLightEdit.time = now
+    return result
+  }
+  const rec = { id, before, after, time: now, seq: 0, epoch: getHistoryEpoch() }
+  pushSceneHistory(
+    () => restoreLightProps(id, rec.before),
+    () => restoreLightProps(id, rec.after),
+  )
+  rec.seq = getHistorySequence()
+  lastLightEdit = rec
+  return result
+}
+
+export function setLightColor(id, hex) {
+  recordLightEdit(id, () => {
+    const entry = l.lights.find((e) => e.id === id)
+    if (!entry) return
+    entry.light.color.set(hex)
+    l.requestRender()
+    if (l.onChange) l.onChange()
+  })
+}
+
+export function setLightIntensity(id, intensity) {
+  recordLightEdit(id, () => {
+    const entry = l.lights.find((e) => e.id === id)
+    if (!entry) return
+    entry.light.intensity = intensity
+    l.requestRender()
+  })
 }
 
 export function setLightCastShadow(id, castShadow) {
-  const entry = l.lights.find((e) => e.id === id)
-  if (!entry) return
-  applyShadowSettings(entry, castShadow)
-  l.requestRender()
+  recordLightEdit(id, () => {
+    const entry = l.lights.find((e) => e.id === id)
+    if (!entry) return
+    applyShadowSettings(entry, castShadow)
+    l.requestRender()
+  })
 }
 
 // Shared by setLightCastShadow and setLightDirectional (a type swap needs to
@@ -589,26 +689,30 @@ function shapeMeta(entry) {
 
 // The distance at which this light (and its shadows) has faded out completely.
 export function setLightRange(id, range) {
-  const entry = l.lights.find((e) => e.id === id)
-  if (!entry) return
-  entry.range = clampRange(range)
-  entry.light.distance = entry.range
-  rebuildCone(entry)
-  l.requestRender()
+  recordLightEdit(id, () => {
+    const entry = l.lights.find((e) => e.id === id)
+    if (!entry) return
+    entry.range = clampRange(range)
+    entry.light.distance = entry.range
+    rebuildCone(entry)
+    l.requestRender()
+  })
 }
 
 // Beam width (half-angle, degrees) and edge softness of a Directional (cone) light.
 export function setLightCone(id, { angle, penumbra } = {}) {
-  const entry = l.lights.find((e) => e.id === id)
-  if (!entry) return
-  if (angle != null) entry.angle = clampAngle(angle)
-  if (penumbra != null) entry.penumbra = clampPenumbra(penumbra)
-  if (entry.directional) {
-    entry.light.angle = rad(entry.angle)
-    entry.light.penumbra = entry.penumbra
-  }
-  rebuildCone(entry)
-  l.requestRender()
+  recordLightEdit(id, () => {
+    const entry = l.lights.find((e) => e.id === id)
+    if (!entry) return
+    if (angle != null) entry.angle = clampAngle(angle)
+    if (penumbra != null) entry.penumbra = clampPenumbra(penumbra)
+    if (entry.directional) {
+      entry.light.angle = rad(entry.angle)
+      entry.light.penumbra = entry.penumbra
+    }
+    rebuildCone(entry)
+    l.requestRender()
+  })
 }
 
 // Intensity is candela, so a light's reach scales with the square of its range: presets are
@@ -617,6 +721,8 @@ export function setLightCone(id, { angle, penumbra } = {}) {
 const bright = (range, k = 1) => Math.round(2 * k * (range / DEFAULT_LIGHT_RANGE) ** 2 * 100) / 100
 
 export const LIGHT_PRESETS = [
+  { id: 'glow', label: 'Soft glow', hint: 'A small short-range glow, e.g. a tail light or lit panel (no shadows)', directional: false, color: '#ffffff', range: 3, intensity: bright(3, 0.9), castShadow: false },
+  { id: 'window', label: 'Window light', hint: 'Soft wide beam pouring out of a window or screen', directional: true, color: '#ffe2a8', range: 14, intensity: bright(14, 0.9), angle: 75, penumbra: 0.7, castShadow: true },
   { id: 'bulb', label: 'Light bulb', hint: 'Warm household bulb', directional: false, color: '#fff1d6', range: 7.5, intensity: 2, castShadow: true },
   { id: 'lamp', label: 'Desk lamp', hint: 'Warm cone pointing down at a table', directional: true, color: '#ffe6bd', range: 9, intensity: bright(9, 1.2), angle: 55, penumbra: 0.5, castShadow: true },
   { id: 'candle', label: 'Candle', hint: 'Tiny warm glow', directional: false, color: '#ffb25a', range: 3, intensity: bright(3, 0.9), castShadow: true },
@@ -631,9 +737,29 @@ export const LIGHT_PRESETS = [
   { id: 'led', label: 'Status LED', hint: 'Smoke alarm, power light: tiny and faint, no shadows', directional: false, color: '#ff3a3a', range: 0.6, intensity: 0.02, castShadow: false },
 ]
 
+// The settings a brand-new light of this preset starts with, in the shape addLight({ data }) takes
+// — so adding "from a preset" is ONE undo step instead of an add followed by an edit.
+export function lightDataForPreset(presetId) {
+  const p = LIGHT_PRESETS.find((x) => x.id === presetId)
+  if (!p) return null
+  return {
+    color: p.color,
+    intensity: p.intensity,
+    range: p.range,
+    angle: p.angle,
+    penumbra: p.penumbra,
+    directional: p.directional,
+    castShadow: p.castShadow,
+  }
+}
+
 // Make light `id` the given preset (type, colour, brightness, range, cone, shadows). Returns
 // the light's new store entry (without id/name) so the panel can mirror it.
 export function applyLightPreset(id, presetId) {
+  return recordLightEdit(id, () => applyLightPresetNow(id, presetId))
+}
+
+function applyLightPresetNow(id, presetId) {
   const entry = l.lights.find((e) => e.id === id)
   const preset = LIGHT_PRESETS.find((p) => p.id === presetId)
   if (!entry || !preset) return null
@@ -815,15 +941,15 @@ export function applyLightsData(list) {
       const n = /^Light (\d+)$/.exec(item.name)
       if (n) nameCounter = Math.max(nameCounter, Number(n[1]))
     }
-    if (item.color) setLightColor(meta.id, item.color)
-    if (item.intensity != null) setLightIntensity(meta.id, item.intensity)
+    if (item.color) entry.light.color.set(item.color) // loading, not editing: no undo steps
+    if (item.intensity != null) entry.light.intensity = item.intensity
     // range / cone first (shadowReach: the name an earlier build saved the range under)
     entry.range = clampRange(item.range ?? item.shadowReach ?? DEFAULT_LIGHT_RANGE)
     entry.light.distance = entry.range
     if (item.angle != null) entry.angle = clampAngle(item.angle)
     if (item.penumbra != null) entry.penumbra = clampPenumbra(item.penumbra)
-    if (item.directional) setLightDirectional(meta.id, true)
-    if (item.castShadow) setLightCastShadow(meta.id, true)
+    if (item.directional) swapLightType(meta.id, true) // loading, not editing: no undo steps
+    if (item.castShadow) applyShadowSettings(entry, true)
     if (item.position) entry.light.position.fromArray(item.position)
     if (item.quaternion) entry.light.quaternion.fromArray(item.quaternion)
     if (item.scale) entry.light.scale.fromArray(item.scale)

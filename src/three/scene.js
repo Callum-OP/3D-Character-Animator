@@ -90,6 +90,7 @@ import {
   setViewCamera as setLightsViewCamera,
   updateLightSources,
   setPlacedLightShadowSize,
+  lightDataForPreset,
 } from './lights.js'
 import {
   initClothMod,
@@ -144,6 +145,7 @@ import {
   disposeMeshEdit,
   getMeshEditsData,
   applyMeshEditsData,
+  applyMeshEditsToMeshes,
   suspendMeshEdit,
   resumeMeshEdit,
   registerObjectMeshes,
@@ -215,7 +217,9 @@ import { describeMissingFiles, describeBlendConversion } from './modelBundle.js'
 import { clearUndoHistory, pushUndoBatch, runWithoutHistoryCapture } from './undoHistory.js'
 import { withExportSafeMaterials } from './materialUserData.js'
 import { buildPartsGroup, safeFileStem } from './extractParts.js'
-import { bakeRegionsForExport } from './regions.js'
+import { bakeRegionsForExport, fromRanges } from './regions.js'
+import { analyseSurface, outwardDirection, averageSurfaceColor, lightColourFrom } from './lightFromPart.js'
+import { getOriginalMaterials } from './surfaceMaterials.js'
 import { pushSceneHistory } from './sceneHistory.js'
 
 // ---------------------------------------------------------------------------
@@ -2510,6 +2514,67 @@ function checkExportTextures(root) {
   return { embedded, unreadable }
 }
 
+// Put a real light where a part of the scene is — a tail light, a lit window, a lamp shade —
+// instead of hunting for that spot and placing one by hand. One light per selected part, or
+// (with `regionId`) one for a painted region of the part. The light sits just off the surface,
+// takes the part's colour, and — for a cone preset — shines outward along the way the surface
+// faces. When the part belongs to an object (a car) the light is attached to it, so it travels
+// with the object.
+export function createLightFromParts(uuids, { regionId = null, presetId = 'glow', useSurfaceColour = true } = {}) {
+  const meshes = [...new Set(uuids || [])].map((u) => getMeshByUuid(u)).filter(Boolean)
+  if (!meshes.length) return { ok: false, message: 'Select a part first.' }
+  const base = lightDataForPreset(presetId)
+  if (!base) return { ok: false, message: 'Unknown light preset.' }
+  if (meshes.length > 12) return { ok: false, message: 'That would make more than 12 lights at once. Select fewer parts.' }
+
+  const s = useStore.getState()
+  const made = []
+  for (const mesh of meshes) {
+    const ov = s.meshOverrides[mesh.uuid]
+    const region = regionId && meshes.length === 1 && ov && ov.regions ? ov.regions.find((r) => r.id === regionId) : null
+    const tris = region ? fromRanges(region.tris) : null
+    const surface = analyseSurface(mesh, tris)
+    const owner = getObjectMaterialModelForMesh(mesh)
+    const centreOf = new THREE.Box3()
+    if (region) {
+      // a region sits on the part: point away from the middle of the part itself
+      mesh.geometry.boundingBox || mesh.geometry.computeBoundingBox()
+      centreOf.copy(mesh.geometry.boundingBox).applyMatrix4(mesh.matrixWorld)
+    } else {
+      // a whole part: point away from the middle of the object it belongs to
+      const ownerRoot = owner ? getObjectRootById(owner.id) : null
+      centreOf.setFromObject(ownerRoot || mesh)
+    }
+    const direction = outwardDirection(surface, centreOf.getCenter(new THREE.Vector3()))
+    const position = surface.position.clone().addScaledVector(direction, Math.max(surface.size * 0.1, 0.02))
+
+    let colour = base.color
+    if (useSurfaceColour) {
+      const look = region && region.look
+      const picked = look && (look.glow > 0 ? look.glowColor || look.color : look.mode === 'solid' ? look.color : null)
+      colour = lightColourFrom(picked || averageSurfaceColor(mesh, tris, getOriginalMaterials(mesh)))
+    }
+    const meta = addLight({
+      data: {
+        ...base,
+        color: colour,
+        position: position.toArray(),
+        direction: base.directional ? direction.toArray() : undefined,
+      },
+    })
+    useStore.getState().addSceneLight(meta)
+    if (owner) attachLightToObject(meta.id, owner.id)
+    made.push(meta)
+  }
+  requestRender()
+  const names = made.map((m) => m.name).join(', ')
+  return {
+    ok: true,
+    ids: made.map((m) => m.id),
+    message: `Made ${made.length === 1 ? 'light' : made.length + ' lights'} ${names}${made.length ? ' (find ' + (made.length === 1 ? 'it' : 'them') + ' in the Lights tab)' : ''}.`,
+  }
+}
+
 // Turn parts of the scene into a brand-new object of their own (a car out of a scene full of
 // cars). The parts are baked — world placement, geometry, materials with their textures and
 // any colour / surface edits — into a self-contained .glb that becomes the new object's file,
@@ -3213,7 +3278,7 @@ export async function applyProjectData(record) {
     }
     applyMeshEditsData(c.meshEdits)
     if (c.nightImmune) setObjectNightImmuneById(id, true)
-    if (c.shadowImmune) setObjectShadowImmuneById(id, true)
+    if (c.shadowImmune) setObjectShadowImmuneById(id, true, false)
     if (c.meshOverridesByIndex) {
       useStore.setState({ meshOverrides: meshOverridesFromIndex(model, c.meshOverridesByIndex) })
     }
@@ -3310,6 +3375,8 @@ export async function applyProjectData(record) {
         useStore.setState((s2) => ({ meshOverrides: { ...s2.meshOverrides, ...patch } }))
       }
     }
+    // Parts of this prop that were moved with the gizmo (saved by mesh index).
+    if (obj.meshEdits) applyMeshEditsToMeshes(getObjectMeshesById(meta.id), obj.meshEdits)
     if (obj.kind !== 'image') {
       // 'lit' is the old (pre-styles) save field: false meant "flat/unlit".
       // Map it onto the new style system so older project files still work.
@@ -3318,7 +3385,7 @@ export async function applyProjectData(record) {
       if (obj.outline) setObjectOutlineById(meta.id, true)
       if (obj.castShadow === false) setObjectCastShadowById(meta.id, false)
       if (obj.nightImmune) setObjectNightImmuneById(meta.id, true)
-      if (obj.shadowImmune) setObjectShadowImmuneById(meta.id, true)
+      if (obj.shadowImmune) setObjectShadowImmuneById(meta.id, true, false)
     }
   }
 
@@ -3662,8 +3729,17 @@ export function setObjectNightImmuneById(id, immune) {
 
 // Make one object / character immune to shadows cast by OTHER objects (it still casts its
 // own, and still follows Night mode). Updates the scene + the store.
-export function setObjectShadowImmuneById(id, immune) {
+export function setObjectShadowImmuneById(id, immune, record = true) {
   const model = state.characters.get(id) || getObjectMaterialModelById(id)
+  if (record && model && model.meshes) {
+    const before = isShadowImmune(model)
+    if (before !== !!immune) {
+      pushSceneHistory(
+        () => setObjectShadowImmuneById(id, before, false),
+        () => setObjectShadowImmuneById(id, !!immune, false),
+      )
+    }
+  }
   if (model && model.meshes) {
     for (const mesh of model.meshes) {
       if (immune) mesh.userData.shadowImmune = true

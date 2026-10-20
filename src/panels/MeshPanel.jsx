@@ -45,6 +45,8 @@ import EditableValue from './EditableValue.jsx'
 import ColorControl from './ColorControl.jsx'
 import MaterialEditor from './MaterialEditor.jsx'
 import RegionEditor from './RegionEditor.jsx'
+import LightFromPart from './LightFromPart.jsx'
+import { recordOverrideEdit } from '../three/materialHistory.js'
 
 // Side-panel section for Mesh mode: pick a part of the character (eyes, hair,
 // clothing…) and move, rotate, resize or recolour it. Click a part in the
@@ -126,7 +128,7 @@ export default function MeshPanel() {
 
   function applyColor(patch) {
     if (!selectedMeshUuids.length) return
-    setMeshesColor(selectedMeshUuids, patch)
+    recordOverrideEdit(selectedMeshUuids, () => setMeshesColor(selectedMeshUuids, patch))
     applyModelMaterials()
   }
 
@@ -472,6 +474,13 @@ export default function MeshPanel() {
             {extractMsg || 'Select several parts (Shift-click) to make them one object, e.g. every piece of one car.'}
           </div>
         </div>
+      )}
+
+      {selectedMeshUuids.length > 0 && (
+        <LightFromPart
+          uuids={selectedMeshUuids}
+          label={selectedMeshUuids.length > 1 ? `Turn ${selectedMeshUuids.length} parts into lights` : 'Turn into a light'}
+        />
       )}
 
       {selectedMeshUuids.length === 1 && selectedMeshUuid && (

@@ -10,6 +10,7 @@ import {
   getMaterialSlots,
 } from '../three/surfaceMaterials.js'
 import ColorControl from './ColorControl.jsx'
+import { recordOverrideEdit } from '../three/materialHistory.js'
 
 // Edit ONE material of the selected part(s): recolour it, change how light reacts to it
 // (glossy, metal, cloth, glass, glow…), or swap one colour inside its texture for another.
@@ -80,7 +81,7 @@ export default function MaterialEditor({ selectedMeshUuids, primaryUuid, resolve
 
   function edit(patch) {
     if (!targets.length) return
-    setMeshesSlot(targets, patch)
+    recordOverrideEdit(targets.map((t) => t.uuid), () => setMeshesSlot(targets, patch))
     applyModelMaterials()
   }
 
