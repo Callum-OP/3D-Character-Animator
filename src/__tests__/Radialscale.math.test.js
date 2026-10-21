@@ -109,3 +109,16 @@ describe('RadialScale continuous rotation tracking (angleStepDelta + turnsToFact
     expect(turnsToFactor(-50, 1)).toBeGreaterThan(0)
   })
 })
+
+describe('RadialScale lower limit', () => {
+  it('can shrink well below the old 0.01 floor', () => {
+    // 10 full turns counter-clockwise from 1 => 2^-10 (~0.00098), previously clamped at 0.01
+    expect(turnsToFactor(-10, 1)).toBeCloseTo(Math.pow(2, -10), 6)
+    expect(turnsToFactor(-10, 1)).toBeLessThan(0.01)
+  })
+
+  it('still never reaches zero', () => {
+    expect(turnsToFactor(-100, 1)).toBeGreaterThan(0)
+    expect(angleDeltaToValue(0, -Math.PI + 0.001, 1e-9)).toBeGreaterThan(0)
+  })
+})

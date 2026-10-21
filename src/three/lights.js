@@ -4,6 +4,7 @@ import { pushSceneHistory } from './sceneHistory.js'
 import { getHistorySequence, getHistoryEpoch } from './undoHistory.js'
 import { useStore } from '../store.js'
 import { createMount, reparentKeepingWorld, registerFollower, unregisterFollower } from './attach.js'
+import { clampUniformScale } from './scaleLimits.js'
 
 // ---------------------------------------------------------------------------
 // Scene lights
@@ -98,9 +99,24 @@ export function initLights(refs) {
 
 // Add a point light near the model, slightly up and to the side so it doesn't
 // start out coincident with the key light.
+// Light names double as the keys of a light's animation keyframes, so they must be unique.
+// A light made from a preset (or from a part / region) is named after the preset, e.g.
+// "Car headlight", then "Car headlight 2", "Car headlight 3" for more of the same.
+export function uniqueLightName(wanted) {
+  const taken = (n) => l.lights.some((e) => e.name === n)
+  if (!taken(wanted)) return wanted
+  const base = wanted.replace(/\s+\d+$/, '')
+  let n = 2
+  while (taken(`${base} ${n}`)) n++
+  return `${base} ${n}`
+}
+
+// A name worth keeping: a preset name like "Car headlight", not the generic "Light 3".
+const isCustomLightName = (n) => typeof n === 'string' && n.trim() !== '' && !/^Light \d+$/.test(n.trim())
+
 export function addLight({ recordUndo = true, data = null } = {}) {
   const id = ++idCounter
-  const name = `Light ${++nameCounter}`
+  const name = isCustomLightName(data?.name) ? uniqueLightName(data.name.trim()) : `Light ${++nameCounter}`
   const scale = Math.max(l.getSceneScale(), 0.5)
 
   const initialColor = data?.color || '#ffffff'
@@ -381,6 +397,7 @@ export function getLightClipboardData(id) {
   const entry = l.lights.find((light) => light.id === id)
   if (!entry) return null
   return {
+    name: isCustomLightName(entry.name) ? entry.name : undefined,
     color: '#' + entry.light.color.getHexString(),
     intensity: entry.light.intensity,
     castShadow: entry.light.castShadow,
@@ -422,7 +439,7 @@ export function snapshotLightTransform(id) {
 export function setLightUniformScale(id, value) {
   const light = getLightById(id)
   if (!light) return
-  light.scale.setScalar(Math.max(0.01, value))
+  light.scale.setScalar(clampUniformScale(value))
   updateDirectionalTargets()
   l.requestRender()
 }
@@ -749,6 +766,7 @@ export function lightDataForPreset(presetId) {
   const p = LIGHT_PRESETS.find((x) => x.id === presetId)
   if (!p) return null
   return {
+    name: p.label,
     color: p.color,
     intensity: p.intensity,
     range: p.range,

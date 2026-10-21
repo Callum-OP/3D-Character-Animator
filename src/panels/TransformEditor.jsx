@@ -8,7 +8,7 @@ function displayValues(transform) {
   return {
     position: transform.position.map((value) => String(Number(value.toFixed(3)))),
     rotation: [rotation.x, rotation.y, rotation.z].map((value) => String(Number(THREE.MathUtils.radToDeg(value).toFixed(2)))),
-    scale: transform.scale.map((value) => String(Number(value.toFixed(3)))),
+    scale: transform.scale.map((value) => String(Number(value.toFixed(5)))),
   }
 }
 

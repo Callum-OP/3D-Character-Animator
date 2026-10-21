@@ -4,6 +4,7 @@ import { disposeObject } from './loadModel.js'
 import { markHistoryAction, pushUndoBatch, registerUndoHistory } from './undoHistory.js'
 import { useStore } from '../store.js'
 import { releaseFollowersOf } from './attach.js'
+import { clampUniformScale } from './scaleLimits.js'
 import { getMeshEditsForMeshes, applyMeshEditsToMeshes } from './meshedit.js'
 import {
   sampleCameraTracks,
@@ -1061,7 +1062,7 @@ export function getSelectedUniformScale(id) {
 export function setSelectedUniformScale(id, value) {
   const root = rootFor(id)
   if (!root) return
-  const v = Math.max(0.01, value)
+  const v = clampUniformScale(value)
   root.scale.set(v, v, v)
   o.requestRender()
 }

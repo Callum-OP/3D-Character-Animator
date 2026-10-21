@@ -62,3 +62,16 @@ describe('uniform scale (radial resize) helpers', () => {
     expect(getSelectedUniformScale(objId)).toBeCloseTo(3)
   })
 })
+describe('uniform scale lower limit', () => {
+  it('lets an object be scaled far below the old 0.01 floor', async () => {
+    const THREE = await import('three')
+    const root = new THREE.Group()
+    root.add(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial()))
+    const meta = addObject({ root }, 'TinyProp', 'glb', null)
+    selectObject(meta.id)
+    setSelectedUniformScale(meta.id, 0.001)
+    expect(getSelectedUniformScale(meta.id)).toBeCloseTo(0.001, 6)
+    setSelectedUniformScale(meta.id, 0)
+    expect(getSelectedUniformScale(meta.id)).toBeGreaterThan(0)
+  })
+})

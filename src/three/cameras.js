@@ -3,6 +3,7 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 import { pushSceneHistory } from './sceneHistory.js'
 import { useStore } from '../store.js'
 import { createMount, reparentKeepingWorld, setObjectWorldTransform, registerFollower, unregisterFollower } from './attach.js'
+import { clampUniformScale } from './scaleLimits.js'
 
 // ---------------------------------------------------------------------------
 // Scene cameras
@@ -342,7 +343,7 @@ export function snapshotCameraTransform(id) {
 export function setCameraUniformScale(id, value) {
   const entry = c.cameras.find((camera) => camera.id === id)
   if (!entry) return
-  const scale = Math.max(0.01, value)
+  const scale = clampUniformScale(value)
   entry.body.scale.setScalar(scale)
   c.requestRender()
 }

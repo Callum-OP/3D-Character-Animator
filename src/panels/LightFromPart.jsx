@@ -14,10 +14,13 @@ const AIM_MODES = [
 // (or change it afterwards in the Lights tab). Shown in the Parts panel for parts and in the
 // region editor for regions. See scene.js createLightFromParts.
 //
+// defaultPresetId: which light type the dropdown starts on (regions start on the car headlight,
+// the most common thing to make from one).
+//
 // onCreated(result, { glow }) lets the caller make the surface glow too (parts and regions each
 // do that their own way).
-export default function LightFromPart({ uuids, regionId = null, label, onCreated }) {
-  const [presetId, setPresetId] = useState('glow')
+export default function LightFromPart({ uuids, regionId = null, label, onCreated, defaultPresetId = 'glow' }) {
+  const [presetId, setPresetId] = useState(defaultPresetId)
   const [useColour, setUseColour] = useState(true)
   const [glow, setGlow] = useState(true)
   const [aimMode, setAimMode] = useState('smart')

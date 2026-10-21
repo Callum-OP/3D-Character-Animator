@@ -29,6 +29,7 @@ import {
   setObjectTransformWithUndo,
 } from '../three/objects.js'
 import RadialScale from './RadialScale.jsx'
+import { MIN_UNIFORM_SCALE, clampUniformScale } from '../three/scaleLimits.js'
 import TransformEditor from './TransformEditor.jsx'
 import ColorControl from './ColorControl.jsx'
 import { modelFileFromInput, MODEL_ACCEPT } from '../three/modelBundle.js'
@@ -150,7 +151,7 @@ export default function ObjectsPanel() {
       dragBeforeRef.current = null
       return
     }
-    const v = Math.max(0.01, parsed)
+    const v = clampUniformScale(parsed)
     setSelectedUniformScale(selectedObjectId, v)
     setScaleVal(v)
     commitUniformScale(selectedObjectId, dragBeforeRef.current)
@@ -294,11 +295,11 @@ export default function ObjectsPanel() {
                   className="text-input"
                   type="number"
                   step="0.01"
-                  min="0.01"
+                  min={MIN_UNIFORM_SCALE}
                   style={{ width: 80 }}
                   // Show whatever's mid-edit, else the live current scale —
                   // never a value stuck from before a ring drag or gizmo tweak.
-                  value={scaleText ?? Number(getSelectedUniformScale(selectedObjectId).toFixed(2))}
+                  value={scaleText ?? Number(getSelectedUniformScale(selectedObjectId).toFixed(4))}
                   title="Type an exact uniform scale factor and press Enter"
                   onFocus={() => {
                     // Snapshot for undo the moment editing starts, same as

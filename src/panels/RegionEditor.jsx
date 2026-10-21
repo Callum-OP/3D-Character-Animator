@@ -296,6 +296,8 @@ export default function RegionEditor({ meshUuid, resolveMesh }) {
           <div className="radio-hint">Roughness and metalness show in Studio / Realistic styles; colour and glow show in every style.</div>
 
           <LightFromPart
+            key={selected.id}
+            defaultPresetId="headlight"
             uuids={[meshUuid]}
             regionId={selected.id}
             label="Turn this region into a light"

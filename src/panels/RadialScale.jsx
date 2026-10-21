@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react'
+import { MIN_UNIFORM_SCALE, formatScale } from '../three/scaleLimits.js'
 
 // Pure math kept for a SINGLE before/after angle comparison (still exercised
 // directly by the existing unit tests). NOTE: because atan2 only ever returns
@@ -14,7 +15,7 @@ export function angleDeltaToValue(startAngle, currentAngle, startValue) {
   while (delta < -Math.PI) delta += Math.PI * 2
   // one full turn == roughly doubling/halving the size
   const factor = Math.pow(2, delta / (Math.PI * 2))
-  return Math.max(0.01, startValue * factor)
+  return Math.max(MIN_UNIFORM_SCALE, startValue * factor)
 }
 
 // Normalises the SMALL step between two consecutive pointer samples to
@@ -33,7 +34,7 @@ export function angleStepDelta(prevAngle, currentAngle) {
 // Convert accumulated turns (can be any size, positive or negative, not just
 // +/-0.5) into a scale factor relative to the value captured at drag start.
 export function turnsToFactor(turns, startValue) {
-  return Math.max(0.01, startValue * Math.pow(2, turns))
+  return Math.max(MIN_UNIFORM_SCALE, startValue * Math.pow(2, turns))
 }
 
 // A circular drag handle for uniform resizing — a resize ring:
@@ -118,7 +119,7 @@ export default function RadialScale({ value, getValue, onChange, onDragStart, on
         <div className="radial-scale-center">⤢</div>
       </div>
       <div className="radial-scale-info">
-        <div className="radial-scale-value">{value.toFixed(2)}×</div>
+        <div className="radial-scale-value">{formatScale(value)}×</div>
         {!compact && <div className="radial-scale-label">{label} — drag the ring</div>}
       </div>
     </div>
