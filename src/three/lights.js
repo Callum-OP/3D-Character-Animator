@@ -5,6 +5,7 @@ import { getHistorySequence, getHistoryEpoch } from './undoHistory.js'
 import { useStore } from '../store.js'
 import { createMount, reparentKeepingWorld, registerFollower, unregisterFollower } from './attach.js'
 import { clampUniformScale } from './scaleLimits.js'
+import { FLICKER_TYPES, normalizeLightEffect, flickerLevel, lighthouseAngle } from './lightEffects.js'
 
 // ---------------------------------------------------------------------------
 // Scene lights
@@ -138,6 +139,7 @@ export function addLight({ recordUndo = true, data = null } = {}) {
   light.add(cone)
   const entry = {
     id, name, light, bulb, cone, directional: false, directionLocal: null,
+    effect: null, glow: null, fxBase: null, // built-in animation (see lightEffects.js)
     range,
     angle: clampAngle(data?.angle ?? DEFAULT_CONE_ANGLE),
     penumbra: clampPenumbra(data?.penumbra),
@@ -147,6 +149,9 @@ export function addLight({ recordUndo = true, data = null } = {}) {
   if (data?.quaternion) entry.light.quaternion.fromArray(data.quaternion)
   if (data?.scale) entry.light.scale.fromArray(data.scale)
   if (entry.directional) aimLight(entry, data?.direction)
+  // A new beam from a preset (no saved aim) is levelled so a lighthouse sweeps the horizon; a new
+  // light never inherits another light's seed, so two flickering lights do not blink in step.
+  if (data?.effect) applyEffectNow(entry, { ...data.effect, seed: undefined }, { level: !data.direction })
   rebuildCone(entry)
   updateDirectionalTargets()
   if (data?.castShadow) applyShadowSettings(entry, true)
@@ -228,6 +233,7 @@ function attachLightEntry(entry, index = l.lights.length) {
   l.scene.add(entry.light)
   if (entry.light.target) l.scene.add(entry.light.target)
   l.requestRender()
+  ensureEffectLoop()
 }
 
 function lightSnapshot(light) {
@@ -296,6 +302,10 @@ function swapLightType(id, directional) {
   next.add(entry.bulb)
   old.remove(entry.cone)
   next.add(entry.cone)
+  if (entry.glow) {
+    old.remove(entry.glow)
+    next.add(entry.glow)
+  }
   const parent = old.parent || l.scene // stays under its mount if it's attached to an object
   parent.remove(old)
   if (old.target && old.target.parent) l.scene.remove(old.target)
@@ -423,6 +433,7 @@ export function setLightVisible(id, visible, recordHistory = true) {
   entry.light.visible = after
   useStore.getState().setSceneLightVisible(id, after)
   l.requestRender()
+  ensureEffectLoop()
   if (recordHistory && before !== after) {
     pushSceneHistory(
       () => setLightVisible(id, before, false),
@@ -510,7 +521,7 @@ export function updateLightSources() {
     const showCone = entry.bulb.visible && entry.directional && !!entry.directionLocal
     entry.cone.visible = showCone
     if (showCone) {
-      _coneDir.copy(entry.directionLocal).normalize()
+      liveDirection(entry, _coneDir).normalize() // follows a lighthouse's sweep
       entry.cone.quaternion.setFromUnitVectors(_coneForward, _coneDir)
       entry.cone.scale.setScalar(1 / Math.max(size, 1e-3))
       entry.cone.material.color.copy(entry.light.color)
@@ -529,10 +540,157 @@ function updateDirectionalTargets() {
     entry.light.updateMatrixWorld(true)
     entry.light.getWorldPosition(entry.light.target.position)
     entry.light.target.position.add(
-      entry.directionLocal.clone().applyQuaternion(entry.light.getWorldQuaternion(new THREE.Quaternion())),
+      liveDirection(entry, _fxDir).applyQuaternion(entry.light.getWorldQuaternion(new THREE.Quaternion())),
     )
     entry.light.target.updateMatrixWorld()
   }
+}
+
+// --- Light effects (flicker, lighthouse) ------------------------------------------------
+//
+// A light can carry a built-in looping animation, described in lightEffects.js. It is applied
+// to the LIVE light only while a frame is drawn, and put back straight afterwards, so the
+// light's own saved settings (intensity, aim, keyframes, undo, copy / paste, export) never see
+// the wobble:
+//   flicker     brightness x flickerLevel(t), for the draw only (applyLightEffects / restoreLightEffects)
+//   lighthouse  the beam's direction is turned about the light's own vertical axis (liveDirection)
+//               and a soft point glow rides on the lamp
+const _fxY = new THREE.Vector3(0, 1, 0)
+const _fxDir = new THREE.Vector3()
+const fxClock = () => (typeof performance !== 'undefined' ? performance.now() / 1000 : 0)
+
+// The direction (light's own frame) the beam points RIGHT NOW: its saved aim, swept round by a
+// lighthouse effect. Clockwise seen from above.
+function liveDirection(entry, out) {
+  out.copy(entry.directionLocal)
+  if (entry.effect && entry.effect.type === 'lighthouse') out.applyAxisAngle(_fxY, -lighthouseAngle(entry.effect, fxClock()))
+  return out
+}
+
+// The lamp's soft glow: a small, shadowless point light on the same spot, sized from the beam.
+const GLOW_RANGE = 0.35 // fraction of the beam's range
+const GLOW_STRENGTH = 0.6
+
+function updateGlow(entry) {
+  const g = entry.glow
+  if (!g) return
+  g.color.copy(entry.light.color)
+  g.distance = entry.range * GLOW_RANGE
+  g.intensity = entry.light.intensity * GLOW_RANGE * GLOW_RANGE * GLOW_STRENGTH
+  g.layers.mask = entry.light.layers.mask // honour "only light these characters"
+}
+
+function syncEffectGlow(entry) {
+  const want = !!entry.effect && entry.effect.type === 'lighthouse'
+  if (want && !entry.glow) {
+    const glow = new THREE.PointLight(entry.light.color.getHex(), 0, entry.range * GLOW_RANGE, 2)
+    glow.name = `${entry.name} glow`
+    glow.userData.isLightGlow = true
+    glow.castShadow = false
+    entry.light.add(glow)
+    entry.glow = glow
+    updateGlow(entry)
+  } else if (!want && entry.glow) {
+    if (entry.glow.parent) entry.glow.parent.remove(entry.glow)
+    entry.glow.dispose?.()
+    entry.glow = null
+  }
+}
+
+// Called by the renderer just before it draws a frame, and undone by restoreLightEffects()
+// right after. Only lights that have an effect are touched.
+export function applyLightEffects() {
+  const t = fxClock()
+  for (const entry of l.lights) {
+    const fx = entry.effect
+    if (!fx) continue
+    if (FLICKER_TYPES.includes(fx.type)) {
+      entry.fxBase = entry.light.intensity
+      entry.light.intensity = entry.fxBase * flickerLevel(fx, t)
+    } else {
+      updateGlow(entry)
+    }
+  }
+}
+
+export function restoreLightEffects() {
+  for (const entry of l.lights) {
+    if (entry.fxBase != null) {
+      entry.light.intensity = entry.fxBase
+      entry.fxBase = null
+    }
+  }
+}
+
+// Effects need the viewport to keep redrawing while nothing else is moving. That loop runs ONLY
+// while at least one visible light has an effect, idles at about 30 frames a second (a flicker
+// does not need more) and stops by itself when the last one is hidden, removed or cleared.
+// During playback / recording the renderer is already drawing every frame, so it adds nothing.
+const FX_FRAME_MS = 33
+let fxRaf = 0
+let fxLast = 0
+const hasLiveEffect = () => l.lights.some((e) => e.effect && e.light.visible)
+
+function ensureEffectLoop() {
+  if (fxRaf || typeof requestAnimationFrame !== 'function' || !hasLiveEffect()) return
+  const tick = (ts) => {
+    if (!l.scene || !hasLiveEffect()) {
+      fxRaf = 0
+      return
+    }
+    fxRaf = requestAnimationFrame(tick)
+    if (ts - fxLast < FX_FRAME_MS) return
+    fxLast = ts
+    l.requestRender()
+  }
+  fxRaf = requestAnimationFrame(tick)
+}
+
+// Flatten a beam to the horizon (keeping the way it faces) so a new lighthouse sweeps round the
+// horizon rather than a cone of ground.
+function levelBeam(entry) {
+  const d = entry.directionLocal
+  if (!d) return
+  d.y = 0
+  if (d.lengthSq() < 1e-8) d.set(0, 0, -1)
+  d.normalize()
+  entry.aimSaved = true
+}
+
+// Install (or clear, with null) an effect on a light. `level`: a lighthouse that is NEW to this
+// light starts on the horizon. Never records undo by itself (callers do), never changes the
+// light's saved settings other than the effect, and - for a lighthouse - makes it a cone.
+function applyEffectNow(entry, effect, { level = false } = {}) {
+  const next = normalizeLightEffect(effect)
+  if (next && !(effect && effect.seed != null)) next.seed = (entry.id * 137) % 1000
+  const wasLighthouse = !!entry.effect && entry.effect.type === 'lighthouse'
+  entry.effect = next
+  if (next && next.type === 'lighthouse') {
+    if (!entry.directional) swapLightType(entry.id, true)
+    if (!wasLighthouse && level) levelBeam(entry)
+  }
+  syncEffectGlow(entry)
+  updateDirectionalTargets()
+  l.requestRender()
+  if (l.onChange) l.onChange()
+  ensureEffectLoop()
+}
+
+// Set, change or clear (patch = null) a light's built-in animation. A patch is merged over the
+// current effect, so changing the type keeps the speed / pattern; "lighthouse" makes the light a
+// cone. One undo step (slider drags merge). Returns what the panel should mirror.
+export function setLightEffect(id, patch) {
+  return recordLightEdit(id, () => {
+    const entry = l.lights.find((e) => e.id === id)
+    if (!entry) return null
+    applyEffectNow(entry, patch === null ? null : { ...(entry.effect || {}), ...patch }, { level: true })
+    return { effect: entry.effect ? { ...entry.effect } : null, directional: entry.directional, ...shapeMeta(entry) }
+  })
+}
+
+export function getLightEffect(id) {
+  const entry = l.lights.find((e) => e.id === id)
+  return entry && entry.effect ? { ...entry.effect } : null
 }
 
 // See consumeObjectGizmoGrab() in objects.js for what this is for.
@@ -562,6 +720,7 @@ function lightProps(entry) {
     angle: entry.angle,
     penumbra: entry.penumbra,
     direction: entry.directionLocal ? entry.directionLocal.toArray() : null,
+    effect: entry.effect ? { ...entry.effect } : null,
   }
 }
 
@@ -586,6 +745,7 @@ function restoreLightProps(id, props) {
     entry.light.distance = props.range
     applyShadowSettings(entry, props.castShadow)
     rebuildCone(entry)
+    applyEffectNow(entry, props.effect || null)
   } finally {
     lightHistoryDepth--
   }
@@ -597,6 +757,7 @@ function restoreLightProps(id, props) {
     range: props.range,
     angle: props.angle,
     penumbra: props.penumbra,
+    effect: entry.effect ? { ...entry.effect } : null,
   })
   l.requestRender()
   if (l.onChange) l.onChange()
@@ -705,7 +866,7 @@ export function getLightShape(id) {
 }
 
 function shapeMeta(entry) {
-  return { range: entry.range, angle: entry.angle, penumbra: entry.penumbra }
+  return { range: entry.range, angle: entry.angle, penumbra: entry.penumbra, effect: entry.effect ? { ...entry.effect } : null }
 }
 
 // The distance at which this light (and its shadows) has faded out completely.
@@ -757,6 +918,9 @@ export const LIGHT_PRESETS = [
   { id: 'torch', label: 'Torch', hint: 'Handheld flashlight', directional: true, color: '#fff5dc', range: 15, intensity: bright(15, 1), angle: 20, penumbra: 0.35, castShadow: true },
   { id: 'neon', label: 'Neon sign', hint: 'Coloured glow, no shadows', directional: false, color: '#ff3bd4', range: 5, intensity: bright(5, 1), castShadow: false },
   { id: 'screen', label: 'Screen glow', hint: 'Laptop / TV / monitor spill', directional: false, color: '#9fc4ff', range: 2.5, intensity: bright(2.5, 0.8), castShadow: false },
+  { id: 'flickersoft', label: 'Soft flicker', hint: 'Warm, gently wavering light, like a candle or a crackling fire; switch between random and steady', directional: false, color: '#ffa04a', range: 8, intensity: bright(8, 1.2), castShadow: true, effect: { type: 'flickerSoft' } },
+  { id: 'flickerhard', label: 'Hard flicker', hint: 'Sharp on / off stutter, like a faulty tube light; switch between random and steady', directional: false, color: '#f4f7ff', range: 9, intensity: bright(9, 1.1), castShadow: true, effect: { type: 'flickerHard' } },
+  { id: 'lighthouse', label: 'Lighthouse', hint: 'Narrow beam sweeping all the way round, with a soft glow around the lamp', directional: true, color: '#fff3d1', range: 80, intensity: bright(80, 1.1), angle: 7, penumbra: 0.5, castShadow: false, effect: { type: 'lighthouse', period: 10 } },
   { id: 'led', label: 'Status LED', hint: 'Smoke alarm, power light: tiny and faint, no shadows', directional: false, color: '#ff3a3a', range: 0.6, intensity: 0.02, castShadow: false },
 ]
 
@@ -774,6 +938,7 @@ export function lightDataForPreset(presetId) {
     penumbra: p.penumbra,
     directional: p.directional,
     castShadow: p.castShadow,
+    effect: p.effect ? { ...p.effect } : undefined,
   }
 }
 
@@ -795,6 +960,8 @@ function applyLightPresetNow(id, presetId) {
   setLightCone(id, {})
   setLightRange(id, preset.range)
   applyShadowSettings(entry, preset.castShadow)
+  // a preset is a complete look: it also sets (or clears) the built-in animation
+  applyEffectNow(entry, preset.effect ? { ...preset.effect, seed: undefined } : null, { level: true })
   l.requestRender()
   if (l.onChange) l.onChange()
   return {
@@ -1029,6 +1196,7 @@ export function applyLightsData(list) {
     if (item.scale) entry.light.scale.fromArray(item.scale)
     if (item.visible != null) entry.light.visible = item.visible !== false
     if (entry.directional) aimLight(entry, item.direction)
+    if (item.effect) applyEffectNow(entry, item.effect) // loading: keep the saved aim, no levelling
     rebuildCone(entry)
     metas.push({
       id: meta.id,

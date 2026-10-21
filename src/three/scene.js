@@ -89,6 +89,8 @@ import {
   disposeLights,
   setViewCamera as setLightsViewCamera,
   updateLightSources,
+  applyLightEffects,
+  restoreLightEffects,
   setPlacedLightShadowSize,
   lightDataForPreset,
 } from './lights.js'
@@ -810,6 +812,8 @@ function renderOnce() {
   if (camera === state.camera) updateFreeCameraClipping()
   const restoreCulling = applyRenderCulling(camera)
   try {
+    // Flicker: lights with a built-in effect are dimmed for THIS draw only (put back in finally).
+    applyLightEffects()
     // Route through the outline effect. When the outline is disabled it falls
     // straight through to renderer.render, so there's no overhead when it's off.
     const effect = getOutlineEffect()
@@ -824,6 +828,7 @@ function renderOnce() {
     // Same task as the draw, so the canvas still holds this frame.
     if (state.videoCapture) state.videoCapture.onFrame(now)
   } finally {
+    restoreLightEffects()
     restoreCulling()
   }
 }

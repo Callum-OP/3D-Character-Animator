@@ -18,6 +18,7 @@ import {
   MIN_LIGHT_RANGE,
   MAX_LIGHT_RANGE,
   setLightDirectional,
+  setLightEffect,
   getLightKeyValue,
   getLightTransform,
   setLightTransform,
@@ -27,6 +28,7 @@ import {
   commitLightTransform,
 } from '../three/lights.js'
 import { applyModelMaterials, attachLightToObject } from '../three/scene.js'
+import { LIGHT_EFFECT_TYPES, MIN_EFFECT_RATE, MAX_EFFECT_RATE, MIN_EFFECT_PERIOD, MAX_EFFECT_PERIOD } from '../three/lightEffects.js'
 import EditableValue from './EditableValue.jsx'
 import TransformEditor from './TransformEditor.jsx'
 import RadialScale from './RadialScale.jsx'
@@ -138,6 +140,14 @@ export default function LightsPanel() {
   function onPreset(presetId) {
     if (!selected || !presetId) return
     const meta = applyLightPreset(selected.id, presetId)
+    if (meta) st().patchSceneLight(selected.id, meta)
+  }
+
+  // Built-in animation (flicker / lighthouse). `patch` null turns it off. A lighthouse needs a
+  // beam, so picking it also makes the light a cone (the store learns that from the result).
+  function onEffect(patch) {
+    if (!selected) return
+    const meta = setLightEffect(selected.id, patch)
     if (meta) st().patchSceneLight(selected.id, meta)
   }
 
@@ -435,6 +445,73 @@ export default function LightsPanel() {
                 </>
               )}
 
+
+              <label className="slider-row" title="A built-in looping animation: flicker like a candle or a faulty tube, or a lighthouse beam that sweeps all the way round. It plays in the viewport and in recordings; it does not change the light's saved settings.">
+                <span className="slider-label">Animation</span>
+                <select
+                  className="select"
+                  aria-label="Light animation"
+                  value={selected.effect ? selected.effect.type : ''}
+                  onChange={(e) => onEffect(e.target.value ? { type: e.target.value } : null)}
+                >
+                  <option value="">None (steady)</option>
+                  {LIGHT_EFFECT_TYPES.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {selected.effect && (
+                <>
+                  <div className="radio-hint" style={{ marginTop: -2, marginBottom: 4 }}>
+                    {LIGHT_EFFECT_TYPES.find((t) => t.id === selected.effect.type)?.hint}
+                    {selected.effect.type === 'lighthouse' ? '. Aim and tilt above set where the beam points as it turns.' : '. Intensity above is its brightest.'}
+                  </div>
+                  {selected.effect.type !== 'lighthouse' && (
+                    <>
+                      <label className="slider-row" title="Random = irregular, like a faulty light or a crackling fire. Steady = the same rhythm over and over.">
+                        <span className="slider-label">Pattern</span>
+                        <select
+                          className="select"
+                          aria-label="Flicker pattern"
+                          value={selected.effect.consistent ? 'steady' : 'random'}
+                          onChange={(e) => onEffect({ consistent: e.target.value === 'steady' })}
+                        >
+                          <option value="random">Random (inconsistent)</option>
+                          <option value="steady">Steady (consistent)</option>
+                        </select>
+                      </label>
+                      <label className="slider-row" title="How fast it flickers">
+                        <span className="slider-label">Speed</span>
+                        <input
+                          type="range"
+                          min={MIN_EFFECT_RATE}
+                          max={MAX_EFFECT_RATE}
+                          step={0.05}
+                          value={selected.effect.rate}
+                          onChange={(e) => onEffect({ rate: Number(e.target.value) })}
+                        />
+                        <span style={{ minWidth: 36, textAlign: 'right' }}>{selected.effect.rate.toFixed(2)}×</span>
+                      </label>
+                    </>
+                  )}
+                  {selected.effect.type === 'lighthouse' && (
+                    <label className="slider-row" title="Seconds for the beam to go all the way round">
+                      <span className="slider-label">Turn time</span>
+                      <input
+                        type="range"
+                        min={MIN_EFFECT_PERIOD}
+                        max={MAX_EFFECT_PERIOD}
+                        step={1}
+                        value={selected.effect.period}
+                        onChange={(e) => onEffect({ period: Number(e.target.value) })}
+                      />
+                      <span style={{ minWidth: 36, textAlign: 'right' }}>{Math.round(selected.effect.period)}s</span>
+                    </label>
+                  )}
+                </>
+              )}
 
               <label className="morph-label" style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
                 <input
