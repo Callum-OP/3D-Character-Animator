@@ -46,6 +46,7 @@ import ColorControl from './ColorControl.jsx'
 import MaterialEditor from './MaterialEditor.jsx'
 import RegionEditor from './RegionEditor.jsx'
 import LightFromPart from './LightFromPart.jsx'
+import { withGlowRegion } from '../three/glowRegions.js'
 import { recordOverrideEdit } from '../three/materialHistory.js'
 
 // Side-panel section for Mesh mode: pick a part of the character (eyes, hair,
@@ -480,6 +481,21 @@ export default function MeshPanel() {
         <LightFromPart
           uuids={selectedMeshUuids}
           label={selectedMeshUuids.length > 1 ? `Turn ${selectedMeshUuids.length} parts into lights` : 'Turn into a light'}
+          onCreated={(result, { glow }) => {
+            if (!glow) return
+            // The part itself should look lit too: a whole-part glow region in the light's colour.
+            const overrides = useStore.getState().meshOverrides
+            const next = {}
+            for (const item of result.items) {
+              const mesh = getMeshByUuid(item.uuid)
+              const regions = withGlowRegion(mesh, (overrides[item.uuid] && overrides[item.uuid].regions) || [], item.colour)
+              if (regions) next[item.uuid] = regions
+            }
+            const uuids = Object.keys(next)
+            if (!uuids.length) return
+            recordOverrideEdit(uuids, () => uuids.forEach((u) => useStore.getState().setMeshRegions(u, next[u])))
+            applyModelMaterials()
+          }}
         />
       )}
 

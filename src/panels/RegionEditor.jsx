@@ -59,7 +59,6 @@ export default function RegionEditor({ meshUuid, resolveMesh }) {
   const [selectedId, setSelectedId] = useState(null)
   const [highlight, setHighlight] = useState(true)
   const [message, setMessage] = useState('')
-  const [glowToo, setGlowToo] = useState(true)
   const meshRef = useRef(null)
 
   const mesh = resolveMesh(meshUuid)
@@ -300,15 +299,11 @@ export default function RegionEditor({ meshUuid, resolveMesh }) {
             uuids={[meshUuid]}
             regionId={selected.id}
             label="Turn this region into a light"
-            onCreated={() => {
-              // A lit tail light should also LOOK lit: give the surface a glow in the same colour.
-              if (glowToo && !(look.glow > 0)) patchLook({ glow: GLOW_ON_LIGHT, glowColor: look.glowColor || look.color || null })
+            onCreated={(result, { glow }) => {
+              // A lit tail light should also LOOK lit: give the surface a glow in the light's colour.
+              if (glow && !(look.glow > 0)) patchLook({ glow: GLOW_ON_LIGHT, glowColor: look.glowColor || (result.items[0] && result.items[0].colour) || look.color || null })
             }}
-          >
-            <label className="color-control-solid" style={{ display: 'block', marginTop: 4 }} title="Also make the surface itself glow, so it looks lit as well as casting light">
-              <input type="checkbox" checked={glowToo} onChange={(e) => setGlowToo(e.target.checked)} /> Also make the surface glow
-            </label>
-          </LightFromPart>
+          />
         </div>
       )}
     </div>

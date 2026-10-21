@@ -479,6 +479,10 @@ export function pickLightId(ndcX, ndcY) {
 // (shadow.radius is the PCF sample spread, 1 = the normal crisp edge), which is
 // the visible effect of a larger emitter. Scale 1 = unchanged from before.
 export function updateLightSources() {
+  // A cone's aim target must follow its light EVERY frame: a light attached to an object turns
+  // with it (rotate, animate, parent moves) without ever touching the light itself, so refreshing
+  // the target only on light edits left the beam pointing the old way.
+  updateDirectionalTargets()
   const freeView = !l.viewCamera || l.viewCamera === l.camera
   for (const entry of l.lights) {
     entry.bulb.visible = !!(l.enabled && freeView && l.selected === entry.light && entry.light.visible)
@@ -729,6 +733,8 @@ export const LIGHT_PRESETS = [
   { id: 'fire', label: 'Campfire', hint: 'Big warm orange glow', directional: false, color: '#ff8a3c', range: 11, intensity: bright(11, 1.3), castShadow: true },
   { id: 'street', label: 'Street lamp', hint: 'Sodium-yellow pool of light', directional: false, color: '#ffd69a', range: 22, intensity: bright(22, 1), castShadow: true },
   { id: 'flood', label: 'Floodlight', hint: 'Wide, bright, long-reaching cone', directional: true, color: '#f4f7ff', range: 40, intensity: bright(40, 1), angle: 62, penumbra: 0.25, castShadow: true },
+  { id: 'taillight', label: 'Car tail light', hint: 'Red glow shining out the back; no shadows', directional: true, color: '#ff2a2a', range: 10, intensity: bright(10, 0.8), angle: 60, penumbra: 0.7, castShadow: false },
+  { id: 'indicator', label: 'Indicator', hint: 'Amber turn signal glow; no shadows', directional: true, color: '#ffa31a', range: 6, intensity: bright(6, 0.8), angle: 70, penumbra: 0.7, castShadow: false },
   { id: 'headlight', label: 'Car headlight', hint: 'Narrower beam, soft edge; add two', directional: true, color: '#fffbea', range: 35, intensity: bright(35, 1), angle: 24, penumbra: 0.45, castShadow: true },
   { id: 'spot', label: 'Stage spotlight', hint: 'Tight, crisp beam', directional: true, color: '#ffffff', range: 50, intensity: bright(50, 1), angle: 14, penumbra: 0.15, castShadow: true },
   { id: 'torch', label: 'Torch', hint: 'Handheld flashlight', directional: true, color: '#fff5dc', range: 15, intensity: bright(15, 1), angle: 20, penumbra: 0.35, castShadow: true },
@@ -780,6 +786,56 @@ function applyLightPresetNow(id, presetId) {
     directional: entry.directional,
     ...shapeMeta(entry),
   }
+}
+
+// --- Aiming a cone ---------------------------------------------------------------------
+//
+// Yaw / pitch are WORLD angles of where the beam points: yaw 0-360 degrees around the vertical
+// axis (0 = toward +Z, 90 = toward +X), pitch -90..90 (positive = up). They are read from the
+// beam's current world direction, so for a light attached to a car they follow the car as it
+// turns; setting them converts back into the light's own frame.
+const deg = (r) => (r * 180) / Math.PI
+
+export function getLightAim(id) {
+  const entry = l.lights.find((e) => e.id === id)
+  if (!entry || !entry.directional || !entry.directionLocal) return null
+  entry.light.updateMatrixWorld(true)
+  const d = entry.directionLocal.clone().normalize().applyQuaternion(entry.light.getWorldQuaternion(new THREE.Quaternion()))
+  let yaw = deg(Math.atan2(d.x, d.z))
+  if (yaw < 0) yaw += 360
+  if (Math.abs(d.x) < 1e-6 && Math.abs(d.z) < 1e-6) yaw = 0 // straight up / down: yaw means nothing
+  return { yaw, pitch: deg(Math.asin(Math.min(1, Math.max(-1, d.y)))) }
+}
+
+export function directionFromAim(yawDeg, pitchDeg) {
+  const cp = Math.cos(rad(pitchDeg))
+  return new THREE.Vector3(Math.sin(rad(yawDeg)) * cp, Math.sin(rad(pitchDeg)), Math.cos(rad(yawDeg)) * cp)
+}
+
+export function setLightAim(id, { yaw, pitch } = {}) {
+  recordLightEdit(id, () => {
+    const entry = l.lights.find((e) => e.id === id)
+    const cur = getLightAim(id)
+    if (!entry || !cur) return
+    const world = directionFromAim(yaw != null ? yaw : cur.yaw, Math.min(90, Math.max(-90, pitch != null ? pitch : cur.pitch)))
+    entry.light.updateMatrixWorld(true)
+    entry.directionLocal = world.applyQuaternion(entry.light.getWorldQuaternion(new THREE.Quaternion()).invert())
+    entry.aimSaved = true
+    updateDirectionalTargets()
+    l.requestRender()
+  })
+}
+
+// Turn the beam the opposite way.
+export function flipLightAim(id) {
+  recordLightEdit(id, () => {
+    const entry = l.lights.find((e) => e.id === id)
+    if (!entry || !entry.directional || !entry.directionLocal) return
+    entry.directionLocal = entry.directionLocal.clone().negate()
+    entry.aimSaved = true
+    updateDirectionalTargets()
+    l.requestRender()
+  })
 }
 
 // Aim a cone: restore a saved direction (in the light's own frame), or - for a light

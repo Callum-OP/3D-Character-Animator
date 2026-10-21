@@ -63,17 +63,73 @@ export function analyseSurface(mesh, tris) {
   }
 }
 
-// The direction a cone light should shine: along the surface's own facing, flipped if need be so
-// it points AWAY from the part it sits on (`partCentre`: the middle of the whole mesh), or — for a
-// part with no single facing — straight out from `partCentre`, falling back to up.
-export function outwardDirection(surface, partCentre) {
+// Which side of an object a point sits on: the bounding box of `root` is measured in the object's
+// OWN axes (so a rotated car still has a front and a back), and the side whose wall the point is
+// closest to is the answer — "the face looking away from the centre of the object". Returns a
+// unit WORLD direction, or null when the root has no geometry to measure.
+export function faceOfObject(position, root) {
+  if (!root) return null
+  root.updateWorldMatrix(true, true)
+  const inv = root.matrixWorld.clone().invert()
+  const box = new THREE.Box3()
+  const corner = new THREE.Vector3()
+  root.traverse((o) => {
+    if (!o.isMesh || !o.geometry || (o.parent && o.parent.isLight) || (o.userData && o.userData.isRegionOverlay)) return
+    if (!o.geometry.boundingBox) o.geometry.computeBoundingBox()
+    const gb = o.geometry.boundingBox
+    for (let i = 0; i < 8; i++) {
+      corner.set(i & 1 ? gb.max.x : gb.min.x, i & 2 ? gb.max.y : gb.min.y, i & 4 ? gb.max.z : gb.min.z)
+      box.expandByPoint(corner.applyMatrix4(o.matrixWorld).applyMatrix4(inv))
+    }
+  })
+  if (box.isEmpty()) return null
+  const centre = box.getCenter(new THREE.Vector3())
+  const half = box.getSize(new THREE.Vector3()).multiplyScalar(0.5)
+  const local = position.clone().applyMatrix4(inv).sub(centre)
+  const rel = [local.x / Math.max(half.x, 1e-6), local.y / Math.max(half.y, 1e-6), local.z / Math.max(half.z, 1e-6)]
+  let axis = 0
+  for (let i = 1; i < 3; i++) if (Math.abs(rel[i]) > Math.abs(rel[axis])) axis = i
+  if (Math.abs(rel[axis]) < 0.05) return null // right in the middle: no side to speak of
+  const dir = new THREE.Vector3()
+  dir.setComponent(axis, Math.sign(rel[axis]))
+  return dir.transformDirection(root.matrixWorld)
+}
+
+// The direction a cone light should shine.
+//   'surface'  the way the faces point, flipped if need be so it points AWAY from the part it sits on
+//              (`partCentre`), or straight out from `partCentre` when the faces point every which way
+//   'face'     out of the side of the whole object the part sits on (`faceDir`, see faceOfObject)
+//   'smart'    (default) the surface's own facing when it agrees with that side — it is the more precise
+//              of the two, e.g. an angled headlight lens — otherwise the side of the object: faces whose
+//              winding or averaging is unreliable (a bumpy lens, a flipped model) cannot send the beam
+//              into the car
+export function outwardDirection(surface, partCentre, { mode = 'smart', faceDir = null } = {}) {
   const away = new THREE.Vector3().subVectors(surface.position, partCentre)
-  if (surface.normal) {
-    const n = surface.normal.clone()
-    if (away.lengthSq() > 1e-10 && n.dot(away) < 0) n.negate()
-    return n
+  const bySurface = () => {
+    if (surface.normal) {
+      const n = surface.normal.clone()
+      if (away.lengthSq() > 1e-10 && n.dot(away) < 0) n.negate()
+      return n
+    }
+    return away.lengthSq() > 1e-10 ? away.normalize() : new THREE.Vector3(0, 1, 0)
   }
-  return away.lengthSq() > 1e-10 ? away.normalize() : new THREE.Vector3(0, 1, 0)
+  if (mode === 'face') return faceDir ? faceDir.clone() : bySurface()
+  const n = bySurface()
+  if (mode === 'surface' || !faceDir) return n
+  return surface.normal && n.dot(faceDir) > 0.5 ? n : faceDir.clone()
+}
+
+// Apply the user's manual aim on top of the detected direction: flip it, turn it around the
+// vertical axis by `yaw` degrees (0-360), tilt it up / down by `pitch` degrees.
+export function adjustDirection(dir, { flip = false, yaw = 0, pitch = 0 } = {}) {
+  const d = dir.clone().normalize()
+  if (flip) d.negate()
+  if (yaw) d.applyAxisAngle(new THREE.Vector3(0, 1, 0), (yaw * Math.PI) / 180)
+  if (pitch) {
+    const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), d)
+    if (right.lengthSq() > 1e-8) d.applyAxisAngle(right.normalize(), (-pitch * Math.PI) / 180)
+  }
+  return d.normalize()
 }
 
 const hex = (rgb) => '#' + rgb.map((c) => Math.round(Math.min(1, Math.max(0, c)) * 255).toString(16).padStart(2, '0')).join('')

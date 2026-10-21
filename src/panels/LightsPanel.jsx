@@ -10,6 +10,9 @@ import {
   setLightRange,
   setLightCone,
   applyLightPreset,
+  getLightAim,
+  setLightAim,
+  flipLightAim,
   lightDataForPreset,
   LIGHT_PRESETS,
   MIN_LIGHT_RANGE,
@@ -110,6 +113,20 @@ export default function LightsPanel() {
     const range = Math.round(sliderToLog(t, MIN_LIGHT_RANGE, MAX_LIGHT_RANGE) * 100) / 100
     setLightRange(selected.id, range)
     st().patchSceneLight(selected.id, { range })
+  }
+
+  const [, bumpAim] = useState(0)
+  const aim = selected && selected.directional ? getLightAim(selected.id) : null
+  const clampDeg = (v, min, max) => Math.min(max, Math.max(min, Number(v) || 0))
+  function onAim(patch) {
+    if (!selected) return
+    setLightAim(selected.id, patch)
+    bumpAim((n) => n + 1)
+  }
+  function onFlipAim() {
+    if (!selected) return
+    flipLightAim(selected.id)
+    bumpAim((n) => n + 1)
   }
 
   function onCone(patch) {
@@ -283,6 +300,28 @@ export default function LightsPanel() {
                 </select>
               </label>
 
+              <label className="slider-row" title="Pick a prop or character and this light rides along with it: it moves, turns and animates with the object.">
+                <span className="slider-label">Attach to</span>
+                <select
+                  className="select"
+                  aria-label="Attach light to object"
+                  value={lightAttachments[selected.id] ?? ''}
+                  onChange={(e) => attachLightToObject(selected.id, e.target.value === '' ? null : Number(e.target.value))}
+                >
+                  <option value="">Nothing (free-standing)</option>
+                  {sceneObjects.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="radio-hint" style={{ marginTop: -2, marginBottom: 6 }}>
+                {lightAttachments[selected.id] != null
+                  ? 'Follows that object when it moves, rotates or is animated (a cone turns with it). Position below is relative to the object.'
+                  : 'Pick an object and this light rides along with it, staying where it is for now.'}
+              </div>
+
               <label className="slider-row">
                 <span className="slider-label">Color</span>
                 <input
@@ -375,32 +414,27 @@ export default function LightsPanel() {
                     />
                     <span style={{ minWidth: 36, textAlign: 'right' }}>{(selected.penumbra ?? 0.35).toFixed(2)}</span>
                   </label>
+                  {aim && (
+                    <>
+                      <label className="slider-row" title="Which way the beam points, turned round the vertical axis: 0-360 degrees (0 = toward +Z, 90 = toward +X)">
+                        <span className="slider-label">Aim: turn</span>
+                        <input type="range" min={0} max={360} step={1} value={Math.round(aim.yaw) % 361} onChange={(e) => onAim({ yaw: Number(e.target.value) })} />
+                        <input type="number" aria-label="Aim yaw degrees" min={0} max={360} step={1} value={Math.round(aim.yaw)} onChange={(e) => onAim({ yaw: clampDeg(e.target.value, 0, 360) })} style={{ width: 56 }} />°
+                      </label>
+                      <label className="slider-row" title="Tilt the beam up (positive) or down (negative), -90 to 90 degrees">
+                        <span className="slider-label">Aim: tilt</span>
+                        <input type="range" min={-90} max={90} step={1} value={Math.round(aim.pitch)} onChange={(e) => onAim({ pitch: Number(e.target.value) })} />
+                        <input type="number" aria-label="Aim pitch degrees" min={-90} max={90} step={1} value={Math.round(aim.pitch)} onChange={(e) => onAim({ pitch: clampDeg(e.target.value, -90, 90) })} style={{ width: 56 }} />°
+                      </label>
+                      <div className="kf-actions">
+                        <button className="btn secondary" onClick={onFlipAim} title="Turn the beam the opposite way">↔ Flip 180°</button>
+                      </div>
+                      <div className="radio-hint">Aim is in the world, so a light on a car keeps its angle relative to the car as the car turns. You can also drag the rotate gizmo.</div>
+                    </>
+                  )}
                 </>
               )}
 
-
-              <label className="morph-label" style={{ display: 'block', marginTop: 6 }}>
-                Attach to
-                <select
-                  className="select"
-                  aria-label="Attach light to object"
-                  style={{ marginLeft: 6 }}
-                  value={lightAttachments[selected.id] ?? ''}
-                  onChange={(e) => attachLightToObject(selected.id, e.target.value === '' ? null : Number(e.target.value))}
-                >
-                  <option value="">Nothing (free-standing)</option>
-                  {sceneObjects.map((o) => (
-                    <option key={o.id} value={o.id}>
-                      {o.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <div className="radio-hint" style={{ marginTop: 2, marginBottom: 4 }}>
-                {lightAttachments[selected.id] != null
-                  ? 'Follows that object when it moves, rotates or is animated. Its position below is now relative to the object.'
-                  : 'Pick a prop or character and this light will ride along with it, staying where it is for now.'}
-              </div>
 
               <label className="morph-label" style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
                 <input

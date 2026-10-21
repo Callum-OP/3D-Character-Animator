@@ -218,7 +218,7 @@ import { clearUndoHistory, pushUndoBatch, runWithoutHistoryCapture } from './und
 import { withExportSafeMaterials } from './materialUserData.js'
 import { buildPartsGroup, safeFileStem } from './extractParts.js'
 import { bakeRegionsForExport, fromRanges } from './regions.js'
-import { analyseSurface, outwardDirection, averageSurfaceColor, lightColourFrom } from './lightFromPart.js'
+import { analyseSurface, outwardDirection, adjustDirection, faceOfObject, averageSurfaceColor, lightColourFrom } from './lightFromPart.js'
 import { getOriginalMaterials } from './surfaceMaterials.js'
 import { pushSceneHistory } from './sceneHistory.js'
 
@@ -2520,7 +2520,7 @@ function checkExportTextures(root) {
 // takes the part's colour, and — for a cone preset — shines outward along the way the surface
 // faces. When the part belongs to an object (a car) the light is attached to it, so it travels
 // with the object.
-export function createLightFromParts(uuids, { regionId = null, presetId = 'glow', useSurfaceColour = true } = {}) {
+export function createLightFromParts(uuids, { regionId = null, presetId = 'glow', useSurfaceColour = true, aimMode = 'smart', aim = null } = {}) {
   const meshes = [...new Set(uuids || [])].map((u) => getMeshByUuid(u)).filter(Boolean)
   if (!meshes.length) return { ok: false, message: 'Select a part first.' }
   const base = lightDataForPreset(presetId)
@@ -2535,6 +2535,7 @@ export function createLightFromParts(uuids, { regionId = null, presetId = 'glow'
     const tris = region ? fromRanges(region.tris) : null
     const surface = analyseSurface(mesh, tris)
     const owner = getObjectMaterialModelForMesh(mesh)
+    const ownerRoot = owner ? getObjectRootById(owner.id) : null
     const centreOf = new THREE.Box3()
     if (region) {
       // a region sits on the part: point away from the middle of the part itself
@@ -2542,11 +2543,13 @@ export function createLightFromParts(uuids, { regionId = null, presetId = 'glow'
       centreOf.copy(mesh.geometry.boundingBox).applyMatrix4(mesh.matrixWorld)
     } else {
       // a whole part: point away from the middle of the object it belongs to
-      const ownerRoot = owner ? getObjectRootById(owner.id) : null
       centreOf.setFromObject(ownerRoot || mesh)
     }
-    const direction = outwardDirection(surface, centreOf.getCenter(new THREE.Vector3()))
-    const position = surface.position.clone().addScaledVector(direction, Math.max(surface.size * 0.1, 0.02))
+    // Which side of the WHOLE object the part sits on (a car's front, a building's east wall)
+    const faceDir = ownerRoot ? faceOfObject(surface.position, ownerRoot) : null
+    const detected = outwardDirection(surface, centreOf.getCenter(new THREE.Vector3()), { mode: aimMode, faceDir })
+    const direction = aim ? adjustDirection(detected, aim) : detected
+    const position = surface.position.clone().addScaledVector(detected, Math.max(surface.size * 0.1, 0.02))
 
     let colour = base.color
     if (useSurfaceColour) {
@@ -2564,13 +2567,14 @@ export function createLightFromParts(uuids, { regionId = null, presetId = 'glow'
     })
     useStore.getState().addSceneLight(meta)
     if (owner) attachLightToObject(meta.id, owner.id)
-    made.push(meta)
+    made.push({ ...meta, uuid: mesh.uuid, colour })
   }
   requestRender()
   const names = made.map((m) => m.name).join(', ')
   return {
     ok: true,
     ids: made.map((m) => m.id),
+    items: made.map((m) => ({ id: m.id, uuid: m.uuid, colour: m.colour })),
     message: `Made ${made.length === 1 ? 'light' : made.length + ' lights'} ${names}${made.length ? ' (find ' + (made.length === 1 ? 'it' : 'them') + ' in the Lights tab)' : ''}.`,
   }
 }
