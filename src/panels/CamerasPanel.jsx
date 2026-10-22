@@ -6,6 +6,7 @@ import {
   setCameraFov,
   snapCameraToView,
   getCameraKeyValue,
+  renameCamera,
   getCameraTransform,
   setCameraTransform,
   snapshotCameraTransform,
@@ -16,7 +17,9 @@ import { attachCameraToObject } from '../three/scene.js'
 import EditableValue from './EditableValue.jsx'
 import TransformEditor from './TransformEditor.jsx'
 import RadialScale from './RadialScale.jsx'
-import { copySceneItem, hasSceneClipboard, pasteSceneItem } from '../three/sceneClipboard.js'
+import { hasSceneClipboard, pasteSceneItem } from '../three/sceneClipboard.js'
+import { useRowMenu, RowMenuButton, RowName } from './rowMenu.jsx'
+import { cameraMenu } from './rowMenus.js'
 
 // Side-panel section: place cameras in the scene, frame shots through them, and
 // keyframe their movement. A new camera copies the current viewport view, so
@@ -61,6 +64,8 @@ export default function CamerasPanel() {
   const scaleBefore = useRef(null)
   const [scaleDragging, setScaleDragging] = useState(false)
   const [scaleValue, setScaleValue] = useState(1)
+  const [renamingId, setRenamingId] = useState(null)
+  const rowMenu = useRowMenu()
 
   const selected = sceneCameras.find((cam) => cam.id === selectedCameraId) || null
   const keyCount = selected ? (animData.cameras?.[selected.name] || []).length : 0
@@ -80,6 +85,22 @@ export default function CamerasPanel() {
 
   function onRemove(id) {
     removeCamera(id)
+  }
+
+  // Names key a camera's animation and its cuts, so a rename moves them across (in the store).
+  function onRename(id, name) {
+    const applied = renameCamera(id, name)
+    if (applied) st().renameSceneCamera(id, applied)
+    setRenamingId(null)
+  }
+
+  // Right-click (or ⋯) on a row selects that camera, then shows its menu.
+  function buildMenu(cam) {
+    if (selectedCameraId !== cam.id) {
+      setSelectedCameraId(cam.id)
+      setMode('object')
+    }
+    return cameraMenu(cam, { startRename: setRenamingId })
   }
 
   function onPasteCamera() {
@@ -149,53 +170,69 @@ export default function CamerasPanel() {
                 key={cam.id}
                 className={'obj-row' + (cam.id === selectedCameraId ? ' selected' : '')}
                 title={cam.name}
-                onClick={() => onSelect(cam.id)}
+                onContextMenu={(e) => {
+                  const { items, run } = buildMenu(cam)
+                  rowMenu.openAt(e, items, run)
+                }}
+                onClick={(e) => {
+                  if (e.detail > 1) return // second click of a double-click (rename)
+                  onSelect(cam.id)
+                }}
               >
-                <span className="obj-name">
-                  {cam.name}
-                  {(animData.cameras?.[cam.name] || []).length > 0 && (
-                    <span className="kf-tag" style={{ marginLeft: 6 }}>
-                      {(animData.cameras?.[cam.name] || []).length} keys
-                    </span>
-                  )}
-                </span>
-                <button
-                  className="obj-eye"
-                  title={`Copy ${cam.name}`}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    copySceneItem('camera', cam.id)
-                  }}
-                >
-                  ⧉
-                </button>
-                <button
-                  className="obj-eye"
-                  title={
-                    cam.id === viewCameraId
-                      ? 'Back to the free view (Esc)'
-                      : 'Look through this camera (0)'
-                  }
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    setViewCameraId(cam.id === viewCameraId ? null : cam.id)
-                  }}
-                >
-                  {cam.id === viewCameraId ? '🎥' : '📷'}
-                </button>
-                <button
-                  className="obj-del"
-                  title="Remove this camera"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onRemove(cam.id)
-                  }}
-                >
-                  ×
-                </button>
+                <div className="obj-row-main">
+                  <RowName
+                    editing={renamingId === cam.id}
+                    value={cam.name}
+                    onCommit={(name) => onRename(cam.id, name)}
+                    onCancel={() => setRenamingId(null)}
+                    onDoubleClick={() => setRenamingId(cam.id)}
+                  >
+                    {cam.name}
+                    {(animData.cameras?.[cam.name] || []).length > 0 && (
+                      <span className="kf-tag" style={{ marginLeft: 6 }}>
+                        {(animData.cameras?.[cam.name] || []).length} keys
+                      </span>
+                    )}
+                  </RowName>
+                  <button
+                    className="obj-eye"
+                    title={
+                      cam.id === viewCameraId
+                        ? 'Back to the free view (Esc)'
+                        : 'Look through this camera (0)'
+                    }
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setViewCameraId(cam.id === viewCameraId ? null : cam.id)
+                    }}
+                  >
+                    {cam.id === viewCameraId ? '🎥' : '📷'}
+                  </button>
+                  <RowMenuButton
+                    onOpen={(e) => {
+                      const { items, run } = buildMenu(cam)
+                      rowMenu.openFromButton(e, items, run)
+                    }}
+                  />
+                  <button
+                    className="obj-del"
+                    title={`Remove ${cam.name}`}
+                    aria-label={`Remove ${cam.name}`}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onRemove(cam.id)
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
               </div>
             ))}
           </div>
+          <p className="obj-row-hint">
+            Right-click a camera (or press ⋯) to rename, duplicate, snap, key, cut to it, attach it or delete it.
+          </p>
+          {rowMenu.element}
 
           {selected && (
             <div className="joint-controls">

@@ -959,6 +959,10 @@ export const useStore = create((set) => ({
     set((s) => ({
       sceneObjects: s.sceneObjects.map((o) => (o.id === id ? { ...o, style } : o)),
     })),
+  renameSceneObject: (id, name) =>
+    set((s) => ({
+      sceneObjects: s.sceneObjects.map((o) => (o.id === id ? { ...o, name } : o)),
+    })),
   setObjectOutline: (id, outline) =>
     set((s) => ({
       sceneObjects: s.sceneObjects.map((o) => (o.id === id ? { ...o, outline } : o)),
@@ -1132,6 +1136,23 @@ export const useStore = create((set) => ({
       selectedCameraId: s.selectedCameraId === id ? null : s.selectedCameraId,
       viewCameraId: s.viewCameraId === id ? null : s.viewCameraId,
     })),
+  // Camera keyframes and cuts are stored under the camera's NAME, so a rename has to
+  // move them across or the camera would lose its animation.
+  renameSceneCamera: (id, name) =>
+    set((s) => {
+      const old = s.sceneCameras.find((cam) => cam.id === id)?.name
+      if (old == null || old === name) return {}
+      const cameras = { ...(s.animData.cameras || {}) }
+      if (cameras[old]) {
+        cameras[name] = cameras[old]
+        delete cameras[old]
+      }
+      const cuts = (s.animData.cuts || []).map((k) => (k.camera === old ? { ...k, camera: name } : k))
+      return {
+        sceneCameras: s.sceneCameras.map((cam) => (cam.id === id ? { ...cam, name } : cam)),
+        animData: { ...s.animData, cameras, cuts },
+      }
+    }),
   setSceneCameras: (sceneCameras) => set({ sceneCameras }),
   setSelectedCameraId: (id) =>
     set(
@@ -1165,6 +1186,21 @@ export const useStore = create((set) => ({
       sceneLights: s.sceneLights.filter((lt) => lt.id !== id),
       selectedLightId: s.selectedLightId === id ? null : s.selectedLightId,
     })),
+  // Light keyframes are stored under the light's NAME — move them with a rename.
+  renameSceneLight: (id, name) =>
+    set((s) => {
+      const old = s.sceneLights.find((lt) => lt.id === id)?.name
+      if (old == null || old === name) return {}
+      const lights = { ...(s.animData.lights || {}) }
+      if (lights[old]) {
+        lights[name] = lights[old]
+        delete lights[old]
+      }
+      return {
+        sceneLights: s.sceneLights.map((lt) => (lt.id === id ? { ...lt, name } : lt)),
+        animData: { ...s.animData, lights },
+      }
+    }),
   setSceneLights: (sceneLights) => set({ sceneLights }),
   setSceneLightVisible: (id, visible) =>
     set((s) => ({

@@ -184,6 +184,21 @@ export function addLight({ recordUndo = true, data = null } = {}) {
   return meta
 }
 
+// Rename a light. Names are the keys of its animation keyframes, so the new name must be
+// unique among lights; the store moves the keyframes across. Returns the applied name,
+// or null if nothing changed.
+export function renameLight(id, wanted) {
+  const entry = l.lights.find((e) => e.id === id)
+  const clean = String(wanted ?? '').trim()
+  if (!entry || !clean || clean === entry.name) return null
+  const name = l.lights.some((e) => e !== entry && e.name === clean) ? uniqueLightName(clean) : clean
+  entry.name = name
+  entry.light.name = name
+  const n = /^Light (\d+)$/.exec(name)
+  if (n) nameCounter = Math.max(nameCounter, Number(n[1]))
+  return name
+}
+
 export function removeLight(id) {
   const idx = l.lights.findIndex((e) => e.id === id)
   if (idx < 0) return

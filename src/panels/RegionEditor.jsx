@@ -5,6 +5,7 @@ import { setFacePickHandler } from '../three/meshedit.js'
 import { getOriginalMaterials } from '../three/surfaceMaterials.js'
 import { recordOverrideEdit } from '../three/materialHistory.js'
 import LightFromPart from './LightFromPart.jsx'
+import { useRowMenu, RowMenuButton, RowName } from './rowMenu.jsx'
 import {
   MAX_REGIONS,
   isRegionCapable,
@@ -37,6 +38,12 @@ const LOOK_PRESETS = [
   { label: 'Neon', look: { mode: 'solid', color: '#35e8ff', glow: 3, glowColor: '#35e8ff', roughness: 0.4 } },
 ]
 
+const COLOUR_MODES = [
+  ['none', 'Keep texture'],
+  ['tint', 'Tint'],
+  ['solid', 'Solid colour'],
+]
+
 const NO_REGIONS = []
 const GLOW_ON_LIGHT = 1.6
 const toHex = (rgb) => '#' + rgb.map((c) => Math.round(Math.min(1, Math.max(0, c)) * 255).toString(16).padStart(2, '0')).join('')
@@ -59,6 +66,9 @@ export default function RegionEditor({ meshUuid, resolveMesh }) {
   const [selectedId, setSelectedId] = useState(null)
   const [highlight, setHighlight] = useState(true)
   const [message, setMessage] = useState('')
+  const [renamingId, setRenamingId] = useState(null)
+  const [lightOpen, setLightOpen] = useState(false)
+  const rowMenu = useRowMenu()
   const meshRef = useRef(null)
 
   const mesh = resolveMesh(meshUuid)
@@ -149,27 +159,79 @@ export default function RegionEditor({ meshUuid, resolveMesh }) {
     setMessage(`Region added (${pending.length} faces). Choose its look below.`)
   }
 
-  function patchLook(patch) {
-    if (!selected) return
-    commit(regions.map((r) => (r.id === selected.id ? { ...r, look: mergeRegionLook(r.look || {}, patch) } : r)))
+  function patchLookOf(id, patch) {
+    commit(regions.map((r) => (r.id === id ? { ...r, look: mergeRegionLook(r.look || {}, patch) } : r)))
+  }
+  const patchLook = (patch) => selected && patchLookOf(selected.id, patch)
+
+  function removeRegion(region) {
+    if (!window.confirm(`Are you sure you want to delete "${region.name}"? (Ctrl+Z will bring it back.)`)) return
+    commit(regions.filter((r) => r.id !== region.id))
+    if (selectedId === region.id) setSelectedId(null)
   }
 
-  function removeRegion() {
-    if (!selected) return
-    if (!window.confirm(`Are you sure you want to delete "${selected.name}"? (Ctrl+Z will bring it back.)`)) return
-    commit(regions.filter((r) => r.id !== selected.id))
-    setSelectedId(null)
+  function renameRegion(id, name) {
+    const clean = name.trim()
+    if (clean) commit(regions.map((r) => (r.id === id ? { ...r, name: clean } : r)))
+    setRenamingId(null)
+  }
+
+  function selectRegion(id) {
+    setSelectedId(id)
+    setSeed(null)
+    setPending(null)
+  }
+
+  // The menu for a region row; right-click (or ⋯) also selects that region.
+  function buildMenu(r) {
+    if (selectedId !== r.id) selectRegion(r.id)
+    const lk = r.look || {}
+    const current = lk.mode || 'none'
+    const items = [
+      { header: r.name },
+      { id: 'rename', label: 'Rename', shortcut: 'Dbl-click' },
+      { id: 'highlight', label: 'Highlight on model', checked: highlight, hint: 'Show this region on the model so you can see where it is' },
+      { separator: true },
+      {
+        label: 'Look',
+        hint: 'A ready-made look: headlight, tail light, window, chrome…',
+        children: [
+          ...LOOK_PRESETS.map((pr) => ({ id: 'look:' + pr.label, label: pr.label })),
+          { separator: true },
+          { id: 'look:', label: 'Original', hint: 'Back to how the model looks' },
+        ],
+      },
+      {
+        label: 'Colour',
+        value: COLOUR_MODES.find(([id]) => id === current)[1],
+        children: COLOUR_MODES.map(([id, label]) => ({ id: 'mode:' + id, label, checked: current === id })),
+      },
+      { id: 'light', label: 'Turn into a light…', hint: 'Put a real light where this region is' },
+      { separator: true },
+      { id: 'delete', label: 'Delete', danger: true },
+    ]
+    function run(id) {
+      if (id === 'rename') return setRenamingId(r.id)
+      if (id === 'highlight') return setHighlight(!highlight)
+      if (id === 'light') return setLightOpen(true)
+      if (id === 'delete') return removeRegion(r)
+      if (id.startsWith('look:')) {
+        const name = id.slice(5)
+        const preset = LOOK_PRESETS.find((pr) => pr.label === name)
+        return patchLookOf(r.id, preset ? { ...CLEAR_LOOK, ...preset.look } : CLEAR_LOOK)
+      }
+      if (id.startsWith('mode:')) {
+        const m = id.slice(5)
+        return patchLookOf(r.id, m === 'none' ? { mode: null, color: null } : { mode: m, color: lk.color || '#ffffff' })
+      }
+    }
+    return { items, run }
   }
 
   const look = (selected && selected.look) || {}
 
   return (
     <div style={{ marginTop: 8 }}>
-      <div className="radio-hint" style={{ marginBottom: 6 }}>
-        Pick a headlight, window or stripe on the model and change just that part&apos;s colour, glow and shine — it
-        stops where the colour ends.
-      </div>
-
       <div className="kf-actions">
         <button
           className={`btn ${picking ? '' : 'secondary'}`}
@@ -180,18 +242,27 @@ export default function RegionEditor({ meshUuid, resolveMesh }) {
           {picking ? 'Click the model… (stop)' : '🎯 Pick on model'}
         </button>
       </div>
+      {regions.length === 0 && !picking && !seed && (
+        <div className="radio-hint" style={{ marginTop: 6 }}>
+          Pick a headlight, window or stripe on the model to change just that part&apos;s colour, glow and shine.
+        </div>
+      )}
       {regions.length >= MAX_REGIONS && <div className="radio-hint">Up to {MAX_REGIONS} regions per part.</div>}
       {message && <div className="radio-hint" style={{ marginTop: 4 }}>{message}</div>}
 
       {seed && pending && (
         <div style={{ marginTop: 8, padding: 8, borderRadius: 6, background: 'rgba(255,43,214,0.10)' }}>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 6 }}>
-            {GROW_MODES.map((g) => (
-              <button key={g.id} className={`btn ${mode === g.id ? '' : 'secondary'}`} title={g.hint} onClick={() => setMode(g.id)}>
-                {g.label}
-              </button>
-            ))}
-          </div>
+          <label className="slider-row" title={GROW_MODES.find((g) => g.id === mode)?.hint}>
+            <span className="slider-label">Select</span>
+            <select className="select" aria-label="How far to grow the selection" value={mode} onChange={(e) => setMode(e.target.value)}>
+              {GROW_MODES.map((g) => (
+                <option key={g.id} value={g.id} title={g.hint}>
+                  {g.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="radio-hint">{GROW_MODES.find((g) => g.id === mode)?.hint}</div>
           {(mode === 'color' || mode === 'everywhere') && (
             <label className="slider-row" title="How far a colour may drift from the one you clicked and still be included">
               <span className="slider-label">Colour tolerance</span>
@@ -209,57 +280,93 @@ export default function RegionEditor({ meshUuid, resolveMesh }) {
 
       {regions.length > 0 && (
         <>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 10 }}>
+          <div className="obj-list" style={{ marginTop: 10 }}>
             {regions.map((r) => (
-              <button
+              <div
                 key={r.id}
-                className={`btn ${selectedId === r.id ? '' : 'secondary'}`}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}
-                onClick={() => { setSelectedId(r.id === selectedId ? null : r.id); setSeed(null); setPending(null) }}
+                className={'obj-row' + (selectedId === r.id ? ' selected' : '')}
+                title={r.name}
+                onClick={(e) => {
+                  if (e.detail > 1) return // second click of a double-click (rename)
+                  if (r.id === selectedId) {
+                    setSelectedId(null)
+                    setSeed(null)
+                    setPending(null)
+                  } else selectRegion(r.id)
+                }}
+                onContextMenu={(e) => {
+                  const { items, run } = buildMenu(r)
+                  rowMenu.openAt(e, items, run)
+                }}
               >
-                <span style={{ width: 11, height: 11, borderRadius: 3, background: (r.look && r.look.color) || '#888', border: '1px solid #888' }} />
-                {r.name}
-              </button>
+                <div className="obj-row-main">
+                  <span
+                    aria-hidden="true"
+                    style={{ flex: '0 0 auto', width: 11, height: 11, borderRadius: 3, background: (r.look && r.look.color) || '#888', border: '1px solid #888' }}
+                  />
+                  <RowName
+                    editing={renamingId === r.id}
+                    value={r.name}
+                    onCommit={(name) => renameRegion(r.id, name)}
+                    onCancel={() => setRenamingId(null)}
+                    onDoubleClick={() => setRenamingId(r.id)}
+                  >
+                    {r.name}
+                  </RowName>
+                  <RowMenuButton
+                    label="Region options"
+                    onOpen={(e) => {
+                      const { items, run } = buildMenu(r)
+                      rowMenu.openFromButton(e, items, run)
+                    }}
+                  />
+                  <button
+                    className="obj-del"
+                    title="Delete this region"
+                    aria-label={`Delete ${r.name}`}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      removeRegion(r)
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
             ))}
           </div>
+          <p className="obj-row-hint">Click a region to edit it. Right-click (or ⋯) for rename, looks, highlight and more.</p>
+          {rowMenu.element}
         </>
       )}
 
       {selected && (
-        <div style={{ marginTop: 8, position: 'relative' }}>
-          <button
-            className="obj-del"
-            style={{ position: 'absolute', top: 0, right: 0 }}
-            title="Delete this region"
-            aria-label="Delete this region"
-            onClick={removeRegion}
-          >
-            ×
-          </button>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6, paddingRight: 26 }}>
-            <input
-              className="text-input"
-              aria-label="Region name"
-              value={selected.name}
-              onChange={(e) => commit(regions.map((r) => (r.id === selected.id ? { ...r, name: e.target.value } : r)))}
-              style={{ flex: 1 }}
-            />
-            <label className="color-control-solid" title="Show this region on the model">
-              <input type="checkbox" checked={highlight} onChange={(e) => setHighlight(e.target.checked)} /> Highlight
-            </label>
-          </div>
+        <div style={{ marginTop: 8 }}>
+          <label className="slider-row" title="A ready-made look for this region">
+            <span className="slider-label">Look</span>
+            <select
+              className="select"
+              aria-label="Region look"
+              value=""
+              onChange={(e) => {
+                const v = e.target.value
+                if (!v) return
+                const preset = LOOK_PRESETS.find((pr) => pr.label === v)
+                patchLook(preset ? { ...CLEAR_LOOK, ...preset.look } : CLEAR_LOOK)
+              }}
+            >
+              <option value="">Choose a preset…</option>
+              {LOOK_PRESETS.map((pr) => (
+                <option key={pr.label} value={pr.label}>
+                  {pr.label}
+                </option>
+              ))}
+              <option value="__original">Original (as the model was)</option>
+            </select>
+          </label>
 
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 6 }}>
-            {LOOK_PRESETS.map((p) => (
-              <button key={p.label} className="btn secondary" onClick={() => patchLook({ ...CLEAR_LOOK, ...p.look })}>
-                {p.label}
-              </button>
-            ))}
-            <button className="btn secondary" onClick={() => patchLook(CLEAR_LOOK)} title="Back to how the model looks">Original</button>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-            {[['none', 'Keep texture'], ['tint', 'Tint'], ['solid', 'Solid colour']].map(([id, label]) => (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+            {COLOUR_MODES.map(([id, label]) => (
               <button
                 key={id}
                 className={`btn ${(look.mode || 'none') === id ? '' : 'secondary'}`}
@@ -285,27 +392,34 @@ export default function RegionEditor({ meshUuid, resolveMesh }) {
               onChange={(e) => patchLook({ glowColor: e.target.value, glow: look.glow || 1.5 })}
             />
           </label>
-          {[['roughness', 'Roughness'], ['metalness', 'Metalness']].map(([key, label]) => (
-            <label key={key} className="slider-row" title={`${label} (Studio / Realistic styles)`}>
-              <span className="slider-label">{label}</span>
-              <input type="range" min={0} max={1} step={0.01} value={look[key] != null ? look[key] : 0.5} onChange={(e) => patchLook({ [key]: Number(e.target.value) })} />
-              <span style={{ minWidth: 34, textAlign: 'right', opacity: look[key] != null ? 1 : 0.55 }}>{(look[key] != null ? look[key] : 0.5).toFixed(2)}</span>
-              <button className="btn secondary" style={{ padding: '0 6px', visibility: look[key] != null ? 'visible' : 'hidden' }} onClick={() => patchLook({ [key]: null })} title="Back to the model's own value">↺</button>
-            </label>
-          ))}
-          <div className="radio-hint">Roughness and metalness show in Studio / Realistic styles; colour and glow show in every style.</div>
 
-          <LightFromPart
-            key={selected.id}
-            defaultPresetId="headlight"
-            uuids={[meshUuid]}
-            regionId={selected.id}
-            label="Turn this region into a light"
-            onCreated={(result, { glow }) => {
-              // A lit tail light should also LOOK lit: give the surface a glow in the light's colour.
-              if (glow && !(look.glow > 0)) patchLook({ glow: GLOW_ON_LIGHT, glowColor: look.glowColor || (result.items[0] && result.items[0].colour) || look.color || null })
-            }}
-          />
+          <details style={{ marginTop: 6 }}>
+            <summary style={{ cursor: 'pointer' }}>Shine (roughness, metalness)</summary>
+            {[['roughness', 'Roughness'], ['metalness', 'Metalness']].map(([key, label]) => (
+              <label key={key} className="slider-row" title={`${label} (Studio / Realistic styles)`}>
+                <span className="slider-label">{label}</span>
+                <input type="range" min={0} max={1} step={0.01} value={look[key] != null ? look[key] : 0.5} onChange={(e) => patchLook({ [key]: Number(e.target.value) })} />
+                <span style={{ minWidth: 34, textAlign: 'right', opacity: look[key] != null ? 1 : 0.55 }}>{(look[key] != null ? look[key] : 0.5).toFixed(2)}</span>
+                <button className="btn secondary" style={{ padding: '0 6px', visibility: look[key] != null ? 'visible' : 'hidden' }} onClick={() => patchLook({ [key]: null })} title="Back to the model's own value">↺</button>
+              </label>
+            ))}
+            <div className="radio-hint">Roughness and metalness show in Studio / Realistic styles; colour and glow show in every style.</div>
+          </details>
+
+          <details style={{ marginTop: 6 }} open={lightOpen} onToggle={(e) => setLightOpen(e.currentTarget.open)}>
+            <summary style={{ cursor: 'pointer' }}>Turn into a light</summary>
+            <LightFromPart
+              key={selected.id}
+              defaultPresetId="headlight"
+              uuids={[meshUuid]}
+              regionId={selected.id}
+              label="Turn this region into a light"
+              onCreated={(result, { glow }) => {
+                // A lit tail light should also LOOK lit: give the surface a glow in the light's colour.
+                if (glow && !(look.glow > 0)) patchLook({ glow: GLOW_ON_LIGHT, glowColor: look.glowColor || (result.items[0] && result.items[0].colour) || look.color || null })
+              }}
+            />
+          </details>
         </div>
       )}
     </div>

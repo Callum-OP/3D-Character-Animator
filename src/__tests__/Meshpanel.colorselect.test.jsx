@@ -61,7 +61,9 @@ describe('Parts panel: multi-select from the list', () => {
     expect(screen.queryByText(/parts selected/)).toBeNull()
     fireEvent.click(row('Eyes'), { shiftKey: true })
     expect(screen.getByText(/2 parts selected/)).toBeTruthy()
-    expect(screen.getByText('Reset selected')).toBeTruthy()
+    // the group actions live in the row menu, and act on the whole selection
+    fireEvent.contextMenu(row('Eyes'))
+    expect(screen.getByRole('menuitem', { name: /Reset 2 parts/ })).toBeTruthy()
   })
 })
 

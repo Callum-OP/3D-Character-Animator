@@ -168,6 +168,24 @@ export function setCharacterObject(id, root, name) {
   o.characterRoots.set(id, { root, name })
 }
 
+// Change the display name of a prop or character. Returns the name that was applied
+// (trimmed), or null if the id is unknown or the name is empty.
+export function renameObject(id, name) {
+  const clean = String(name ?? '').trim()
+  if (!clean) return null
+  const prop = o.objects.find((e) => e.id === id)
+  if (prop) {
+    prop.name = clean
+    return clean
+  }
+  const character = o.characterRoots.get(id)
+  if (character) {
+    character.name = clean
+    return clean
+  }
+  return null
+}
+
 // Unregister one character (when its model is disposed / removed).
 export function clearCharacterObject(id) {
   const entry = o.characterRoots.get(id)

@@ -35,44 +35,61 @@ afterEach(cleanup)
 
 const rowOf = (name) => screen.getByText(new RegExp(`^${name}`)).closest('.obj-row')
 
-describe('Transparency switch in Scene objects', () => {
+// The Transparency switch lives in the row's right-click menu now.
+const openMenu = (name) => fireEvent.contextMenu(rowOf(name))
+const entry = () => screen.queryByRole('menuitemcheckbox', { name: /Transparency/ })
+
+describe('Transparency switch in the object menu', () => {
   it('only appears on models that actually have transparent materials', () => {
     render(<ObjectsPanel />)
-    expect(within(rowOf('Hero')).getByLabelText('Transparency')).toBeTruthy()
-    expect(within(rowOf('Window')).getByLabelText('Transparency')).toBeTruthy()
-    expect(within(rowOf('Plain')).queryByLabelText('Transparency')).toBeNull()
+    openMenu('Hero')
+    expect(entry()).toBeTruthy()
+    cleanup()
+    render(<ObjectsPanel />)
+    openMenu('Window')
+    expect(entry()).toBeTruthy()
+    cleanup()
+    render(<ObjectsPanel />)
+    openMenu('Plain')
+    expect(entry()).toBeNull()
   })
 
   it('starts on, and turning it off disables alpha on every transparent mesh and re-applies materials', () => {
     render(<ObjectsPanel />)
-    const box = within(rowOf('Hero')).getByLabelText('Transparency')
-    expect(box.checked).toBe(true)
-    fireEvent.click(box)
+    openMenu('Hero')
+    expect(entry().getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(entry())
     expect(useStore.getState().meshOverrides['skin-a'].alpha).toBe(false)
     expect(useStore.getState().meshOverrides['skin-b'].alpha).toBe(false)
     expect(apply).toHaveBeenCalled()
-    expect(within(rowOf('Hero')).getByLabelText('Transparency').checked).toBe(false)
-    fireEvent.click(within(rowOf('Hero')).getByLabelText('Transparency'))
+    openMenu('Hero')
+    expect(entry().getAttribute('aria-checked')).toBe('false')
+    fireEvent.click(entry())
     expect(useStore.getState().meshOverrides['skin-a'].alpha).toBe(true)
-    expect(within(rowOf('Hero')).getByLabelText('Transparency').checked).toBe(true)
+    openMenu('Hero')
+    expect(entry().getAttribute('aria-checked')).toBe('true')
   })
 
-  it('clicking the switch does not select the row', () => {
+  it('right-clicking selects the row, and using the switch leaves it selected', () => {
     render(<ObjectsPanel />)
-    fireEvent.click(within(rowOf('Hero')).getByLabelText('Transparency'))
-    expect(useStore.getState().selectedObjectId).toBeNull()
+    openMenu('Hero')
+    expect(useStore.getState().selectedObjectId).toBe(1)
+    fireEvent.click(entry())
+    expect(useStore.getState().selectedObjectId).toBe(1)
   })
 
   it('works for props too', () => {
     render(<ObjectsPanel />)
-    fireEvent.click(within(rowOf('Window')).getByLabelText('Transparency'))
+    openMenu('Window')
+    fireEvent.click(entry())
     expect(useStore.getState().meshOverrides.glass.alpha).toBe(false)
   })
 
   it('writes into a non-active character\'s own overrides', () => {
     transparent[2] = ['eyes']
     render(<ObjectsPanel />)
-    fireEvent.click(within(rowOf('Plain')).getByLabelText('Transparency'))
+    openMenu('Plain')
+    fireEvent.click(entry())
     expect(useStore.getState().characters[2].meshOverrides.eyes.alpha).toBe(false)
     expect(useStore.getState().meshOverrides.eyes).toBeUndefined()
     delete transparent[2]

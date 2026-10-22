@@ -173,6 +173,7 @@ import {
   getObjectMaterialModelForMesh,
   setObjectStyle,
   setObjectOutline,
+  renameObject,
   applyAllObjectStyles,
   getObjectMaterialModelById,
   setObjectCastShadow,
@@ -2120,6 +2121,13 @@ export function setObjectOutlineById(id, outline) {
 export function setObjectCastShadowById(id, castShadow) {
   setObjectCastShadow(id, castShadow)
   useStore.getState().setObjectCastShadow(id, castShadow)
+}
+
+// Rename a prop, image or character (updates the scene + the store).
+export function renameObjectById(id, name) {
+  const applied = renameObject(id, name)
+  if (applied) useStore.getState().renameSceneObject(id, applied)
+  return applied
 }
 
 export function resetObjectById(id) {

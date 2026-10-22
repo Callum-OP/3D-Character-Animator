@@ -23,6 +23,7 @@ import {
   getLightTransform,
   setLightTransform,
   setLightVisible,
+  renameLight,
   snapshotLightTransform,
   setLightUniformScale,
   commitLightTransform,
@@ -32,7 +33,9 @@ import { LIGHT_EFFECT_TYPES, MIN_EFFECT_RATE, MAX_EFFECT_RATE, MIN_EFFECT_PERIOD
 import EditableValue from './EditableValue.jsx'
 import TransformEditor from './TransformEditor.jsx'
 import RadialScale from './RadialScale.jsx'
-import { copySceneItem, hasSceneClipboard, pasteSceneItem } from '../three/sceneClipboard.js'
+import { hasSceneClipboard, pasteSceneItem } from '../three/sceneClipboard.js'
+import { useRowMenu, RowMenuButton, RowName } from './rowMenu.jsx'
+import { lightMenu } from './rowMenus.js'
 
 // Side-panel section: add point lights, move them around the character, and
 // adjust colour/brightness/shadows per light. Separate from the built-in key
@@ -56,6 +59,8 @@ export default function LightsPanel() {
   const scaleBefore = useRef(null)
   const [scaleDragging, setScaleDragging] = useState(false)
   const [scaleValue, setScaleValue] = useState(1)
+  const [renamingId, setRenamingId] = useState(null)
+  const rowMenu = useRowMenu()
 
   const selected = sceneLights.find((lt) => lt.id === selectedLightId) || null
   const keyCount = selected ? (animData.lights?.[selected.name] || []).length : 0
@@ -90,6 +95,23 @@ export default function LightsPanel() {
 
   function onVisibility(id, visible) {
     setLightVisible(id, visible)
+  }
+
+  // Names key a light's animation, so a rename moves the keyframes across (in the store).
+  function onRename(id, name) {
+    const applied = renameLight(id, name)
+    if (applied) st().renameSceneLight(id, applied)
+    setRenamingId(null)
+  }
+
+  // Right-click (or ⋯) on a row selects that light, then shows its menu.
+  function buildMenu(lt) {
+    if (selectedLightId !== lt.id) {
+      setSelectedLightId(lt.id)
+      selectLight(lt.id)
+      setMode('object')
+    }
+    return lightMenu(lt, { startRename: setRenamingId, onRemove })
   }
 
   function onColor(color) {
@@ -234,32 +256,68 @@ export default function LightsPanel() {
                 key={lt.id}
                 className={'obj-row' + (lt.id === selectedLightId ? ' selected' : '')}
                 title={lt.name}
-                onClick={() => onSelect(lt.id)}
+                onContextMenu={(e) => {
+                  const { items, run } = buildMenu(lt)
+                  rowMenu.openAt(e, items, run)
+                }}
+                onClick={(e) => {
+                  if (e.detail > 1) return // second click of a double-click (rename)
+                  onSelect(lt.id)
+                }}
               >
-                <span className="obj-name">
-                  {lt.directional ? '🔦' : '💡'} {lt.name}
-                  {rimFollowLight && rimFollowLightId === lt.id && (
-                    <span title="Driving the rim light" style={{ marginLeft: 6 }}>🎯</span>
-                  )}
-                  {(animData.lights?.[lt.name] || []).length > 0 && (
-                    <span className="kf-tag" style={{ marginLeft: 6 }}>
-                      {(animData.lights?.[lt.name] || []).length} keys
-                    </span>
-                  )}
-                </span>
-                <button
-                  className="obj-eye"
-                  title={lt.visible === false ? 'Show light' : 'Hide light'}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onVisibility(lt.id, lt.visible === false)
-                  }}
-                >
-                  {lt.visible === false ? '🙈' : '👁'}
-                </button>
+                <div className="obj-row-main">
+                  <RowName
+                    editing={renamingId === lt.id}
+                    value={lt.name}
+                    onCommit={(name) => onRename(lt.id, name)}
+                    onCancel={() => setRenamingId(null)}
+                    onDoubleClick={() => setRenamingId(lt.id)}
+                  >
+                    {lt.directional ? '🔦' : '💡'} {lt.name}
+                    {rimFollowLight && rimFollowLightId === lt.id && (
+                      <span title="Driving the rim light" style={{ marginLeft: 6 }}>🎯</span>
+                    )}
+                    {(animData.lights?.[lt.name] || []).length > 0 && (
+                      <span className="kf-tag" style={{ marginLeft: 6 }}>
+                        {(animData.lights?.[lt.name] || []).length} keys
+                      </span>
+                    )}
+                  </RowName>
+                  <button
+                    className="obj-eye"
+                    title={lt.visible === false ? 'Show light' : 'Hide light'}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onVisibility(lt.id, lt.visible === false)
+                    }}
+                  >
+                    {lt.visible === false ? '🙈' : '👁'}
+                  </button>
+                  <RowMenuButton
+                    onOpen={(e) => {
+                      const { items, run } = buildMenu(lt)
+                      rowMenu.openFromButton(e, items, run)
+                    }}
+                  />
+                  <button
+                    className="obj-del"
+                    title={`Remove ${lt.name}`}
+                    aria-label={`Remove ${lt.name}`}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onRemove(lt.id)
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
               </div>
             ))}
           </div>
+          <p className="obj-row-hint">
+            Right-click a light (or press ⋯) to rename, duplicate, change its preset or animation, or delete it.
+          </p>
+          {rowMenu.element}
 
           {selected && (
             <div className="joint-controls">
@@ -538,38 +596,6 @@ export default function LightsPanel() {
                   title="Save this light's position/colour/intensity at the Animate panel's insert time — key it at two times and it glides between them"
                 >
                   Key light{keyCount ? ` (${keyCount})` : ''}
-                </button>
-              </div>
-
-              {/* Copy / Remove live down here, away from the row's quick toggles,
-                  with Remove pushed to the far side so it can't be hit by accident. */}
-              <div
-                className="light-danger-zone"
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  gap: 8,
-                  marginTop: 16,
-                  paddingTop: 10,
-                  borderTop: '1px solid var(--panel-border)',
-                }}
-              >
-                <button
-                  className="btn secondary"
-                  style={{ flex: '0 0 auto' }}
-                  title={`Copy ${selected.name}`}
-                  onClick={() => copySceneItem('light', selected.id)}
-                >
-                  ⧉ Copy light
-                </button>
-                <button
-                  className="btn secondary"
-                  style={{ flex: '0 0 auto', color: '#ff6b6b', borderColor: '#ff6b6b' }}
-                  title={`Remove ${selected.name}`}
-                  onClick={() => onRemove(selected.id)}
-                >
-                  Remove light
                 </button>
               </div>
             </div>

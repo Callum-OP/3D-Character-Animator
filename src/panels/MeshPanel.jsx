@@ -4,8 +4,6 @@ import {
   getMeshDelta,
   setMeshDelta,
   getMeshKeyValue,
-  resetMesh,
-  resetMeshes,
   resetAllMeshes,
   getLinkedMorphTargets,
   getMeshIndex,
@@ -16,7 +14,6 @@ import {
   getCurrentModel,
   requestRender,
   setMeshVisibleByUuid,
-  setCameraToMesh,
 
   setMeshesVisibleByUuids,
   extractPartsToObject,
@@ -45,6 +42,8 @@ import EditableValue from './EditableValue.jsx'
 import ColorControl from './ColorControl.jsx'
 import MaterialEditor from './MaterialEditor.jsx'
 import RegionEditor from './RegionEditor.jsx'
+import { useRowMenu, RowMenuButton } from './rowMenu.jsx'
+import { partMenu, partTargets } from './rowMenus.js'
 import LightFromPart from './LightFromPart.jsx'
 import { withGlowRegion } from '../three/glowRegions.js'
 import { recordOverrideEdit } from '../three/materialHistory.js'
@@ -91,6 +90,7 @@ export default function MeshPanel() {
   const [brushSize, setBrushSizeState] = useState(3)
   const [fabricPreset, setFabricPreset] = useState('cotton')
   const [shrinkwrap, setShrinkwrapState] = useState(false)
+  const rowMenu = useRowMenu()
 
   const currentModel = getCurrentModel()
   const meshes = modelInfo?.meshes || []
@@ -116,10 +116,10 @@ export default function MeshPanel() {
   // primary (last-picked) part's current colour.
   const colorOverride = selectedMeshUuid ? meshOverrides[selectedMeshUuid] : null
 
-  async function onExtract(removeOriginals) {
+  async function onExtract(removeOriginals, uuids = selectedMeshUuids) {
     setExtracting(true)
     try {
-      const result = await extractPartsToObject(selectedMeshUuids, { removeOriginals })
+      const result = await extractPartsToObject(uuids, { removeOriginals })
       setExtractMsg(result.message)
       if (result.ok) setSelectedMeshUuid(null)
     } finally {
@@ -185,12 +185,68 @@ export default function MeshPanel() {
     setBrushSize(n)
   }
 
-  function onKeyPart() {
-    if (selectedIndex < 0 || !selectedMesh) return
-    const key = getMeshKeyValue(selectedMesh.uuid)
+  function onKeyPart(uuid) {
+    const index = meshes.findIndex((m) => m.uuid === uuid)
+    if (index < 0) return
+    const key = getMeshKeyValue(uuid)
     if (!key) return
-    const t = snap(insertTime)
-    st().addMeshKeyframe(selectedIndex, t, key)
+    st().addMeshKeyframe(index, snap(insertTime), key)
+  }
+
+  // The menu for a part row. If the row is part of a multi-selection it acts on all of
+  // them, otherwise on just that part (and right-clicking an unselected row selects it).
+  function buildMenu(uuid) {
+    if (!selectedMeshUuids.includes(uuid)) setSelectedMeshUuid(uuid)
+    return partMenu(partTargets(uuid), {
+      nameOf: (u) => meshes.find((m) => m.uuid === u)?.name || objectPartGroups.flatMap((g) => g.parts).find((x) => x.uuid === u)?.name,
+      isCharacterPart: (u) => meshes.some((m) => m.uuid === u),
+      keyPart: onKeyPart,
+      extract: onExtract,
+      extracting,
+    })
+  }
+
+  // One row of a parts list: name, eye, ⋯. Same for the character's parts and for props.
+  function renderPartRow(part) {
+    const hidden = meshOverrides[part.uuid]?.visible === false
+    return (
+      <div
+        key={part.uuid}
+        className={'obj-row' + (selectedMeshUuids.includes(part.uuid) ? ' selected' : '') + (multi && part.uuid === selectedMeshUuid ? ' obj-row-primary' : '')}
+        title={part.name}
+        onClick={(e) => onRowClick(e, part.uuid)}
+        onContextMenu={(e) => {
+          const { items, run } = buildMenu(part.uuid)
+          rowMenu.openAt(e, items, run)
+        }}
+      >
+        <div className="obj-row-main">
+          <span className="obj-name" style={hidden ? { opacity: 0.45 } : undefined}>
+            {part.name}
+          </span>
+          <button
+            className="obj-eye"
+            title={hidden ? 'Show this part' : 'Hide this part'}
+            onClick={(e) => {
+              e.stopPropagation()
+              // Eye on a part that's part of a multi-selection flips the
+              // whole selection together.
+              if (selectedMeshUuids.length > 1 && selectedMeshUuids.includes(part.uuid)) setMeshesVisibleByUuids(selectedMeshUuids, hidden)
+              else setMeshVisibleByUuid(part.uuid, hidden)
+            }}
+          >
+            {hidden ? '🙈' : '👁'}
+          </button>
+          <RowMenuButton
+            label="Part options"
+            onOpen={(e) => {
+              const { items, run } = buildMenu(part.uuid)
+              rowMenu.openFromButton(e, items, run)
+            }}
+          />
+        </div>
+      </div>
+    )
   }
 
   useEffect(() => {
@@ -239,9 +295,7 @@ export default function MeshPanel() {
     <div className="panel">
       <h2>Parts</h2>
       <p className="panel-hint">
-        Click a part of the character or an object (eyes, hair, clothing, a
-        prop's pieces…) then drag the gizmo to move, rotate or resize just
-        that piece.
+        Pick a part of the character or an object, then drag the gizmo to move, rotate or resize just that piece.
       </p>
 
       <div className="seg" title="What the gizmo does when you drag it">
@@ -273,27 +327,27 @@ export default function MeshPanel() {
         </button>
       </div>
 
+      <div className="obj-list" style={{ marginTop: 10 }}>
+        {meshes.map((mesh) => renderPartRow(mesh))}
+      </div>
+
+      {objectPartGroups.map((group) => (
+        <div key={group.objectId} className="obj-list" style={{ marginTop: 10 }}>
+          <div className="joint-parent" style={{ marginBottom: 4 }} title={group.objectName}>
+            {group.objectName}
+          </div>
+          {group.parts.map((part) => renderPartRow(part))}
+        </div>
+      ))}
+      <p className="obj-row-hint">Right-click a part (or press ⋯) to hide it, reset it, frame it, key it or make it into an object.</p>
+      {extractMsg && <div className="pose-msg">{extractMsg}</div>}
+      {rowMenu.element}
+
       {multi && (
         <div className="joint-controls">
           <div className="pose-msg">
             {selectedMeshUuids.length} parts selected — drag the 3D gizmo to move, rotate or
             resize them together.
-          </div>
-          <div className="kf-actions" style={{ marginTop: 6 }}>
-            <button
-              className="btn secondary"
-              onClick={() => resetMeshes(selectedMeshUuids)}
-              title="Put every selected part back where it started (one undo step)"
-            >
-              Reset selected
-            </button>
-            <button
-              className="btn secondary"
-              onClick={() => setSelectedMeshUuid(selectedMeshUuid)}
-              title="Keep only the last part you picked"
-            >
-              Select only last
-            </button>
           </div>
         </div>
       )}
@@ -304,6 +358,14 @@ export default function MeshPanel() {
             <span className="joint-name" title={selectedMesh.name}>
               {selectedMesh.name}
             </span>
+            {keyCount > 0 && <span className="kf-tag">{keyCount} keys</span>}
+            <RowMenuButton
+              label="Part options"
+              onOpen={(e) => {
+                const { items, run } = buildMenu(selectedMesh.uuid)
+                rowMenu.openFromButton(e, items, run)
+              }}
+            />
           </div>
 
           <XformRow
@@ -326,11 +388,11 @@ export default function MeshPanel() {
           />
 
           {selectedMesh && morphEntries.length > 0 && !isPropPart && (
-            <div className="joint-controls" style={{ marginTop: 8 }}>
-              <div className="joint-header">
-                <span className="joint-name">Shape keys</span>
-                <span className="joint-parent">{selectedMesh.name}</span>
-              </div>
+            <details className="joint-controls" style={{ marginTop: 8 }}>
+              <summary style={{ cursor: 'pointer' }}>
+                <span className="joint-name">Shape keys</span>{' '}
+                <span className="joint-parent">{morphEntries.length}</span>
+              </summary>
               <label
                 className="morph-label"
                 style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}
@@ -402,34 +464,8 @@ export default function MeshPanel() {
                   </div>
                 )
               })}
-            </div>
+            </details>
           )}
-
-          <div className="kf-actions" style={{ marginTop: 6 }}>
-            <button
-              className="btn secondary"
-              onClick={() => resetMesh(selectedMesh.uuid)}
-              title="Put only this part back where it started"
-            >
-              Reset this part
-            </button>
-            <button
-              className="btn secondary"
-              onClick={() => setCameraToMesh(selectedMesh.uuid)}
-              title="Frame this part in the viewport and orbit around it (F)"
-            >
-              Set camera to part
-            </button>
-            {!isPropPart && (
-              <button
-                className="btn secondary"
-                onClick={onKeyPart}
-                title="Save this part's position/rotation/size at the Animate panel's insert time — key it at two times and it animates between them"
-              >
-                Key part{keyCount ? ` (${keyCount})` : ''}
-              </button>
-            )}
-          </div>
         </div>
       )}
 
@@ -451,33 +487,11 @@ export default function MeshPanel() {
       )}
 
       {selectedMeshUuids.length > 0 && (
-        <div className="field" style={{ marginTop: 10 }}>
-          <label className="field-label">Turn into an object</label>
-          <div className="kf-actions">
-            <button
-              className="btn secondary"
-              disabled={extracting}
-              title="Move the selected part(s) out into a new object of their own (the originals are hidden)"
-              onClick={() => onExtract(true)}
-            >
-              {extracting ? 'Working…' : multi ? `Extract ${selectedMeshUuids.length} parts` : 'Extract to object'}
-            </button>
-            <button
-              className="btn secondary"
-              disabled={extracting}
-              title="Make a new object from the selected part(s) and leave the originals where they are"
-              onClick={() => onExtract(false)}
-            >
-              Copy to object
-            </button>
-          </div>
-          <div className="radio-hint" style={{ marginTop: 4 }}>
-            {extractMsg || 'Select several parts (Shift-click) to make them one object, e.g. every piece of one car.'}
-          </div>
-        </div>
-      )}
-
-      {selectedMeshUuids.length > 0 && (
+        <details className="joint-controls" style={{ marginTop: 10 }}>
+          <summary style={{ cursor: 'pointer' }}>
+            <span className="joint-name">Turn into a light</span>{' '}
+            <span className="joint-parent">glowing parts, headlights…</span>
+          </summary>
         <LightFromPart
           uuids={selectedMeshUuids}
           label={selectedMeshUuids.length > 1 ? `Turn ${selectedMeshUuids.length} parts into lights` : 'Turn into a light'}
@@ -497,6 +511,7 @@ export default function MeshPanel() {
             applyModelMaterials()
           }}
         />
+        </details>
       )}
 
       {selectedMeshUuids.length === 1 && selectedMeshUuid && (
@@ -521,11 +536,11 @@ export default function MeshPanel() {
       )}
 
       {selectedMesh && !isPropPart && !multi && (
-        <div className="joint-controls" style={{ marginTop: 10 }}>
-          <div className="joint-header">
-            <span className="joint-name">Cloth</span>
-            <span className="joint-parent">{selectedMesh.name}</span>
-          </div>
+        <details className="joint-controls" style={{ marginTop: 10 }}>
+          <summary style={{ cursor: 'pointer' }}>
+            <span className="joint-name">Cloth</span>{' '}
+            <span className="joint-parent">{clothOn ? 'on' : 'drape a cape, skirt, sash…'}</span>
+          </summary>
           <label
             className="morph-label"
             style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}
@@ -637,73 +652,8 @@ export default function MeshPanel() {
               </button>
             </>
           )}
-        </div>
+        </details>
       )}
-
-      <div className="obj-list" style={{ marginTop: 10 }}>
-        {meshes.map((mesh) => {
-          const hidden = meshOverrides[mesh.uuid]?.visible === false
-          return (
-            <div
-              key={mesh.uuid}
-              className={'obj-row' + (selectedMeshUuids.includes(mesh.uuid) ? ' selected' : '') + (multi && mesh.uuid === selectedMeshUuid ? ' obj-row-primary' : '')}
-              title={mesh.name}
-              onClick={(e) => onRowClick(e, mesh.uuid)}
-            >
-              <span className="obj-name" style={hidden ? { opacity: 0.45 } : undefined}>
-                {mesh.name}
-              </span>
-              <button
-                className="obj-eye"
-                title={hidden ? 'Show this part' : 'Hide this part'}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  // Eye on a part that's part of a multi-selection flips the
-                  // whole selection together.
-                  if (selectedMeshUuids.length > 1 && selectedMeshUuids.includes(mesh.uuid)) setMeshesVisibleByUuids(selectedMeshUuids, hidden)
-                  else setMeshVisibleByUuid(mesh.uuid, hidden)
-                }}
-              >
-                {hidden ? '🙈' : '👁'}
-              </button>
-            </div>
-          )
-        })}
-      </div>
-
-      {objectPartGroups.map((group) => (
-        <div key={group.objectId} className="obj-list" style={{ marginTop: 10 }}>
-          <div className="joint-parent" style={{ marginBottom: 4 }} title={group.objectName}>
-            {group.objectName}
-          </div>
-          {group.parts.map((part) => {
-            const hidden = meshOverrides[part.uuid]?.visible === false
-            return (
-              <div
-                key={part.uuid}
-                className={'obj-row' + (selectedMeshUuids.includes(part.uuid) ? ' selected' : '') + (multi && part.uuid === selectedMeshUuid ? ' obj-row-primary' : '')}
-                title={part.name}
-                onClick={(e) => onRowClick(e, part.uuid)}
-              >
-                <span className="obj-name" style={hidden ? { opacity: 0.45 } : undefined}>
-                  {part.name}
-                </span>
-                <button
-                  className="obj-eye"
-                  title={hidden ? 'Show this part' : 'Hide this part'}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    if (selectedMeshUuids.length > 1 && selectedMeshUuids.includes(part.uuid)) setMeshesVisibleByUuids(selectedMeshUuids, hidden)
-                    else setMeshVisibleByUuid(part.uuid, hidden)
-                  }}
-                >
-                  {hidden ? '🙈' : '👁'}
-                </button>
-              </div>
-            )
-          })}
-        </div>
-      ))}
 
       <div className="pose-hint">
         Click a part or a name to select, then drag the gizmo. Shift/Ctrl-click

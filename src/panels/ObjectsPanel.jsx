@@ -4,19 +4,8 @@ import {
   addObjectFile,
   addImageFile,
   removeObjectById,
-  resetObjectById,
   setObjectVisibleById,
-  setObjectStyleById,
-  setObjectOutlineById,
-  setObjectCastShadowById,
-  setObjectNightImmuneById,
-  setObjectShadowImmuneById,
-  setObjectAttachmentById,
-  keyObjectAttachmentById,
-  clearObjectAttachmentTimeline,
-  scrubAllTimeline,
-  setCameraToObject,
-  getTransparentMeshUuidsForObject,
+  renameObjectById,
   getMeshUuidsForObject,
   applyModelMaterials,
 } from '../three/scene.js'
@@ -33,6 +22,8 @@ import { MIN_UNIFORM_SCALE, clampUniformScale } from '../three/scaleLimits.js'
 import TransformEditor from './TransformEditor.jsx'
 import ColorControl from './ColorControl.jsx'
 import { modelFileFromInput, MODEL_ACCEPT } from '../three/modelBundle.js'
+import { useRowMenu, RowMenuButton, RowName } from './rowMenu.jsx'
+import { objectMenu, objectTargets } from './rowMenus.js'
 
 // Side-panel section: add props / backgrounds around the character, then move,
 // rotate or resize the selected one. Objects are independent of the character —
@@ -43,32 +34,16 @@ const MODES = [
   { value: 'scale', label: 'Resize' },
 ]
 
-// Per-object Look override. 'auto' means "match the character's Look panel
-// settings live" — everything else pins the prop to that style regardless of
-// what the character is doing.
-const STYLE_OPTIONS = [
-  { value: 'auto', label: 'Match scene' },
-  { value: 'unlit', label: 'Flat colour' },
-  { value: 'toon', label: 'Cartoon' },
-  { value: 'soft', label: 'Soft Anime' },
-  { value: 'standard', label: 'Studio' },
-  { value: 'realistic', label: 'Realistic' },
-]
-
 export default function ObjectsPanel() {
   const modelInfo = useStore((s) => s.modelInfo)
   const boneNames = modelInfo?.bones ? modelInfo.bones.map((b) => b.name) : []
   const sceneObjects = useStore((s) => s.sceneObjects)
-  const nightOn = useStore((s) => s.night.enabled)
   const selectedObjectId = useStore((s) => s.selectedObjectId)
   const selectedObjectIds = useStore((s) => s.selectedObjectIds)
-  const globalTime = useStore((s) => s.globalTime)
-  const objectAttachmentData = useStore((s) => s.objectAttachmentData)
   const objectMode = useStore((s) => s.objectMode)
   const meshOverrides = useStore((s) => s.meshOverrides)
   const characterRoster = useStore((s) => s.characters)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
-  const setMeshesAlpha = useStore((s) => s.setMeshesAlpha)
   const setMeshesColor = useStore((s) => s.setMeshesColor)
   const setSelectedObjectId = useStore((s) => s.setSelectedObjectId)
   const toggleObjectSelection = useStore((s) => s.toggleObjectSelection)
@@ -86,6 +61,30 @@ export default function ObjectsPanel() {
   // committed (parsed + applied) on blur/Enter.
   const [scaleText, setScaleText] = useState(null)
   const [keyAttachmentAtPlayhead, setKeyAttachmentAtPlayhead] = useState(false)
+  const [renamingId, setRenamingId] = useState(null)
+  const rowMenu = useRowMenu()
+
+  // The menu for a row. If the row is part of a multi-selection it acts on all of them,
+  // otherwise on just that row (and right-clicking an unselected row selects it first,
+  // the same as right-clicking in the 3D view).
+  function buildMenu(o) {
+    if (!selectedObjectIds.includes(o.id)) setSelectedObjectId(o.id)
+    return objectMenu(objectTargets(o), {
+      boneNames,
+      keyAtPlayhead: keyAttachmentAtPlayhead,
+      setKeyAtPlayhead: setKeyAttachmentAtPlayhead,
+      startRename: setRenamingId,
+      notify: setMsg,
+    })
+  }
+  const openRowMenu = (e, o) => {
+    const { items, run } = buildMenu(o)
+    rowMenu.openAt(e, items, run)
+  }
+  const openRowMenuFromButton = (e, o) => {
+    const { items, run } = buildMenu(o)
+    rowMenu.openFromButton(e, items, run)
+  }
 
   function onPick(e) {
     const picked = Array.from(e.target.files || [])
@@ -342,256 +341,94 @@ export default function ObjectsPanel() {
 
           <div className="obj-list">
             {sceneObjects.map((o) => {
-              // Models whose textures use alpha (hair cards, glass, or skin that lets the mouth
-              // show through…) keep it by default; this switch turns it off. Only offered when
-              // the model has some.
-              const alphaMeshes = getTransparentMeshUuidsForObject(o)
-              const overridesFor =
-                o.isCharacter && o.id !== activeCharacterId ? characterRoster[o.id]?.meshOverrides || {} : meshOverrides
-              const alphaOn = alphaMeshes.every((uuid) => overridesFor[uuid]?.alpha !== false)
+              // Small status marks for anything that differs from the default, so a row still
+              // tells you what's been changed without a button for every setting. The menu
+              // (right-click, or ⋯) is where they're switched.
+              const flags = []
+              if (o.outline) flags.push(['✏️', 'Ink outline on'])
+              if (o.castShadow === false) flags.push(['🚫', 'Does not cast shadows'])
+              if (o.nightImmune) flags.push(['☀️', 'Ignores Night mode (stays in daylight)'])
+              if (o.shadowImmune) flags.push(['🔆', 'Never shadowed by other objects'])
               return (
-              <div
-                key={o.id}
-                className={
-                  'obj-row' +
-                  (selectedObjectIds.includes(o.id) ? ' selected' : '') +
-                  (multiSelected && o.id === selectedObjectId ? ' obj-row-primary' : '')
-                }
-                title={multiSelected ? o.name : o.name + ' (Shift/Ctrl-click to select more)'}
-                onClick={(e) => {
-                  const additive = e.shiftKey || e.ctrlKey || e.metaKey
-                  if (!additive && selectedObjectIds.length <= 1) {
-                    // Plain click, nothing already multi-selected: keep the old
-                    // "click again to deselect" toggle behaviour.
-                    setSelectedObjectId(o.id === selectedObjectId ? null : o.id)
-                  } else {
-                    toggleObjectSelection(o.id, additive)
+                <div
+                  key={o.id}
+                  className={
+                    'obj-row' +
+                    (selectedObjectIds.includes(o.id) ? ' selected' : '') +
+                    (multiSelected && o.id === selectedObjectId ? ' obj-row-primary' : '')
                   }
-                }}
-              >
-                <div className="obj-row-main">
-                  <span className="obj-name">{o.isCharacter ? `${o.name} (character)` : o.name}</span>
-                  <button
-                    className="obj-eye"
-                    title={o.visible === false ? 'Show' : 'Hide'}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setObjectVisibleById(o.id, o.visible === false)
-                    }}
-                  >
-                    {o.visible === false ? '🙈' : '👁'}
-                  </button>
-                  {(nightOn || o.nightImmune) && (
+                  title={multiSelected ? o.name : o.name + ' (Shift/Ctrl-click to select more)'}
+                  onContextMenu={(e) => openRowMenu(e, o)}
+                  onClick={(e) => {
+                    if (e.detail > 1) return // the second click of a double-click (rename) shouldn't toggle again
+                    const additive = e.shiftKey || e.ctrlKey || e.metaKey
+                    if (!additive && selectedObjectIds.length <= 1) {
+                      // Plain click, nothing already multi-selected: keep the old
+                      // "click again to deselect" toggle behaviour.
+                      setSelectedObjectId(o.id === selectedObjectId ? null : o.id)
+                    } else {
+                      toggleObjectSelection(o.id, additive)
+                    }
+                  }}
+                >
+                  <div className="obj-row-main">
+                    <RowName
+                      editing={renamingId === o.id}
+                      value={o.name}
+                      onCommit={(name) => {
+                        renameObjectById(o.id, name)
+                        setRenamingId(null)
+                      }}
+                      onCancel={() => setRenamingId(null)}
+                      onDoubleClick={() => setRenamingId(o.id)}
+                    >
+                      {o.name}
+                    </RowName>
+                    {o.isCharacter && <span className="obj-sub">character</span>}
+                    {o.attachedBoneName && (
+                      <span className="obj-sub" title={`Attached to the "${o.attachedBoneName}" bone`}>
+                        → {o.attachedBoneName}
+                      </span>
+                    )}
+                    {flags.length > 0 && (
+                      <span className="obj-flags">
+                        {flags.map(([icon, why]) => (
+                          <span key={icon} title={why}>
+                            {icon}
+                          </span>
+                        ))}
+                      </span>
+                    )}
                     <button
                       className="obj-eye"
-                      title={
-                        o.nightImmune
-                          ? 'Ignores Night mode (stays in daylight) — click to darken it with the rest of the scene'
-                          : 'Darkened by Night mode — click to keep this in daylight'
-                      }
-                      aria-pressed={!!o.nightImmune}
+                      title={o.visible === false ? 'Show' : 'Hide'}
                       onClick={(e) => {
                         e.stopPropagation()
-                        setObjectNightImmuneById(o.id, !o.nightImmune)
+                        setObjectVisibleById(o.id, o.visible === false)
                       }}
                     >
-                      {o.nightImmune ? '☀️' : '🌙'}
+                      {o.visible === false ? '🙈' : '👁'}
                     </button>
-                  )}
-                  <button
-                    className="obj-eye"
-                    title={
-                      o.shadowImmune
-                        ? 'Never shadowed by other objects (still follows Night mode) — click to let shadows fall on it again'
-                        : 'Shadows from other objects fall on this — click to make it immune to them (Night mode still applies)'
-                    }
-                    aria-pressed={!!o.shadowImmune}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setObjectShadowImmuneById(o.id, !o.shadowImmune)
-                    }}
-                  >
-                    {o.shadowImmune ? '🔆' : '🕶'}
-                  </button>
-                  <button
-                    className="obj-del"
-                    title={o.isCharacter ? 'Delete character (Ctrl+Z to undo)' : 'Remove'}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      confirmDeleteObject(o)
-                    }}
-                  >
-                    ×
-                  </button>
-                </div>
-
-                {alphaMeshes.length > 0 && (
-                  <div className="obj-row-controls">
-                    <label
-                      className="obj-alpha"
-                      title="This model uses transparent textures. Turn off if inner parts (mouth, teeth) show through the skin — hair, lashes or glass that rely on it will look solid."
-                      onClick={(e) => e.stopPropagation()}
+                    <RowMenuButton onOpen={(e) => openRowMenuFromButton(e, o)} />
+                    <button
+                      className="obj-del"
+                      title={o.isCharacter ? 'Delete character (Ctrl+Z to undo)' : 'Remove'}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        confirmDeleteObject(o)
+                      }}
                     >
-                      <input
-                        type="checkbox"
-                        checked={alphaOn}
-                        onChange={(e) => {
-                          setMeshesAlpha(alphaMeshes, e.target.checked, o.isCharacter ? o.id : null)
-                          applyModelMaterials()
-                        }}
-                      />
-                      Transparency
-                    </label>
+                      ×
+                    </button>
                   </div>
-                )}
-
-                {(o.kind === 'model' || (!o.isCharacter && boneNames.length > 0)) && (
-                  <div className="obj-row-controls">
-                    {o.kind === 'model' && (
-                      <>
-                        <select
-                          className="select"
-                          style={{ fontSize: 11, padding: '2px 4px' }}
-                          title="How this prop is shaded — 'Match scene' follows the character's Look panel"
-                          value={o.style || 'auto'}
-                          onClick={(e) => e.stopPropagation()}
-                          onChange={(e) => setObjectStyleById(o.id, e.target.value)}
-                        >
-                          {STYLE_OPTIONS.map((opt) => (
-                            <option key={opt.value} value={opt.value}>
-                              {opt.label}
-                            </option>
-                          ))}
-                        </select>
-                        <button
-                          className="obj-eye"
-                          title={o.outline ? 'Ink outline on — click to turn off' : 'No ink outline — click to turn on'}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setObjectOutlineById(o.id, !o.outline)
-                          }}
-                        >
-                          {o.outline ? '✏️' : '⬜'}
-                        </button>
-                        <button
-                          className="obj-eye"
-                          title={
-                            o.castShadow === false
-                              ? 'Shadows off — click to cast shadows'
-                              : 'Casts shadows — click to ignore shadows'
-                          }
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setObjectCastShadowById(o.id, o.castShadow === false)
-                          }}
-                        >
-                          {o.castShadow === false ? '🚫' : '🌑'}
-                        </button>
-                      </>
-                    )}
-                    {!o.isCharacter && boneNames.length > 0 && (
-                      <>
-                        <select
-                          className="select"
-                          style={{ fontSize: 11, padding: '2px 4px' }}
-                          title={
-                            keyAttachmentAtPlayhead
-                              ? `Key attachment at ${globalTime.toFixed(2)}s on the All animation timeline`
-                              : o.attachedBoneName
-                                ? `Attached to "${o.attachedBoneName}" — follows that bone. Choose another bone, or "Not attached" to detach.`
-                                : 'Attach this to a bone (e.g. a gun to a hand bone) so it follows posing and animation'
-                          }
-                          value={o.attachedBoneName || ''}
-                          onClick={(e) => e.stopPropagation()}
-                          onChange={(e) => {
-                            const boneName = e.target.value || null
-                            if (keyAttachmentAtPlayhead) {
-                              const ok = keyObjectAttachmentById(o.id, boneName, globalTime)
-                              setMsg(ok
-                                ? `Attachment keyed at ${globalTime.toFixed(2)}s.`
-                                : `Could not find "${boneName}" on the active character.`)
-                            } else {
-                              setObjectAttachmentById(o.id, boneName)
-                            }
-                          }}
-                        >
-                          <option value="">Not attached</option>
-                          {boneNames.map((name) => (
-                            <option key={name} value={name}>
-                              {name}
-                            </option>
-                          ))}
-                        </select>
-                        <label className="radio-hint" style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                          <input
-                            type="checkbox"
-                            checked={keyAttachmentAtPlayhead}
-                            onClick={(e) => e.stopPropagation()}
-                            onChange={(e) => setKeyAttachmentAtPlayhead(e.target.checked)}
-                          />
-                          Key at {globalTime.toFixed(2)}s
-                        </label>
-                        {objectAttachmentData?.[o.animationKey]?.keys?.map((key) => (
-                          <button
-                            key={key.time}
-                            className="btn secondary"
-                            title={`Go to attachment key at ${key.time.toFixed(2)}s`}
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              scrubAllTimeline(key.time)
-                            }}
-                          >
-                            {key.boneName ? `${key.boneName} · ` : 'Detach · '}{key.time.toFixed(2)}s
-                          </button>
-                        ))}
-                        {objectAttachmentData?.[o.animationKey] && (
-                          <button
-                            className="btn secondary"
-                            title="Remove this object's timed attachment keys"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              clearObjectAttachmentTimeline(o.id)
-                              setMsg('Timed attachment keys cleared.')
-                            }}
-                          >
-                            Clear keys
-                          </button>
-                        )}
-                      </>
-                    )}
-                  </div>
-                )}
-              </div>
+                </div>
               )
             })}
           </div>
-
-          {selectedObjectIds.length > 0 && (
-            <div className="kf-actions" style={{ marginTop: 8 }}>
-              {!multiSelected && (
-                <button
-                  className="btn secondary"
-                  onClick={() => setCameraToObject(selectedObjectId)}
-                  title="Frame this object in the viewport and orbit around it"
-                >
-                  Set camera to object
-                </button>
-              )}
-              <button
-                className="btn secondary"
-                onClick={() => selectedObjectIds.forEach((id) => resetObjectById(id))}
-                title={
-                  multiSelected
-                    ? 'Reset every selected object back to the origin'
-                    : sceneObjects.find((o) => o.id === selectedObjectId)?.attachedBoneName
-                      ? 'Reset position (relative to the bone it’s attached to)'
-                      : 'Reset position'
-                }
-              >
-                {multiSelected ? `Reset position (${selectedObjectIds.length})` : 'Reset position'}
-              </button>
-            </div>
-          )}
+          <p className="obj-row-hint">
+            Right-click an object (or press ⋯) to rename, duplicate, change its look and shadows, attach it to a bone and more.
+          </p>
+          {rowMenu.element}
         </>
       )}
     </div>

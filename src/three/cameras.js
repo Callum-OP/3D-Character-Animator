@@ -117,6 +117,24 @@ export function addCamera(fov, { recordUndo = true, position, quaternion, bodySc
   return meta
 }
 
+// Rename a camera. Names key its animation keyframes and cuts, so the new one must be
+// unique among cameras; the store moves the keyframes across. Returns the applied
+// name, or null if nothing changed.
+export function renameCamera(id, wanted) {
+  const entry = c.cameras.find((e) => e.id === id)
+  const clean = String(wanted ?? '').trim()
+  if (!entry || !clean || clean === entry.name) return null
+  let name = clean
+  for (let n = 2; c.cameras.some((e) => e !== entry && e.name === name); n++) {
+    name = `${clean.replace(/\s+\d+$/, '')} ${n}`
+  }
+  entry.name = name
+  entry.rig.name = name
+  const n = /^Camera (\d+)$/.exec(name)
+  if (n) nameCounter = Math.max(nameCounter, Number(n[1]))
+  return name
+}
+
 export function removeCamera(id) {
   const idx = c.cameras.findIndex((e) => e.id === id)
   if (idx < 0) return
