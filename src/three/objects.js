@@ -241,6 +241,7 @@ export function addObject(parsed, name, format, file, animationKey = null) {
     attachedBoneName: null, // bone name this prop is parented to, or null
     attachedCharacterId: null, // which character owns that bone
     attachedBone: null, // live Bone Object3D reference (not serialisable)
+    attachedObjectId: null, // id of the prop this one is parented to, or null
   }
   o.objects.push(entry)
   applyObjectStyle(entry)
@@ -285,6 +286,7 @@ export function addImage(map, name, aspect, file, animationKey = null) {
     attachedBoneName: null,
     attachedCharacterId: null,
     attachedBone: null,
+    attachedObjectId: null,
   }
   o.objects.push(entry)
   o.requestRender()
@@ -331,6 +333,12 @@ export function attachObjectToBone(id, bone, boneName, characterId) {
   if (o.selected === entry.root) o.transform.detach()
   o.pivotRoots = o.pivotRoots.filter((r) => r !== entry.root)
   reparentKeepingWorld(entry.root, bone)
+  if (entry.attachedObjectId != null) {
+    // a prop rides on a bone OR on another prop, never both
+    entry.attachedObjectId = null
+    entry.root.userData.isAttachedObjectRoot = false
+    useStore.getState().setObjectParent(id, null)
+  }
   entry.attachedBoneName = boneName || bone.name
   entry.attachedCharacterId = characterId != null ? characterId : null
   entry.attachedBone = bone
@@ -473,6 +481,91 @@ function applyAttachmentAnimationsAt(time, tracks, transformTracks) {
 
 // Detach a prop back into the scene root, preserving its current world
 // position/rotation/scale (so it stays exactly where the bone left it).
+// --- Prop-to-prop attaching ---------------------------------------------------
+// A prop can be parented under another prop, so it follows every move / rotate / resize of it
+// (a gun on a car roof, a flag on a pole). Props and images can be attached to props and
+// images; characters are not part of this (a character is carried by bone attachment).
+// The child's transform becomes relative to its parent the moment it is attached, exactly like
+// a bone attachment, and it keeps its place in the world when attached or detached.
+
+// True for the root of a registered prop/image (anything riding on a character bone, say).
+export function isObjectRoot(node) {
+  return o.objects.some((e) => e.root === node)
+}
+
+export function getObjectParentId(id) {
+  const entry = o.objects.find((e) => e.id === id)
+  return entry && entry.attachedObjectId != null ? entry.attachedObjectId : null
+}
+
+// Every prop below `id` in the attachment tree (children, their children, ...).
+export function getObjectDescendantIds(id) {
+  const out = []
+  const walk = (parentId) => {
+    for (const e of o.objects) {
+      if (e.attachedObjectId === parentId) {
+        out.push(e.id)
+        walk(e.id)
+      }
+    }
+  }
+  walk(id)
+  return out
+}
+
+export function canAttachObjectToObject(childId, parentId) {
+  if (childId === parentId) return false
+  const child = o.objects.find((e) => e.id === childId)
+  const parent = o.objects.find((e) => e.id === parentId)
+  if (!child || !parent) return false
+  return !getObjectDescendantIds(childId).includes(parentId) // never into its own subtree
+}
+
+// keepLocal: the transform is ALREADY relative to the parent (project load) — don't convert.
+export function attachObjectToObject(id, parentId, { keepLocal = false } = {}) {
+  if (!canAttachObjectToObject(id, parentId)) return false
+  const entry = o.objects.find((e) => e.id === id)
+  const parent = o.objects.find((e) => e.id === parentId)
+  const wasSelected = o.selected === entry.root
+  if (wasSelected) o.transform.detach()
+  o.pivotRoots = o.pivotRoots.filter((r) => r !== entry.root)
+  if (keepLocal) parent.root.add(entry.root)
+  else reparentKeepingWorld(entry.root, parent.root)
+  entry.attachedBoneName = null
+  entry.attachedCharacterId = null
+  entry.attachedBone = null
+  entry.attachedObjectId = parentId
+  entry.root.userData.isAttachedObjectRoot = true
+  const store = useStore.getState()
+  store.setObjectAttachment(id, null)
+  store.setObjectParent(id, parentId)
+  if (wasSelected && o.enabled) o.transform.attach(entry.root)
+  o.requestRender()
+  return true
+}
+
+export function detachObjectFromObject(id) {
+  const entry = o.objects.find((e) => e.id === id)
+  if (!entry || entry.attachedObjectId == null) return false
+  const wasSelected = o.selected === entry.root
+  if (wasSelected) o.transform.detach()
+  reparentKeepingWorld(entry.root, o.scene)
+  entry.attachedObjectId = null
+  entry.root.userData.isAttachedObjectRoot = false
+  useStore.getState().setObjectParent(id, null)
+  if (wasSelected && o.enabled) o.transform.attach(entry.root)
+  o.requestRender()
+  return true
+}
+
+// Before an object goes away (deleted, or undo of its add), everything attached to it is let go
+// into the scene where it stands — otherwise it would be thrown out with the parent's subtree.
+export function releaseChildObjects(id) {
+  const kids = o.objects.filter((e) => e.attachedObjectId === id).map((e) => e.id)
+  for (const kid of kids) detachObjectFromObject(kid)
+  return kids
+}
+
 export function detachObject(id) {
   const entry = o.objects.find((e) => e.id === id)
   if (!entry || !entry.attachedBoneName) return
@@ -549,17 +642,20 @@ export function setObjectVisible(id, visible, recordHistory = true) {
   o.requestRender()
 }
 
-export function copyObject(id) {
-  const entry = o.objects.find((candidate) => candidate.id === id)
-  if (!entry) return false
-  if (objectClipboard) disposeObject(objectClipboard.root)
+// What one copied object remembers. `local` is its transform relative to the object it is
+// attached to (null for the top one, whose root carries its WORLD transform instead, so a copy
+// of something riding a bone or another prop still lands exactly where it is).
+function captureObjectClip(entry, isTop) {
   const originalMaterials = entry.materials
     ? entry.meshes.map((mesh) => entry.materials.originals.get(mesh))
     : null
   const root = cloneObjectRoot(entry.root, originalMaterials)
-  entry.root.updateWorldMatrix(true, false)
-  entry.root.matrixWorld.decompose(root.position, root.quaternion, root.scale)
-  objectClipboard = {
+  if (isTop) {
+    entry.root.updateWorldMatrix(true, false)
+    entry.root.matrixWorld.decompose(root.position, root.quaternion, root.scale)
+  }
+  return {
+    sourceId: entry.id,
     root,
     name: entry.name,
     format: entry.format,
@@ -568,51 +664,90 @@ export function copyObject(id) {
     style: entry.style,
     outline: entry.outline,
     castShadow: entry.kind === 'image' ? false : entry.castShadow !== false,
+    local: isTop ? null : objectTransform(entry.root),
+    children: o.objects.filter((e) => e.attachedObjectId === entry.id).map((e) => captureObjectClip(e, false)),
   }
+}
+
+function disposeClip(clip) {
+  disposeObject(clip.root)
+  for (const child of clip.children) disposeClip(child)
+}
+
+export function copyObject(id) {
+  const entry = o.objects.find((candidate) => candidate.id === id)
+  if (!entry) return false
+  if (objectClipboard) disposeClip(objectClipboard)
+  objectClipboard = captureObjectClip(entry, true)
   return true
 }
 
+// Paste the copied object — and any props attached to it — exactly where the original is.
+// Returns the top object's meta plus `created`: every object made, parent first, as
+// { sourceId, meta, root }, so the caller can register them and rebuild attached lights.
 export function pasteObject() {
   if (!objectClipboard || !o.scene) return null
-  const source = objectClipboard
-  const root = cloneObjectRoot(source.root)
-  root.position.x += 0.25
-  const meshes = []
-  root.traverse((obj) => {
-    if (!obj.isMesh) return
-    meshes.push(obj)
-    obj.castShadow = source.kind === 'image' ? false : source.castShadow !== false
-    obj.receiveShadow = source.kind !== 'image'
-  })
-  o.scene.add(root)
-  const id = ++idCounter
-  let materials = null
-  if (source.kind !== 'image') {
-    const materialModel = { meshes }
-    recordOriginalMaterials(materialModel)
-    materials = materialModel.materials
+  const created = []
+  const make = (clip, parentEntry) => {
+    const root = cloneObjectRoot(clip.root)
+    if (parentEntry) {
+      parentEntry.root.add(root)
+      applyObjectTransform(root, clip.local)
+      root.userData.isAttachedObjectRoot = true
+    } else {
+      o.scene.add(root)
+    }
+    const meshes = []
+    root.traverse((obj) => {
+      if (!obj.isMesh) return
+      meshes.push(obj)
+      obj.castShadow = clip.kind === 'image' ? false : clip.castShadow !== false
+      obj.receiveShadow = clip.kind !== 'image'
+    })
+    const id = ++idCounter
+    let materials = null
+    if (clip.kind !== 'image') {
+      const materialModel = { meshes }
+      recordOriginalMaterials(materialModel)
+      materials = materialModel.materials
+    }
+    const entry = {
+      id,
+      animationKey: makeAnimationKey(),
+      name: `${clip.name} Copy`,
+      format: clip.format,
+      root,
+      kind: clip.kind,
+      file: clip.file || null,
+      meshes,
+      materials,
+      style: clip.style || 'auto',
+      outline: !!clip.outline,
+      castShadow: clip.kind === 'image' ? false : clip.castShadow !== false,
+      attachedBoneName: null,
+      attachedCharacterId: null,
+      attachedBone: null,
+      attachedObjectId: parentEntry ? parentEntry.id : null,
+    }
+    o.objects.push(entry)
+    if (entry.kind === 'model') applyObjectStyle(entry)
+    created.push({
+      sourceId: clip.sourceId,
+      root,
+      meta: {
+        id,
+        animationKey: entry.animationKey,
+        name: entry.name,
+        format: entry.format,
+        kind: entry.kind,
+        attachedToObjectId: entry.attachedObjectId,
+      },
+    })
+    for (const child of clip.children) make(child, entry)
   }
-  const entry = {
-    id,
-    animationKey: makeAnimationKey(),
-    name: `${source.name} Copy`,
-    format: source.format,
-    root,
-    kind: source.kind,
-    file: source.file || null,
-    meshes,
-    materials,
-    style: source.style || 'auto',
-    outline: !!source.outline,
-    castShadow: source.kind === 'image' ? false : source.castShadow !== false,
-    attachedBoneName: null,
-    attachedCharacterId: null,
-    attachedBone: null,
-  }
-  o.objects.push(entry)
-  if (entry.kind === 'model') applyObjectStyle(entry)
+  make(objectClipboard, null)
   o.requestRender()
-  return { id, animationKey: entry.animationKey, name: entry.name, format: entry.format, kind: entry.kind }
+  return { ...created[0].meta, created }
 }
 
 export function hasCopiedObject() {
@@ -621,7 +756,7 @@ export function hasCopiedObject() {
 
 export function clearCopiedObject() {
   if (!objectClipboard) return
-  disposeObject(objectClipboard.root)
+  disposeClip(objectClipboard)
   objectClipboard = null
 }
 
@@ -630,6 +765,7 @@ export function removeObject(id) {
   const idx = o.objects.findIndex((e) => e.id === id)
   if (idx < 0) return
   const entry = o.objects[idx]
+  releaseChildObjects(entry.id) // props attached to it stay in the scene
   releaseFollowersOf(entry.root) // lights/cameras mounted on it go back to the scene, not into the bin
   useStore.getState().removeObjectAnimationTrack(entry.animationKey)
   if (o.selected === entry.root) {
@@ -658,6 +794,7 @@ export function detachObjectSoft(id) {
   const index = o.objects.findIndex((e) => e.id === id)
   if (index < 0) return null
   const entry = o.objects[index]
+  releaseChildObjects(entry.id)
   releaseFollowersOf(entry.root)
   const world = {
     position: new THREE.Vector3(),
@@ -666,7 +803,7 @@ export function detachObjectSoft(id) {
   }
   entry.root.updateWorldMatrix(true, false)
   entry.root.matrixWorld.decompose(world.position, world.quaternion, world.scale)
-  const wasAttached = Boolean(entry.attachedBone)
+  const wasAttached = Boolean(entry.attachedBone) || entry.attachedObjectId != null
   if (o.selected === entry.root) {
     o.transform?.detach()
     o.selected = null
@@ -686,6 +823,8 @@ export function reattachObjectSoft(record) {
     entry.attachedBone = null
     entry.attachedBoneName = null
     entry.attachedCharacterId = null
+    entry.attachedObjectId = null
+    entry.root.userData.isAttachedObjectRoot = false
     entry.root.position.copy(world.position)
     entry.root.quaternion.copy(world.quaternion)
     entry.root.scale.copy(world.scale)
@@ -756,6 +895,7 @@ function applyObjectStyle(entry, opts) {
       backlightFalloff: use.backlightFalloff,
       shadowStrength: use.shadowStrength,
       rimLight: use.rimLight,
+      textureLook: use.textureLook || null, // Look > Material
       // Per-part visibility (H key / eye icon in the Parts panel) — same
       // meshOverrides map the character uses, keyed by mesh.uuid, which is
       // globally unique regardless of whether the mesh belongs to a
@@ -798,8 +938,21 @@ function disposePropMaterials(entry) {
   disposeGeneratedMaterials({ meshes: entry.meshes, materials: entry.materials })
 }
 
+// Everything that merely rides on an object — a light's or camera's mount, a prop attached to
+// it — is NOT part of the object. Object3D.clone(true) copies the whole subtree, which turned a
+// copied object into one carrying a raw, unregistered copy of its light (a glowing sphere that
+// was in no list and was lost on reload). Those are rebuilt properly on paste instead.
+function stripRiders(root) {
+  const riders = []
+  root.traverse((obj) => {
+    if (obj !== root && obj.userData && (obj.userData.isAttachMount || obj.userData.isAttachedObjectRoot)) riders.push(obj)
+  })
+  for (const obj of riders) obj.removeFromParent()
+}
+
 function cloneObjectRoot(source, originalMaterials = null) {
   const root = source.clone(true)
+  stripRiders(root)
   let meshIndex = 0
   root.traverse((obj) => {
     if (!obj.isMesh) return
@@ -1252,6 +1405,9 @@ export function getObjectsForSave(meshOverrides) {
       shadowImmune: e.kind === 'model' && e.meshes.some((m) => m.userData && m.userData.shadowImmune) ? true : undefined,
       // Bone this prop is riding, if any (transform above is already bone-local).
       attachedBoneName: e.attachedBoneName || undefined,
+      // Prop it is attached to, if any, by that prop's animation key (stable across a reload,
+      // unlike ids); the transform above is then relative to that prop.
+      attachedToKey: e.attachedObjectId != null ? o.objects.find((p) => p.id === e.attachedObjectId)?.animationKey : undefined,
       // Per-part (mesh) visibility/outline/shading overrides — see comment above.
       meshOverridesByIndex: e.kind === 'model' ? objectMeshOverridesByIndex(e, meshOverrides) : undefined,
       // Parts moved / rotated / scaled with the gizmo (by index, like the overrides above).
@@ -1470,6 +1626,8 @@ export function getObjectsData() {
     // together puts the prop right back where it was riding the bone.
     attachedBoneName: e.attachedBoneName || undefined,
     attachedCharacterId: e.attachedCharacterId ?? undefined,
+    // the prop it is attached to (matched by name on load, like the objects themselves)
+    attachedToName: e.attachedObjectId != null ? o.objects.find((p) => p.id === e.attachedObjectId)?.name : undefined,
     meshEdits: e.kind === 'model' ? nonEmpty(getMeshEditsForMeshes(e.meshes)) : undefined,
   }))
 }
@@ -1481,11 +1639,14 @@ export function getObjectsData() {
 export function applyObjectsData(list, resolveBone) {
   if (!Array.isArray(list)) return
   const used = new Set()
+  const matched = []
   for (const item of list) {
     const idx = o.objects.findIndex((e, i) => e.name === item.name && !used.has(i))
     if (idx < 0) continue
     used.add(idx)
     const entry = o.objects[idx]
+    matched.push([item, entry])
+    if (entry.attachedObjectId != null) detachObjectFromObject(entry.id) // the save says it is free
     const root = entry.root
     const bone = item.attachedBoneName && resolveBone ? resolveBone(item.attachedBoneName) : null
     if (bone) {
@@ -1509,6 +1670,13 @@ export function applyObjectsData(list, resolveBone) {
     if (item.quaternion) root.quaternion.fromArray(item.quaternion)
     if (item.scale) root.scale.fromArray(item.scale)
     if (item.meshEdits) applyMeshEditsToMeshes(entry.meshes || [], item.meshEdits)
+  }
+  // Props that were attached to another prop: now that every prop has its saved transform,
+  // re-parent (the saved transform is already relative to the parent) and re-apply it.
+  for (const [item, entry] of matched) {
+    if (!item.attachedToName) continue
+    const parent = o.objects.find((e) => e !== entry && e.name === item.attachedToName)
+    if (parent && attachObjectToObject(entry.id, parent.id, { keepLocal: true })) applyObjectTransform(entry.root, item)
   }
   o.requestRender()
 }

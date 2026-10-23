@@ -3096,3 +3096,19 @@ body {
   font-size: 10.5px;
   color: var(--text-dim);
 }
+
+/* Save-before-closing box */
+.close-guard {
+  max-width: 420px;
+}
+.close-guard-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+.close-guard-error {
+  color: #ff8a80;
+  font-size: 12.5px;
+  margin: 8px 0 0;
+}

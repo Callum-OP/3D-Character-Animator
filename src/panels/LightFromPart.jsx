@@ -14,8 +14,8 @@ const AIM_MODES = [
 // (or change it afterwards in the Lights tab). Shown in the Parts panel for parts and in the
 // region editor for regions. See scene.js createLightFromParts.
 //
-// defaultPresetId: which light type the dropdown starts on (regions start on the car headlight,
-// the most common thing to make from one).
+// defaultPresetId: which light type the dropdown starts on. It starts on Soft glow everywhere;
+// a specific type (e.g. the car headlight) is only ever picked by the person, never assumed.
 //
 // onCreated(result, { glow }) lets the caller make the surface glow too (parts and regions each
 // do that their own way).

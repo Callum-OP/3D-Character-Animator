@@ -28,6 +28,7 @@
 // ---------------------------------------------------------------------------
 
 import { openDB, PROJECTS_STORE as STORE } from './localdb.js'
+import { markProjectClean } from './projectDirty.js'
 import { pickerUsable, isPickerBlocked } from './fsAccess.js'
 
 const FILE_EXT = '.3dcp' // "3D Character Poser" project — just JSON inside
@@ -367,6 +368,7 @@ async function writeToHandle(handle, record) {
 // project already has a file on disk, exactly like Ctrl+S.
 export async function saveProjectToHandle(handle, record) {
   await writeToHandle(handle, record)
+  markProjectClean() // what is on disk now is what is on screen
   if (isNativeHandle(handle)) {
     const name = await nativeBridge().baseName(handle)
     const recent = await upsertRecent({ name, handle })
@@ -393,6 +395,7 @@ export async function saveProjectAs(record, suggestedName) {
       throw err
     }
     await writeToHandle(filePath, record)
+    markProjectClean()
     const name = await native.baseName(filePath)
     const recent = await upsertRecent({ name, handle: filePath })
     return { handle: filePath, name, savedAt: recent.savedAt }
@@ -412,6 +415,7 @@ export async function saveProjectAs(record, suggestedName) {
     }
     if (handle) {
       await writeToHandle(handle, record)
+      markProjectClean()
       const recent = await upsertRecent({ name: handle.name, handle })
       return { handle, name: handle.name, savedAt: recent.savedAt }
     }
@@ -430,6 +434,7 @@ export async function saveProjectAs(record, suggestedName) {
   a.download = name
   a.click()
   URL.revokeObjectURL(url)
+  markProjectClean()
   const recent = await rememberRecent({ name, handle: null })
   return { handle: null, name, savedAt: recent.savedAt }
 }

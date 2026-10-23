@@ -385,6 +385,11 @@ export default function ObjectsPanel() {
                       {o.name}
                     </RowName>
                     {o.isCharacter && <span className="obj-sub">character</span>}
+                    {o.attachedToObjectId != null && (
+                      <span className="obj-sub" title="Attached to another object — it follows it">
+                        ⛓ {sceneObjects.find((p) => p.id === o.attachedToObjectId)?.name}
+                      </span>
+                    )}
                     {o.attachedBoneName && (
                       <span className="obj-sub" title={`Attached to the "${o.attachedBoneName}" bone`}>
                         → {o.attachedBoneName}

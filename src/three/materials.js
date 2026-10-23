@@ -7,6 +7,7 @@ import {
   hasSurface, hasReplace, hasAnySlot, isStyledCopy, markStyledCopy, hasSlotOpacity,
   applyToonSurface, toonOpacityLook, applyRegionLooks, hasRegions,
 } from './surfaceMaterials.js'
+import { applyTextureLook } from './textureLook.js'
 
 // ---------------------------------------------------------------------------
 // Material modes + per-mesh shading overrides
@@ -529,6 +530,7 @@ export function applyMaterials(model, opts) {
     mode, toonSteps = 3, soften = 0, overrides = {}, rimLight,
     ambientOcclusionStrength, backlightColor, backlightFalloff, colorGrading, shadowStrength,
     transparencyDefault = true, // alpha stays as loaded unless a mesh is switched off (overrides[uuid].alpha === false)
+    textureLook = null, // Look > Material (see textureLook.js): changes the surfaces themselves, whatever the lighting
   } = opts
   const store = model.materials
 
@@ -558,6 +560,7 @@ export function applyMaterials(model, opts) {
       updateStyleControls(unlitMat, { colorGrading })
       applyAlphaState(unlitMat, original, store, alphaOn)
       if (applyColorOverride(unlitMat, original, ov)) applyAlphaState(unlitMat, original, store, alphaOn)
+      applyTextureLook(unlitMat, original, mesh, textureLook, ov && ov.slots)
       mesh.material = unlitMat
       continue
     }
@@ -567,8 +570,9 @@ export function applyMaterials(model, opts) {
     // would change every mesh that happens to share its material. Materials of that
     // mesh nobody touched keep rendering with the originals.
     if (mode === 'standard' || mode === 'realistic') {
-      const styled = !!(ov && ov.color) || hasAnySlot(ov) || hasRegions(ov)
-      const target = styled ? buildStyled(store, mesh, original, ov) : original
+      // A texture look needs the mesh's own copies too (the originals are shared and never changed).
+      const styled = !!(ov && ov.color) || hasAnySlot(ov) || hasRegions(ov) || !!textureLook
+      const target = styled ? buildStyled(store, mesh, original, ov, !!textureLook) : original
       if (styled) applyAlphaState(target, original, store, alphaOn)
       const arr = Array.isArray(target) ? target : [target]
       for (const m of arr) {
@@ -586,6 +590,7 @@ export function applyMaterials(model, opts) {
       if (styled && applyColorOverride(target, original, ov, { surface: true })) {
         applyAlphaState(target, original, store, alphaOn)
       }
+      if (styled) applyTextureLook(target, original, mesh, textureLook, ov && ov.slots)
       mesh.material = target
       continue
     }
@@ -613,6 +618,7 @@ export function applyMaterials(model, opts) {
       shadowStrength,
     })
     if (applyColorOverride(toonMat, original, ov, { toon: { soft: mode === 'soft' } })) applyAlphaState(toonMat, original, store, alphaOn)
+    applyTextureLook(toonMat, original, mesh, textureLook, ov && ov.slots)
     mesh.material = toonMat
   }
   syncMeshMaterialFlags(model.meshes)
@@ -724,7 +730,7 @@ function buildTinted(src) {
 //   'clone'    when only colour / opacity / colour-replace change, and
 //   'orig'     when untouched (the shared original, never mutated).
 // Rebuilt only when a slot's kind changes (e.g. the first time metalness is set).
-function buildStyled(store, mesh, original, ov) {
+function buildStyled(store, mesh, original, ov, forceClone = false) {
   if (!store.styled) store.styled = new Map()
   const isArr = Array.isArray(original)
   const srcs = isArr ? original : [original]
@@ -733,7 +739,7 @@ function buildStyled(store, mesh, original, ov) {
     const look = ov && ov.slots ? ov.slots[i] : null
     const kind = hasSurface(look)
       ? 'physical'
-      : (ov && ov.color) || hasRegions(ov) || (look && (look.color != null || look.opacity != null)) || hasReplace(look)
+      : (ov && ov.color) || hasRegions(ov) || forceClone || (look && (look.color != null || look.opacity != null)) || hasReplace(look)
         ? 'clone'
         : 'orig'
     const have = prev[i]

@@ -54,6 +54,7 @@ import {
   selectMeshes,
   setMeshEditEnabled,
   setMeshGizmoMode,
+  pickMeshUuidAt,
 } from './meshedit.js'
 import { setLimitsEnabled } from './limits.js'
 import {
@@ -320,6 +321,7 @@ function Viewport() {
   }, [materialMode])
   const toonSteps = useStore((s) => s.toonSteps)
   const colorGrading = useStore((s) => s.colorGrading)
+  const materialLook = useStore((s) => s.materialLook)
   const ambientOcclusionStrength = useStore((s) => s.ambientOcclusionStrength)
   const backlightColor = useStore((s) => s.backlightColor)
   const backlightFalloff = useStore((s) => s.backlightFalloff)
@@ -346,6 +348,7 @@ function Viewport() {
     materialMode,
     toonSteps,
     colorGrading,
+    materialLook,
     ambientOcclusionStrength,
     backlightColor,
     backlightFalloff,
@@ -667,10 +670,10 @@ function Viewport() {
     }
   }, [])
 
-  // --- Right-click menu (Object mode) ---------------------------------------
+  // --- Right-click menu (Object and Mesh mode) ------------------------------
   // Right-click (without dragging — the right button also pans the view) on a
-  // prop / character / camera / light to select it and get Copy, Paste, Hide/Show
-  // and Delete; on empty space, just Paste when there's something to paste.
+  // prop / character / camera / light (Object mode) or a part (Mesh mode) to select it and
+  // get Copy, Paste, Hide/Show and more; on empty space, just Paste when there's something to paste.
   const [ctxMenu, setCtxMenu] = useState(null) // { x, y, items, target }
   const closeCtxMenu = useCallback(() => setCtxMenu(null), [])
 
@@ -680,11 +683,14 @@ function Viewport() {
     const gesture = createRightClickGesture({
       onOpen(e) {
         const s = useStore.getState()
-        if (s.mode !== 'object' || s.viewCameraId != null) return
+        if ((s.mode !== 'object' && s.mode !== 'mesh') || s.viewCameraId != null) return
         const rect = el.getBoundingClientRect()
         const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1
         const ndcY = -((e.clientY - rect.top) / rect.height) * 2 + 1
-        const target = resolveContextTarget(ndcX, ndcY, s, { pickCameraId, pickLightId, pickObjectId, isCharacterId, setActiveCharacter })
+        const target = resolveContextTarget(ndcX, ndcY, s, {
+          pickCameraId, pickLightId, pickObjectId, isCharacterId, setActiveCharacter,
+          pickMeshUuid: () => pickMeshUuidAt(e.clientX, e.clientY),
+        })
         selectContextTarget(target)
         const state = useStore.getState()
         const items = getContextMenuItems(target, state)
@@ -693,8 +699,9 @@ function Viewport() {
       },
     })
     function onContextMenu(e) {
-      // Our own menu replaces the browser's, in Object mode only.
-      if (useStore.getState().mode === 'object') e.preventDefault()
+      // Our own menu replaces the browser's, in Object and Mesh mode.
+      const m = useStore.getState().mode
+      if (m === 'object' || m === 'mesh') e.preventDefault()
     }
     el.addEventListener('pointerdown', gesture.pointerDown)
     el.addEventListener('pointermove', gesture.pointerMove)

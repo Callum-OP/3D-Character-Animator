@@ -45,6 +45,35 @@ export function createMount() {
   return mount
 }
 
+// World-space bounds of an object's OWN content — its meshes — leaving out whatever is
+// mounted on it (an attached light's glow sphere and beam cone, a camera's body). Those are
+// markers, not part of the object, and a long light cone or a camera body parked away from
+// it would otherwise stretch the box, so "Set camera to object" framed a tiny prop from
+// miles back. Same maths as Box3.setFromObject for everything else.
+const _contentBox = new THREE.Box3()
+export function getContentBounds(root, target = new THREE.Box3()) {
+  target.makeEmpty()
+  if (!root) return target
+  const walk = (obj) => {
+    if (obj.userData && obj.userData.isAttachMount) return
+    obj.updateWorldMatrix(false, false)
+    const geometry = obj.geometry
+    if (geometry) {
+      if (obj.boundingBox !== undefined) {
+        if (obj.boundingBox === null) obj.computeBoundingBox()
+        _contentBox.copy(obj.boundingBox)
+      } else {
+        if (geometry.boundingBox === null) geometry.computeBoundingBox()
+        _contentBox.copy(geometry.boundingBox)
+      }
+      target.union(_contentBox.applyMatrix4(obj.matrixWorld))
+    }
+    for (const child of obj.children) walk(child)
+  }
+  walk(root)
+  return target
+}
+
 // Bring every world matrix in `obj`'s tree up to date. updateWorldMatrix()
 // would bypass the mount's scale-cancelling override above, so refresh from the
 // top of the tree with the normal recursive update instead.
@@ -64,6 +93,15 @@ export function reparentKeepingWorld(obj, newParent) {
   _inv.copy(newParent.matrixWorld).invert()
   _m.multiplyMatrices(_inv, world)
   _m.decompose(obj.position, obj.quaternion, obj.scale)
+}
+
+// An object's WORLD position / rotation / scale, wherever it is parented. Copy & paste need
+// this: an attached light or camera stores its transform relative to the object it rides on,
+// and pasting that as if it were a world position drops the copy somewhere else entirely.
+export function getWorldTransform(obj) {
+  refreshWorld(obj)
+  obj.matrixWorld.decompose(_p, _q, _s)
+  return { position: _p.toArray(), quaternion: _q.toArray(), scale: _s.toArray() }
 }
 
 // Set an object's WORLD position + orientation, whatever it is parented to

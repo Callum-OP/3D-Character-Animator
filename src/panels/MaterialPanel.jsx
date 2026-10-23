@@ -351,8 +351,8 @@ export default function MaterialPanel() {
 
   return (
     <div className="panel">
-      <h2>Look</h2>
-      <p className="panel-hint">Choose how the character is shaded and outlined.</p>
+      <h2>Lighting</h2>
+      <p className="panel-hint">Choose how the scene is lit, shaded and outlined. Textures and colours are in the Material tab.</p>
 
       <div className="field">
         <label className="field-label">Style presets</label>

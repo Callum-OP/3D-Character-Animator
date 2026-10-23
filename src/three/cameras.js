@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import { pushSceneHistory } from './sceneHistory.js'
 import { useStore } from '../store.js'
-import { createMount, reparentKeepingWorld, setObjectWorldTransform, registerFollower, unregisterFollower } from './attach.js'
+import { createMount, reparentKeepingWorld, setObjectWorldTransform, registerFollower, unregisterFollower, getWorldTransform } from './attach.js'
 import { clampUniformScale } from './scaleLimits.js'
 
 // ---------------------------------------------------------------------------
@@ -333,14 +333,21 @@ export function setCameraTransform(id, transform) {
   }
 }
 
-export function getCameraClipboardData(id) {
+// A camera's settings for copy & paste: its WORLD placement (an attached camera stores its
+// transform relative to the object it rides on — see getLightClipboardData), or with `local`
+// the object-relative numbers, for copying a whole object together with its cameras.
+export function getCameraClipboardData(id, { local = false } = {}) {
   const entry = c.cameras.find((camera) => camera.id === id)
   if (!entry) return null
+  const placed = local
+    ? { position: entry.rig.position.toArray(), quaternion: entry.rig.quaternion.toArray() }
+    : getWorldTransform(entry.rig)
   return {
     fov: entry.camera.fov,
-    position: entry.rig.position.toArray(),
-    quaternion: entry.rig.quaternion.toArray(),
+    position: placed.position,
+    quaternion: placed.quaternion,
     bodyScale: entry.body.scale.toArray(),
+    attachedObjectId: entry.attach ? entry.attach.objectId : null,
   }
 }
 
@@ -351,6 +358,52 @@ export function pasteCamera(data) {
     quaternion: data.quaternion,
     bodyScale: data.bodyScale,
   })
+}
+
+// --- Cameras that ride on an object --------------------------------------------
+
+export function getAttachedCameraIds(objectId) {
+  return c.cameras.filter((e) => e.attach && e.attach.objectId === objectId).map((e) => e.id)
+}
+
+export function getAttachedCamerasData(objectId) {
+  return getAttachedCameraIds(objectId).map((id) => ({
+    ...getCameraClipboardData(id, { local: true }),
+    sourceName: c.cameras.find((e) => e.id === id).name,
+  }))
+}
+
+export function addCameraOnObject(data, root, objectId) {
+  const meta = addCamera(data.fov, {
+    recordUndo: false,
+    position: data.position,
+    quaternion: data.quaternion,
+    bodyScale: data.bodyScale,
+  })
+  attachCameraToRoot(meta.id, root, objectId, { keepLocal: true })
+  return meta
+}
+
+// Take a camera out of the scene without an undo step of its own (see withdrawLight).
+export function withdrawCamera(id) {
+  const idx = c.cameras.findIndex((e) => e.id === id)
+  if (idx < 0) return null
+  const entry = c.cameras[idx]
+  const meta = useStore.getState().sceneCameras.find((x) => x.id === id) || null
+  const objectId = entry.attach ? entry.attach.objectId : null
+  detachCameraEntry(entry)
+  useStore.getState().removeSceneCamera(id)
+  return { entry, idx, meta, objectId }
+}
+
+export function reinstateCamera(rec, root = null) {
+  attachCameraEntry(rec.entry, rec.idx)
+  if (rec.meta) useStore.getState().addSceneCamera(rec.meta)
+  if (root && rec.objectId != null) attachCameraToRoot(rec.entry.id, root, rec.objectId)
+}
+
+export function disposeWithdrawnCamera(rec) {
+  if (rec && !c.cameras.includes(rec.entry)) disposeBody(rec.entry.body)
 }
 
 export function snapshotCameraTransform(id) {

@@ -1,4 +1,5 @@
 import { mergeLook } from './three/surfaceMaterials.js'
+import { TEXTURE_LOOK_DEFAULT, presetLook } from './three/textureLookOptions.js'
 import { create } from 'zustand'
 import { setUndoHistoryLimit } from './three/undoHistory.js'
 import { DEFAULT_NIGHT, normalizeNight, DEFAULT_SHADOWS, normalizeShadows, shadowStyleValues, shadowsFromLegacy } from './three/shadowSettings.js'
@@ -13,7 +14,7 @@ const APP_SETTINGS_FIELDS = [
   'showGrid', 'showGround', 'solidBackground', 'backgroundColor', 'shadows', 'showStats',
   'performanceMode', 'performanceBackgroundObjects', 'performanceLowPoly',
   'performanceResolution', 'performanceEffects', 'autoDecimate',
-  'materialMode', 'toonSteps', 'colorGrading', 'ambientOcclusionStrength',
+  'materialMode', 'toonSteps', 'colorGrading', 'materialLook', 'ambientOcclusionStrength',
   'backlightColor', 'backlightFalloff', 'rimLightColor', 'rimSideOnly',
   'rimSoftEnabled', 'rimSoftIntensity', 'rimSoftWidth', 'rimHardEnabled',
   'rimHardIntensity', 'rimHardWidth', 'rimFollowLight', 'rimFollowLightId',
@@ -476,6 +477,9 @@ export const useStore = create((set) => ({
   materialMode: 'unlit', // 'unlit' | 'toon' | 'soft' | 'standard' (shown as Studio) | 'realistic'
   toonSteps: 3, // number of shadow bands in toon (Cartoon) mode
   colorGrading: 'none', // 'none' | 'warm' | 'cool' | 'bleach' | 'cinematic'
+  // Look > Material: what the surfaces themselves are made of (textures, colours, finish) —
+  // separate from the lighting above, and stackable with it. See three/textureLook.js.
+  materialLook: { ...TEXTURE_LOOK_DEFAULT },
   ambientOcclusionStrength: 0.15,
   backlightColor: '#ffffff',
   backlightFalloff: 0.15,
@@ -484,6 +488,10 @@ export const useStore = create((set) => ({
   setMaterialMode: (materialMode) => set({ materialMode }),
   setToonSteps: (toonSteps) => set({ toonSteps }),
   setColorGrading: (colorGrading) => set({ colorGrading }),
+  // Change any of the material controls; once you've touched one by hand it is no longer "the preset".
+  setMaterialLook: (patch) =>
+    set((s) => ({ materialLook: { ...s.materialLook, ...patch, preset: patch.preset || 'custom' } })),
+  applyMaterialLookPreset: (id) => set((s) => ({ materialLook: presetLook(id, s.materialLook) })),
   setAmbientOcclusionStrength: (ambientOcclusionStrength) => set({ ambientOcclusionStrength }),
   setBacklightColor: (backlightColor) => set({ backlightColor }),
   setBacklightFalloff: (backlightFalloff) => set({ backlightFalloff }),
@@ -1001,6 +1009,11 @@ export const useStore = create((set) => ({
     set((s) => ({
       sceneObjects: s.sceneObjects.map((o) => (o.id === id ? { ...o, attachedBoneName } : o)),
     })),
+  // Which prop (if any) an object is attached to — shown on its row, and what Attach to object edits.
+  setObjectParent: (id, attachedToObjectId) =>
+    set((s) => ({
+      sceneObjects: s.sceneObjects.map((o) => (o.id === id ? { ...o, attachedToObjectId } : o)),
+    })),
   setObjectAttachmentTrack: (animationKey, track) =>
     set((s) => ({
       objectAttachmentData: { ...s.objectAttachmentData, [animationKey]: track },
@@ -1360,6 +1373,11 @@ export const useStore = create((set) => ({
     }),
 
   // Insert/replace a light keyframe (position + colour + intensity), by light name.
+  // Replace a light's / camera's whole keyframe list (a copied object's lights carry theirs along).
+  setLightKeyframes: (name, keys) =>
+    set((s) => ({ animData: { ...s.animData, lights: { ...(s.animData.lights || {}), [name]: keys } } })),
+  setCameraKeyframes: (name, keys) =>
+    set((s) => ({ animData: { ...s.animData, cameras: { ...(s.animData.cameras || {}), [name]: keys } } })),
   addLightKeyframe: (name, time, key) =>
     set((s) => {
       const lights = { ...(s.animData.lights || {}) }

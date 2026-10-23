@@ -29,7 +29,7 @@ describe('object clipboard and visibility history', () => {
     objectId = addObject({ root: sourceRoot }, 'TestProp', 'glb', null).id
   })
 
-  it('copies and pastes an independent object with an offset', () => {
+  it('copies and pastes an independent object in the same place', () => {
     useStore.setState({
       mode: 'object',
       selectedObjectId: objectId,
@@ -41,7 +41,7 @@ describe('object clipboard and visibility history', () => {
     const sourceMesh = sourceRoot.children[0]
     const pastedMesh = pastedRoot.children[0]
     expect(pasted.name).toBe('TestProp Copy')
-    expect(pastedRoot.position.x).toBeCloseTo(0.25)
+    expect(pastedRoot.position.x).toBeCloseTo(sourceRoot.position.x)
     expect(pastedMesh.geometry).not.toBe(sourceMesh.geometry)
     expect(pastedMesh.material).not.toBe(sourceMesh.material)
   })
