@@ -3112,3 +3112,26 @@ body {
   font-size: 12.5px;
   margin: 8px 0 0;
 }
+
+/* Material tab: dropdowns are just a title and the chosen option (details are tooltips),
+   with clear space between one control and the next. */
+.material-look-field {
+  display: block;
+  margin: 0 0 12px;
+}
+.material-look-field .field-label {
+  display: block;
+  margin-bottom: 4px;
+}
+.material-look-note {
+  font-weight: 400;
+  opacity: 0.6;
+  font-size: 0.9em;
+}
+.material-look-adjust {
+  margin: 0 0 12px;
+}
+.material-look-adjust > summary {
+  cursor: pointer;
+  margin-bottom: 6px;
+}

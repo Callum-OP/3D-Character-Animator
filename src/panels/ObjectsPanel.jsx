@@ -349,6 +349,7 @@ export default function ObjectsPanel() {
               if (o.castShadow === false) flags.push(['🚫', 'Does not cast shadows'])
               if (o.nightImmune) flags.push(['☀️', 'Ignores Night mode (stays in daylight)'])
               if (o.shadowImmune) flags.push(['🔆', 'Never shadowed by other objects'])
+              if (o.rimImmune) flags.push(['✨', 'Ignores rim lighting'])
               return (
                 <div
                   key={o.id}

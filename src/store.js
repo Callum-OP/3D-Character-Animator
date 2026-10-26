@@ -1,5 +1,5 @@
 import { mergeLook } from './three/surfaceMaterials.js'
-import { TEXTURE_LOOK_DEFAULT, presetLook } from './three/textureLookOptions.js'
+import { TEXTURE_LOOK_DEFAULT, presetLook, normalizeMaterialLook } from './three/textureLookOptions.js'
 import { create } from 'zustand'
 import { setUndoHistoryLimit } from './three/undoHistory.js'
 import { DEFAULT_NIGHT, normalizeNight, DEFAULT_SHADOWS, normalizeShadows, shadowStyleValues, shadowsFromLegacy } from './three/shadowSettings.js'
@@ -986,6 +986,11 @@ export const useStore = create((set) => ({
     set((s) => ({
       sceneObjects: s.sceneObjects.map((o) => (o.id === id ? { ...o, shadowImmune } : o)),
     })),
+  // Per object or character: ignores rim lighting (the edge highlight of the Lighting tab).
+  setObjectRimImmune: (id, rimImmune) =>
+    set((s) => ({
+      sceneObjects: s.sceneObjects.map((o) => (o.id === id ? { ...o, rimImmune } : o)),
+    })),
   // Regions (per-face looks, see three/regions.js): replace a mesh's whole region list.
   setMeshRegions: (uuid, regions) =>
     set((s) => {
@@ -1719,6 +1724,7 @@ export function migrateAppSettings(saved) {
   } else if (next.shadows !== undefined) {
     next.shadows = normalizeShadows(next.shadows)
   }
+  if (next.materialLook !== undefined) next.materialLook = normalizeMaterialLook(next.materialLook) // older saves lack newer controls
   for (const k of legacy) delete next[k]
   delete next.settingsVersion // the store's current version is re-saved below
   return next

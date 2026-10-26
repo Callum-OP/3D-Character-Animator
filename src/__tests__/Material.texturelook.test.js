@@ -22,7 +22,9 @@ describe('texture look: controls and presets', () => {
       expect(ids.has(p.id)).toBe(false)
       ids.add(p.id)
       for (const [k, v] of Object.entries(p.config)) {
-        expect(allowed[k].map((o) => o.value)).toContain(v)
+        if (k === 'strength') expect(v).toBeGreaterThan(0)
+        else if (k === 'separation') expect(v).toBeGreaterThanOrEqual(0)
+        else expect(allowed[k].map((o) => o.value)).toContain(v)
       }
       expect(isTextureLookActive(presetLook(p.id))).toBe(p.id !== 'original')
     }
@@ -34,18 +36,24 @@ describe('texture look: controls and presets', () => {
     expect(noir.contrast).toBeGreaterThan(1)
     expect(noir.flat).toBe(0)
     expect(noir.bias).toBe(0) // still full texture detail
-    const flat = resolveTextureLook(presetLook('flat'), 'character')
+    const flat = plainFlat('character')
     expect(flat.flat).toBe(1)
     expect(flat.flatten).toBe(true)
     expect(flat.grey).toBe(0) // colours kept
   })
 
-  it('Anime smooths the textures, limits the tones and enriches colour', () => {
+  it('Anime: flat colours that keep shapes at 0% sensitivity, vivid, no tone steps, matte, flat bumps, 70%', () => {
+    expect(presetLook('anime')).toMatchObject({
+      detail: 'regions', separation: 0, colour: 'vivid', bands: 0, pixels: 0, finish: 'matte', bumps: 'flatten', strength: 0.7,
+    })
     const anime = resolveTextureLook(presetLook('anime'), 'character')
-    expect(anime.bias).toBeGreaterThan(0)
-    expect(anime.bands).toBeGreaterThan(1)
+    expect(anime.regions).toBe(0.7)
+    expect(anime.threshold).toBeCloseTo(0.4) // 0% sensitivity: only the most obvious colour changes stay separate
+    expect(anime.bands).toBe(0)
+    expect(anime.pixels).toBe(0)
     expect(anime.saturation).toBeGreaterThan(1)
-    expect(anime.finish).toEqual({ roughness: 1, metalness: 0 })
+    expect(anime.flatten).toBe(true)
+    expect(anime.strength).toBe(0.7)
   })
 
   it('"Apply to" decides who gets it; strength 0 is off; a preset keeps your scope and strength', () => {
@@ -54,15 +62,19 @@ describe('texture look: controls and presets', () => {
     expect(resolveTextureLook(look, 'object')).not.toBeNull()
     expect(resolveTextureLook({ ...look, scope: 'characters' }, 'object')).toBeNull()
     expect(resolveTextureLook({ ...presetLook('noir'), strength: 0 }, 'object')).toBeNull()
-    const kept = presetLook('sepia', { scope: 'characters', strength: 0.4 })
+    // a preset is a whole look: it sets the strength (full unless it says otherwise) but keeps WHERE it applies
+    const kept = presetLook('noir', { scope: 'characters', strength: 0.4 })
     expect(kept.scope).toBe('characters')
-    expect(kept.strength).toBe(0.4)
-    expect(kept.preset).toBe('sepia')
+    expect(kept.strength).toBe(1)
+    expect(kept.preset).toBe('noir')
+    expect(presetLook('anime', { scope: 'objects' }).scope).toBe('objects')
+    expect(presetLook('noir', { strength: 0.7 }).strength).toBe(1) // not left over from Anime
   })
 
   it('strength softens the texture-sampling effects', () => {
-    const full = resolveTextureLook(presetLook('simplified'), 'object')
-    const half = resolveTextureLook({ ...presetLook('simplified'), strength: 0.5 }, 'object')
+    const simplified = { ...presetLook('original'), detail: 'simplified' }
+    const full = resolveTextureLook({ ...simplified, strength: 1 }, 'object')
+    const half = resolveTextureLook({ ...simplified, strength: 0.5 }, 'object')
     expect(half.bias).toBeCloseTo(full.bias / 2)
     expect(half.strength).toBe(0.5)
   })
@@ -148,6 +160,8 @@ function build() {
   return { model, floor, plain, floorMat, plainMat, normalMap }
 }
 const look = (id, kind = 'object') => resolveTextureLook(presetLook(id), kind)
+// the plain "one colour per surface" Flat colour detail (the Flat colours PRESET now keeps shapes)
+const plainFlat = (kind = 'object') => resolveTextureLook({ ...presetLook('original'), detail: 'flat', bumps: 'flatten' }, kind)
 const uni = (mesh) => mesh.material.userData.texLookUniforms
 
 describe.each(['unlit', 'toon', 'soft', 'standard', 'realistic'])('texture look applied — %s lighting', (mode) => {
@@ -172,7 +186,7 @@ describe.each(['unlit', 'toon', 'soft', 'standard', 'realistic'])('texture look 
 
   it('flat colour swaps the texture for its own average — a brown floor stays brown', () => {
     const { model, floor } = build()
-    applyMaterials(model, { mode, textureLook: look('flat') })
+    applyMaterials(model, { mode, textureLook: plainFlat() })
     expect(uni(floor).tlB.value.w).toBe(1) // flat mix
     const c = uni(floor).tlFlat.value // linear
     const lin = (v) => Math.pow((v / 255 + 0.055) / 1.055, 2.4)
@@ -185,13 +199,15 @@ describe.each(['unlit', 'toon', 'soft', 'standard', 'realistic'])('texture look 
   it('a texture whose pixels cannot be read keeps its texture rather than going wrong', () => {
     const { model, floor, floorMat } = build()
     floorMat.map = new THREE.Texture() // no image to read
-    applyMaterials(model, { mode, textureLook: look('flat') })
+    applyMaterials(model, { mode, textureLook: plainFlat() })
     expect(uni(floor).tlB.value.w).toBe(0)
+    applyMaterials(model, { mode, textureLook: look('anime') }) // and the keep-shapes version (Anime uses it)
+    expect(uni(floor).tlD.value.z).toBe(0)
   })
 
   it('an untextured mesh is left as it is (apart from colour grading)', () => {
     const { model, plain } = build()
-    applyMaterials(model, { mode, textureLook: look('flat') })
+    applyMaterials(model, { mode, textureLook: plainFlat() })
     expect(uni(plain).tlB.value.w).toBe(0)
   })
 
@@ -207,10 +223,10 @@ describe.each(['unlit', 'toon', 'soft', 'standard', 'realistic'])('texture look 
 describe('bumps and finish', () => {
   it('Flatten removes the surface relief on the copy, never on the loaded material', () => {
     const { model, floor, floorMat } = build()
-    applyMaterials(model, { mode: 'standard', textureLook: look('flat') })
+    applyMaterials(model, { mode: 'standard', textureLook: plainFlat() })
     expect(floor.material.normalScale.x).toBe(0)
     expect(floorMat.normalScale.x).toBe(1)
-    applyMaterials(model, { mode: 'toon', textureLook: look('flat') })
+    applyMaterials(model, { mode: 'toon', textureLook: plainFlat() })
     expect(floor.material.normalScale.x).toBe(0)
   })
 
@@ -260,10 +276,10 @@ describe('the store', () => {
   it('a preset sets its controls; touching a control by hand makes it "custom"', () => {
     useStore.getState().applyMaterialLookPreset('anime')
     expect(useStore.getState().materialLook.preset).toBe('anime')
-    expect(useStore.getState().materialLook.detail).toBe('smooth')
+    expect(useStore.getState().materialLook.detail).toBe('regions')
     useStore.getState().setMaterialLook({ bands: 3 })
     expect(useStore.getState().materialLook.preset).toBe('custom')
-    expect(useStore.getState().materialLook.detail).toBe('smooth') // the rest stays
+    expect(useStore.getState().materialLook.detail).toBe('regions') // the rest stays
   })
   it('Original after another preset is a clean reset, but keeps where it applies', () => {
     useStore.getState().setMaterialLook({ scope: 'objects' })
@@ -310,8 +326,8 @@ describe('the shader hook', () => {
     const { model, floor } = build()
     applyMaterials(model, { mode: 'toon', textureLook: look('noir') })
     const key = floor.material.customProgramCacheKey()
-    applyMaterials(model, { mode: 'toon', textureLook: look('anime') })
-    applyMaterials(model, { mode: 'toon', textureLook: look('sepia') })
+    applyMaterials(model, { mode: 'toon', textureLook: resolveTextureLook({ ...presetLook('original'), colour: 'vivid' }, 'object') })
+    applyMaterials(model, { mode: 'toon', textureLook: resolveTextureLook({ ...presetLook('original'), colour: 'sepia' }, 'object') })
     expect(floor.material.customProgramCacheKey()).toBe(key) // same shader: changing the look only changes uniforms
     expect(uni(floor).tlB.value.y).toBe(1) // sepia now
     expect(uni(floor).tlB.value.x).toBe(0)
@@ -324,10 +340,111 @@ describe('the material editor keeps priority', () => {
     const ov = { [floor.uuid]: { slots: { 0: { roughness: 0.2, normalStrength: 0.4 } } } }
     applyMaterials(model, { mode: 'standard', overrides: ov, textureLook: look('noir') })
     expect(floor.material.normalScale.x).toBeCloseTo(0.4)
-    applyMaterials(model, { mode: 'standard', overrides: ov, textureLook: look('flat') })
+    applyMaterials(model, { mode: 'standard', overrides: ov, textureLook: plainFlat() })
     expect(floor.material.normalScale.x).toBe(0) // Flatten is the broader choice
     applyMaterials(model, { mode: 'standard', overrides: ov, textureLook: null })
     expect(floor.material.normalScale.x).toBeCloseTo(0.4)
     expect(floor.material.roughness).toBeCloseTo(0.2)
+  })
+})
+
+describe('the presets as asked for', () => {
+  const ids = TEXTURE_LOOK_PRESETS.map((p) => p.id)
+  it('lays out three rows of four', () => {
+    expect(ids.slice(0, 4)).toEqual(['original', 'flat', 'cel', 'anime']) // flat | cel | anime, left to right
+    expect(ids.slice(4, 8)).toEqual(['toonsmooth', 'pixel', 'flatpixel', 'retro']) // Toon Smoothed left of the three pixel ones
+    expect(ids.slice(8, 12)).toEqual(['clay', 'manga', 'noirink', 'noir']) // Clay left of Manga, both noir last
+    expect(ids).toHaveLength(12)
+    expect(new Set(ids).size).toBe(12)
+  })
+  it('Sepia and Pastel presets are gone; Pixel (chunky) and Manga replace them', () => {
+    expect(ids).not.toContain('sepia')
+    expect(ids).not.toContain('pastel')
+    expect(presetLook('pixel').pixels).toBe(16) // "Chunky"
+    expect(PIXEL_OPTIONS.find((o) => o.value === 16).label).toBe('Chunky')
+    expect(presetLook('manga').colour).toBe('manga')
+    // the colours themselves are still choosable by hand
+    expect(COLOUR_OPTIONS.map((o) => o.value)).toEqual(expect.arrayContaining(['sepia', 'pastel', 'muted', 'clay', 'manga']))
+  })
+  it('Noir Ink uses 6 tones', () => {
+    expect(presetLook('noirink').bands).toBe(6)
+  })
+  it('Toon Smoothed is the previous Anime (8 tones, 70%); Cel Paint is the same at 12 tones and full strength', () => {
+    const { preset: _p, strength: toonStrength, ...toon } = presetLook('toonsmooth')
+    const { preset: _c, strength: celStrength, ...cel } = presetLook('cel')
+    expect(toon).toMatchObject({ detail: 'simplified', colour: 'vivid', bands: 8, pixels: 0, finish: 'matte', bumps: 'flatten' })
+    expect(toonStrength).toBe(0.7)
+    expect(cel).toEqual({ ...toon, bands: 12 }) // every setting the same except the tones...
+    expect(celStrength).toBe(1) // ...at full strength
+    expect(resolveTextureLook(presetLook('cel'), 'object').bands).toBe(12)
+  })
+  it('Simplified, Smoothed and Vivid are no longer presets, but are still choosable as controls', () => {
+    const ids = TEXTURE_LOOK_PRESETS.map((p) => p.id)
+    for (const gone of ['simplified', 'smoothed', 'vivid']) expect(ids).not.toContain(gone)
+    expect(DETAIL_OPTIONS.map((d) => d.value)).toEqual(expect.arrayContaining(['smooth', 'simplified']))
+    expect(COLOUR_OPTIONS.map((c) => c.value)).toContain('vivid')
+    // asking for one that is gone just gives the original look
+    expect(presetLook('simplified').preset).toBe('original')
+  })
+  it('Flat colour is the plain one-colour-per-surface version, not keep-shapes', () => {
+    expect(presetLook('flat')).toMatchObject({ detail: 'flat', bumps: 'flatten' })
+    expect(TEXTURE_LOOK_PRESETS.find((p) => p.id === 'flat').label).toBe('Flat colour')
+    const r = resolveTextureLook(presetLook('flat'), 'object')
+    expect(r.flat).toBe(1)
+    expect(r.regions).toBe(0)
+  })
+  it('Flat Pixel is Pixel with flat colours that keep their shapes', () => {
+    expect(presetLook('pixel')).toMatchObject({ pixels: 16, detail: 'full' })
+    expect(presetLook('flatpixel')).toMatchObject({ pixels: 16, detail: 'regions' })
+  })
+  it('Clay is its own colour (one plain grey), separate from Muted, with no shine or relief', () => {
+    const clay = resolveTextureLook(presetLook('clay'), 'object')
+    expect(clay.clay).toBe(1)
+    expect(clay.saturation).toBe(1) // not the "muted" colour
+    expect(clay.flatten).toBe(true)
+    expect(clay.finish).toEqual({ roughness: 1, metalness: 0 })
+    expect(resolveTextureLook({ ...presetLook('original'), colour: 'muted' }, 'object').clay).toBe(0)
+    expect(resolveTextureLook({ ...presetLook('original'), colour: 'muted' }, 'object').saturation).toBe(0.5)
+  })
+  it('every preset still works in every lighting mode', () => {
+    for (const p of TEXTURE_LOOK_PRESETS.filter((x) => x.id !== 'original')) {
+      for (const mode of ['unlit', 'toon', 'soft', 'standard', 'realistic']) {
+        const { model, floor } = build()
+        applyMaterials(model, { mode, textureLook: look(p.id) })
+        expect(uni(floor).tlC.value.w).toBe(1)
+      }
+    }
+  })
+})
+
+describe('Clay and Manga in the shader', () => {
+  it('Clay switches on the plain-grey replacement; Manga the paper-and-pencil stage', () => {
+    const { model, floor } = build()
+    applyMaterials(model, { mode: 'toon', textureLook: look('clay') })
+    expect(uni(floor).tlC.value.z).toBe(1)
+    expect(uni(floor).tlD.value.x).toBe(0)
+    applyMaterials(model, { mode: 'toon', textureLook: look('manga') })
+    expect(uni(floor).tlC.value.z).toBe(0)
+    expect(uni(floor).tlD.value.x).toBe(1)
+    applyMaterials(model, { mode: 'toon', textureLook: look('noir') })
+    expect(uni(floor).tlD.value.x).toBe(0)
+  })
+
+  it.each([['standard', 'standard'], ['toon', 'toon'], ['unlit', 'basic']])('manga hooks the final lit colour of the real %s shader', (mode, kind) => {
+    const { model, floor } = build()
+    applyMaterials(model, { mode, textureLook: look('manga') })
+    const shader = { uniforms: {}, fragmentShader: THREE.ShaderLib[kind].fragmentShader, vertexShader: '' }
+    floor.material.onBeforeCompile(shader, {})
+    expect(shader.fragmentShader).toContain('tlManga(')
+    expect(shader.fragmentShader.indexOf('tlManga( gl_FragColor.rgb )')).toBeLessThan(shader.fragmentShader.indexOf('#include <tonemapping_fragment>'))
+    expect(Object.keys(shader.uniforms)).toContain('tlD')
+  })
+
+  it('switching off clears both', () => {
+    const { model, floor } = build()
+    applyMaterials(model, { mode: 'toon', textureLook: look('manga') })
+    applyMaterials(model, { mode: 'toon', textureLook: null })
+    expect(uni(floor).tlD.value.x).toBe(0)
+    expect(uni(floor).tlC.value.w).toBe(0)
   })
 })

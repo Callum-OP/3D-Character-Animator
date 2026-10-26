@@ -28,8 +28,9 @@ describe('shadow darkening shader patch', () => {
     // darkening by strength, with the (neutral-by-default) shadow colour applied on top
     expect(opaque.source).toContain('dsShadowMin = dsLightSum > 0.0001 ? clamp( dsLitSum / dsLightSum, 0.0, 1.0 ) : 1.0;')
     expect(opaque.source).toContain('float dsShadowAmt = uShadowDarkness * ( 1.0 - dsShadowMin );')
-    expect(opaque.source).toContain('outgoingLight *= ( 1.0 - dsShadowAmt ) * mix( vec3( 1.0 ), uShadowTint, 1.0 - dsShadowMin );')
-    expect(opaque.source.indexOf('outgoingLight *=')).toBeLessThan(opaque.source.indexOf('gl_FragColor'))
+    expect(opaque.source).toContain('vec3 dsShadowMul = ( 1.0 - dsShadowAmt ) * mix( vec3( 1.0 ), uShadowTint, 1.0 - dsShadowMin );')
+    expect(opaque.source).toContain('outgoingLight *= dsShadowMul;')
+    expect(opaque.source.indexOf('outgoingLight *= dsShadowMul')).toBeLessThan(opaque.source.indexOf('gl_FragColor'))
     const common = patchCommonChunk('// common')
     expect(common).toContain('uniform float uShadowDarkness;')
     expect(common).toContain('float dsShadowMin = 1.0;')

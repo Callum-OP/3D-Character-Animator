@@ -235,7 +235,7 @@ import { releaseFollowersOf, getContentBounds } from './attach.js'
 import { describeMissingFiles, describeBlendConversion } from './modelBundle.js'
 import { clearUndoHistory, pushUndoBatch, runWithoutHistoryCapture } from './undoHistory.js'
 import { markProjectClean, markProjectCleanAfterLoad } from './projectDirty.js'
-import { resolveTextureLook, TEXTURE_LOOK_DEFAULT } from './textureLookOptions.js'
+import { resolveTextureLook, normalizeMaterialLook, TEXTURE_LOOK_DEFAULT } from './textureLookOptions.js'
 import { withExportSafeMaterials } from './materialUserData.js'
 import { buildPartsGroup, safeFileStem } from './extractParts.js'
 import { bakeRegionsForExport, fromRanges } from './regions.js'
@@ -3384,6 +3384,7 @@ export function getProjectData() {
       meshOverridesByIndex: meshOverridesByIndexFor(model, live.meshOverrides),
       nightImmune: isNightImmune(model) || undefined,
       shadowImmune: isShadowImmune(model) || undefined,
+      rimImmune: isRimImmune(model) || undefined,
       animData: live.animData,
       // BVH imports, ragdoll bakes, combined/trimmed clips — anything NOT
       // baked into the model file itself, so it isn't lost on reload.
@@ -3440,7 +3441,7 @@ export function clearProjectScene() {
   disposeCurrentModel()
   // A blank project starts with a blank undo history too.
   clearUndoHistory()
-  useStore.setState({ stopAtFirstClipEnd: false, materialLook: { ...TEXTURE_LOOK_DEFAULT } }) // per-project settings
+  runWithoutHistoryCapture(() => useStore.setState({ stopAtFirstClipEnd: false, materialLook: { ...TEXTURE_LOOK_DEFAULT } })) // per-project settings
   markProjectClean() // a blank project has nothing to lose
 }
 
@@ -3510,6 +3511,7 @@ export async function applyProjectData(record) {
     applyMeshEditsData(c.meshEdits)
     if (c.nightImmune) setObjectNightImmuneById(id, true)
     if (c.shadowImmune) setObjectShadowImmuneById(id, true, false)
+    if (c.rimImmune) setObjectRimImmuneById(id, true, false)
     if (c.meshOverridesByIndex) {
       useStore.setState({ meshOverrides: meshOverridesFromIndex(model, c.meshOverridesByIndex) })
     }
@@ -3575,7 +3577,7 @@ export async function applyProjectData(record) {
   // turned it on) opens with it OFF, rather than inheriting the last project's.
   patch.stopAtFirstClipEnd = st.stopAtFirstClipEnd === true
   // The material look is per project too: one that never set it opens with the model's own materials.
-  patch.materialLook = { ...TEXTURE_LOOK_DEFAULT, ...(st.materialLook || {}) }
+  patch.materialLook = normalizeMaterialLook(st.materialLook)
   useStore.setState(patch) // Viewport effects push these into the scene reactively
   // Apply saved shared style settings immediately to every loaded character;
   // the active-character UI effect alone would leave inactive models behind.
@@ -3623,6 +3625,7 @@ export async function applyProjectData(record) {
       if (obj.castShadow === false) setObjectCastShadowById(meta.id, false)
       if (obj.nightImmune) setObjectNightImmuneById(meta.id, true)
       if (obj.shadowImmune) setObjectShadowImmuneById(meta.id, true, false)
+      if (obj.rimImmune) setObjectRimImmuneById(meta.id, true, false)
     }
   }
 
@@ -3937,7 +3940,7 @@ function syncAllMeshFlags() {
 export function setNightSettings(next) {
   const cfg = normalizeNight(next)
   state.nightCfg = cfg
-  setNightLook(cfg.enabled ? cfg.strength : 0, cfg.tint)
+  setNightLook(cfg.enabled ? cfg.strength : 0, cfg.tint, cfg.affectLights)
   applyBackgroundColour()
   requestRender()
 }
@@ -3998,6 +4001,50 @@ export function setObjectShadowImmuneById(id, immune, record = true) {
   }
   useStore.getState().setObjectShadowImmune(id, !!immune)
   requestRender()
+}
+
+// How many materials among the loaded characters and objects carry a normal or bump map — the
+// only thing the Material tab's "Flatten" bumps has to act on (many stylised models have none).
+export function countBumpMappedMaterials() {
+  let count = 0
+  const scan = (model) => {
+    if (!model || !model.materials || !model.materials.originals) return
+    for (const original of model.materials.originals.values()) {
+      for (const m of Array.isArray(original) ? original : [original]) {
+        if (m && (m.normalMap || m.bumpMap)) count++
+      }
+    }
+  }
+  for (const o of useStore.getState().sceneObjects) scan(state.characters.get(o.id) || getObjectMaterialModelById(o.id))
+  return count
+}
+
+// Make one object / character ignore rim lighting (the edge highlight from the Lighting tab).
+// Updates the scene + the store; undoable.
+export function setObjectRimImmuneById(id, immune, record = true) {
+  const model = state.characters.get(id) || getObjectMaterialModelById(id)
+  if (record && model && model.meshes) {
+    const before = isRimImmune(model)
+    if (before !== !!immune) {
+      pushSceneHistory(
+        () => setObjectRimImmuneById(id, before, false),
+        () => setObjectRimImmuneById(id, !!immune, false),
+      )
+    }
+  }
+  if (model && model.meshes) {
+    for (const mesh of model.meshes) {
+      if (immune) mesh.userData.rimImmune = true
+      else delete mesh.userData.rimImmune
+    }
+    syncMeshMaterialFlags(model.meshes)
+  }
+  useStore.getState().setObjectRimImmune(id, !!immune)
+  requestRender()
+}
+
+function isRimImmune(model) {
+  return !!(model && model.meshes && model.meshes.some((m) => m.userData && m.userData.rimImmune))
 }
 
 function isShadowImmune(model) {

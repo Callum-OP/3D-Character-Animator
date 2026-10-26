@@ -303,9 +303,13 @@ function updateRimLight(material, rim) {
     if (!m || !m.userData) continue
     const u = m.userData
     ensureColor(u, 'rimColor').set(rim.color)
-    u.rimSoftIntensity = softAmount
+    // What was asked for is kept, so an object that ignores rim lighting can be switched back.
+    u.rimSoftRequested = softAmount
+    u.rimHardRequested = hardAmount
+    const k = u.rimImmune ? 0 : 1
+    u.rimSoftIntensity = softAmount * k
     u.rimSoftWidth = soft.width != null ? soft.width : 0.5
-    u.rimHardIntensity = hardAmount
+    u.rimHardIntensity = hardAmount * k
     u.rimHardWidth = hard.width != null ? hard.width : 0.35
     u.rimSideOnly = rim.sideOnly ? 1 : 0
     if (rim.direction) ensureVector3(u, 'rimLightDir', rim.direction).copy(rim.direction)
@@ -319,6 +323,21 @@ function updateRimLight(material, rim) {
       ru.rimSideOnly.value = u.rimSideOnly
       if (rim.direction) ru.rimLightDir.value = u.rimLightDir
     }
+  }
+}
+
+// An object that ignores rim lighting keeps its materials' rim intensity at zero (the live
+// uniforms are updated, so toggling it never recompiles anything).
+function applyRimImmunity(m) {
+  const u = m.userData
+  if (!u || u.rimSoftRequested == null) return // no rim has been written to this material yet
+  const k = u.rimImmune ? 0 : 1
+  u.rimSoftIntensity = u.rimSoftRequested * k
+  u.rimHardIntensity = u.rimHardRequested * k
+  const ru = u.rimUniforms
+  if (ru) {
+    ru.rimSoftIntensity.value = u.rimSoftIntensity
+    ru.rimHardIntensity.value = u.rimHardIntensity
   }
 }
 
@@ -484,6 +503,7 @@ export function syncMeshMaterialFlags(meshes) {
     if (!mesh) continue
     const immune = !!(mesh.userData && mesh.userData.nightImmune)
     const shadowImmune = !!(mesh.userData && mesh.userData.shadowImmune)
+    const rimImmune = !!(mesh.userData && mesh.userData.rimImmune)
     const arr = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
     for (const m of arr) {
       if (!m) continue
@@ -494,6 +514,9 @@ export function syncMeshMaterialFlags(meshes) {
       if (shadowImmune) m.userData.shadowImmune = true
       else delete m.userData.shadowImmune
       setShadowImmune(m, shadowImmune)
+      if (rimImmune) m.userData.rimImmune = true
+      else delete m.userData.rimImmune
+      applyRimImmunity(m)
     }
   }
 }
@@ -618,7 +641,7 @@ export function applyMaterials(model, opts) {
       shadowStrength,
     })
     if (applyColorOverride(toonMat, original, ov, { toon: { soft: mode === 'soft' } })) applyAlphaState(toonMat, original, store, alphaOn)
-    applyTextureLook(toonMat, original, mesh, textureLook, ov && ov.slots)
+    applyTextureLook(toonMat, original, mesh, textureLook, ov && ov.slots, { toon: { soft: mode === 'soft' } })
     mesh.material = toonMat
   }
   syncMeshMaterialFlags(model.meshes)

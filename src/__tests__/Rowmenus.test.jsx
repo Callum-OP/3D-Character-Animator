@@ -4,7 +4,7 @@ import React from 'react'
 
 const lightCalls = { remove: vi.fn(), rename: vi.fn((id, name) => name), visible: vi.fn() }
 const cameraCalls = { remove: vi.fn(), rename: vi.fn((id, name) => name) }
-const sceneCalls = { visible: vi.fn(), rename: vi.fn((id, name) => name), remove: vi.fn(), reset: vi.fn() }
+const sceneCalls = { visible: vi.fn(), rename: vi.fn((id, name) => name), remove: vi.fn(), reset: vi.fn(), rim: vi.fn() }
 
 vi.mock('../three/lights.js', async (importOriginal) => {
   const actual = await importOriginal()
@@ -41,6 +41,7 @@ vi.mock('../three/scene.js', async (importOriginal) => {
     },
     removeObjectById: (...a) => sceneCalls.remove(...a),
     resetObjectById: (...a) => sceneCalls.reset(...a),
+    setObjectRimImmuneById: (...a) => sceneCalls.rim(...a),
     getTransparentMeshUuidsForObject: () => [],
   }
 })
@@ -167,6 +168,29 @@ describe('Objects list menu', () => {
     expect(screen.getByRole('menuitemcheckbox', { name: /Casts shadows/ }).getAttribute('aria-checked')).toBe('false')
     expect(screen.getByRole('menuitemcheckbox', { name: /Darkens at night/ }).getAttribute('aria-checked')).toBe('false')
     expect(screen.getByRole('menuitemcheckbox', { name: /Receives shadows/ }).getAttribute('aria-checked')).toBe('true')
+  })
+
+  it('has "Ignore rim lighting" in the Light & shadow section, off by default, and it toggles', () => {
+    render(<ObjectsPanel />)
+    fireEvent.contextMenu(row('Sword'))
+    const labels = [...screen.getByRole('menu').querySelectorAll('[role^="menuitem"]')].map((e) => e.textContent.replace('✓', '').trim())
+    const shadow = labels.indexOf('Casts shadows')
+    expect(shadow).toBeGreaterThan(-1)
+    const rim = labels.indexOf('Ignore rim lighting')
+    expect(rim).toBeGreaterThan(shadow) // after the section's first entry, before the section ends
+    expect(rim).toBeLessThan(labels.indexOf('Reset position'))
+    const item = screen.getByRole('menuitemcheckbox', { name: /Ignore rim lighting/ })
+    expect(item.getAttribute('aria-checked')).toBe('false')
+    fireEvent.click(item)
+    expect(sceneCalls.rim).toHaveBeenCalledWith(1, true)
+  })
+
+  it('shows it ticked, and a marker on the row, when the object ignores rim lighting', () => {
+    useStore.setState({ sceneObjects: [{ id: 1, name: 'Sword', visible: true, kind: 'model', rimImmune: true, animationKey: 'k1' }] })
+    render(<ObjectsPanel />)
+    expect(row('Sword').querySelector('[title="Ignores rim lighting"]')).toBeTruthy()
+    fireEvent.contextMenu(row('Sword'))
+    expect(screen.getByRole('menuitemcheckbox', { name: /Ignore rim lighting/ }).getAttribute('aria-checked')).toBe('true')
   })
 
   it('Hide runs on the row, and the menu then offers Show', () => {

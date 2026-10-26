@@ -741,6 +741,9 @@ export function pasteObject() {
         format: entry.format,
         kind: entry.kind,
         attachedToObjectId: entry.attachedObjectId,
+        nightImmune: meshes.some((m) => m.userData && m.userData.nightImmune) || undefined,
+        shadowImmune: meshes.some((m) => m.userData && m.userData.shadowImmune) || undefined,
+        rimImmune: meshes.some((m) => m.userData && m.userData.rimImmune) || undefined,
       },
     })
     for (const child of clip.children) make(child, entry)
@@ -1403,6 +1406,7 @@ export function getObjectsForSave(meshOverrides) {
       castShadow: e.kind === 'model' ? e.castShadow : undefined,
       nightImmune: e.kind === 'model' && e.meshes.some((m) => m.userData && m.userData.nightImmune) ? true : undefined,
       shadowImmune: e.kind === 'model' && e.meshes.some((m) => m.userData && m.userData.shadowImmune) ? true : undefined,
+      rimImmune: e.kind === 'model' && e.meshes.some((m) => m.userData && m.userData.rimImmune) ? true : undefined,
       // Bone this prop is riding, if any (transform above is already bone-local).
       attachedBoneName: e.attachedBoneName || undefined,
       // Prop it is attached to, if any, by that prop's animation key (stable across a reload,

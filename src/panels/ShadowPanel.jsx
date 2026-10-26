@@ -190,6 +190,7 @@ export function NightPanel() {
   const night = useStore((s) => s.night)
   const setNight = useStore((s) => s.setNight)
   const { enabled, strength, tint } = night
+  const affectLights = !!night.affectLights
   return (
     <div className="shadow-panel">
       <label className="toggle-row" title="Darken the whole scene, lit or flat">
@@ -226,6 +227,18 @@ export function NightPanel() {
         >
           Reset
         </button>
+      </label>
+      <label
+        className="toggle-row"
+        title="Off (default): lights you place (point and spot lights) keep shining at full brightness however dark the night is — a lamp still works in total darkness. On: they are dimmed along with everything else."
+      >
+        <input
+          type="checkbox"
+          checked={affectLights}
+          disabled={!enabled}
+          onChange={(e) => setNight({ affectLights: e.target.checked })}
+        />
+        Night also dims placed lights
       </label>
       <div className="radio-hint" style={{ marginTop: 4 }}>
         Darkens everything in the scene, including flat-coloured models and the background. To keep something lit

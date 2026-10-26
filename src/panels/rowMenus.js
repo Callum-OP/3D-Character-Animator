@@ -8,6 +8,7 @@ import {
   setObjectCastShadowById,
   setObjectNightImmuneById,
   setObjectShadowImmuneById,
+  setObjectRimImmuneById,
   setObjectAttachmentById,
   keyObjectAttachmentById,
   clearObjectAttachmentTimeline,
@@ -139,6 +140,12 @@ export function objectMenu(targets, ctx, state = useStore.getState()) {
       hint: 'Off = shadows from other objects never fall on this (Night mode still applies)',
     },
     {
+      id: 'rim',
+      label: 'Ignore rim lighting',
+      checked: !!first.rimImmune,
+      hint: "On = the edge highlight from the Lighting tab's rim light never touches this",
+    },
+    {
       id: 'night',
       label: 'Darkens at night',
       checked: !first.nightImmune,
@@ -245,6 +252,10 @@ export function objectMenu(targets, ctx, state = useStore.getState()) {
     }
     if (id === 'receive') {
       for (const o of targets) setObjectShadowImmuneById(o.id, !first.shadowImmune)
+      return
+    }
+    if (id === 'rim') {
+      for (const o of targets) setObjectRimImmuneById(o.id, !first.rimImmune)
       return
     }
     if (id === 'night') {
