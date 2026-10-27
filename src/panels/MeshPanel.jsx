@@ -42,6 +42,7 @@ import EditableValue from './EditableValue.jsx'
 import ColorControl from './ColorControl.jsx'
 import MaterialEditor from './MaterialEditor.jsx'
 import RegionEditor from './RegionEditor.jsx'
+import DecimateEditor from './DecimateEditor.jsx'
 import { useRowMenu, RowMenuButton } from './rowMenu.jsx'
 import { partMenu, partTargets } from './rowMenus.js'
 import LightFromPart from './LightFromPart.jsx'
@@ -529,6 +530,14 @@ export default function MeshPanel() {
 
       {selectedMeshUuids.length > 0 && selectedMeshUuid && (
         <MaterialEditor
+          selectedMeshUuids={selectedMeshUuids}
+          primaryUuid={selectedMeshUuid}
+          resolveMesh={(uuid) => currentModel?.meshes?.find((m) => m.uuid === uuid) || getMeshByUuid(uuid)}
+        />
+      )}
+
+      {selectedMeshUuids.length > 0 && selectedMeshUuid && (
+        <DecimateEditor
           selectedMeshUuids={selectedMeshUuids}
           primaryUuid={selectedMeshUuid}
           resolveMesh={(uuid) => currentModel?.meshes?.find((m) => m.uuid === uuid) || getMeshByUuid(uuid)}

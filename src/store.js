@@ -670,6 +670,30 @@ export const useStore = create((set) => ({
       return { meshOverrides: write(s.meshOverrides) }
     }),
 
+  // Reduce detail (see three/decimate.js): keep `ratio` (0.01 .. 1) of each target part's triangles.
+  // Stored per part in the override map, so it saves/loads and copies with the part. ratio >= 1
+  // clears it (full detail). `protect` keeps open edges / material borders fixed. A character that
+  // isn't the active one keeps its overrides in the roster, so the write goes there.
+  setMeshesDecimate: (uuids, patch, characterId = null) =>
+    set((s) => {
+      const write = (map) => {
+        const next = { ...map }
+        for (const uuid of uuids) {
+          const base = { outline: true, shading: 'full', ...map[uuid] }
+          const merged = { ratio: 1, protect: true, ...(base.decimate || {}), ...patch }
+          if (!(merged.ratio < 0.9995)) delete base.decimate
+          else base.decimate = { ratio: Math.max(0.01, merged.ratio), protect: merged.protect !== false }
+          next[uuid] = base
+        }
+        return next
+      }
+      if (characterId != null && characterId !== s.activeCharacterId && s.characters[characterId]) {
+        const c = s.characters[characterId]
+        return { characters: { ...s.characters, [characterId]: { ...c, meshOverrides: write(c.meshOverrides || {}) } } }
+      }
+      return { meshOverrides: write(s.meshOverrides) }
+    }),
+
   // Edit ONE material of each target mesh (see three/surfaceMaterials.js): `targets` is
   // [{ uuid, slot }], `patch` a partial SlotLook where null removes a setting. Lives in
   // the per-mesh override map, so it saves/loads and copies like the other per-mesh

@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { addShadowUniforms, shadowFilterKey, setNightImmune, setShadowImmune } from './shadowDarkening.js'
 import { stripAppMaterialData } from './materialUserData.js'
 import { applyRegionIds } from './regions.js'
+import { applyMeshDecimation, decimateSpecOf } from './decimate.js'
 import {
   recordMaterialSlots, buildPhysical, applySurface, applyOpacity, applyColorReplace,
   hasSurface, hasReplace, hasAnySlot, isStyledCopy, markStyledCopy, hasSlotOpacity,
@@ -561,7 +562,10 @@ export function applyMaterials(model, opts) {
     const rawOv = overrides[mesh.uuid]
     // Regions (per-face looks) need the mesh's faces marked; saved regions that no longer fit
     // this geometry (re-imported, re-decimated) are ignored rather than painted on the wrong faces.
-    const regionsOk = hasRegions(rawOv) && applyRegionIds(mesh, rawOv.regions)
+    // Reduce detail (see decimate.js): the part shows a lighter copy of its geometry. Its faces are then
+    // different ones, so Paint regions are left out while it is reduced.
+    const reduced = applyMeshDecimation(mesh, decimateSpecOf(rawOv))
+    const regionsOk = !reduced && hasRegions(rawOv) && applyRegionIds(mesh, rawOv.regions)
     const ov = rawOv && rawOv.regions && !regionsOk ? { ...rawOv, regions: undefined } : rawOv
     const shading = (ov && ov.shading) || 'full'
     const original = store.originals.get(mesh)

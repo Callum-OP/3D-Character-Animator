@@ -16,6 +16,7 @@ import {
 import { resolveShadowQuality, computeShadowFilter, chooseShadowMapSize, normalizeShadows, normalizeNight, shadowsFromProject } from './shadowSettings.js'
 import { VideoCapture, findVideoConfig, webCodecsAvailable } from './videoCapture.js'
 import { computeOutputSize, videoBitrate, pickVideoFormat, MAX_VIDEO_SIDE } from './exportSize.js'
+import { setDecimatorReadyHandler, ensureDecimatorReady } from './decimate.js'
 import { fitShadowExtents, needsRefit, collectFloorReceivers, probeFloor } from './shadowFit.js'
 import {
   recordOriginalMaterials,
@@ -510,6 +511,10 @@ export function initScene(container) {
     // Move (IK) — keep the toolbar toggle in sync when that happens.
     onGizmoModeChange: (mode) => useStore.getState().setBoneGizmoMode(mode),
   })
+
+  // Reduce detail needs its (WebAssembly) simplifier; parts saved as reduced are applied the moment it is ready.
+  setDecimatorReadyHandler(() => applyModelMaterials())
+  ensureDecimatorReady()
 
   // --- Mesh editing (part gizmo + click-to-pick, active in Mesh mode) ---
   initMeshEdit({
