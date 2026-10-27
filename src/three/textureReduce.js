@@ -58,7 +58,7 @@ const makeCanvas = (w, h) => {
 }
 
 // Redraw an image smaller. Big reductions go down in halves, which keeps them smooth instead of jagged.
-function drawSmaller(image, from, to) {
+export function drawSmaller(image, from, to) {
   let source = image
   let w = from.width
   let h = from.height

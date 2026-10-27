@@ -122,7 +122,7 @@ export const TEXTURE_LOOK_PRESETS = [
   { id: 'flatpixel', label: 'Flat Pixel', hint: 'Chunky pixels in flat colours that keep their shapes.', config: { detail: 'regions', pixels: 16 } },
   { id: 'retro', label: 'Retro', hint: 'Medium-resolution textures in a limited palette — an old 3D game.', config: { pixels: 32, bands: 8, bumps: 'flatten' } },
   { id: 'clay', label: 'Clay', hint: 'Everything one plain grey, no shine, no surface relief — an untextured clay-model render.', config: { colour: 'clay', finish: 'matte', bumps: 'flatten' } },
-  { id: 'manga', label: 'Manga', hint: 'Anime-style flat shapes in clean black ink on clear white paper, with pencil hatching in the dark areas (contrast +20%, brightness +30%).', config: { detail: 'regions', separation: 0, colour: 'manga', bands: 0, pixels: 0, bumps: 'flatten', finish: 'hatch', contrast: 0.2, brightness: 0.3 } },
+  { id: 'manga', label: 'Manga', hint: 'Anime-style flat shapes in clean black ink on clear white paper, with pencil hatching in the dark areas (contrast +80%, brightness +30%).', config: { detail: 'regions', separation: 0, colour: 'manga', bands: 0, pixels: 0, bumps: 'flatten', finish: 'hatch', contrast: 0.8, brightness: 0.3 } },
   { id: 'noirink', label: 'Noir Ink', hint: 'Black & white pushed to a few hard tones, like a graphic-novel panel.', config: { detail: 'smooth', colour: 'noir', bands: 6 } },
   { id: 'noir', label: 'Noir', hint: 'The textures stay, but the colour is only black, white and grey, with deep contrast.', config: { colour: 'noir' } },
 ]

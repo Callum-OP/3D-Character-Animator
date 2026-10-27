@@ -17,6 +17,7 @@ import { resolveShadowQuality, computeShadowFilter, chooseShadowMapSize, normali
 import { VideoCapture, findVideoConfig, webCodecsAvailable } from './videoCapture.js'
 import { computeOutputSize, videoBitrate, pickVideoFormat, MAX_VIDEO_SIDE } from './exportSize.js'
 import { setDecimatorReadyHandler, ensureDecimatorReady } from './decimate.js'
+import { bakeLookIntoMaterials, lookExportNotes } from './bakeLook.js'
 import { fitShadowExtents, needsRefit, collectFloorReceivers, probeFloor } from './shadowFit.js'
 import {
   recordOriginalMaterials,
@@ -2522,7 +2523,7 @@ function downloadBlob(blob, filename) {
 // poseMode: 'current' (default) exports the pose on screen; 'rest' exports every
 // character in its un-posed rest pose (on the export copy only — the live
 // character is never touched). See exportPose.js.
-export async function exportSceneModel(format = 'glb', name = 'scene', poseMode = 'current') {
+export async function exportSceneModel(format = 'glb', name = 'scene', poseMode = 'current', { bakeLook = false } = {}) {
   const items = getAllRootsForExport()
   if (!items.length) {
     return { ok: false, message: 'Nothing to export — load a character or add an object first.' }
@@ -2532,6 +2533,10 @@ export async function exportSceneModel(format = 'glb', name = 'scene', poseMode 
       import('three/examples/jsm/exporters/GLTFExporter.js'),
       import('./exportPose.js'),
     ])
+    // "Include Material look in export": the Look > Material settings baked into the files' real materials.
+    const look = useStore.getState().materialLook
+    const lookApplies = resolveTextureLook(look, 'character') !== null || resolveTextureLook(look, 'object') !== null
+    const bake = bakeLook && lookApplies ? { look, cache: new Map(), stats: { baked: 0, failed: 0 } } : null
 
     // Fresh, transform-less parent: every child below gets its WORLD matrix
     // baked into its local transform, so nesting (e.g. a prop parented under
@@ -2546,7 +2551,7 @@ export async function exportSceneModel(format = 'glb', name = 'scene', poseMode 
       const dup = cloneForExport(root, { pose: poseMode, restQuats: model?.__poseRestQuats || null })
       dup.name = objName || dup.name
       root.matrixWorld.decompose(dup.position, dup.quaternion, dup.scale)
-      useExportMaterials(root, dup, model)
+      useExportMaterials(root, dup, model, bake)
       exportGroup.add(dup)
     }
     const textureReport = checkExportTextures(exportGroup)
@@ -2573,6 +2578,14 @@ export async function exportSceneModel(format = 'glb', name = 'scene', poseMode 
     if (textureReport.unreadable) {
       message += ` ${textureReport.unreadable} texture${textureReport.unreadable === 1 ? ' was' : 's were'} not ready to embed and left out.`
     }
+    if (bake) {
+      message += ` Material look baked into ${bake.stats.baked} material${bake.stats.baked === 1 ? '' : 's'}.`
+      if (bake.stats.failed) message += ` ${bake.stats.failed} could not be baked and keep their own look.`
+      const notes = lookExportNotes(look)
+      if (notes.length) message += ` Not included (drawn from the lighting on screen): ${notes.join(' and ')}.`
+    } else if (bakeLook && !lookApplies) {
+      message += ' Material look is Original, so there was nothing to bake.'
+    }
     return { ok: true, message }
   } catch (err) {
     return { ok: false, message: 'Export failed: ' + (err && err.message ? err.message : String(err)) }
@@ -2583,7 +2596,7 @@ export async function exportSceneModel(format = 'glb', name = 'scene', poseMode 
 // viewport may be showing a toon / unlit stand-in, but the FILE should carry the actual
 // materials — textures, roughness / metalness, normal maps and the Material editor's edits.
 // `src` and `dup` are the live root and its export clone; their node trees match one to one.
-function useExportMaterials(src, dup, characterModel) {
+function useExportMaterials(src, dup, characterModel, bake = null) {
   const s = useStore.getState()
   let model = characterModel || null
   let overrides = s.meshOverrides
@@ -2612,6 +2625,20 @@ function useExportMaterials(src, dup, characterModel) {
     if (baked) {
       dupMeshes[i].geometry = baked.geometry
       dupMeshes[i].material = baked.material
+    }
+    // Look > Material, written into the file's real materials (see bakeLook.js).
+    const resolved = bake && owner ? resolveTextureLook(bake.look, model ? 'character' : 'object') : null
+    if (resolved) {
+      const done = bakeLookIntoMaterials(dupMeshes[i].material, {
+        mesh,
+        sources: owner.materials && owner.materials.originals.get(mesh),
+        slotLooks: ov && ov.slots,
+        look: resolved,
+        cache: bake.cache,
+      })
+      dupMeshes[i].material = done.material
+      bake.stats.baked += done.baked
+      bake.stats.failed += done.failed
     }
   }
   // The pink / cyan region highlight is a viewport aid, never part of a file.

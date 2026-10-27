@@ -41,7 +41,7 @@ describe('contrast, brightness, saturation and tint', () => {
   })
   it('a preset puts all the adjustments back to nothing, unless it sets its own', () => {
     expect(presetLook('noir')).toMatchObject({ contrast: 0, brightness: 0, saturation: 0, tintAmount: 0, tint: '#ffffff' })
-    expect(presetLook('manga', { contrast: 0.9, tintAmount: 0.5 })).toMatchObject({ contrast: 0.2, brightness: 0.3, saturation: 0, tintAmount: 0 })
+    expect(presetLook('manga', { contrast: 0.9, tintAmount: 0.5 })).toMatchObject({ contrast: 0.8, brightness: 0.3, saturation: 0, tintAmount: 0 })
     expect(presetLook('cel')).toMatchObject({ contrast: 0.05, brightness: 0.05 })
     expect(presetLook('anime')).toMatchObject({ saturation: 0.15 })
   })

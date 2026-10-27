@@ -69,6 +69,8 @@ export default function ExportPanel() {
   // 'baked' = pose becomes the file's bind pose (best for Blender); 'current' = skinned pose
   // using the model's original bind data; 'rest' = un-posed. See exportPose.js.
   const [exportPoseMode, setExportPoseMode] = useState('baked')
+  // Write the Look > Material settings (clay, flat colour, noir, pixel …) into the model's own textures and colours.
+  const [exportBakeLook, setExportBakeLook] = useState(false)
 
   const name = modelInfo?.name || 'render'
   const canRecord = canRecordVideo()
@@ -128,7 +130,7 @@ export default function ExportPanel() {
     if (exportingModel) return
     setExportingModel(true)
     setMsg(format === 'glb' ? 'Exporting scene as .glb…' : 'Exporting scene as .gltf…')
-    const result = await exportSceneModel(format, name, exportPoseMode)
+    const result = await exportSceneModel(format, name, exportPoseMode, { bakeLook: exportBakeLook })
     setExportingModel(false)
     setMsg(result.message)
   }
@@ -329,6 +331,15 @@ export default function ExportPanel() {
             <option value="rest">Rest pose</option>
           </select>
         </label>
+        <label className="toggle-row" style={{ marginTop: 6 }} title="Writes the Look > Material settings into the file's textures and colours, so the model keeps its look in Blender, Unity and other programs.">
+          <input type="checkbox" checked={exportBakeLook} onChange={(e) => setExportBakeLook(e.target.checked)} />
+          Include Material look in export
+        </label>
+        <div className="radio-hint" style={{ marginTop: 2 }}>
+          Bakes what a file can hold: colour grade (clay, noir, sepia, vivid …), flat colour, smoothed / pixel
+          textures, bump flattening and finish. Manga ink and pencil hatching depend on the lighting, so they stay
+          in the app.
+        </div>
         <div className="radio-hint" style={{ marginTop: 4 }}>
           Combines every visible character and object into one file at their
           current positions. Three.js can't write .fbx directly — open the
