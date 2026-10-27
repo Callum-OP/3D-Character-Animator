@@ -121,7 +121,10 @@ export function normalizeShadows(input) {
 //   tint      colour of the night (hue only, like shadow tint)
 // Objects can opt out individually (see nightImmune in the object list).
 // ---------------------------------------------------------------------------
-export const DEFAULT_NIGHT = Object.freeze({ enabled: false, strength: 0.6, tint: '#5b78d1' })
+// affectLights: whether the night also dims lights the person placed (point / spot lights). Off by
+// default: a lamp should still shine in total darkness. (The main scene light is always part of the
+// day/night wash.)
+export const DEFAULT_NIGHT = Object.freeze({ enabled: false, strength: 0.6, tint: '#5b78d1', affectLights: false })
 
 export function normalizeNight(input) {
   const src = input && typeof input === 'object' ? input : {}
@@ -130,6 +133,7 @@ export function normalizeNight(input) {
     enabled: typeof src.enabled === 'boolean' ? src.enabled : d.enabled,
     strength: clamp(typeof src.strength === 'number' && Number.isFinite(src.strength) ? src.strength : d.strength, 0, 1),
     tint: typeof src.tint === 'string' && HEX.test(src.tint) ? src.tint.toLowerCase() : d.tint,
+    affectLights: typeof src.affectLights === 'boolean' ? src.affectLights : d.affectLights,
   }
 }
 

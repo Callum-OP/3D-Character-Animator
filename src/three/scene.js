@@ -16,6 +16,8 @@ import {
 import { resolveShadowQuality, computeShadowFilter, chooseShadowMapSize, normalizeShadows, normalizeNight, shadowsFromProject } from './shadowSettings.js'
 import { VideoCapture, findVideoConfig, webCodecsAvailable } from './videoCapture.js'
 import { computeOutputSize, videoBitrate, pickVideoFormat, MAX_VIDEO_SIDE } from './exportSize.js'
+import { setDecimatorReadyHandler, ensureDecimatorReady } from './decimate.js'
+import { bakeLookIntoMaterials, lookExportNotes } from './bakeLook.js'
 import { fitShadowExtents, needsRefit, collectFloorReceivers, probeFloor } from './shadowFit.js'
 import {
   recordOriginalMaterials,
@@ -65,6 +67,11 @@ import {
   applyCamerasData,
   attachCameraToRoot,
   detachCameraFromObject,
+  getAttachedCamerasData,
+  addCameraOnObject,
+  withdrawCamera,
+  reinstateCamera,
+  disposeWithdrawnCamera,
   clearCameras,
   disposeCameras,
   setViewCamera as setCamerasViewCamera,
@@ -85,6 +92,11 @@ import {
   applyLightsData,
   attachLightToRoot,
   detachLightFromObject,
+  getAttachedLightsData,
+  addLightOnObject,
+  withdrawLight,
+  reinstateLight,
+  disposeWithdrawnLight,
   clearLights,
   disposeLights,
   setViewCamera as setLightsViewCamera,
@@ -174,6 +186,12 @@ import {
   setObjectStyle,
   setObjectOutline,
   renameObject,
+  getObjectDescendantIds,
+  attachObjectToObject,
+  detachObjectFromObject,
+  canAttachObjectToObject,
+  getObjectParentId,
+  isObjectRoot,
   applyAllObjectStyles,
   getObjectMaterialModelById,
   setObjectCastShadow,
@@ -215,9 +233,11 @@ import {
 import { getPose, applyPose } from './posing.js'
 import { detectFacingYaw } from './bvh.js'
 import { useStore, captureCharacterRecord } from '../store.js'
-import { releaseFollowersOf } from './attach.js'
+import { releaseFollowersOf, getContentBounds } from './attach.js'
 import { describeMissingFiles, describeBlendConversion } from './modelBundle.js'
 import { clearUndoHistory, pushUndoBatch, runWithoutHistoryCapture } from './undoHistory.js'
+import { markProjectClean, markProjectCleanAfterLoad } from './projectDirty.js'
+import { resolveTextureLook, normalizeMaterialLook, TEXTURE_LOOK_DEFAULT } from './textureLookOptions.js'
 import { withExportSafeMaterials } from './materialUserData.js'
 import { buildPartsGroup, safeFileStem } from './extractParts.js'
 import { bakeRegionsForExport, fromRanges } from './regions.js'
@@ -492,6 +512,10 @@ export function initScene(container) {
     // Move (IK) — keep the toolbar toggle in sync when that happens.
     onGizmoModeChange: (mode) => useStore.getState().setBoneGizmoMode(mode),
   })
+
+  // Reduce detail needs its (WebAssembly) simplifier; parts saved as reduced are applied the moment it is ready.
+  setDecimatorReadyHandler(() => applyModelMaterials())
+  ensureDecimatorReady()
 
   // --- Mesh editing (part gizmo + click-to-pick, active in Mesh mode) ---
   initMeshEdit({
@@ -1531,7 +1555,6 @@ export function pasteCopiedCharacter() {
   const id = `char_${++characterIdCounter}`
   model.info = { ...model.info, name: `${model.info.name} Copy` }
   model.root.name = model.info.name
-  model.root.position.x += 0.25
 
   state.scene.add(model.root)
   state.characters.set(id, model)
@@ -1594,6 +1617,13 @@ function cloneCharacterModel(source) {
   source.root.traverse((node) => sourceNodes.push(node))
   root.traverse((node) => clonedNodes.push(node))
   const nodeMap = new Map(sourceNodes.map((node, index) => [node, clonedNodes[index]]))
+  // What merely rides on the character (a light's or camera's mount, a prop attached to a bone)
+  // is not part of it: the clone would carry unregistered phantom copies of them.
+  sourceNodes.forEach((node, index) => {
+    if (node !== source.root && ((node.userData && node.userData.isAttachMount) || isObjectRoot(node))) {
+      clonedNodes[index].removeFromParent()
+    }
+  })
   const overlays = []
   root.traverse((node) => {
     if (node.isSkinnedMesh && node.name.startsWith('(part overlay: ')) overlays.push(node)
@@ -1845,7 +1875,7 @@ function disposeCharacter(id) {
 
 // Load a file and add it as a movable scene object (does NOT replace the
 // character). Selects it so the gizmo is ready. Errors propagate to the caller.
-export async function addObjectFile(file, { animationKey } = {}) {
+export async function addObjectFile(file, { animationKey, recordHistory = true } = {}) {
   const shouldFrameInitialObject = state.characters.size === 0 && useStore.getState().sceneObjects.length === 0
   const parsed = await loadModel(file)
   const meta = addObject(parsed, parsed.info.name, parsed.info.format, parsed.persistFile || file, animationKey)
@@ -1853,7 +1883,7 @@ export async function addObjectFile(file, { animationKey } = {}) {
   useStore.getState().addSceneObject(meta) // sets selectedObjectId = meta.id
   if (state.characters.size === 0) useStore.getState().setMode('object')
   applyModelMaterials() // pick up the current Look settings immediately
-  recordObjectAdded(meta.id)
+  if (recordHistory) recordObjectAdded(meta.id)
   if (shouldFrameInitialObject) setCameraToObject(meta.id)
   requestRender()
   return meta
@@ -2015,8 +2045,9 @@ function restorePresence(batch) {
   return true
 }
 
-function pushPresenceBatch(kind, id) {
+function pushPresenceBatch(kind, id, companions = null) {
   const batch = {
+    companions, // lights / cameras / child props that travel with this object (see pasteCopiedObject)
     entries: [], // presence steps carry no transform snapshots
     kind, // 'add' | 'delete'
     id,
@@ -2027,8 +2058,13 @@ function pushPresenceBatch(kind, id) {
     // Undo of a delete / redo of an add puts the object back; the other two take it out.
     run(direction) {
       const putBack = (kind === 'delete') === (direction === 'undo')
-      if (putBack) restorePresence(batch)
-      else removePresence(batch)
+      if (putBack) {
+        restorePresence(batch)
+        if (batch.companions) batch.companions.reinstate()
+      } else {
+        if (batch.companions) batch.companions.withdraw()
+        removePresence(batch)
+      }
     },
     // Dropped from history while detached -> nothing can bring it back; free it.
     discard() {
@@ -2036,14 +2072,15 @@ function pushPresenceBatch(kind, id) {
         disposeObjectEntry(batch.rec.entry)
         batch.rec = null
       }
+      if (batch.companions) batch.companions.discard()
     },
   }
   return batch
 }
 
 // Log that a prop/image was just added (undo removes it, redo brings it back).
-function recordObjectAdded(id) {
-  pushUndoBatch('object', pushPresenceBatch('add', id))
+function recordObjectAdded(id, companions = null) {
+  pushUndoBatch('object', pushPresenceBatch('add', id, companions))
 }
 
 export function removeObjectById(id, recordHistory = true) {
@@ -2086,19 +2123,104 @@ export function setMeshesVisibleByUuids(uuids, visible) {
   for (const uuid of uuids) st.setMeshVisible(uuid, visible)
 }
 
+// Lights and cameras that ride on the copied objects, remembered at copy time (object id ->
+// { lights, cameras }, placed relative to that object, each light/camera carrying a snapshot of
+// its keyframes) so the paste can rebuild them as real, listed, animated items on the copies.
+let attachedClipboard = new Map()
+
+const cloneKeys = (keys) => (keys && keys.length ? JSON.parse(JSON.stringify(keys)) : [])
+
 export function copyObjectById(id) {
   const copied = copyObject(id)
-  if (copied) clearCopiedCharacterData()
+  attachedClipboard = new Map()
+  if (copied) {
+    clearCopiedCharacterData()
+    const animData = useStore.getState().animData
+    for (const objectId of [id, ...getObjectDescendantIds(id)]) {
+      attachedClipboard.set(objectId, {
+        lights: getAttachedLightsData(objectId).map((d) => ({ ...d, keys: cloneKeys(animData.lights?.[d.sourceName]) })),
+        cameras: getAttachedCamerasData(objectId).map((d) => ({ ...d, keys: cloneKeys(animData.cameras?.[d.sourceName]) })),
+      })
+    }
+  }
   return copied
 }
 
+// Paste the copied object — and the props, lights and cameras attached to it — exactly where the
+// original is. The lights and cameras are made properly (listed, saved with the project, with
+// the same keyframes), and undoing the paste takes all of it away in one step.
 export function pasteCopiedObject() {
-  const meta = pasteObject()
-  if (!meta) return null
-  useStore.getState().addSceneObject(meta)
-  registerObjectMeshes(meta.id, getObjectMeshesById(meta.id))
-  recordObjectAdded(meta.id)
+  const result = pasteObject()
+  if (!result) return null
+  const { created, ...meta } = result
+  const store = useStore.getState()
+  for (const item of created) {
+    store.addSceneObject(item.meta)
+    registerObjectMeshes(item.meta.id, getObjectMeshesById(item.meta.id))
+  }
+
+  const lightIds = []
+  const cameraIds = []
+  runWithoutHistoryCapture(() => {
+    for (const item of created) {
+      const attached = attachedClipboard.get(item.sourceId)
+      if (!attached) continue
+      for (const data of attached.lights) {
+        const made = addLightOnObject(data, item.root, item.meta.id)
+        useStore.getState().addSceneLight(made)
+        if (data.keys.length) useStore.getState().setLightKeyframes(made.name, cloneKeys(data.keys))
+        lightIds.push(made.id)
+      }
+      for (const data of attached.cameras) {
+        const made = addCameraOnObject(data, item.root, item.meta.id)
+        useStore.getState().addSceneCamera(made)
+        if (data.keys.length) useStore.getState().setCameraKeyframes(made.name, cloneKeys(data.keys))
+        cameraIds.push(made.id)
+      }
+    }
+  })
+  // adding lights/cameras selects them; the pasted object is what should be selected
+  useStore.setState({
+    selectedObjectId: meta.id,
+    selectedObjectIds: [meta.id],
+    selectedLightId: null,
+    selectedCameraId: null,
+  })
+
+  recordObjectAdded(meta.id, makePasteCompanions(created, lightIds, cameraIds))
   return meta
+}
+
+// Everything a pasted object brought with it besides itself, so one undo / redo moves it all.
+function makePasteCompanions(created, lightIds, cameraIds) {
+  const kids = created.slice(1) // parent first; [0] is the batch's own object
+  const hasAny = kids.length || lightIds.length || cameraIds.length
+  if (!hasAny) return null
+  const kidBatches = kids.map((k) => pushPresenceBatch('add', k.meta.id))
+  const rootId = created[0].meta.id
+  let lightRecs = []
+  let cameraRecs = []
+  return {
+    withdraw() {
+      lightRecs = lightIds.map((id) => withdrawLight(id)).filter(Boolean)
+      cameraRecs = cameraIds.map((id) => withdrawCamera(id)).filter(Boolean)
+      for (const batch of [...kidBatches].reverse()) removePresence(batch)
+    },
+    reinstate() {
+      for (const batch of kidBatches) restorePresence(batch)
+      kids.forEach((k) => attachObjectToObject(k.meta.id, k.meta.attachedToObjectId))
+      for (const rec of lightRecs) reinstateLight(rec, rec.objectId != null ? getObjectRootById(rec.objectId) : null)
+      for (const rec of cameraRecs) reinstateCamera(rec, rec.objectId != null ? getObjectRootById(rec.objectId) : null)
+      lightRecs = []
+      cameraRecs = []
+      useStore.setState({ selectedObjectId: rootId, selectedObjectIds: [rootId], selectedLightId: null, selectedCameraId: null })
+    },
+    discard() {
+      lightRecs.forEach(disposeWithdrawnLight)
+      cameraRecs.forEach(disposeWithdrawnCamera)
+      kidBatches.forEach((b) => b.discard())
+    },
+  }
 }
 
 export function hasCopiedObjectData() {
@@ -2401,7 +2523,7 @@ function downloadBlob(blob, filename) {
 // poseMode: 'current' (default) exports the pose on screen; 'rest' exports every
 // character in its un-posed rest pose (on the export copy only — the live
 // character is never touched). See exportPose.js.
-export async function exportSceneModel(format = 'glb', name = 'scene', poseMode = 'current') {
+export async function exportSceneModel(format = 'glb', name = 'scene', poseMode = 'current', { bakeLook = false } = {}) {
   const items = getAllRootsForExport()
   if (!items.length) {
     return { ok: false, message: 'Nothing to export — load a character or add an object first.' }
@@ -2411,6 +2533,10 @@ export async function exportSceneModel(format = 'glb', name = 'scene', poseMode 
       import('three/examples/jsm/exporters/GLTFExporter.js'),
       import('./exportPose.js'),
     ])
+    // "Include Material look in export": the Look > Material settings baked into the files' real materials.
+    const look = useStore.getState().materialLook
+    const lookApplies = resolveTextureLook(look, 'character') !== null || resolveTextureLook(look, 'object') !== null
+    const bake = bakeLook && lookApplies ? { look, cache: new Map(), stats: { baked: 0, failed: 0 } } : null
 
     // Fresh, transform-less parent: every child below gets its WORLD matrix
     // baked into its local transform, so nesting (e.g. a prop parented under
@@ -2425,7 +2551,7 @@ export async function exportSceneModel(format = 'glb', name = 'scene', poseMode 
       const dup = cloneForExport(root, { pose: poseMode, restQuats: model?.__poseRestQuats || null })
       dup.name = objName || dup.name
       root.matrixWorld.decompose(dup.position, dup.quaternion, dup.scale)
-      useExportMaterials(root, dup, model)
+      useExportMaterials(root, dup, model, bake)
       exportGroup.add(dup)
     }
     const textureReport = checkExportTextures(exportGroup)
@@ -2452,6 +2578,14 @@ export async function exportSceneModel(format = 'glb', name = 'scene', poseMode 
     if (textureReport.unreadable) {
       message += ` ${textureReport.unreadable} texture${textureReport.unreadable === 1 ? ' was' : 's were'} not ready to embed and left out.`
     }
+    if (bake) {
+      message += ` Material look baked into ${bake.stats.baked} material${bake.stats.baked === 1 ? '' : 's'}.`
+      if (bake.stats.failed) message += ` ${bake.stats.failed} could not be baked and keep their own look.`
+      const notes = lookExportNotes(look)
+      if (notes.length) message += ` Not included (drawn from the lighting on screen): ${notes.join(' and ')}.`
+    } else if (bakeLook && !lookApplies) {
+      message += ' Material look is Original, so there was nothing to bake.'
+    }
     return { ok: true, message }
   } catch (err) {
     return { ok: false, message: 'Export failed: ' + (err && err.message ? err.message : String(err)) }
@@ -2462,7 +2596,7 @@ export async function exportSceneModel(format = 'glb', name = 'scene', poseMode 
 // viewport may be showing a toon / unlit stand-in, but the FILE should carry the actual
 // materials — textures, roughness / metalness, normal maps and the Material editor's edits.
 // `src` and `dup` are the live root and its export clone; their node trees match one to one.
-function useExportMaterials(src, dup, characterModel) {
+function useExportMaterials(src, dup, characterModel, bake = null) {
   const s = useStore.getState()
   let model = characterModel || null
   let overrides = s.meshOverrides
@@ -2491,6 +2625,20 @@ function useExportMaterials(src, dup, characterModel) {
     if (baked) {
       dupMeshes[i].geometry = baked.geometry
       dupMeshes[i].material = baked.material
+    }
+    // Look > Material, written into the file's real materials (see bakeLook.js).
+    const resolved = bake && owner ? resolveTextureLook(bake.look, model ? 'character' : 'object') : null
+    if (resolved) {
+      const done = bakeLookIntoMaterials(dupMeshes[i].material, {
+        mesh,
+        sources: owner.materials && owner.materials.originals.get(mesh),
+        slotLooks: ov && ov.slots,
+        look: resolved,
+        cache: bake.cache,
+      })
+      dupMeshes[i].material = done.material
+      bake.stats.baked += done.baked
+      bake.stats.failed += done.failed
     }
   }
   // The pink / cyan region highlight is a viewport aid, never part of a file.
@@ -2556,7 +2704,7 @@ export function createLightFromParts(uuids, { regionId = null, presetId = 'glow'
       centreOf.copy(mesh.geometry.boundingBox).applyMatrix4(mesh.matrixWorld)
     } else {
       // a whole part: point away from the middle of the object it belongs to
-      centreOf.setFromObject(ownerRoot || mesh)
+      getContentBounds(ownerRoot || mesh, centreOf)
     }
     // Which side of the WHOLE object the part sits on (a car's front, a building's east wall)
     const faceDir = ownerRoot ? faceOfObject(surface.position, ownerRoot) : null
@@ -2592,13 +2740,106 @@ export function createLightFromParts(uuids, { regionId = null, presetId = 'glow'
   }
 }
 
+// --- Props attached to props, and merging props into one ------------------------
+
+// Attach a prop to another prop (so it follows it), or with parentId null let it go. Returns
+// false when that isn't allowed (a prop can't go inside its own subtree).
+export function setObjectParentById(id, parentId) {
+  if (parentId == null) return detachObjectFromObject(id)
+  return attachObjectToObject(id, parentId)
+}
+
+export function canAttachObjects(childId, parentId) {
+  return canAttachObjectToObject(childId, parentId)
+}
+
+// Turn several props into ONE new object (a car out of its body, wheels and lamps). The parts are
+// baked together like "turn parts into an object", at their exact world placement with the new
+// pivot under the footprint. Lights, cameras and props that were attached to any of the
+// originals are re-attached to the new object and keep their place, so they follow it. The
+// originals are removed; one Ctrl+Z brings all of it back.
+export async function mergeObjectsToOne(ids) {
+  const s = useStore.getState()
+  const list = [...new Set(ids || [])].map((id) => s.sceneObjects.find((o) => o.id === id)).filter(Boolean)
+  if (list.length < 2) return { ok: false, message: 'Select two or more objects to merge.' }
+  if (list.some((o) => o.isCharacter)) {
+    return { ok: false, message: "Characters can't be merged into an object (the skeleton bends them). Merge props and scenery." }
+  }
+  if (list.some((o) => o.kind !== 'model')) return { ok: false, message: 'Only 3D models can be merged — leave reference images out of the selection.' }
+
+  const idSet = new Set(list.map((o) => o.id))
+  const uuids = []
+  for (const o of list) {
+    for (const mesh of getObjectMeshesById(o.id)) {
+      if (s.meshOverrides[mesh.uuid]?.visible !== false) uuids.push(mesh.uuid) // a hidden part stays out
+    }
+  }
+  if (!uuids.length) return { ok: false, message: 'Nothing visible to merge — every part of those objects is hidden.' }
+
+  // What rides on the originals and must move across (and move back on undo).
+  const lightMoves = s.sceneLights.filter((l) => idSet.has(s.lightAttachments[l.id])).map((l) => ({ id: l.id, from: s.lightAttachments[l.id] }))
+  const cameraMoves = s.sceneCameras.filter((c) => idSet.has(s.cameraAttachments[c.id])).map((c) => ({ id: c.id, from: s.cameraAttachments[c.id] }))
+  const childMoves = s.sceneObjects
+    .filter((o) => o.attachedToObjectId != null && idSet.has(o.attachedToObjectId) && !idSet.has(o.id))
+    .map((o) => ({ id: o.id, from: o.attachedToObjectId }))
+  const hadAnimation = list.some((o) => (s.objectAnimData?.[o.animationKey] || []).length)
+
+  const made = await extractPartsToObject(uuids, { removeOriginals: false, recordHistory: false, name: `${list[0].name} merged` })
+  if (!made.ok) return made
+  const newId = made.id
+
+  const moveRiders = (toFor) => {
+    for (const m of lightMoves) attachLightToObject(m.id, toFor(m))
+    for (const m of cameraMoves) attachCameraToObject(m.id, toFor(m))
+    for (const m of childMoves) attachObjectToObject(m.id, toFor(m))
+  }
+  const addBatch = pushPresenceBatch('add', newId)
+  const deleteBatches = list.map((o) => pushPresenceBatch('delete', o.id))
+  const selectIds = (selected) => useStore.setState({
+    selectedObjectId: selected[0], selectedObjectIds: selected, selectedLightId: null, selectedCameraId: null,
+  })
+
+  // forward: riders hop across first, then the originals leave
+  moveRiders(() => newId)
+  deleteBatches.forEach((b) => removePresence(b))
+  selectIds([newId])
+  pushUndoBatch('object', {
+    entries: [],
+    kind: 'merge',
+    run(direction) {
+      if (direction === 'undo') {
+        removePresence(addBatch) // lets its riders go into the scene, ready to hop back
+        for (const b of [...deleteBatches].reverse()) restorePresence(b)
+        moveRiders((m) => m.from)
+        selectIds(list.map((o) => o.id))
+      } else {
+        restorePresence(addBatch)
+        moveRiders(() => newId)
+        deleteBatches.forEach((b) => removePresence(b))
+        selectIds([newId])
+      }
+      requestRender()
+    },
+    discard() {
+      addBatch.discard()
+      deleteBatches.forEach((b) => b.discard())
+    },
+  })
+  requestRender()
+  let message = `Merged ${list.length} objects into "${useStore.getState().sceneObjects.find((o) => o.id === newId)?.name || 'one object'}".`
+  const carried = lightMoves.length + cameraMoves.length + childMoves.length
+  if (carried) message += ` ${carried} attached ${carried === 1 ? 'item now follows' : 'items now follow'} the new object.`
+  if (hadAnimation) message += ' Movement keyframes on the originals did not carry over.'
+  return { ok: true, message, id: newId }
+}
+
 // Turn parts of the scene into a brand-new object of their own (a car out of a scene full of
 // cars). The parts are baked — world placement, geometry, materials with their textures and
 // any colour / surface edits — into a self-contained .glb that becomes the new object's file,
 // so it saves with the project and behaves like any other imported object. The new object
 // sits exactly where the originals were, with its pivot under its footprint.
 // removeOriginals: hide the source parts (a "move"); false leaves them in place (a "copy").
-export async function extractPartsToObject(uuids, { removeOriginals = true } = {}) {
+export async function extractPartsToObject(uuids, { removeOriginals = true, recordHistory = true, name = null } = {}) {
   const meshes = [...new Set(uuids || [])].map((u) => getMeshByUuid(u)).filter(Boolean)
   if (!meshes.length) return { ok: false, message: 'Select one or more parts first.' }
   if (meshes.some((m) => m.isSkinnedMesh)) {
@@ -2620,7 +2861,7 @@ export async function extractPartsToObject(uuids, { removeOriginals = true } = {
       }
       return owner ? materialsForExport(owner, mesh, s.meshOverrides[mesh.uuid]) : null
     }
-    const stem = safeFileStem(meshes.length === 1 ? meshes[0].name : meshes[0].name ? `${meshes[0].name} group` : '', 'Extracted object')
+    const stem = safeFileStem(name || (meshes.length === 1 ? meshes[0].name : meshes[0].name ? `${meshes[0].name} group` : ''), 'Extracted object')
     const bakeFor = (mesh) => {
       const ov = s.meshOverrides[mesh.uuid]
       return ov && ov.regions ? bakeRegionsForExport(mesh, ov.regions, materialFor(mesh) || mesh.material) : null
@@ -2632,7 +2873,7 @@ export async function extractPartsToObject(uuids, { removeOriginals = true } = {
       () => new Promise((resolve, reject) => new GLTFExporter().parse(group, resolve, reject, { binary: true })),
     )
     const file = new File([glb], `${stem}.glb`, { type: 'model/gltf-binary' })
-    const meta = await addObjectFile(file)
+    const meta = await addObjectFile(file, { recordHistory })
     setObjectTransform(meta.id, { position: pivot.toArray() })
     if (removeOriginals) setMeshesVisibleByUuids(meshes.map((m) => m.uuid), false)
     applyModelMaterials()
@@ -3066,6 +3307,7 @@ function collectSettings() {
     materialMode: s.materialMode,
     toonSteps: s.toonSteps,
     colorGrading: s.colorGrading,
+    materialLook: s.materialLook,
     ambientOcclusionStrength: s.ambientOcclusionStrength,
     backlightColor: s.backlightColor,
     backlightFalloff: s.backlightFalloff,
@@ -3160,6 +3402,8 @@ export function getProjectData() {
 
     characters.push({
       id,
+      // the name shown in the Objects list (it can have been renamed; the file name is not it)
+      name: s.sceneObjects.find((o) => o.id === id)?.name,
       fileName: model.file.name,
       blob: model.file,
       transform: {
@@ -3172,6 +3416,7 @@ export function getProjectData() {
       meshOverridesByIndex: meshOverridesByIndexFor(model, live.meshOverrides),
       nightImmune: isNightImmune(model) || undefined,
       shadowImmune: isShadowImmune(model) || undefined,
+      rimImmune: isRimImmune(model) || undefined,
       animData: live.animData,
       // BVH imports, ragdoll bakes, combined/trimmed clips — anything NOT
       // baked into the model file itself, so it isn't lost on reload.
@@ -3228,7 +3473,8 @@ export function clearProjectScene() {
   disposeCurrentModel()
   // A blank project starts with a blank undo history too.
   clearUndoHistory()
-  useStore.setState({ stopAtFirstClipEnd: false }) // per-project setting
+  runWithoutHistoryCapture(() => useStore.setState({ stopAtFirstClipEnd: false, materialLook: { ...TEXTURE_LOOK_DEFAULT } })) // per-project settings
+  markProjectClean() // a blank project has nothing to lose
 }
 
 // Restore a project record: tear down the current session, then rebuild every
@@ -3280,6 +3526,7 @@ export async function applyProjectData(record) {
     await loadModelFile(new File([c.blob], c.fileName), { addNew: i > 0 })
     const id = state.activeCharacterId // whatever we just loaded is now active
     const model = state.characters.get(id)
+    if (c.name) renameObjectById(id, c.name)
 
     if (c.transform) {
       model.root.position.fromArray(c.transform.position)
@@ -3296,6 +3543,7 @@ export async function applyProjectData(record) {
     applyMeshEditsData(c.meshEdits)
     if (c.nightImmune) setObjectNightImmuneById(id, true)
     if (c.shadowImmune) setObjectShadowImmuneById(id, true, false)
+    if (c.rimImmune) setObjectRimImmuneById(id, true, false)
     if (c.meshOverridesByIndex) {
       useStore.setState({ meshOverrides: meshOverridesFromIndex(model, c.meshOverridesByIndex) })
     }
@@ -3337,7 +3585,7 @@ export async function applyProjectData(record) {
   }
   const patch = {}
   for (const k of [
-    'materialMode', 'toonSteps', 'colorGrading',
+    'materialMode', 'toonSteps', 'colorGrading', 'materialLook',
     'ambientOcclusionStrength', 'backlightColor', 'backlightFalloff', 'lightLinks',
     'rimLightColor', 'rimSideOnly',
     'rimSoftEnabled', 'rimSoftIntensity', 'rimSoftWidth',
@@ -3360,18 +3608,24 @@ export async function applyProjectData(record) {
   // Per-project: a save from before this existed (or a project that never
   // turned it on) opens with it OFF, rather than inheriting the last project's.
   patch.stopAtFirstClipEnd = st.stopAtFirstClipEnd === true
+  // The material look is per project too: one that never set it opens with the model's own materials.
+  patch.materialLook = normalizeMaterialLook(st.materialLook)
   useStore.setState(patch) // Viewport effects push these into the scene reactively
   // Apply saved shared style settings immediately to every loaded character;
   // the active-character UI effect alone would leave inactive models behind.
   applyModelMaterials()
 
   // 4. Re-add props/images in order, restoring transform + visibility.
+  const restoredObjects = []
   for (const obj of record.objects || []) {
     if (!obj.blob) continue
     const file = new File([obj.blob], obj.fileName)
     const meta = obj.kind === 'image'
       ? await addImageFile(file, { animationKey: obj.animationKey })
       : await addObjectFile(file, { animationKey: obj.animationKey })
+    restoredObjects.push({ obj, id: meta.id })
+    // The list shows the name it was saved under (it may have been renamed), not the file's.
+    if (obj.name && obj.name !== meta.name) renameObjectById(meta.id, obj.name)
     // Re-attach to its bone (if any) BEFORE applying the saved transform —
     // attaching reparents-and-preserves-current-world-position, which we
     // then immediately overwrite with the saved (already bone-local) TRS.
@@ -3399,10 +3653,24 @@ export async function applyProjectData(record) {
       // Map it onto the new style system so older project files still work.
       const style = obj.style || (obj.lit === false ? 'unlit' : 'auto')
       if (style !== 'auto') setObjectStyleById(meta.id, style)
-      if (obj.outline) setObjectOutlineById(meta.id, true)
+      // 'off' / 'on' (or an older save's true) are the person's own choice; anything else follows the style
+      if (obj.outline === 'off') setObjectOutlineById(meta.id, false)
+      else if (obj.outline === 'on' || obj.outline === true) setObjectOutlineById(meta.id, true)
       if (obj.castShadow === false) setObjectCastShadowById(meta.id, false)
       if (obj.nightImmune) setObjectNightImmuneById(meta.id, true)
       if (obj.shadowImmune) setObjectShadowImmuneById(meta.id, true, false)
+      if (obj.rimImmune) setObjectRimImmuneById(meta.id, true, false)
+    }
+  }
+
+  // Props that were attached to another prop: every prop exists now, so re-parent them (their
+  // saved transform is already relative to the parent) and put that transform back.
+  {
+    const idByKey = new Map(restoredObjects.filter((r) => r.obj.animationKey).map((r) => [r.obj.animationKey, r.id]))
+    for (const { obj, id } of restoredObjects) {
+      const parentId = obj.attachedToKey ? idByKey.get(obj.attachedToKey) : null
+      if (parentId == null) continue
+      if (attachObjectToObject(id, parentId, { keepLocal: true })) setObjectTransform(id, obj.transform)
     }
   }
 
@@ -3459,6 +3727,7 @@ export async function applyProjectData(record) {
   // The freshly loaded project starts with a clean undo history — the add/key
   // steps recorded while rebuilding it aren't things a person did.
   clearUndoHistory()
+  markProjectCleanAfterLoad() // what is on screen is what is on disk
 
   requestRender()
 }
@@ -3476,7 +3745,7 @@ export function disposeCurrentModel() {
 // Frame the camera so the whole model fits comfortably in view, and point the
 // orbit target at its centre.
 function frameCameraToObject(object) {
-  const box = new THREE.Box3().setFromObject(object)
+  const box = getContentBounds(object)
   if (box.isEmpty()) return
   placeCameraOnBox(box)
   placeShadowUnder(box)
@@ -3705,7 +3974,7 @@ function syncAllMeshFlags() {
 export function setNightSettings(next) {
   const cfg = normalizeNight(next)
   state.nightCfg = cfg
-  setNightLook(cfg.enabled ? cfg.strength : 0, cfg.tint)
+  setNightLook(cfg.enabled ? cfg.strength : 0, cfg.tint, cfg.affectLights)
   applyBackgroundColour()
   requestRender()
 }
@@ -3766,6 +4035,50 @@ export function setObjectShadowImmuneById(id, immune, record = true) {
   }
   useStore.getState().setObjectShadowImmune(id, !!immune)
   requestRender()
+}
+
+// How many materials among the loaded characters and objects carry a normal or bump map — the
+// only thing the Material tab's "Flatten" bumps has to act on (many stylised models have none).
+export function countBumpMappedMaterials() {
+  let count = 0
+  const scan = (model) => {
+    if (!model || !model.materials || !model.materials.originals) return
+    for (const original of model.materials.originals.values()) {
+      for (const m of Array.isArray(original) ? original : [original]) {
+        if (m && (m.normalMap || m.bumpMap)) count++
+      }
+    }
+  }
+  for (const o of useStore.getState().sceneObjects) scan(state.characters.get(o.id) || getObjectMaterialModelById(o.id))
+  return count
+}
+
+// Make one object / character ignore rim lighting (the edge highlight from the Lighting tab).
+// Updates the scene + the store; undoable.
+export function setObjectRimImmuneById(id, immune, record = true) {
+  const model = state.characters.get(id) || getObjectMaterialModelById(id)
+  if (record && model && model.meshes) {
+    const before = isRimImmune(model)
+    if (before !== !!immune) {
+      pushSceneHistory(
+        () => setObjectRimImmuneById(id, before, false),
+        () => setObjectRimImmuneById(id, !!immune, false),
+      )
+    }
+  }
+  if (model && model.meshes) {
+    for (const mesh of model.meshes) {
+      if (immune) mesh.userData.rimImmune = true
+      else delete mesh.userData.rimImmune
+    }
+    syncMeshMaterialFlags(model.meshes)
+  }
+  useStore.getState().setObjectRimImmune(id, !!immune)
+  requestRender()
+}
+
+function isRimImmune(model) {
+  return !!(model && model.meshes && model.meshes.some((m) => m.userData && m.userData.rimImmune))
 }
 
 function isShadowImmune(model) {
@@ -3980,6 +4293,7 @@ export function applyModelMaterials() {
     toonSteps: s.toonSteps,
     soften,
     colorGrading: s.colorGrading,
+    textureLook: resolveTextureLook(s.materialLook, 'object'), // Look > Material, for props & scenery
     ambientOcclusionStrength: s.ambientOcclusionStrength,
     backlightColor: s.backlightColor,
     backlightFalloff: s.backlightFalloff,
@@ -3995,6 +4309,7 @@ export function applyModelMaterials() {
     toonSteps: s.toonSteps,
     soften,
     colorGrading: s.colorGrading,
+    textureLook: resolveTextureLook(s.materialLook, 'character'), // Look > Material, for characters
     ambientOcclusionStrength: s.ambientOcclusionStrength,
     backlightColor: s.backlightColor,
     backlightFalloff: s.backlightFalloff,
@@ -4262,7 +4577,7 @@ function applyCharacterLightLinks(s) {
 export function getObjectScreenPosition(id) {
   const object = getObjectRootById(id)
   if (!object || !state.camera || !state.renderer) return null
-  const box = new THREE.Box3().setFromObject(object)
+  const box = getContentBounds(object)
   if (box.isEmpty()) return null
   const centre = box.getCenter(new THREE.Vector3()).project(state.camera)
   if (centre.z > 1) return null

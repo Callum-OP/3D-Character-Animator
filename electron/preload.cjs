@@ -43,6 +43,17 @@ contextBridge.exposeInMainWorld('animare', {
     return () => ipcRenderer.removeListener('animare:open-file', handler)
   },
 
+  // Closing the window: main asks the renderer first (so it can offer to save).
+  // onCloseRequested(cb) → cb() when the person tries to close; returns an unsubscribe function.
+  // Call closeAck() straight away (it proves the page is alive), then closeNow() once closing is fine.
+  onCloseRequested: (cb) => {
+    const handler = () => cb()
+    ipcRenderer.on('animare:close-requested', handler)
+    return () => ipcRenderer.removeListener('animare:close-requested', handler)
+  },
+  closeAck: () => ipcRenderer.send('animare:close-ack'),
+  closeNow: () => ipcRenderer.send('animare:close-now'),
+
   // .blend import: runs the user's own Blender, headless, to convert the file to glTF.
   blender: {
     // → { available, path, source, version, tooOld }

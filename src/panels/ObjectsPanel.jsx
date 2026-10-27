@@ -345,10 +345,11 @@ export default function ObjectsPanel() {
               // tells you what's been changed without a button for every setting. The menu
               // (right-click, or ⋯) is where they're switched.
               const flags = []
-              if (o.outline) flags.push(['✏️', 'Ink outline on'])
+              if (o.outline === false) flags.push(['⭕', 'Ink outline switched off for this object'])
               if (o.castShadow === false) flags.push(['🚫', 'Does not cast shadows'])
               if (o.nightImmune) flags.push(['☀️', 'Ignores Night mode (stays in daylight)'])
               if (o.shadowImmune) flags.push(['🔆', 'Never shadowed by other objects'])
+              if (o.rimImmune) flags.push(['✨', 'Ignores rim lighting'])
               return (
                 <div
                   key={o.id}
@@ -385,6 +386,11 @@ export default function ObjectsPanel() {
                       {o.name}
                     </RowName>
                     {o.isCharacter && <span className="obj-sub">character</span>}
+                    {o.attachedToObjectId != null && (
+                      <span className="obj-sub" title="Attached to another object — it follows it">
+                        ⛓ {sceneObjects.find((p) => p.id === o.attachedToObjectId)?.name}
+                      </span>
+                    )}
                     {o.attachedBoneName && (
                       <span className="obj-sub" title={`Attached to the "${o.attachedBoneName}" bone`}>
                         → {o.attachedBoneName}

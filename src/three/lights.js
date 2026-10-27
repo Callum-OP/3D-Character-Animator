@@ -3,7 +3,7 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 import { pushSceneHistory } from './sceneHistory.js'
 import { getHistorySequence, getHistoryEpoch } from './undoHistory.js'
 import { useStore } from '../store.js'
-import { createMount, reparentKeepingWorld, registerFollower, unregisterFollower } from './attach.js'
+import { createMount, reparentKeepingWorld, registerFollower, unregisterFollower, getWorldTransform } from './attach.js'
 import { clampUniformScale } from './scaleLimits.js'
 import { FLICKER_TYPES, normalizeLightEffect, flickerLevel, lighthouseAngle } from './lightEffects.js'
 
@@ -418,9 +418,20 @@ export function setLightTransform(id, transform) {
   }
 }
 
-export function getLightClipboardData(id) {
+// A light's settings for copy & paste. Its placement is the WORLD one — an attached light stores
+// its transform relative to the object it rides on, and pasting those numbers as a world
+// position dropped the copy somewhere else entirely (sometimes miles away). `local` keeps the
+// object-relative numbers instead, for copying a whole object together with its lights.
+export function getLightClipboardData(id, { local = false } = {}) {
   const entry = l.lights.find((light) => light.id === id)
   if (!entry) return null
+  const placed = local
+    ? {
+        position: entry.light.position.toArray(),
+        quaternion: entry.light.quaternion.toArray(),
+        scale: entry.light.scale.toArray(),
+      }
+    : getWorldTransform(entry.light)
   return {
     name: isCustomLightName(entry.name) ? entry.name : undefined,
     color: '#' + entry.light.color.getHexString(),
@@ -430,14 +441,60 @@ export function getLightClipboardData(id) {
     visible: entry.light.visible,
     ...shapeMeta(entry),
     direction: entry.directionLocal ? entry.directionLocal.toArray() : undefined,
-    position: entry.light.position.toArray(),
-    quaternion: entry.light.quaternion.toArray(),
-    scale: entry.light.scale.toArray(),
+    ...placed,
+    // the object it rides on, so a pasted copy can keep riding on it
+    attachedObjectId: entry.attach ? entry.attach.objectId : null,
   }
 }
 
 export function pasteLight(data) {
   return data ? addLight({ data }) : null
+}
+
+// --- Lights that ride on an object ---------------------------------------------
+
+export function getAttachedLightIds(objectId) {
+  return l.lights.filter((e) => e.attach && e.attach.objectId === objectId).map((e) => e.id)
+}
+
+// The settings of every light attached to an object, positioned relative to it, tagged with the
+// name it has now (its keyframes are filed under that name).
+export function getAttachedLightsData(objectId) {
+  return getAttachedLightIds(objectId).map((id) => ({
+    ...getLightClipboardData(id, { local: true }),
+    sourceName: l.lights.find((e) => e.id === id).name,
+  }))
+}
+
+// Make a real, listed light from `data` (placement relative to `root`) and attach it there.
+export function addLightOnObject(data, root, objectId) {
+  const meta = addLight({ recordUndo: false, data })
+  attachLightToRoot(meta.id, root, objectId, { keepLocal: true })
+  return meta
+}
+
+// Take a light out of the scene (and the Lights list) without an undo step of its own, for a
+// bigger step that undoes it as part of itself; reinstateLight puts it back.
+export function withdrawLight(id) {
+  const idx = l.lights.findIndex((e) => e.id === id)
+  if (idx < 0) return null
+  const entry = l.lights[idx]
+  const meta = useStore.getState().sceneLights.find((x) => x.id === id) || null
+  const objectId = entry.attach ? entry.attach.objectId : null
+  detachLightEntry(entry)
+  useStore.getState().removeSceneLight(id)
+  return { entry, idx, meta, objectId }
+}
+
+export function reinstateLight(rec, root = null) {
+  attachLightEntry(rec.entry, rec.idx)
+  if (rec.meta) useStore.getState().addSceneLight(rec.meta)
+  if (root && rec.objectId != null) attachLightToRoot(rec.entry.id, root, rec.objectId)
+}
+
+// Free a withdrawn light for good, once nothing can bring it back.
+export function disposeWithdrawnLight(rec) {
+  if (rec && !l.lights.includes(rec.entry)) disposeLightEntry(rec.entry)
 }
 
 export function setLightVisible(id, visible, recordHistory = true) {

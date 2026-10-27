@@ -50,7 +50,26 @@ export function patchLightsChunk(source) {
 	}`
     },
   )
-  return { source: out, count }
+  // Placed lights (point and spot — the sun-like key light is directional) also report how much
+  // they add to this pixel, so Night mode can leave exactly that part undimmed (dsPlaced).
+  let placedCount = 0
+  const wrap = (text, infoCall) => {
+    const start = text.indexOf(infoCall)
+    if (start < 0) return text
+    const re = /RE_Direct\( directLight, geometryPosition, geometryNormal, geometryViewDir, geometryClearcoatNormal, material, reflectedLight \);/g
+    re.lastIndex = start
+    const m = re.exec(text)
+    if (!m) return text
+    placedCount++
+    const wrapped = `{
+\t\tvec3 dsPre = reflectedLight.directDiffuse + reflectedLight.directSpecular;
+\t\t${m[0]}
+\t\tdsPlaced += ( reflectedLight.directDiffuse + reflectedLight.directSpecular ) - dsPre;
+\t}`
+    return text.slice(0, m.index) + wrapped + text.slice(m.index + m[0].length)
+  }
+  const withPlaced = wrap(wrap(out, 'getPointLightInfo'), 'getSpotLightInfo')
+  return { source: withPlaced, count, placedCount }
 }
 
 export function patchOpaqueChunk(source) {
@@ -62,10 +81,15 @@ export function patchOpaqueChunk(source) {
       `// Fraction of the direct light that actually arrives (1 = unshadowed, or nothing facing a light).
 	dsShadowMin = dsLightSum > 0.0001 ? clamp( dsLitSum / dsLightSum, 0.0, 1.0 ) : 1.0;
 	float dsShadowAmt = uShadowDarkness * ( 1.0 - dsShadowMin );
-	outgoingLight *= ( 1.0 - dsShadowAmt ) * mix( vec3( 1.0 ), uShadowTint, 1.0 - dsShadowMin );
-	// Night mode: a flat dark wash over everything (zero uniforms = no change).
+	vec3 dsShadowMul = ( 1.0 - dsShadowAmt ) * mix( vec3( 1.0 ), uShadowTint, 1.0 - dsShadowMin );
+	outgoingLight *= dsShadowMul;
+	// Night mode: a flat dark wash over everything (zero uniforms = no change)...
 	float dsNight = uNightAmt * ( 1.0 - uNightImmune );
-	outgoingLight *= ( 1.0 - dsNight ) * mix( vec3( 1.0 ), uNightTint, dsNight );
+	vec3 dsNightMul = ( 1.0 - dsNight ) * mix( vec3( 1.0 ), uNightTint, dsNight );
+	// ...except the light that placed lights add, which keeps shining through the night unless Night
+	// mode has been set to dim them too (uNightLightsKeep: 1 = keep, 0 = dim).
+	vec3 dsKeep = dsPlaced * dsShadowMul * uNightLightsKeep;
+	outgoingLight = max( outgoingLight - dsKeep, vec3( 0.0 ) ) * dsNightMul + dsKeep;
 	${needle}`,
     ),
     count: 1,
@@ -77,6 +101,8 @@ export function patchCommonChunk(source) {
 uniform float uShadowDarkness;
 uniform vec3 uShadowTint; // luminance-normalised shadow colour (1,1,1 = plain darkening)
 uniform float uNightAmt; // night mode strength, 0 = off
+uniform float uNightLightsKeep; // 1 = placed lights are not dimmed by night mode, 0 = they are
+vec3 dsPlaced = vec3( 0.0 ); // what placed (point / spot) lights add at this pixel
 uniform float uNightImmune; // 1 = this material ignores night mode (its own uniform, see nightImmuneUniform)
 uniform float uShadowImmune; // 1 = this material is never shadowed by other objects (its own uniform, see shadowImmuneUniform)
 float dsReachFade( float dist, float reach ) { return reach > 0.0 ? 1.0 - smoothstep( reach * 0.1, reach, dist ) : 1.0; }
@@ -127,6 +153,7 @@ export const shadowFilterB = { value: new THREE.Vector4(24, 0, 0, 0) }
 // one, so a material could be made immune but never un-immune again.)
 export const nightAmount = { value: 0 }
 export const nightTint = { value: new THREE.Color(1, 1, 1) }
+export const nightLightsKeep = { value: 1 }
 const immuneUniforms = new WeakMap()
 const notImmune = { value: 0 }
 
@@ -170,6 +197,7 @@ export function addShadowUniforms(uniforms, material) {
   uniforms.uNightAmt = nightAmount
   uniforms.uNightImmune = nightImmuneUniform(material)
   uniforms.uNightTint = nightTint
+  uniforms.uNightLightsKeep = nightLightsKeep
   uniforms.uShadowImmune = shadowImmuneUniform(material)
   uniforms.uShadowDarkness = shadowDarkness
   uniforms.uShadowTint = shadowTint
@@ -351,7 +379,8 @@ export function setShadowDarkness(value) {
 // changes the HUE of a shadow without changing how dark it is (darkness stays the
 // Strength slider's job). White / unset = plain, neutral darkening.
 // Night mode: strength 0..1 (0 = off) and the colour of the night.
-export function setNightLook(strength, hex) {
+export function setNightLook(strength, hex, affectLights = false) {
+  nightLightsKeep.value = affectLights ? 0 : 1
   nightAmount.value = Math.min(1, Math.max(0, strength || 0))
   normalisedTint(hex, nightTint.value)
 }

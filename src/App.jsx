@@ -2,6 +2,7 @@ import { PRIVACY_POLICY_URL } from './links.js'
 import Viewport from './three/Viewport.jsx'
 import TitleBar from './panels/TitleBar.jsx'
 import MaterialPanel from './panels/MaterialPanel.jsx'
+import MaterialLookPanel from './panels/MaterialLookPanel.jsx'
 import BonePanel from './panels/BonePanel.jsx'
 import MeshPanel from './panels/MeshPanel.jsx'
 import AnimationPanel from './panels/AnimationPanel.jsx'
@@ -12,6 +13,7 @@ import ProjectPanel from './panels/ProjectPanel.jsx'
 import ExportPanel from './panels/ExportPanel.jsx'
 import ViewPanel from './panels/ViewPanel.jsx'
 import HelpOverlay from './panels/HelpOverlay.jsx'
+import CloseGuard from './panels/CloseGuard.jsx'
 import Accordion from './panels/Accordion.jsx'
 import TabGroup from './panels/TabGroup.jsx'
 import { useStore } from './store.js'
@@ -88,6 +90,7 @@ function AppInner() {
 
   return (
     <div className="app-shell">
+      <CloseGuard />
       <TitleBar onOpenSettings={() => setSettingsOpen(true)} />
       <div className={'app' + (settingsOpen ? ' settings-is-open' : '')}>
         <Viewport />
@@ -161,11 +164,12 @@ function AppInner() {
           />
         </Accordion>
 
-        <Accordion id="look" icon="🎨" title="Look" subtitle="Materials and viewport style">
+        <Accordion id="look" icon="🎨" title="Look" subtitle="Lighting, materials and viewport style">
           <TabGroup
-            defaultTab="material"
+            defaultTab="lighting"
             tabs={[
-              { key: 'material', label: 'Material', icon: '🎨', render: () => <MaterialPanel /> },
+              { key: 'lighting', label: 'Lighting', icon: '💡', render: () => <MaterialPanel /> },
+              { key: 'material', label: 'Material', icon: '🎨', render: () => <MaterialLookPanel /> },
             ]}
           />
         </Accordion>

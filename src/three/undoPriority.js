@@ -4,6 +4,7 @@ import { undo as undoMesh, redo as redoMesh } from './meshedit.js'
 import { undo as undoPose, redo as redoPose } from './posing.js'
 import { undo as undoKeyframe, redo as redoKeyframe } from './keyframeHistory.js'
 import { undoScene, redoScene } from './sceneHistory.js'
+import { undo as undoLook, redo as redoLook } from './lookHistory.js'
 
 export function resolveUndoTarget(state, direction = 'undo') {
   return resolveUndoHistoryTarget(state, direction)
@@ -14,6 +15,7 @@ export function performUndo(state) {
   if (target === 'object') undoObject()
   else if (target === 'keyframe') undoKeyframe()
   else if (target === 'scene') undoScene()
+  else if (target === 'look') undoLook()
   else if (target === 'mesh') undoMesh()
   else undoPose()
 }
@@ -23,6 +25,7 @@ export function performRedo(state) {
   if (target === 'object') redoObject()
   else if (target === 'keyframe') redoKeyframe()
   else if (target === 'scene') redoScene()
+  else if (target === 'look') redoLook()
   else if (target === 'mesh') redoMesh()
   else redoPose()
 }

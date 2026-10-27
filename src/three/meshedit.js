@@ -1261,6 +1261,12 @@ export function setFacePickHandler(fn) {
   if (m.renderer && m.renderer.domElement) m.renderer.domElement.style.cursor = fn ? 'crosshair' : ''
 }
 
+// The uuid of the part under a screen position (or null) — for right-clicking a part.
+export function pickMeshUuidAt(clientX, clientY) {
+  const mesh = pickMeshAt(clientX, clientY)
+  return mesh ? mesh.uuid : null
+}
+
 function pickMeshAt(clientX, clientY) {
   const hit = pickHitAt(clientX, clientY)
   return hit ? hit.object : null

@@ -410,7 +410,6 @@ export default function RegionEditor({ meshUuid, resolveMesh }) {
             <summary style={{ cursor: 'pointer' }}>Turn into a light</summary>
             <LightFromPart
               key={selected.id}
-              defaultPresetId="headlight"
               uuids={[meshUuid]}
               regionId={selected.id}
               label="Turn this region into a light"

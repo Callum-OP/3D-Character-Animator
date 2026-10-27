@@ -1,4 +1,5 @@
 import { mergeLook } from './three/surfaceMaterials.js'
+import { TEXTURE_LOOK_DEFAULT, presetLook, normalizeMaterialLook } from './three/textureLookOptions.js'
 import { create } from 'zustand'
 import { setUndoHistoryLimit } from './three/undoHistory.js'
 import { DEFAULT_NIGHT, normalizeNight, DEFAULT_SHADOWS, normalizeShadows, shadowStyleValues, shadowsFromLegacy } from './three/shadowSettings.js'
@@ -13,7 +14,7 @@ const APP_SETTINGS_FIELDS = [
   'showGrid', 'showGround', 'solidBackground', 'backgroundColor', 'shadows', 'showStats',
   'performanceMode', 'performanceBackgroundObjects', 'performanceLowPoly',
   'performanceResolution', 'performanceEffects', 'autoDecimate',
-  'materialMode', 'toonSteps', 'colorGrading', 'ambientOcclusionStrength',
+  'materialMode', 'toonSteps', 'colorGrading', 'materialLook', 'ambientOcclusionStrength',
   'backlightColor', 'backlightFalloff', 'rimLightColor', 'rimSideOnly',
   'rimSoftEnabled', 'rimSoftIntensity', 'rimSoftWidth', 'rimHardEnabled',
   'rimHardIntensity', 'rimHardWidth', 'rimFollowLight', 'rimFollowLightId',
@@ -476,6 +477,9 @@ export const useStore = create((set) => ({
   materialMode: 'unlit', // 'unlit' | 'toon' | 'soft' | 'standard' (shown as Studio) | 'realistic'
   toonSteps: 3, // number of shadow bands in toon (Cartoon) mode
   colorGrading: 'none', // 'none' | 'warm' | 'cool' | 'bleach' | 'cinematic'
+  // Look > Material: what the surfaces themselves are made of (textures, colours, finish) —
+  // separate from the lighting above, and stackable with it. See three/textureLook.js.
+  materialLook: { ...TEXTURE_LOOK_DEFAULT },
   ambientOcclusionStrength: 0.15,
   backlightColor: '#ffffff',
   backlightFalloff: 0.15,
@@ -484,6 +488,10 @@ export const useStore = create((set) => ({
   setMaterialMode: (materialMode) => set({ materialMode }),
   setToonSteps: (toonSteps) => set({ toonSteps }),
   setColorGrading: (colorGrading) => set({ colorGrading }),
+  // Change any of the material controls; once you've touched one by hand it is no longer "the preset".
+  setMaterialLook: (patch) =>
+    set((s) => ({ materialLook: { ...s.materialLook, ...patch, preset: patch.preset || 'custom' } })),
+  applyMaterialLookPreset: (id) => set((s) => ({ materialLook: presetLook(id, s.materialLook) })),
   setAmbientOcclusionStrength: (ambientOcclusionStrength) => set({ ambientOcclusionStrength }),
   setBacklightColor: (backlightColor) => set({ backlightColor }),
   setBacklightFalloff: (backlightFalloff) => set({ backlightFalloff }),
@@ -652,6 +660,51 @@ export const useStore = create((set) => ({
             delete merged.solid
           }
           next[uuid] = merged
+        }
+        return next
+      }
+      if (characterId != null && characterId !== s.activeCharacterId && s.characters[characterId]) {
+        const c = s.characters[characterId]
+        return { characters: { ...s.characters, [characterId]: { ...c, meshOverrides: write(c.meshOverrides || {}) } } }
+      }
+      return { meshOverrides: write(s.meshOverrides) }
+    }),
+
+  // Reduce detail (see three/decimate.js): keep `ratio` (0.01 .. 1) of each target part's triangles.
+  // Stored per part in the override map, so it saves/loads and copies with the part. ratio >= 1
+  // clears it (full detail). `protect` keeps open edges / material borders fixed. A character that
+  // isn't the active one keeps its overrides in the roster, so the write goes there.
+  setMeshesDecimate: (uuids, patch, characterId = null) =>
+    set((s) => {
+      const write = (map) => {
+        const next = { ...map }
+        for (const uuid of uuids) {
+          const base = { outline: true, shading: 'full', ...map[uuid] }
+          const merged = { ratio: 1, protect: true, ...(base.decimate || {}), ...patch }
+          if (!(merged.ratio < 0.9995)) delete base.decimate
+          else base.decimate = { ratio: Math.max(0.01, merged.ratio), protect: merged.protect !== false }
+          next[uuid] = base
+        }
+        return next
+      }
+      if (characterId != null && characterId !== s.activeCharacterId && s.characters[characterId]) {
+        const c = s.characters[characterId]
+        return { characters: { ...s.characters, [characterId]: { ...c, meshOverrides: write(c.meshOverrides || {}) } } }
+      }
+      return { meshOverrides: write(s.meshOverrides) }
+    }),
+
+  // Reduce texture size (see three/textureReduce.js): cap the textures of each target part at `max` px
+  // on the longest side (null = as loaded). Stored per part in the override map, like the colour.
+  setMeshesTextureMax: (uuids, max, characterId = null) =>
+    set((s) => {
+      const write = (map) => {
+        const next = { ...map }
+        for (const uuid of uuids) {
+          const base = { outline: true, shading: 'full', ...map[uuid] }
+          if (max) base.textureMax = Math.round(max)
+          else delete base.textureMax
+          next[uuid] = base
         }
         return next
       }
@@ -978,6 +1031,11 @@ export const useStore = create((set) => ({
     set((s) => ({
       sceneObjects: s.sceneObjects.map((o) => (o.id === id ? { ...o, shadowImmune } : o)),
     })),
+  // Per object or character: ignores rim lighting (the edge highlight of the Lighting tab).
+  setObjectRimImmune: (id, rimImmune) =>
+    set((s) => ({
+      sceneObjects: s.sceneObjects.map((o) => (o.id === id ? { ...o, rimImmune } : o)),
+    })),
   // Regions (per-face looks, see three/regions.js): replace a mesh's whole region list.
   setMeshRegions: (uuid, regions) =>
     set((s) => {
@@ -1000,6 +1058,11 @@ export const useStore = create((set) => ({
   setObjectAttachment: (id, attachedBoneName) =>
     set((s) => ({
       sceneObjects: s.sceneObjects.map((o) => (o.id === id ? { ...o, attachedBoneName } : o)),
+    })),
+  // Which prop (if any) an object is attached to — shown on its row, and what Attach to object edits.
+  setObjectParent: (id, attachedToObjectId) =>
+    set((s) => ({
+      sceneObjects: s.sceneObjects.map((o) => (o.id === id ? { ...o, attachedToObjectId } : o)),
     })),
   setObjectAttachmentTrack: (animationKey, track) =>
     set((s) => ({
@@ -1360,6 +1423,11 @@ export const useStore = create((set) => ({
     }),
 
   // Insert/replace a light keyframe (position + colour + intensity), by light name.
+  // Replace a light's / camera's whole keyframe list (a copied object's lights carry theirs along).
+  setLightKeyframes: (name, keys) =>
+    set((s) => ({ animData: { ...s.animData, lights: { ...(s.animData.lights || {}), [name]: keys } } })),
+  setCameraKeyframes: (name, keys) =>
+    set((s) => ({ animData: { ...s.animData, cameras: { ...(s.animData.cameras || {}), [name]: keys } } })),
   addLightKeyframe: (name, time, key) =>
     set((s) => {
       const lights = { ...(s.animData.lights || {}) }
@@ -1701,6 +1769,7 @@ export function migrateAppSettings(saved) {
   } else if (next.shadows !== undefined) {
     next.shadows = normalizeShadows(next.shadows)
   }
+  if (next.materialLook !== undefined) next.materialLook = normalizeMaterialLook(next.materialLook) // older saves lack newer controls
   for (const k of legacy) delete next[k]
   delete next.settingsVersion // the store's current version is re-saved below
   return next

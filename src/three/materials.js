@@ -2,11 +2,14 @@ import * as THREE from 'three'
 import { addShadowUniforms, shadowFilterKey, setNightImmune, setShadowImmune } from './shadowDarkening.js'
 import { stripAppMaterialData } from './materialUserData.js'
 import { applyRegionIds } from './regions.js'
+import { applyMeshDecimation, decimateSpecOf } from './decimate.js'
+import { textureMaxOf, reduceMaterial } from './textureReduce.js'
 import {
   recordMaterialSlots, buildPhysical, applySurface, applyOpacity, applyColorReplace,
   hasSurface, hasReplace, hasAnySlot, isStyledCopy, markStyledCopy, hasSlotOpacity,
   applyToonSurface, toonOpacityLook, applyRegionLooks, hasRegions,
 } from './surfaceMaterials.js'
+import { applyTextureLook } from './textureLook.js'
 
 // ---------------------------------------------------------------------------
 // Material modes + per-mesh shading overrides
@@ -302,9 +305,13 @@ function updateRimLight(material, rim) {
     if (!m || !m.userData) continue
     const u = m.userData
     ensureColor(u, 'rimColor').set(rim.color)
-    u.rimSoftIntensity = softAmount
+    // What was asked for is kept, so an object that ignores rim lighting can be switched back.
+    u.rimSoftRequested = softAmount
+    u.rimHardRequested = hardAmount
+    const k = u.rimImmune ? 0 : 1
+    u.rimSoftIntensity = softAmount * k
     u.rimSoftWidth = soft.width != null ? soft.width : 0.5
-    u.rimHardIntensity = hardAmount
+    u.rimHardIntensity = hardAmount * k
     u.rimHardWidth = hard.width != null ? hard.width : 0.35
     u.rimSideOnly = rim.sideOnly ? 1 : 0
     if (rim.direction) ensureVector3(u, 'rimLightDir', rim.direction).copy(rim.direction)
@@ -318,6 +325,21 @@ function updateRimLight(material, rim) {
       ru.rimSideOnly.value = u.rimSideOnly
       if (rim.direction) ru.rimLightDir.value = u.rimLightDir
     }
+  }
+}
+
+// An object that ignores rim lighting keeps its materials' rim intensity at zero (the live
+// uniforms are updated, so toggling it never recompiles anything).
+function applyRimImmunity(m) {
+  const u = m.userData
+  if (!u || u.rimSoftRequested == null) return // no rim has been written to this material yet
+  const k = u.rimImmune ? 0 : 1
+  u.rimSoftIntensity = u.rimSoftRequested * k
+  u.rimHardIntensity = u.rimHardRequested * k
+  const ru = u.rimUniforms
+  if (ru) {
+    ru.rimSoftIntensity.value = u.rimSoftIntensity
+    ru.rimHardIntensity.value = u.rimHardIntensity
   }
 }
 
@@ -483,6 +505,7 @@ export function syncMeshMaterialFlags(meshes) {
     if (!mesh) continue
     const immune = !!(mesh.userData && mesh.userData.nightImmune)
     const shadowImmune = !!(mesh.userData && mesh.userData.shadowImmune)
+    const rimImmune = !!(mesh.userData && mesh.userData.rimImmune)
     const arr = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
     for (const m of arr) {
       if (!m) continue
@@ -493,6 +516,9 @@ export function syncMeshMaterialFlags(meshes) {
       if (shadowImmune) m.userData.shadowImmune = true
       else delete m.userData.shadowImmune
       setShadowImmune(m, shadowImmune)
+      if (rimImmune) m.userData.rimImmune = true
+      else delete m.userData.rimImmune
+      applyRimImmunity(m)
     }
   }
 }
@@ -529,6 +555,7 @@ export function applyMaterials(model, opts) {
     mode, toonSteps = 3, soften = 0, overrides = {}, rimLight,
     ambientOcclusionStrength, backlightColor, backlightFalloff, colorGrading, shadowStrength,
     transparencyDefault = true, // alpha stays as loaded unless a mesh is switched off (overrides[uuid].alpha === false)
+    textureLook = null, // Look > Material (see textureLook.js): changes the surfaces themselves, whatever the lighting
   } = opts
   const store = model.materials
 
@@ -536,10 +563,13 @@ export function applyMaterials(model, opts) {
     const rawOv = overrides[mesh.uuid]
     // Regions (per-face looks) need the mesh's faces marked; saved regions that no longer fit
     // this geometry (re-imported, re-decimated) are ignored rather than painted on the wrong faces.
-    const regionsOk = hasRegions(rawOv) && applyRegionIds(mesh, rawOv.regions)
+    // Reduce detail (see decimate.js): the part shows a lighter copy of its geometry. Its faces are then
+    // different ones, so Paint regions are left out while it is reduced.
+    const reduced = applyMeshDecimation(mesh, decimateSpecOf(rawOv))
+    const regionsOk = !reduced && hasRegions(rawOv) && applyRegionIds(mesh, rawOv.regions)
     const ov = rawOv && rawOv.regions && !regionsOk ? { ...rawOv, regions: undefined } : rawOv
     const shading = (ov && ov.shading) || 'full'
-    const original = store.originals.get(mesh)
+    const original = resolveOriginal(store, mesh, ov)
 
     // Per-mesh visibility (hide clothing layers, etc.).
     mesh.visible = !(ov && ov.visible === false)
@@ -558,6 +588,7 @@ export function applyMaterials(model, opts) {
       updateStyleControls(unlitMat, { colorGrading })
       applyAlphaState(unlitMat, original, store, alphaOn)
       if (applyColorOverride(unlitMat, original, ov)) applyAlphaState(unlitMat, original, store, alphaOn)
+      applyTextureLook(unlitMat, original, mesh, textureLook, ov && ov.slots)
       mesh.material = unlitMat
       continue
     }
@@ -567,8 +598,9 @@ export function applyMaterials(model, opts) {
     // would change every mesh that happens to share its material. Materials of that
     // mesh nobody touched keep rendering with the originals.
     if (mode === 'standard' || mode === 'realistic') {
-      const styled = !!(ov && ov.color) || hasAnySlot(ov) || hasRegions(ov)
-      const target = styled ? buildStyled(store, mesh, original, ov) : original
+      // A texture look needs the mesh's own copies too (the originals are shared and never changed).
+      const styled = !!(ov && ov.color) || hasAnySlot(ov) || hasRegions(ov) || !!textureLook
+      const target = styled ? buildStyled(store, mesh, original, ov, !!textureLook) : original
       if (styled) applyAlphaState(target, original, store, alphaOn)
       const arr = Array.isArray(target) ? target : [target]
       for (const m of arr) {
@@ -586,6 +618,7 @@ export function applyMaterials(model, opts) {
       if (styled && applyColorOverride(target, original, ov, { surface: true })) {
         applyAlphaState(target, original, store, alphaOn)
       }
+      if (styled) applyTextureLook(target, original, mesh, textureLook, ov && ov.slots)
       mesh.material = target
       continue
     }
@@ -613,6 +646,7 @@ export function applyMaterials(model, opts) {
       shadowStrength,
     })
     if (applyColorOverride(toonMat, original, ov, { toon: { soft: mode === 'soft' } })) applyAlphaState(toonMat, original, store, alphaOn)
+    applyTextureLook(toonMat, original, mesh, textureLook, ov && ov.slots, { toon: { soft: mode === 'soft' } })
     mesh.material = toonMat
   }
   syncMeshMaterialFlags(model.meshes)
@@ -651,6 +685,9 @@ export function disposeGeneratedMaterials(model) {
   disposeCache(model.materials.toon)
   model.materials.unlit.clear()
   model.materials.toon.clear()
+  if (model.materials.reduced) {
+    for (const mesh of [...model.materials.reduced.keys()]) dropReduced(model.materials, mesh)
+  }
   if (model.materials.tinted) {
     disposeCache(model.materials.tinted)
     model.materials.tinted.clear()
@@ -665,6 +702,63 @@ export function disposeGeneratedMaterials(model) {
 }
 
 // --- internals ---------------------------------------------------------------
+
+// Reduce texture size (see textureReduce.js): the materials a part is built from. Normally the model's
+// own (`originals`); when the part has a texture cap, its own copies holding smaller textures. They stand
+// in for the originals everywhere below (toon / unlit / restyled shells are built from them, and the
+// exporter writes them), and the model's own materials and textures are never touched.
+function resolveOriginal(store, mesh, ov) {
+  const original = store.originals.get(mesh)
+  const max = textureMaxOf(ov)
+  const have = store.reduced && store.reduced.get(mesh)
+  if (!max || !original) {
+    if (have) dropReduced(store, mesh)
+    return original
+  }
+  if (have && have.max === max && have.src === original) return have.mat
+  if (have) dropReduced(store, mesh)
+  const list = Array.isArray(original) ? original : [original]
+  const owned = []
+  const textures = []
+  let changed = false
+  const mats = list.map((m) => {
+    const made = reduceMaterial(m, max)
+    if (!made) return m
+    changed = true
+    owned.push(made.material)
+    textures.push(...made.textures)
+    const alpha = store.alpha && store.alpha.get(m)
+    if (alpha) store.alpha.set(made.material, { ...alpha })
+    return made.material
+  })
+  if (!changed) return original // nothing is bigger than the cap
+  if (!store.reduced) store.reduced = new Map()
+  const mat = Array.isArray(original) ? mats : mats[0]
+  store.reduced.set(mesh, { max, src: original, mat, owned, textures })
+  // The unlit / toon shells were built from the old materials.
+  for (const cache of [store.unlit, store.toon]) {
+    const made = cache.get(mesh)
+    if (made) for (const m of Array.isArray(made) ? made : [made]) m.dispose()
+    cache.delete(mesh)
+  }
+  return mat
+}
+
+function dropReduced(store, mesh) {
+  const have = store.reduced && store.reduced.get(mesh)
+  if (!have) return
+  store.reduced.delete(mesh)
+  for (const cache of [store.unlit, store.toon]) {
+    const made = cache && cache.get(mesh)
+    if (made) for (const m of Array.isArray(made) ? made : [made]) m.dispose()
+    if (cache) cache.delete(mesh)
+  }
+  for (const m of have.owned) {
+    if (store.alpha) store.alpha.delete(m)
+    m.dispose()
+  }
+  for (const t of have.textures) t.dispose()
+}
 
 // Fetch a cached generated material for a mesh, building it (per sub-material for
 // multi-material meshes) on first request.
@@ -702,8 +796,9 @@ function assignGradient(material, steps, floor, smooth) {
 // viewport shader effect and cannot be written to a file.)
 export function materialsForExport(model, mesh, ov) {
   const store = model && model.materials
-  const original = store && store.originals.get(mesh)
-  if (!original) return null
+  const loaded = store && store.originals.get(mesh)
+  if (!loaded) return null
+  const original = resolveOriginal(store, mesh, ov) // smaller textures when the part has Reduce texture size set
   const styled = !!(ov && ov.color) || hasAnySlot(ov)
   if (!styled) return original
   const alphaOn = ov && typeof ov.alpha === 'boolean' ? ov.alpha : true
@@ -724,7 +819,7 @@ function buildTinted(src) {
 //   'clone'    when only colour / opacity / colour-replace change, and
 //   'orig'     when untouched (the shared original, never mutated).
 // Rebuilt only when a slot's kind changes (e.g. the first time metalness is set).
-function buildStyled(store, mesh, original, ov) {
+function buildStyled(store, mesh, original, ov, forceClone = false) {
   if (!store.styled) store.styled = new Map()
   const isArr = Array.isArray(original)
   const srcs = isArr ? original : [original]
@@ -733,7 +828,7 @@ function buildStyled(store, mesh, original, ov) {
     const look = ov && ov.slots ? ov.slots[i] : null
     const kind = hasSurface(look)
       ? 'physical'
-      : (ov && ov.color) || hasRegions(ov) || (look && (look.color != null || look.opacity != null)) || hasReplace(look)
+      : (ov && ov.color) || hasRegions(ov) || forceClone || (look && (look.color != null || look.opacity != null)) || hasReplace(look)
         ? 'clone'
         : 'orig'
     const have = prev[i]

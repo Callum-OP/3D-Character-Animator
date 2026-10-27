@@ -8,6 +8,7 @@ import {
   setObjectCastShadowById,
   setObjectNightImmuneById,
   setObjectShadowImmuneById,
+  setObjectRimImmuneById,
   setObjectAttachmentById,
   keyObjectAttachmentById,
   clearObjectAttachmentTimeline,
@@ -19,6 +20,9 @@ import {
   setMeshesVisibleByUuids,
   applyModelMaterials,
   attachCameraToObject,
+  canAttachObjects,
+  setObjectParentById,
+  mergeObjectsToOne,
 } from '../three/scene.js'
 import { copyCurrentEdit, pasteCurrentEdit } from '../three/editClipboard.js'
 import { copySceneItem, pasteSceneItem } from '../three/sceneClipboard.js'
@@ -95,6 +99,12 @@ export function objectMenu(targets, ctx, state = useStore.getState()) {
   if (!multi) {
     items.push({ id: 'rename', label: 'Rename', shortcut: 'Dbl-click' })
     items.push({ id: 'duplicate', label: 'Duplicate' })
+  } else if (targets.every((o) => !o.isCharacter && o.kind === 'model')) {
+    items.push({
+      id: 'merge',
+      label: `Merge ${count} objects into one`,
+      hint: 'Join them into a single object. Lights, cameras and props attached to any of them follow the new object.',
+    })
   }
   items.push({ id: 'visibility', label: first.visible === false ? 'Show' : 'Hide', shortcut: 'H' })
 
@@ -107,7 +117,8 @@ export function objectMenu(targets, ctx, state = useStore.getState()) {
       hint: "How this prop is shaded — 'Match scene' follows the character's Look panel",
       children: STYLE_OPTIONS.map((o) => ({ id: 'style:' + o.value, label: o.label, checked: current === o.value })),
     })
-    look.push({ id: 'outline', label: 'Ink outline', checked: !!first.outline, hint: 'Draw a cartoon ink outline around this prop' })
+    // On by default whenever the Lighting style has outlines on; switch off to keep this one outline-free.
+    look.push({ id: 'outline', label: 'Ink outline', checked: first.outline ?? !!state.outlineEnabled, hint: 'Outlined like the characters whenever the Lighting style has outlines on. Switch off to keep this object outline-free.' })
   }
   if (alphaStates.length) {
     look.push({
@@ -130,6 +141,12 @@ export function objectMenu(targets, ctx, state = useStore.getState()) {
       hint: 'Off = shadows from other objects never fall on this (Night mode still applies)',
     },
     {
+      id: 'rim',
+      label: 'Ignore rim lighting',
+      checked: !!first.rimImmune,
+      hint: "On = the edge highlight from the Lighting tab's rim light never touches this",
+    },
+    {
       id: 'night',
       label: 'Darkens at night',
       checked: !first.nightImmune,
@@ -137,10 +154,30 @@ export function objectMenu(targets, ctx, state = useStore.getState()) {
     },
   )
 
-  if (canAttach) {
+  // Another prop to ride on (a flag on a pole, a gun on a car roof): follows every move of it.
+  const parentChoices = !multi && !first.isCharacter
+    ? state.sceneObjects.filter((o) => !o.isCharacter && canAttachObjects(first.id, o.id))
+    : []
+  const currentParent = !multi && first.attachedToObjectId != null ? state.sceneObjects.find((o) => o.id === first.attachedToObjectId) : null
+  if (!multi && !first.isCharacter && (parentChoices.length || currentParent)) {
     items.push(
       { separator: true },
       { header: 'Attach' },
+      {
+        label: 'Attach to object',
+        value: currentParent ? currentParent.name : 'None',
+        hint: 'Parent this to another object so it follows it when that is moved, rotated or resized',
+        children: [
+          { id: 'parent:', label: 'Not attached', checked: !currentParent },
+          { separator: true },
+          ...parentChoices.map((o) => ({ id: 'parent:' + o.id, label: o.name, checked: first.attachedToObjectId === o.id })),
+        ],
+      },
+    )
+  }
+  if (canAttach) {
+    items.push(
+      ...(parentChoices.length || currentParent ? [] : [{ separator: true }, { header: 'Attach' }]),
       {
         label: 'Attach to bone',
         value: first.attachedBoneName || 'None',
@@ -201,7 +238,7 @@ export function objectMenu(targets, ctx, state = useStore.getState()) {
       return
     }
     if (id === 'outline') {
-      for (const o of targets.filter((x) => x.kind === 'model')) setObjectOutlineById(o.id, !first.outline)
+      for (const o of targets.filter((x) => x.kind === 'model')) setObjectOutlineById(o.id, !(first.outline ?? !!state.outlineEnabled))
       return
     }
     if (id === 'alpha') {
@@ -218,8 +255,22 @@ export function objectMenu(targets, ctx, state = useStore.getState()) {
       for (const o of targets) setObjectShadowImmuneById(o.id, !first.shadowImmune)
       return
     }
+    if (id === 'rim') {
+      for (const o of targets) setObjectRimImmuneById(o.id, !first.rimImmune)
+      return
+    }
     if (id === 'night') {
       for (const o of targets) setObjectNightImmuneById(o.id, !first.nightImmune)
+      return
+    }
+    if (id === 'merge') {
+      return mergeObjectsToOne(targets.map((o) => o.id)).then((r) => ctx.notify?.(r.message))
+    }
+    if (id.startsWith('parent:')) {
+      const raw = id.slice(7)
+      const parentId = raw === '' ? null : parentChoices.find((o) => String(o.id) === raw)?.id
+      if (raw !== '' && parentId == null) return
+      if (!setObjectParentById(first.id, parentId)) ctx.notify?.("That would put an object inside itself — pick a different one.")
       return
     }
     if (id === 'keyAtPlayhead') return ctx.setKeyAtPlayhead?.(!ctx.keyAtPlayhead)

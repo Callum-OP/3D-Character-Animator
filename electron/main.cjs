@@ -155,6 +155,29 @@ function registerFileIpc() {
   registerBlenderIpc({ ipcMain, dialog, app })
 }
 
+// --- Closing the window --------------------------------------------------------
+// Closing is handed to the renderer first so it can ask "Save changes?" when there is unsaved
+// work (see src/panels/CloseGuard.jsx). The renderer answers right away that it heard (ack),
+// then either confirms (closeNow) or, if the person cancels, does nothing and the window stays.
+// If it never acknowledges — it crashed or is frozen — the window closes anyway rather than
+// becoming impossible to close.
+let closeApproved = false
+let closeAckTimer = null
+const CLOSE_ACK_MS = 5000
+
+function registerCloseIpc() {
+  ipcMain.on('animare:close-ack', () => {
+    clearTimeout(closeAckTimer)
+    closeAckTimer = null
+  })
+  ipcMain.on('animare:close-now', () => {
+    clearTimeout(closeAckTimer)
+    closeAckTimer = null
+    closeApproved = true
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close()
+  })
+}
+
 function hardenSession() {
   const allowed = new Set(['fileSystem', 'clipboard-sanitized-write', 'clipboard-read', 'fullscreen'])
   session.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) => {
@@ -215,6 +238,7 @@ function createWindow() {
     },
   })
   mainWindow = win
+  closeApproved = false // a fresh window (e.g. reopened on macOS) must ask again
   const wc = win.webContents
 
   // Lock page/pinch zoom at 100%. The app zooms the 3D camera itself (wheel,
@@ -262,6 +286,17 @@ function createWindow() {
   }
 
   win.loadURL(DEV_URL || `${APP_ORIGIN}/index.html`)
+  win.on('close', (event) => {
+    if (closeApproved || !rendererReady || wc.isDestroyed() || wc.isCrashed()) return
+    event.preventDefault()
+    if (closeAckTimer) return // already asking
+    wc.send('animare:close-requested')
+    closeAckTimer = setTimeout(() => {
+      closeAckTimer = null
+      closeApproved = true
+      if (!win.isDestroyed()) win.close()
+    }, CLOSE_ACK_MS)
+  })
   win.on('closed', () => {
     if (mainWindow === win) mainWindow = null
   })
@@ -283,6 +318,7 @@ app.on('child-process-gone', (_e, details) => {
 app.whenReady().then(() => {
   registerAppProtocol()
   registerFileIpc()
+  registerCloseIpc()
   hardenSession()
   buildMenu()
   createWindow()
