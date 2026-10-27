@@ -193,6 +193,30 @@ describe('Objects list menu', () => {
     expect(screen.getByRole('menuitemcheckbox', { name: /Ignore rim lighting/ }).getAttribute('aria-checked')).toBe('true')
   })
 
+  it('Ink outline is ticked by default (the style outlines props) and clicking it switches this one off', () => {
+    useStore.setState({ outlineEnabled: true, sceneObjects: [{ id: 1, name: 'Sword', visible: true, kind: 'model', outline: null, animationKey: 'k1' }] })
+    render(<ObjectsPanel />)
+    fireEvent.contextMenu(row('Sword'))
+    const item = screen.getByRole('menuitemcheckbox', { name: /Ink outline/ })
+    expect(item.getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(item)
+    expect(useStore.getState().sceneObjects[0].outline).toBe(false)
+    fireEvent.contextMenu(row('Sword'))
+    expect(screen.getByRole('menuitemcheckbox', { name: /Ink outline/ }).getAttribute('aria-checked')).toBe('false')
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Ink outline/ }))
+    expect(useStore.getState().sceneObjects[0].outline).toBe(true)
+  })
+
+  it('marks a row whose outline has been switched off, and nothing for the default', () => {
+    useStore.setState({ sceneObjects: [
+      { id: 1, name: 'Sword', visible: true, kind: 'model', outline: false, animationKey: 'k1' },
+      { id: 2, name: 'Shield', visible: true, kind: 'model', outline: null, animationKey: 'k2' },
+    ] })
+    render(<ObjectsPanel />)
+    expect(row('Sword').querySelector('[title="Ink outline switched off for this object"]')).toBeTruthy()
+    expect(row('Shield').querySelector('[title*="outline"]')).toBeNull()
+  })
+
   it('Hide runs on the row, and the menu then offers Show', () => {
     render(<ObjectsPanel />)
     fireEvent.contextMenu(row('Sword'))

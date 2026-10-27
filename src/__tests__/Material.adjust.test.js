@@ -95,20 +95,18 @@ describe('the new Clay grey and Manga shading, in the shader text', () => {
     expect(shader.fragmentShader).toContain('vec3( 0.26 )')
     expect(shader.fragmentShader).not.toContain('vec3( 0.32 )')
   })
-  it('Manga is the earlier look again: ink only on very dark colours, and darker than before', () => {
+  it('Manga is clean ink on clear paper: everything light is the same white, very dark areas are black', () => {
     const { m, mesh } = model()
     applyMaterials(m, { mode: 'toon', textureLook: resolve({}, 'manga') })
     const shader = { uniforms: {}, fragmentShader: THREE.ShaderLib.toon.fragmentShader, vertexShader: '' }
     mesh.material.onBeforeCompile(shader, {})
     const f = shader.fragmentShader
-    expect(f).toContain('vec3 tlManga( vec3 lin )')
-    expect(f).toContain('tlManga( gl_FragColor.rgb )')
-    expect(f).toContain('float ink = 1.0 - smoothstep( 0.06, 0.30, g )') // only very dark colours
-    expect(f).not.toContain('lightFrac') // no longer inking shaded light colours
-    // the dark areas are darker: a deeper tone, stronger hatching and a lower floor than the previous look
-    expect(f).toContain('t -= ink * 0.45')
-    expect(f).toContain('t -= ink * hatchA * 0.30')
-    expect(f).toContain('clamp( t, 0.07, 0.985 )')
+    expect(f).toContain('vec3 tlInk( vec3 lit, float manga, float hatch )')
+    expect(f).toContain('tlInk( gl_FragColor.rgb, tlD.x, tlD.w )')
+    expect(f).toContain('float ink = 1.0 - smoothstep( 0.06, 0.30, g )') // only very dark colours get ink
+    expect(f).toContain('float clean = ink * 0.96') // without hatching the ink is flat and goes to black...
+    expect(f).toContain('pow( 0.985 - darkness * 0.955, 2.2 )') // ...on clear paper white
+    expect(f).toContain('mix( clean, hatched, hatch )') // hatching is a separate switch
   })
 })
 
@@ -138,5 +136,61 @@ describe('normalizeMaterialLook — older or damaged settings', () => {
   it('a valid look comes back unchanged (colour lower-cased)', () => {
     const look = { ...presetLook('anime'), contrast: 0.3, tint: '#FFAA00', tintAmount: 0.4 }
     expect(normalizeMaterialLook(look)).toEqual({ ...look, tint: '#ffaa00' })
+  })
+})
+
+describe('Manga, Pencil hatching and the coloured comic', () => {
+  const uniforms = (look, mode = 'toon') => {
+    const { m, mesh } = model()
+    applyMaterials(m, { mode, textureLook: look })
+    return mesh.material.userData.texLookUniforms
+  }
+
+  it('Manga on its own is clean: ink on white, no hatching', () => {
+    const u = uniforms(resolve({ colour: 'manga' }))
+    expect(u.tlD.value.x).toBe(1) // manga colours
+    expect(u.tlD.value.w).toBe(0) // no hatching
+  })
+  it('Pencil hatching is a Surface finish that can be switched on and off', () => {
+    const on = uniforms(resolve({ finish: 'hatch' }))
+    expect(on.tlD.value.w).toBe(1)
+    expect(on.tlD.value.x).toBe(0) // ...on whatever colours there are: this is the coloured comic
+    const off = uniforms(resolve({ finish: 'matte' }))
+    expect(off.tlD.value.w).toBe(0)
+  })
+  it('switching the finish off again removes the hatching', () => {
+    const { m, mesh } = model()
+    applyMaterials(m, { mode: 'toon', textureLook: resolve({ finish: 'hatch' }) })
+    applyMaterials(m, { mode: 'toon', textureLook: resolve({ finish: 'original', colour: 'noir' }) })
+    expect(mesh.material.userData.texLookUniforms.tlD.value.w).toBe(0)
+  })
+  it('the Manga preset is anime-like flat shapes in manga colours with pencil hatching', () => {
+    expect(presetLook('manga')).toMatchObject({
+      detail: 'regions', separation: 0, colour: 'manga', bands: 0, pixels: 0, bumps: 'flatten', finish: 'hatch', strength: 1,
+    })
+    const u = uniforms(resolve({}, 'manga'))
+    expect(u.tlD.value.x).toBe(1)
+    expect(u.tlD.value.w).toBe(1)
+  })
+  it('hatching is drawn on matte paper: no shine, in the PBR and toon modes alike', () => {
+    const { m, mesh } = model()
+    applyMaterials(m, { mode: 'standard', textureLook: resolve({ finish: 'hatch' }) })
+    expect(mesh.material.roughness).toBe(1)
+    expect(mesh.material.metalness).toBe(0)
+    const t = model()
+    applyMaterials(t.m, { mode: 'toon', textureLook: resolve({ finish: 'hatch' }) })
+    expect(t.mesh.material.userData.toonSurfUniforms).toBeUndefined() // nothing to highlight
+  })
+  it('works in every lighting mode, flat colour lighting included (it needs no shine)', () => {
+    for (const mode of ['unlit', 'toon', 'soft', 'standard', 'realistic']) {
+      expect(uniforms(resolve({ finish: 'hatch' }), mode).tlD.value.w).toBe(1)
+    }
+  })
+  it.each([['standard', 'standard'], ['toon', 'toon'], ['unlit', 'basic']])('the real %s shader runs the ink stage for hatching alone', (mode, kind) => {
+    const { m, mesh } = model()
+    applyMaterials(m, { mode, textureLook: resolve({ finish: 'hatch' }) })
+    const shader = { uniforms: {}, fragmentShader: THREE.ShaderLib[kind].fragmentShader, vertexShader: '' }
+    mesh.material.onBeforeCompile(shader, {})
+    expect(shader.fragmentShader).toContain('( tlD.x > 0.5 || tlD.w > 0.5 )')
   })
 })

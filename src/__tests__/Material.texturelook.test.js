@@ -435,8 +435,8 @@ describe('Clay and Manga in the shader', () => {
     applyMaterials(model, { mode, textureLook: look('manga') })
     const shader = { uniforms: {}, fragmentShader: THREE.ShaderLib[kind].fragmentShader, vertexShader: '' }
     floor.material.onBeforeCompile(shader, {})
-    expect(shader.fragmentShader).toContain('tlManga(')
-    expect(shader.fragmentShader.indexOf('tlManga( gl_FragColor.rgb )')).toBeLessThan(shader.fragmentShader.indexOf('#include <tonemapping_fragment>'))
+    expect(shader.fragmentShader).toContain('tlInk(')
+    expect(shader.fragmentShader.indexOf('tlInk( gl_FragColor.rgb, tlD.x, tlD.w )')).toBeLessThan(shader.fragmentShader.indexOf('#include <tonemapping_fragment>'))
     expect(Object.keys(shader.uniforms)).toContain('tlD')
   })
 

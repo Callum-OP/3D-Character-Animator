@@ -32,7 +32,7 @@ export default function MaterialLookPanel() {
   // (in the label) rather than looking broken.
   const bumpMapped = useMemo(() => countBumpMappedMaterials(), [sceneObjects, modelInfo])
   const noEffect = {
-    finish: materialMode === 'unlit' ? 'no effect in Flat colour lighting' : null,
+    finish: materialMode === 'unlit' && look.finish !== 'hatch' ? 'no shine in Flat colour lighting' : null,
     bumps: bumpMapped === 0 ? 'no bump maps in this scene' : materialMode === 'unlit' ? 'no effect in Flat colour lighting' : null,
   }
 

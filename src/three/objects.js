@@ -236,7 +236,9 @@ export function addObject(parsed, name, format, file, animationKey = null) {
     meshes,
     materials: materialModel.materials,
     style: 'auto', // 'auto' | 'unlit' | 'toon' | 'soft' | 'standard' | 'realistic'
-    outline: false, // props default to no ink outline, even in Cartoon/Soft styles
+    // null = follow the Lighting style: outlined whenever it has outlines on (the default). true / false
+    // = this prop's own choice (the Ink outline switch in its menu), whatever the style says.
+    outline: null,
     castShadow: true,
     attachedBoneName: null, // bone name this prop is parented to, or null
     attachedCharacterId: null, // which character owns that bone
@@ -722,7 +724,7 @@ export function pasteObject() {
       meshes,
       materials,
       style: clip.style || 'auto',
-      outline: !!clip.outline,
+      outline: clip.outline === undefined ? null : clip.outline,
       castShadow: clip.kind === 'image' ? false : clip.castShadow !== false,
       attachedBoneName: null,
       attachedCharacterId: null,
@@ -741,6 +743,7 @@ export function pasteObject() {
         format: entry.format,
         kind: entry.kind,
         attachedToObjectId: entry.attachedObjectId,
+        outline: entry.outline,
         nightImmune: meshes.some((m) => m.userData && m.userData.nightImmune) || undefined,
         shadowImmune: meshes.some((m) => m.userData && m.userData.shadowImmune) || undefined,
         rimImmune: meshes.some((m) => m.userData && m.userData.rimImmune) || undefined,
@@ -854,9 +857,9 @@ export function setObjectStyle(id, style) {
   o.requestRender()
 }
 
-// Toggle the ink outline on a prop (off by default — most props/backgrounds
-// look better without the character's cel-shading outline, but it's there
-// for anything meant to read as part of the same toon look).
+// Set the ink outline on a prop. null (the default) = follow the Lighting style, so props are
+// outlined like the characters whenever the style has outlines on; false = never outline this
+// one; true = outline it whenever outlines are on.
 export function setObjectOutline(id, outline) {
   const entry = o.objects.find((e) => e.id === id && e.kind === 'model')
   if (!entry) return
@@ -906,16 +909,25 @@ function applyObjectStyle(entry, opts) {
       overrides: use.overrides || {},
     },
   )
+  // Props are outlined the same way characters are (width, colour, opacity, softening from the
+  // Lighting tab), unless this prop — or one of its parts — has been switched off. Whether the
+  // outline is drawn at all is the style's own outline switch, applied to the whole renderer.
   const width = use.outlineWidth != null ? use.outlineWidth : 0.0025
+  const soften = use.soften || 0
+  const ink = new THREE.Color(use.outlineColor || '#000000')
+  const overrides = use.overrides || {}
   for (const mesh of entry.meshes) {
+    const ov = overrides[mesh.uuid]
+    const visible = entry.outline !== false && !(ov && ov.outline === false)
+    const partWidth = Math.min(ov && ov.outlineWidth != null ? ov.outlineWidth : width, width)
     const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
     for (const mat of mats) {
       if (!mat) continue
       mat.userData.outlineParameters = {
-        thickness: width,
-        color: [0, 0, 0],
-        alpha: 1,
-        visible: entry.outline,
+        thickness: partWidth * (1 - soften),
+        color: [ink.r, ink.g, ink.b],
+        alpha: use.outlineOpacity != null ? use.outlineOpacity : 1,
+        visible,
         keepAlive: false,
       }
     }
@@ -1402,7 +1414,8 @@ export function getObjectsForSave(meshOverrides) {
       },
       visible: e.root.visible,
       style: e.kind === 'model' ? e.style : undefined,
-      outline: e.kind === 'model' ? e.outline : undefined,
+      // 'off' / 'on' are the person's own choice; nothing written means "follow the style"
+      outline: e.kind === 'model' ? (e.outline === false ? 'off' : e.outline === true ? 'on' : undefined) : undefined,
       castShadow: e.kind === 'model' ? e.castShadow : undefined,
       nightImmune: e.kind === 'model' && e.meshes.some((m) => m.userData && m.userData.nightImmune) ? true : undefined,
       shadowImmune: e.kind === 'model' && e.meshes.some((m) => m.userData && m.userData.shadowImmune) ? true : undefined,

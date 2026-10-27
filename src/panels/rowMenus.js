@@ -117,7 +117,8 @@ export function objectMenu(targets, ctx, state = useStore.getState()) {
       hint: "How this prop is shaded — 'Match scene' follows the character's Look panel",
       children: STYLE_OPTIONS.map((o) => ({ id: 'style:' + o.value, label: o.label, checked: current === o.value })),
     })
-    look.push({ id: 'outline', label: 'Ink outline', checked: !!first.outline, hint: 'Draw a cartoon ink outline around this prop' })
+    // On by default whenever the Lighting style has outlines on; switch off to keep this one outline-free.
+    look.push({ id: 'outline', label: 'Ink outline', checked: first.outline ?? !!state.outlineEnabled, hint: 'Outlined like the characters whenever the Lighting style has outlines on. Switch off to keep this object outline-free.' })
   }
   if (alphaStates.length) {
     look.push({
@@ -237,7 +238,7 @@ export function objectMenu(targets, ctx, state = useStore.getState()) {
       return
     }
     if (id === 'outline') {
-      for (const o of targets.filter((x) => x.kind === 'model')) setObjectOutlineById(o.id, !first.outline)
+      for (const o of targets.filter((x) => x.kind === 'model')) setObjectOutlineById(o.id, !(first.outline ?? !!state.outlineEnabled))
       return
     }
     if (id === 'alpha') {

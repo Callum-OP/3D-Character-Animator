@@ -3621,7 +3621,9 @@ export async function applyProjectData(record) {
       // Map it onto the new style system so older project files still work.
       const style = obj.style || (obj.lit === false ? 'unlit' : 'auto')
       if (style !== 'auto') setObjectStyleById(meta.id, style)
-      if (obj.outline) setObjectOutlineById(meta.id, true)
+      // 'off' / 'on' (or an older save's true) are the person's own choice; anything else follows the style
+      if (obj.outline === 'off') setObjectOutlineById(meta.id, false)
+      else if (obj.outline === 'on' || obj.outline === true) setObjectOutlineById(meta.id, true)
       if (obj.castShadow === false) setObjectCastShadowById(meta.id, false)
       if (obj.nightImmune) setObjectNightImmuneById(meta.id, true)
       if (obj.shadowImmune) setObjectShadowImmuneById(meta.id, true, false)

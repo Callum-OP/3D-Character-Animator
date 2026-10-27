@@ -345,7 +345,7 @@ export default function ObjectsPanel() {
               // tells you what's been changed without a button for every setting. The menu
               // (right-click, or ⋯) is where they're switched.
               const flags = []
-              if (o.outline) flags.push(['✏️', 'Ink outline on'])
+              if (o.outline === false) flags.push(['⭕', 'Ink outline switched off for this object'])
               if (o.castShadow === false) flags.push(['🚫', 'Does not cast shadows'])
               if (o.nightImmune) flags.push(['☀️', 'Ignores Night mode (stays in daylight)'])
               if (o.shadowImmune) flags.push(['🔆', 'Never shadowed by other objects'])

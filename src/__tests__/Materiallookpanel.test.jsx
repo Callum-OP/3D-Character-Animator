@@ -95,7 +95,7 @@ describe('the dropdowns stay uncluttered', () => {
     fireEvent.change(screen.getByLabelText('Colours'), { target: { value: 'clay' } })
     expect(field('Colours').getAttribute('title')).toMatch(/one plain grey/)
     fireEvent.change(screen.getByLabelText('Colours'), { target: { value: 'manga' } })
-    expect(field('Colours').getAttribute('title')).toMatch(/pencil-grey/)
+    expect(field('Colours').getAttribute('title')).toMatch(/Clean ink on blank paper/)
   })
 
   it('the presets are laid out in three rows of four', () => {
@@ -145,13 +145,13 @@ describe('controls that cannot show anything here say so', () => {
   it('Surface finish notes that Flat colour lighting has no shine', () => {
     useStore.setState({ materialMode: 'unlit' })
     const { container } = render(<MaterialLookPanel />)
-    expect(labelOf(container, 'Surface finish').textContent).toContain('no effect in Flat colour lighting')
+    expect(labelOf(container, 'Surface finish').textContent).toContain('no shine in Flat colour lighting')
     expect(labelOf(container, 'Surface finish').getAttribute('title')).toMatch(/Nothing to show right now/)
   })
   it('and says nothing when it does apply', () => {
     useStore.setState({ materialMode: 'standard' })
     const { container } = render(<MaterialLookPanel />)
-    expect(labelOf(container, 'Surface finish').textContent).toBe('Surface finishOriginalMatteSatinGlossyMetallic')
+    expect(labelOf(container, 'Surface finish').textContent).toBe('Surface finishOriginalMatteSatinGlossyMetallicPencil hatching')
   })
 })
 

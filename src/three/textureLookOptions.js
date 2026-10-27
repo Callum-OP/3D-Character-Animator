@@ -23,7 +23,7 @@ export const TEXTURE_LOOK_DEFAULT = {
   colour: 'original', // original | bw | noir | sepia | pastel | vivid | muted | clay | manga
   bands: 0, // 0 = off, else the number of colour steps per channel
   pixels: 0, // 0 = off, else texture cells per unit (chunky = low)
-  finish: 'original', // original | matte | satin | glossy | metallic  (every lit mode; not Flat colour lighting)
+  finish: 'original', // original | matte | satin | glossy | metallic | hatch  (shine: every lit mode; hatch: any)
   bumps: 'keep', // keep | flatten
   strength: 1, // 0..1 blend between the model's own look and the treated one
   separation: 0.5, // 'Flat — keep shapes': how small a colour change still counts as a separate shape
@@ -52,7 +52,7 @@ export const COLOUR_OPTIONS = [
   { value: 'vivid', label: 'Vivid', hint: 'Richer, more saturated colours' },
   { value: 'muted', label: 'Muted', hint: 'Dusty, desaturated colours' },
   { value: 'clay', label: 'Clay grey', hint: 'Every surface becomes one plain grey, like an untextured clay model — only the lighting shows the shapes' },
-  { value: 'manga', label: 'Manga', hint: 'Everything bright snow white; only very dark colours get pencil-grey hatching' },
+  { value: 'manga', label: 'Manga', hint: 'Clean ink on blank paper: everything clear white, very dark areas black. No texture — add Pencil hatching under Surface finish for pencil shading' },
 ]
 export const BAND_OPTIONS = [
   { value: 0, label: 'Off' },
@@ -77,6 +77,7 @@ export const FINISH_OPTIONS = [
   { value: 'satin', label: 'Satin', hint: 'A soft, even sheen' },
   { value: 'glossy', label: 'Glossy', hint: 'Shiny plastic or varnish, with a bright highlight' },
   { value: 'metallic', label: 'Metallic', hint: 'Brushed metal, with a banded sky reflection' },
+  { value: 'hatch', label: 'Pencil hatching', hint: 'Matte, with diagonal pencil hatching in the dark areas. Works with any colours — the Manga preset uses it; pair it with Original colours for a coloured comic' },
 ]
 export const BUMP_OPTIONS = [
   { value: 'keep', label: 'Keep' },
@@ -93,11 +94,13 @@ const FINISH_VALUES = {
   satin: { roughness: 0.55, metalness: 0 },
   glossy: { roughness: 0.15, metalness: 0 },
   metallic: { roughness: 0.32, metalness: 0.9 },
+  hatch: { roughness: 1, metalness: 0 }, // hatching is drawn on matte paper
 }
 // The same finishes for the toon-style lighting modes, which have no real shine of their own:
 // they are drawn as stylised highlights by the toon surface shader (see surfaceMaterials.js).
 const FINISH_TOON_VALUES = {
   matte: { roughness: 1, metalness: 0, specularIntensity: 0 },
+  hatch: { roughness: 1, metalness: 0, specularIntensity: 0 },
   satin: { roughness: 0.55, metalness: 0, specularIntensity: 0.6 },
   glossy: { roughness: 0.15, metalness: 0, specularIntensity: 1, clearcoat: 0.5 },
   metallic: { roughness: 0.32, metalness: 0.9, specularIntensity: 1, envMapIntensity: 1 },
@@ -118,7 +121,7 @@ export const TEXTURE_LOOK_PRESETS = [
   { id: 'flatpixel', label: 'Flat Pixel', hint: 'Chunky pixels in flat colours that keep their shapes.', config: { detail: 'regions', pixels: 16 } },
   { id: 'retro', label: 'Retro', hint: 'Medium-resolution textures in a limited palette — an old 3D game.', config: { pixels: 32, bands: 8, bumps: 'flatten' } },
   { id: 'clay', label: 'Clay', hint: 'Everything one plain grey, no shine, no surface relief — an untextured clay-model render.', config: { colour: 'clay', finish: 'matte', bumps: 'flatten' } },
-  { id: 'manga', label: 'Manga', hint: 'Bright snow-white paper; only the very darkest areas get pencil-grey hatching.', config: { detail: 'smooth', colour: 'manga', finish: 'matte', bumps: 'flatten' } },
+  { id: 'manga', label: 'Manga', hint: 'Anime-style flat shapes in clean black ink on clear white paper, with pencil hatching in the dark areas.', config: { detail: 'regions', separation: 0, colour: 'manga', bands: 0, pixels: 0, bumps: 'flatten', finish: 'hatch' } },
   { id: 'noirink', label: 'Noir Ink', hint: 'Black & white pushed to a few hard tones, like a graphic-novel panel.', config: { detail: 'smooth', colour: 'noir', bands: 6 } },
   { id: 'noir', label: 'Noir', hint: 'The textures stay, but the colour is only black, white and grey, with deep contrast.', config: { colour: 'noir' } },
 ]
@@ -205,6 +208,7 @@ export function resolveTextureLook(look, kind) {
     saturation: (colour === 'vivid' ? 1.6 : colour === 'muted' ? 0.5 : 1) * Math.max(0, 1 + clampN(look.saturation, -1, 1)),
     clay: colour === 'clay' ? 1 : 0,
     manga: colour === 'manga' ? 1 : 0,
+    hatch: look.finish === 'hatch' ? 1 : 0, // pencil hatching in the dark areas (Surface finish)
     finish: FINISH_VALUES[look.finish] || null,
     finishToon: FINISH_TOON_VALUES[look.finish] || null,
     flatten: look.bumps === 'flatten',

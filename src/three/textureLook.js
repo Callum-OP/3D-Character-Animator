@@ -28,7 +28,7 @@ const GLSL = `
 uniform vec4 tlA; // mip bias, colour bands, pixel cells, contrast
 uniform vec4 tlB; // grey, sepia, pastel, flat-colour mix
 uniform vec4 tlC; // saturation, strength, clay grey, on/off
-uniform vec4 tlD; // manga, keep-shapes mix, palette size, 0
+uniform vec4 tlD; // manga, keep-shapes mix, palette size, pencil hatching
 uniform vec4 tlE; // brightness, tint amount, 0, 0
 uniform vec3 tlTint; // tint colour (display space)
 uniform vec3 tlPal[8]; // keep-shapes palette (display-space colours)
@@ -53,21 +53,22 @@ vec3 tlGrade( vec3 lin ) {
   if ( tlA.y > 1.5 ) c = floor( c * ( tlA.y - 1.0 ) + 0.5 ) / ( tlA.y - 1.0 );
   return pow( c, vec3( 2.2 ) );
 }
-// Manga: the LIT colour becomes bright snow-white paper. Whites, greys and mid-tones are all lifted
-// to paper; only very dark colours get ink — a deep pencil-grey tone with diagonal hatching, and a
-// cross-hatch in the darkest. It follows the lighting, not just the texture. The darkest areas go
-// nearly black.
-vec3 tlManga( vec3 lin ) {
-  float g = pow( clamp( dot( lin, vec3( 0.2126, 0.7152, 0.0722 ) ), 0.0, 1.0 ), 0.4545 );
-  float ink = 1.0 - smoothstep( 0.06, 0.30, g ); // none above a dark grey, full at near-black
+// Ink, on the LIT colour (so it follows the lighting, not just the texture): how dark a spot is
+// decides how much ink it gets — none above a dark grey, full at near-black.
+//   manga:  the result is clean ink on clear white paper — every light area the same bright white,
+//           very dark areas black. Add hatching and the dark areas are drawn as diagonal pencil
+//           hatching instead (a cross-hatch in the darkest), grey in the gaps, black on the lines.
+//   not manga (hatch only): the same hatching, darkening the colours it lands on — a coloured comic.
+vec3 tlInk( vec3 lit, float manga, float hatch ) {
+  float g = pow( clamp( dot( lit, vec3( 0.2126, 0.7152, 0.0722 ) ), 0.0, 1.0 ), 0.4545 );
+  float ink = 1.0 - smoothstep( 0.06, 0.30, g );
   float hatchA = step( 0.55, fract( ( gl_FragCoord.x + gl_FragCoord.y ) / 5.0 ) );
   float hatchB = step( 0.55, fract( ( gl_FragCoord.x - gl_FragCoord.y ) / 5.0 ) );
-  float t = 0.985; // snow-white paper
-  t -= ink * 0.45; // the pencil-grey tone
-  t -= ink * hatchA * 0.30; // pencil hatching
-  t -= smoothstep( 0.55, 1.0, ink ) * hatchB * 0.32; // cross-hatching, darkest areas only
-  t = clamp( t, 0.07, 0.985 );
-  return vec3( pow( t, 2.2 ) );
+  float hatched = ink * 0.45 + ink * hatchA * 0.30 + smoothstep( 0.55, 1.0, ink ) * hatchB * 0.32;
+  float clean = ink * 0.96;
+  float darkness = clamp( mix( clean, hatched, hatch ), 0.0, 0.97 );
+  if ( manga > 0.5 ) return vec3( pow( 0.985 - darkness * 0.955, 2.2 ) );
+  return lit * ( 1.0 - darkness );
 }
 `
 const MAP_FRAGMENT = `
@@ -132,8 +133,8 @@ function ensureUniforms(mat) {
       .replace('#include <map_fragment>', MAP_FRAGMENT)
       // after colour_fragment, so Colour replace / region looks (which work there) see the raw colours first
       .replace('#include <alphamap_fragment>', '#include <alphamap_fragment>\n  if ( tlC.w > 0.5 ) diffuseColor.rgb = mix( diffuseColor.rgb, tlGrade( diffuseColor.rgb ), tlC.y );')
-      // manga works on the finished, lit colour (so shadows get the hatching)
-      .replace('#include <tonemapping_fragment>', 'if ( tlC.w > 0.5 && tlD.x > 0.5 ) gl_FragColor.rgb = mix( gl_FragColor.rgb, tlManga( gl_FragColor.rgb ), tlC.y );\n  #include <tonemapping_fragment>')
+      // manga / pencil hatching work on the finished, lit colour
+      .replace('#include <tonemapping_fragment>', 'if ( tlC.w > 0.5 && ( tlD.x > 0.5 || tlD.w > 0.5 ) ) gl_FragColor.rgb = mix( gl_FragColor.rgb, tlInk( gl_FragColor.rgb, tlD.x, tlD.w ), tlC.y );\n  #include <tonemapping_fragment>')
   }
   mat.needsUpdate = true
   return uniforms
@@ -513,7 +514,7 @@ export function applyTextureLook(targets, sources, mesh, look, slotLooks = null,
         paletteSize = Math.min(8, palette.length)
       }
     }
-    uni.tlD.value.set(look.manga, paletteSize ? look.regions : 0, paletteSize, 0)
+    uni.tlD.value.set(look.manga, paletteSize ? look.regions : 0, paletteSize, look.hatch)
     // finish in the toon modes: a stylised highlight (they have no real shine). Done before the
     // relief below, because it also sets the bump strength.
     // (Matte has no highlight to draw, so it changes nothing and installs nothing.)
