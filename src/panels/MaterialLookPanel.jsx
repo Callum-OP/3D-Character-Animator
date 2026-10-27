@@ -163,6 +163,30 @@ export default function MaterialLookPanel() {
       {select('Colour tones', 'bands', BAND_OPTIONS, 'Fewer tones look more like paint or print.', true)}
       {select('Pixel size', 'pixels', PIXEL_OPTIONS, 'Chunky, low-resolution textures.', true)}
       {select('Surface finish', 'finish', FINISH_OPTIONS, 'Shine. Shows in Studio and Realistic lighting.')}
+      {look.finish === 'hatch' && (
+        <label className="slider-row" title="How strong the pencil hatching is: 0% is none, 100% is full pencil shading">
+          <span className="slider-label">Hatching intensity</span>
+          <input
+            type="range"
+            aria-label="Hatching intensity"
+            min={0}
+            max={1}
+            step={0.05}
+            value={look.hatchIntensity ?? 1}
+            onChange={(e) => setLook({ hatchIntensity: Number(e.target.value) })}
+          />
+          <EditableValue
+            value={look.hatchIntensity ?? 1}
+            min={0}
+            max={1}
+            onChange={(v) => setLook({ hatchIntensity: v })}
+            format={(v) => Math.round(v * 100) + '%'}
+            toInput={(v) => Math.round(v * 100)}
+            fromInput={(v) => v / 100}
+            label="Hatching intensity"
+          />
+        </label>
+      )}
       {select('Bumps', 'bumps', BUMP_OPTIONS, 'Surface relief from normal / bump maps.')}
 
       <label className="slider-row" title="How much of the look is applied: 0% is the model's own materials, 100% is the full look">

@@ -23,6 +23,7 @@ describe('texture look: controls and presets', () => {
       ids.add(p.id)
       for (const [k, v] of Object.entries(p.config)) {
         if (k === 'strength') expect(v).toBeGreaterThan(0)
+        else if (['separation', 'contrast', 'brightness', 'saturation'].includes(k)) expect(Math.abs(v)).toBeLessThanOrEqual(1)
         else if (k === 'separation') expect(v).toBeGreaterThanOrEqual(0)
         else expect(allowed[k].map((o) => o.value)).toContain(v)
       }
@@ -374,7 +375,7 @@ describe('the presets as asked for', () => {
     const { preset: _c, strength: celStrength, ...cel } = presetLook('cel')
     expect(toon).toMatchObject({ detail: 'simplified', colour: 'vivid', bands: 8, pixels: 0, finish: 'matte', bumps: 'flatten' })
     expect(toonStrength).toBe(0.7)
-    expect(cel).toEqual({ ...toon, bands: 12 }) // every setting the same except the tones...
+    expect(cel).toEqual({ ...toon, bands: 12, contrast: 0.05, brightness: 0.05 }) // every setting the same except the tones...
     expect(celStrength).toBe(1) // ...at full strength
     expect(resolveTextureLook(presetLook('cel'), 'object').bands).toBe(12)
   })

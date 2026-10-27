@@ -33,6 +33,7 @@ export const TEXTURE_LOOK_DEFAULT = {
   saturation: 0, // -1..1  (-1 = no colour, +1 = twice as colourful)
   tint: '#ffffff', // a colour to paint the whole look in (keeps the light and dark of the texture)
   tintAmount: 0, // 0..1
+  hatchIntensity: 1, // 0..1  how strong the pencil hatching is (only used when Surface finish is Pencil hatching)
   scope: 'all', // all | characters | objects
 }
 
@@ -114,14 +115,14 @@ const FINISH_TOON_VALUES = {
 export const TEXTURE_LOOK_PRESETS = [
   { id: 'original', label: 'Original', hint: "The model's own textures and colours, untouched.", config: {} },
   { id: 'flat', label: 'Flat colour', hint: 'Every textured surface becomes one plain colour — a wood floor becomes a plain brown floor.', config: { detail: 'flat', bumps: 'flatten' } },
-  { id: 'cel', label: 'Cel Paint', hint: 'Simplified textures in clean, rich colours with 12 fine tones, at full strength.', config: { detail: 'simplified', colour: 'vivid', bands: 12, pixels: 0, bumps: 'flatten', finish: 'matte' } },
-  { id: 'anime', label: 'Anime', hint: 'Flat, vivid colours that keep every clearly different shape (sensitivity 0%), no tone steps, matte (70%).', config: { detail: 'regions', separation: 0, colour: 'vivid', bands: 0, pixels: 0, bumps: 'flatten', finish: 'matte', strength: 0.7 } },
+  { id: 'cel', label: 'Cel Paint', hint: 'Simplified textures in clean, rich colours with 12 fine tones, at full strength, with a touch more contrast and brightness (5%).', config: { detail: 'simplified', colour: 'vivid', bands: 12, pixels: 0, bumps: 'flatten', finish: 'matte', contrast: 0.05, brightness: 0.05 } },
+  { id: 'anime', label: 'Anime', hint: 'Flat, vivid colours that keep every clearly different shape (sensitivity 0%), no tone steps, matte (70%), saturation +15%.', config: { detail: 'regions', separation: 0, colour: 'vivid', bands: 0, pixels: 0, bumps: 'flatten', finish: 'matte', strength: 0.7, saturation: 0.15 } },
   { id: 'toonsmooth', label: 'Toon Smoothed', hint: 'Simplified textures in clean, rich colours with 8 soft tones — painted rather than photographed (70%).', config: { detail: 'simplified', colour: 'vivid', bands: 8, pixels: 0, bumps: 'flatten', finish: 'matte', strength: 0.7 } },
   { id: 'pixel', label: 'Pixel', hint: 'Chunky, blocky low-resolution textures.', config: { pixels: 16 } },
   { id: 'flatpixel', label: 'Flat Pixel', hint: 'Chunky pixels in flat colours that keep their shapes.', config: { detail: 'regions', pixels: 16 } },
   { id: 'retro', label: 'Retro', hint: 'Medium-resolution textures in a limited palette — an old 3D game.', config: { pixels: 32, bands: 8, bumps: 'flatten' } },
   { id: 'clay', label: 'Clay', hint: 'Everything one plain grey, no shine, no surface relief — an untextured clay-model render.', config: { colour: 'clay', finish: 'matte', bumps: 'flatten' } },
-  { id: 'manga', label: 'Manga', hint: 'Anime-style flat shapes in clean black ink on clear white paper, with pencil hatching in the dark areas.', config: { detail: 'regions', separation: 0, colour: 'manga', bands: 0, pixels: 0, bumps: 'flatten', finish: 'hatch' } },
+  { id: 'manga', label: 'Manga', hint: 'Anime-style flat shapes in clean black ink on clear white paper, with pencil hatching in the dark areas (contrast +20%, brightness +30%).', config: { detail: 'regions', separation: 0, colour: 'manga', bands: 0, pixels: 0, bumps: 'flatten', finish: 'hatch', contrast: 0.2, brightness: 0.3 } },
   { id: 'noirink', label: 'Noir Ink', hint: 'Black & white pushed to a few hard tones, like a graphic-novel panel.', config: { detail: 'smooth', colour: 'noir', bands: 6 } },
   { id: 'noir', label: 'Noir', hint: 'The textures stay, but the colour is only black, white and grey, with deep contrast.', config: { colour: 'noir' } },
 ]
@@ -176,6 +177,7 @@ export function normalizeMaterialLook(input) {
     saturation: clampN(src.saturation, -1, 1),
     tint: typeof src.tint === 'string' && HEX.test(src.tint) ? src.tint.toLowerCase() : d.tint,
     tintAmount: clampN(src.tintAmount, 0, 1),
+    hatchIntensity: src.hatchIntensity === undefined ? d.hatchIntensity : clampN(src.hatchIntensity, 0, 1),
   }
 }
 
@@ -208,6 +210,7 @@ export function resolveTextureLook(look, kind) {
     saturation: (colour === 'vivid' ? 1.6 : colour === 'muted' ? 0.5 : 1) * Math.max(0, 1 + clampN(look.saturation, -1, 1)),
     clay: colour === 'clay' ? 1 : 0,
     manga: colour === 'manga' ? 1 : 0,
+    hatchIntensity: clampN(look.hatchIntensity ?? 1, 0, 1),
     hatch: look.finish === 'hatch' ? 1 : 0, // pencil hatching in the dark areas (Surface finish)
     finish: FINISH_VALUES[look.finish] || null,
     finishToon: FINISH_TOON_VALUES[look.finish] || null,

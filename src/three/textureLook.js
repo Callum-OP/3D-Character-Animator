@@ -29,7 +29,7 @@ uniform vec4 tlA; // mip bias, colour bands, pixel cells, contrast
 uniform vec4 tlB; // grey, sepia, pastel, flat-colour mix
 uniform vec4 tlC; // saturation, strength, clay grey, on/off
 uniform vec4 tlD; // manga, keep-shapes mix, palette size, pencil hatching
-uniform vec4 tlE; // brightness, tint amount, 0, 0
+uniform vec4 tlE; // brightness, tint amount, pencil hatching intensity, 0
 uniform vec3 tlTint; // tint colour (display space)
 uniform vec3 tlPal[8]; // keep-shapes palette (display-space colours)
 uniform vec3 tlFlat; // the flat colour (linear)
@@ -66,6 +66,7 @@ vec3 tlInk( vec3 lit, float manga, float hatch ) {
   float hatchB = step( 0.55, fract( ( gl_FragCoord.x - gl_FragCoord.y ) / 5.0 ) );
   float hatched = ink * 0.45 + ink * hatchA * 0.30 + smoothstep( 0.55, 1.0, ink ) * hatchB * 0.32;
   float clean = ink * 0.96;
+  hatched *= tlE.z; // hatching intensity: 1 = full pencil, 0 = none
   float darkness = clamp( mix( clean, hatched, hatch ), 0.0, 0.97 );
   if ( manga > 0.5 ) return vec3( pow( 0.985 - darkness * 0.955, 2.2 ) );
   return lit * ( 1.0 - darkness );
@@ -503,7 +504,7 @@ export function applyTextureLook(targets, sources, mesh, look, slotLooks = null,
     }
     uni.tlB.value.set(look.grey, look.sepia, look.pastel, flat)
     uni.tlC.value.set(look.saturation, look.strength, look.clay, 1)
-    uni.tlE.value.set(look.brightness, look.tintAmount, 0, 0)
+    uni.tlE.value.set(look.brightness, look.tintAmount, look.hatchIntensity ?? 1, 0)
     uni.tlTint.value.set(look.tint[0], look.tint[1], look.tint[2])
     // keep shapes: the clearly different colours of the texture, as a small palette
     let paletteSize = 0

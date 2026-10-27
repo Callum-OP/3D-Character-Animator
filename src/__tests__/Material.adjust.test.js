@@ -39,9 +39,18 @@ describe('contrast, brightness, saturation and tint', () => {
     }
     expect(isTextureLookActive({ ...TEXTURE_LOOK_DEFAULT, tint: '#ff0000' })).toBe(false)
   })
-  it('a preset puts all the adjustments back to nothing', () => {
-    const p = presetLook('manga')
-    expect(p).toMatchObject({ contrast: 0, brightness: 0, saturation: 0, tintAmount: 0, tint: '#ffffff' })
+  it('a preset puts all the adjustments back to nothing, unless it sets its own', () => {
+    expect(presetLook('noir')).toMatchObject({ contrast: 0, brightness: 0, saturation: 0, tintAmount: 0, tint: '#ffffff' })
+    expect(presetLook('manga', { contrast: 0.9, tintAmount: 0.5 })).toMatchObject({ contrast: 0.2, brightness: 0.3, saturation: 0, tintAmount: 0 })
+    expect(presetLook('cel')).toMatchObject({ contrast: 0.05, brightness: 0.05 })
+    expect(presetLook('anime')).toMatchObject({ saturation: 0.15 })
+  })
+  it('pencil hatching has an intensity: full by default, kept in range, saved and passed to the shader', () => {
+    expect(TEXTURE_LOOK_DEFAULT.hatchIntensity).toBe(1)
+    expect(normalizeMaterialLook({}).hatchIntensity).toBe(1)
+    expect(normalizeMaterialLook({ hatchIntensity: 7 }).hatchIntensity).toBe(1)
+    expect(normalizeMaterialLook({ hatchIntensity: 0.4 }).hatchIntensity).toBe(0.4)
+    expect(resolve({ finish: 'hatch', hatchIntensity: 0.4 }).hatchIntensity).toBeCloseTo(0.4)
   })
 })
 
