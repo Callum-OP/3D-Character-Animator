@@ -694,6 +694,27 @@ export const useStore = create((set) => ({
       return { meshOverrides: write(s.meshOverrides) }
     }),
 
+  // Reduce texture size (see three/textureReduce.js): cap the textures of each target part at `max` px
+  // on the longest side (null = as loaded). Stored per part in the override map, like the colour.
+  setMeshesTextureMax: (uuids, max, characterId = null) =>
+    set((s) => {
+      const write = (map) => {
+        const next = { ...map }
+        for (const uuid of uuids) {
+          const base = { outline: true, shading: 'full', ...map[uuid] }
+          if (max) base.textureMax = Math.round(max)
+          else delete base.textureMax
+          next[uuid] = base
+        }
+        return next
+      }
+      if (characterId != null && characterId !== s.activeCharacterId && s.characters[characterId]) {
+        const c = s.characters[characterId]
+        return { characters: { ...s.characters, [characterId]: { ...c, meshOverrides: write(c.meshOverrides || {}) } } }
+      }
+      return { meshOverrides: write(s.meshOverrides) }
+    }),
+
   // Edit ONE material of each target mesh (see three/surfaceMaterials.js): `targets` is
   // [{ uuid, slot }], `patch` a partial SlotLook where null removes a setting. Lives in
   // the per-mesh override map, so it saves/loads and copies like the other per-mesh

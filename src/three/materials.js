@@ -3,6 +3,7 @@ import { addShadowUniforms, shadowFilterKey, setNightImmune, setShadowImmune } f
 import { stripAppMaterialData } from './materialUserData.js'
 import { applyRegionIds } from './regions.js'
 import { applyMeshDecimation, decimateSpecOf } from './decimate.js'
+import { textureMaxOf, reduceMaterial } from './textureReduce.js'
 import {
   recordMaterialSlots, buildPhysical, applySurface, applyOpacity, applyColorReplace,
   hasSurface, hasReplace, hasAnySlot, isStyledCopy, markStyledCopy, hasSlotOpacity,
@@ -568,7 +569,7 @@ export function applyMaterials(model, opts) {
     const regionsOk = !reduced && hasRegions(rawOv) && applyRegionIds(mesh, rawOv.regions)
     const ov = rawOv && rawOv.regions && !regionsOk ? { ...rawOv, regions: undefined } : rawOv
     const shading = (ov && ov.shading) || 'full'
-    const original = store.originals.get(mesh)
+    const original = resolveOriginal(store, mesh, ov)
 
     // Per-mesh visibility (hide clothing layers, etc.).
     mesh.visible = !(ov && ov.visible === false)
@@ -684,6 +685,9 @@ export function disposeGeneratedMaterials(model) {
   disposeCache(model.materials.toon)
   model.materials.unlit.clear()
   model.materials.toon.clear()
+  if (model.materials.reduced) {
+    for (const mesh of [...model.materials.reduced.keys()]) dropReduced(model.materials, mesh)
+  }
   if (model.materials.tinted) {
     disposeCache(model.materials.tinted)
     model.materials.tinted.clear()
@@ -698,6 +702,63 @@ export function disposeGeneratedMaterials(model) {
 }
 
 // --- internals ---------------------------------------------------------------
+
+// Reduce texture size (see textureReduce.js): the materials a part is built from. Normally the model's
+// own (`originals`); when the part has a texture cap, its own copies holding smaller textures. They stand
+// in for the originals everywhere below (toon / unlit / restyled shells are built from them, and the
+// exporter writes them), and the model's own materials and textures are never touched.
+function resolveOriginal(store, mesh, ov) {
+  const original = store.originals.get(mesh)
+  const max = textureMaxOf(ov)
+  const have = store.reduced && store.reduced.get(mesh)
+  if (!max || !original) {
+    if (have) dropReduced(store, mesh)
+    return original
+  }
+  if (have && have.max === max && have.src === original) return have.mat
+  if (have) dropReduced(store, mesh)
+  const list = Array.isArray(original) ? original : [original]
+  const owned = []
+  const textures = []
+  let changed = false
+  const mats = list.map((m) => {
+    const made = reduceMaterial(m, max)
+    if (!made) return m
+    changed = true
+    owned.push(made.material)
+    textures.push(...made.textures)
+    const alpha = store.alpha && store.alpha.get(m)
+    if (alpha) store.alpha.set(made.material, { ...alpha })
+    return made.material
+  })
+  if (!changed) return original // nothing is bigger than the cap
+  if (!store.reduced) store.reduced = new Map()
+  const mat = Array.isArray(original) ? mats : mats[0]
+  store.reduced.set(mesh, { max, src: original, mat, owned, textures })
+  // The unlit / toon shells were built from the old materials.
+  for (const cache of [store.unlit, store.toon]) {
+    const made = cache.get(mesh)
+    if (made) for (const m of Array.isArray(made) ? made : [made]) m.dispose()
+    cache.delete(mesh)
+  }
+  return mat
+}
+
+function dropReduced(store, mesh) {
+  const have = store.reduced && store.reduced.get(mesh)
+  if (!have) return
+  store.reduced.delete(mesh)
+  for (const cache of [store.unlit, store.toon]) {
+    const made = cache && cache.get(mesh)
+    if (made) for (const m of Array.isArray(made) ? made : [made]) m.dispose()
+    if (cache) cache.delete(mesh)
+  }
+  for (const m of have.owned) {
+    if (store.alpha) store.alpha.delete(m)
+    m.dispose()
+  }
+  for (const t of have.textures) t.dispose()
+}
 
 // Fetch a cached generated material for a mesh, building it (per sub-material for
 // multi-material meshes) on first request.
@@ -735,8 +796,9 @@ function assignGradient(material, steps, floor, smooth) {
 // viewport shader effect and cannot be written to a file.)
 export function materialsForExport(model, mesh, ov) {
   const store = model && model.materials
-  const original = store && store.originals.get(mesh)
-  if (!original) return null
+  const loaded = store && store.originals.get(mesh)
+  if (!loaded) return null
+  const original = resolveOriginal(store, mesh, ov) // smaller textures when the part has Reduce texture size set
   const styled = !!(ov && ov.color) || hasAnySlot(ov)
   if (!styled) return original
   const alphaOn = ov && typeof ov.alpha === 'boolean' ? ov.alpha : true
