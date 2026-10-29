@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useStore } from '../store.js'
+import QualitySection from './QualitySection.jsx'
 import { hasUndoHistory, clearUndoHistory } from '../three/undoHistory.js'
 
 // Side-panel section: viewport display toggles (grid, ground, background,
@@ -21,10 +22,10 @@ export default function ViewPanel() {
   const performanceResolution = useStore((s) => s.performanceResolution)
   const performanceEffects = useStore((s) => s.performanceEffects)
   const autoDecimate = useStore((s) => s.autoDecimate)
-  const importTextureMax = useStore((s) => s.importTextureMax)
+  const importTextureLimit = useStore((s) => s.importTextureLimit)
   const edgeSmoothing = useStore((s) => s.edgeSmoothing)
   const setEdgeSmoothing = useStore((s) => s.setEdgeSmoothing)
-  const setImportTextureMax = useStore((s) => s.setImportTextureMax)
+  const setImportTextureLimit = useStore((s) => s.setImportTextureLimit)
   const undoLimit = useStore((s) => s.undoLimit)
   const setShowGrid = useStore((s) => s.setShowGrid)
   const setShowGround = useStore((s) => s.setShowGround)
@@ -122,6 +123,8 @@ export default function ViewPanel() {
         </p>
       )}
 
+      <QualitySection />
+
       <label className="toggle-row">
         <input
           type="checkbox"
@@ -131,6 +134,9 @@ export default function ViewPanel() {
         Performance readout
       </label>
 
+      <details className="advanced-performance" style={{ marginTop: 10 }}>
+        <summary style={{ cursor: 'pointer' }}>Advanced performance</summary>
+        <div style={{ marginTop: 6 }}>
       <label
         className="toggle-row"
         title="Slightly lower viewport resolution for a barely noticeable performance improvement"
@@ -216,13 +222,13 @@ export default function ViewPanel() {
 
       <label className="toggle-row" title="Smooths jagged edges (MSAA). It multiplies the viewport's memory use, roughly 150 MB on a 1080p window. Takes effect the next time the app starts.">
         <input type="checkbox" checked={edgeSmoothing} onChange={(e) => setEdgeSmoothing(e.target.checked)} />
-        Smooth edges (MSAA) — applies on next launch
+        Smooth edges (MSAA) — applies on next launch (Low and Very low turn it off)
       </label>
 
       <label className="toggle-row" title="Textures bigger than this are redrawn smaller when a model is imported. A 4096 px texture takes about 150 MB of memory, 2048 px about a quarter of that.">
-        <span>Texture size on import</span>
-        <select value={importTextureMax} onChange={(e) => setImportTextureMax(e.target.value)} aria-label="Texture size on import">
-          <option value={0}>Original</option>
+        <span>Extra texture limit on import</span>
+        <select value={importTextureLimit} onChange={(e) => setImportTextureLimit(e.target.value)} aria-label="Texture size on import">
+          <option value={0}>Original (follow Quality)</option>
           <option value={4096}>4096 px</option>
           <option value={2048}>2048 px</option>
           <option value={1024}>1024 px</option>
@@ -230,8 +236,11 @@ export default function ViewPanel() {
         </select>
       </label>
       <p className="panel-hint">
-        Large textures are most of a model&apos;s memory. 2048 px stays sharp and uses a quarter of 4096 px. Applies to models imported from now on.
+        An extra limit on top of the Quality preset: the smaller of the two is used. Original means the preset alone decides. Applies to models imported from now on.
       </p>
+
+        </div>
+      </details>
 
       <label className="toggle-row" title="Maximum undo and redo steps retained for each editing mode">
         <span>Undo history limit</span>

@@ -179,8 +179,14 @@ export function shadowsFromProject(settings, current = DEFAULT_SHADOWS) {
 
 // Resolve a quality id to concrete numbers, clamped to what the GPU supports.
 // Performance mode always drops to the lightest real-shadow setting.
-export function resolveShadowQuality(id, { maxTextureSize = 8192, performance = false } = {}) {
-  const wanted = SHADOW_QUALITY.find((q) => q.id === id) || SHADOW_QUALITY.find((q) => q.id === DEFAULT_SHADOW_QUALITY)
+// `cap` is a quality id the app is limited to (a Quality preset): a project asking for more gets the cap,
+// one asking for less keeps its own.
+export function resolveShadowQuality(id, { maxTextureSize = 8192, performance = false, cap = null } = {}) {
+  let wanted = SHADOW_QUALITY.find((q) => q.id === id) || SHADOW_QUALITY.find((q) => q.id === DEFAULT_SHADOW_QUALITY)
+  if (cap) {
+    const order = SHADOW_QUALITY.map((q) => q.id)
+    if (order.indexOf(wanted.id) > order.indexOf(cap)) wanted = SHADOW_QUALITY.find((q) => q.id === cap) || wanted
+  }
   const base = performance && wanted.id !== 'blob' ? SHADOW_QUALITY.find((q) => q.id === 'low') : wanted
   if (base.id === 'blob') return { id: 'blob', blob: true, mapSize: 0, taps: 0, lightSize: 0, maxBlur: 0 }
   const mapSize = Math.max(256, Math.min(base.mapSize, maxTextureSize || base.mapSize))

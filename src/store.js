@@ -13,7 +13,7 @@ const APP_SETTINGS_FIELDS = [
   'exportVideoFps', 'exportVideoQuality', 'exportVideoFormat',
   'showGrid', 'showGround', 'solidBackground', 'backgroundColor', 'shadows', 'showStats',
   'performanceMode', 'performanceBackgroundObjects', 'performanceLowPoly',
-  'performanceResolution', 'performanceEffects', 'autoDecimate', 'importTextureMax', 'edgeSmoothing',
+  'performanceResolution', 'performanceEffects', 'autoDecimate', 'importTextureLimit', 'edgeSmoothing', 'qualityPreset',
   'materialMode', 'toonSteps', 'colorGrading', 'materialLook', 'ambientOcclusionStrength',
   'backlightColor', 'backlightFalloff', 'rimLightColor', 'rimSideOnly',
   'rimSoftEnabled', 'rimSoftIntensity', 'rimSoftWidth', 'rimHardEnabled',
@@ -449,13 +449,17 @@ export const useStore = create((set) => ({
   // preserved because Three's SimplifyModifier does not retain skin weights.
   autoDecimate: true,
   setAutoDecimate: (autoDecimate) => set({ autoDecimate }),
-  // Longest side (px) a model's textures may have when it is imported; bigger ones are redrawn smaller to save
-  // memory (0 = keep every texture as loaded). See three/textureImport.js.
+  // Quality preset (High / Standard / Low / Very low, see three/qualityPresets.js): how much memory and GPU
+  // time the app may use. App-wide, not saved in projects.
+  qualityPreset: 'standard',
+  setQualityPreset: (qualityPreset) => set({ qualityPreset }),
+  // An extra limit (px, longest side) on textures when a model is imported, on top of the preset's; 0 = none.
+  // See three/textureImport.js.
   // Smooth edges with MSAA. Costs graphics memory (roughly 4x the canvas); read once when the viewport starts.
   edgeSmoothing: true,
   setEdgeSmoothing: (edgeSmoothing) => set({ edgeSmoothing: !!edgeSmoothing }),
-  importTextureMax: 2048,
-  setImportTextureMax: (importTextureMax) => set({ importTextureMax: Number(importTextureMax) || 0 }),
+  importTextureLimit: 0, // an extra, stricter limit (Advanced); the Quality preset sets the normal one
+  setImportTextureLimit: (importTextureLimit) => set({ importTextureLimit: Number(importTextureLimit) || 0 }),
 
   // ---- Export ----
   exportScale: 2, // PNG resolution multiplier (1× / 2× / 4×) — used when image size is 'viewport'

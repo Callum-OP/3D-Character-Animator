@@ -20,6 +20,7 @@ import { setDecimatorReadyHandler } from './decimate.js'
 import { bakeLookIntoMaterials, lookExportNotes } from './bakeLook.js'
 import { createShadowRefresh, canReuseShadows, cullSignature, planKeyShadow } from './shadowReuse.js'
 import { trimMemory } from './memoryTrim.js'
+import { getQualityPreset, effectiveTextureMax, effectiveEdgeSmoothing, frameIntervalFor, DEFAULT_QUALITY_PRESET } from './qualityPresets.js'
 import { estimateTextureMB } from './textureImport.js'
 import { fitShadowExtents, needsRefit, collectFloorReceivers, probeFloor } from './shadowFit.js'
 import {
@@ -305,6 +306,9 @@ const state = {
   camTransition: null, // { elapsed, duration, fromPos, fromQuat, fromFov, toPos, toQuat, toFov, finalId } while gliding
 
   renderScheduled: false,
+  quality: getQualityPreset(DEFAULT_QUALITY_PRESET), // the Quality preset in force (see qualityPresets.js)
+  qualityFrameInterval: 0, // ms between frames while playing (0 = every display frame)
+  lastQualityFrameAt: 0,
   shadowRefresh: createShadowRefresh(), // has something other than the camera changed since the last draw? (see shadowReuse.js)
   cullSignature: 0, // which roots the last draw hid (a change means a caster came into / left the shadow pass)
   continuous: false, // when true, render every frame (for animation playback)
@@ -362,7 +366,7 @@ export function initScene(container) {
       alpha: true,
       // Edge smoothing (MSAA) multiplies the canvas's colour and depth memory; it can only be chosen when the
       // viewport starts, so the setting (View panel) applies from the next launch.
-      antialias: useStore.getState().edgeSmoothing !== false,
+      antialias: effectiveEdgeSmoothing(useStore.getState().qualityPreset, useStore.getState().edgeSmoothing),
       preserveDrawingBuffer: true,
     })
   } catch (err) {
@@ -383,7 +387,9 @@ export function initScene(container) {
   // High-DPI displays multiply every lit fragment and shadow sample. Keep the
   // viewport crisp without letting a 4K phone/laptop panel dominate the GPU.
   state.pixelRatio = Math.min(window.devicePixelRatio, 1.5)
-  renderer.setPixelRatio(state.pixelRatio) // cap DPR (memory)
+  state.quality = getQualityPreset(useStore.getState().qualityPreset)
+  state.qualityFrameInterval = frameIntervalFor(state.quality.id)
+  renderer.setPixelRatio(getPerformancePixelRatio()) // cap DPR (memory); the Quality preset may lower it further
   renderer.setSize(width, height)
   renderer.setClearColor(0x000000, 0) // fully transparent clear
   renderer.outputColorSpace = THREE.SRGBColorSpace
@@ -417,7 +423,7 @@ export function initScene(container) {
 
   // Optional camera effects: depth of field + uniform blur.
   initPostFX(renderer)
-  resizePostFX(width, height, state.pixelRatio)
+  resizePostFX(width, height, getPerformancePixelRatio())
 
   // --- Scene ---
   const scene = new THREE.Scene()
@@ -483,7 +489,7 @@ export function initScene(container) {
     // Orbiting is fragment-bound with lit materials and the outline pass. A
     // temporary lower DPR keeps interaction responsive; the final frame is
     // rendered at the normal quality as soon as the drag ends.
-    if (!state.outputOverride && state.pixelRatio > 1.25) renderer.setPixelRatio(1.25)
+    if (!state.outputOverride && getPerformancePixelRatio() > 1.25) renderer.setPixelRatio(1.25)
   })
   controls.addEventListener('end', () => {
     renderer.setPixelRatio(getPerformancePixelRatio())
@@ -937,7 +943,7 @@ function applyRenderCulling(camera) {
     const sphere = _cullSpheres[casterSphereCount] || (_cullSpheres[casterSphereCount] = new THREE.Sphere())
     _cullBox.makeEmpty().setFromObject(root).getBoundingSphere(sphere)
     const inView = viewFrustum.intersectsSphere(sphere)
-    const distantBackground = state.performanceMode && state.performanceBackgroundObjects &&
+    const distantBackground = ((state.performanceMode && state.performanceBackgroundObjects) || state.quality.hideDistant) &&
       objectRootSet.has(root) && camera.position.distanceTo(sphere.center) > Math.max(6, state.modelRadius * 4)
 
     let castsShadow = false
@@ -1093,6 +1099,11 @@ export function setContinuousRender(on, reason = 'anim') {
         now - state.lastRecordingFrameAt < state.recordingFrameInterval - 2 // half a refresh of slack, or 30 fps on a 60 Hz screen keeps landing on 50 ms
       ) return
       if (state.recordingFrameInterval) state.lastRecordingFrameAt = now
+      else if (state.qualityFrameInterval) {
+        // The Quality preset's frame-rate cap (the animation clock keeps real time: skipped frames just make the next one cover more)
+        if (now - state.lastQualityFrameAt < state.qualityFrameInterval - 2) return
+        state.lastQualityFrameAt = now
+      }
       const delta = state.clock ? state.clock.getDelta() : 0
       const speed = Number(useStore.getState().speed) || 1
       const animationDelta =
@@ -1184,7 +1195,7 @@ function handleResize() {
     state.viewCamera.aspect = width / height
     state.viewCamera.updateProjectionMatrix()
   }
-  resizePostFX(width, height, override ? 1 : state.pixelRatio)
+  resizePostFX(width, height, override ? 1 : getPerformancePixelRatio())
   requestRender()
 }
 
@@ -1214,7 +1225,7 @@ export async function loadModelFile(file, { addNew = false } = {}) {
   const previousCharacterState = isAddition ? captureCharacterUndoContext(store) : null
   store.setLoading(true)
   try {
-    const parsed = await loadModel(file, { autoDecimate: store.autoDecimate, textureMax: store.importTextureMax })
+    const parsed = await loadModel(file, { autoDecimate: store.autoDecimate, textureMax: effectiveTextureMax(store.qualityPreset, store.importTextureLimit), meshMax: getQualityPreset(store.qualityPreset).meshBudget })
     parsed.file = parsed.persistFile || file // retain the source blob so the model can be saved to a project (a .blend's converted .glb)
     prepareModelTextures(parsed)
 
@@ -1937,7 +1948,8 @@ function disposeCharacter(id) {
 // character). Selects it so the gizmo is ready. Errors propagate to the caller.
 export async function addObjectFile(file, { animationKey, recordHistory = true } = {}) {
   const shouldFrameInitialObject = state.characters.size === 0 && useStore.getState().sceneObjects.length === 0
-  const parsed = await loadModel(file, { textureMax: useStore.getState().importTextureMax })
+  const quality = useStore.getState()
+  const parsed = await loadModel(file, { textureMax: effectiveTextureMax(quality.qualityPreset, quality.importTextureLimit), meshMax: getQualityPreset(quality.qualityPreset).meshBudget })
   const meta = addObject(parsed, parsed.info.name, parsed.info.format, parsed.persistFile || file, animationKey)
   registerObjectMeshes(meta.id, parsed.meshes) // makes its parts pickable/editable in Mesh mode
   useStore.getState().addSceneObject(meta) // sets selectedObjectId = meta.id
@@ -3941,9 +3953,25 @@ export function getGroundY() {
 
 function getPerformancePixelRatio() {
   if (state.outputOverride) return 1 // exact export pixels, no device-ratio scaling
-  return state.performanceLowPoly
-    ? Math.min(state.pixelRatio, state.performanceResolution)
-    : state.pixelRatio
+  // state.pixelRatio is the device ratio (capped) that exports size themselves by; the Quality preset can
+  // lower what the live viewport draws at.
+  const base = Math.min(state.pixelRatio, state.quality.pixelRatioCap)
+  return state.performanceLowPoly ? Math.min(base, state.performanceResolution) : base
+}
+
+// Apply a Quality preset (qualityPresets.js) to the running viewport. Edge smoothing (MSAA) is chosen when the
+// viewport starts, so that part waits for the next launch; textures and mesh limits apply to models imported
+// or opened from now on.
+export function setQualityPreset(id) {
+  state.quality = getQualityPreset(id)
+  state.qualityFrameInterval = frameIntervalFor(state.quality.id)
+  if (state.renderer) {
+    state.renderer.setPixelRatio(getPerformancePixelRatio())
+    resizePostFX(state.container?.clientWidth || 1, state.container?.clientHeight || 1, getPerformancePixelRatio())
+  }
+  if (state.shadowCfg) state.shadowMap = !getShadowQuality().blob // the shadow-quality ceiling changed
+  applyShadowMode() // (also re-sizes the shadow maps)
+  requestRender()
 }
 
 function applyPerformanceSettings() {
@@ -4003,6 +4031,7 @@ function getShadowQuality() {
   return resolveShadowQuality(state.shadowCfg.quality, {
     maxTextureSize: state.renderer?.capabilities?.maxTextureSize,
     performance: state.performanceMode,
+    cap: state.quality.shadowCap,
   })
 }
 
@@ -4010,7 +4039,7 @@ export function setShadowSettings(next) {
   const cfg = normalizeShadows(next)
   state.shadowCfg = cfg
   state.shadowOn = cfg.enabled
-  state.shadowMap = cfg.quality !== 'blob'
+  state.shadowMap = !getShadowQuality().blob // the project's quality, as limited by the Quality preset
   setShadowTintUniform(cfg.tint)
   syncAllMeshFlags()
   applyShadowMode()

@@ -1,4 +1,5 @@
 import { limitTextureSizes, releaseLoaderCaches } from './textureImport.js'
+import { limitMeshTriangles } from './decimate.js'
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { SimplifyModifier } from 'three/examples/jsm/modifiers/SimplifyModifier.js'
@@ -121,11 +122,13 @@ export const SUPPORTED_EXTENSION_RE = new RegExp(
  * export uses Draco mesh compression, the loader will throw; we surface a clear
  * message telling the user to re-export without it.
  */
-export async function loadModel(file, { autoDecimate = true, textureMax = 0 } = {}) {
+export async function loadModel(file, { autoDecimate = true, textureMax = 0, meshMax = 0 } = {}) {
   const parsed = await loadModelRaw(file, { autoDecimate })
   releaseLoaderCaches(parsed)
   // Decoded textures are most of a model's memory: redraw the oversized ones smaller (see textureImport.js).
   if (textureMax) limitTextureSizes(parsed.root, textureMax)
+  // Lower Quality presets also thin very dense meshes as they come in (see decimate.js limitMeshTriangles).
+  if (meshMax) await limitMeshTriangles(parsed.root, meshMax)
   return parsed
 }
 

@@ -123,13 +123,12 @@ describe('smaller-texture cache stays small', () => {
 })
 
 describe('texture size on import setting', () => {
-  it('defaults to 2048 and accepts Original', () => {
-    expect(useStore.getState().importTextureMax).toBe(2048)
-    useStore.getState().setImportTextureMax('1024')
-    expect(useStore.getState().importTextureMax).toBe(1024)
-    useStore.getState().setImportTextureMax('0')
-    expect(useStore.getState().importTextureMax).toBe(0)
-    useStore.getState().setImportTextureMax(2048)
+  it('is an extra limit that defaults to none (the Quality preset sets the normal one) and accepts a value', () => {
+    expect(useStore.getState().importTextureLimit).toBe(0)
+    useStore.getState().setImportTextureLimit('1024')
+    expect(useStore.getState().importTextureLimit).toBe(1024)
+    useStore.getState().setImportTextureLimit('0')
+    expect(useStore.getState().importTextureLimit).toBe(0)
   })
 })
 

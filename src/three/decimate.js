@@ -296,3 +296,32 @@ export function applyMeshDecimation(mesh, spec) {
   current.dispose() // the geometry no longer drawn (the full one, or the previous reduction) frees its graphics memory; the data stays for restoring
   return true
 }
+
+/**
+ * Thin every mesh of `root` that has more than `maxTriangles` triangles down to about that many (a lower Quality
+ * preset, as a model is imported). Permanent for this load — the original is not kept; opening the project under
+ * a higher preset loads it in full again. Skinned meshes, morph targets, UVs and material groups are kept (the
+ * simplifier only drops vertices). Returns { meshes, trianglesBefore, trianglesAfter }.
+ */
+export async function limitMeshTriangles(root, maxTriangles) {
+  const result = { meshes: 0, trianglesBefore: 0, trianglesAfter: 0 }
+  if (!root || !(maxTriangles >= 1)) return result
+  await ensureDecimatorReady()
+  if (!ready) return result // no WebAssembly here: leave the meshes as they are
+  const meshes = []
+  root.traverse((obj) => {
+    if (obj.isMesh && obj.geometry && triangleCount(obj.geometry) > maxTriangles) meshes.push(obj)
+  })
+  for (const mesh of meshes) {
+    const before = triangleCount(mesh.geometry)
+    const reduced = decimateGeometry(mesh.geometry, Math.max(MIN_RATIO, maxTriangles / before), { protectEdges: true })
+    if (reduced === mesh.geometry) continue
+    const old = mesh.geometry
+    mesh.geometry = reduced
+    old.dispose()
+    result.meshes++
+    result.trianglesBefore += before
+    result.trianglesAfter += triangleCount(reduced)
+  }
+  return result
+}

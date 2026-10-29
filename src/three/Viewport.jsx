@@ -13,6 +13,7 @@ import {
   setPerformanceMode,
   setPerformanceBackgroundObjects,
   setPerformanceLowPoly,
+  setQualityPreset,
   setPerformanceResolution,
   setPerformanceEffects,
   setDofSettings,
@@ -278,6 +279,10 @@ function Viewport() {
   const performanceLowPoly = useStore((s) => s.performanceLowPoly)
   const performanceResolution = useStore((s) => s.performanceResolution)
   const performanceEffects = useStore((s) => s.performanceEffects)
+  const qualityPreset = useStore((s) => s.qualityPreset)
+  useEffect(() => {
+    setQualityPreset(qualityPreset)
+  }, [qualityPreset])
   useEffect(() => {
     setNightSettings(night)
   }, [night])
