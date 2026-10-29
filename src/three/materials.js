@@ -720,6 +720,7 @@ function resolveOriginal(store, mesh, ov) {
   const list = Array.isArray(original) ? original : [original]
   const owned = []
   const textures = []
+  const stoodIn = [] // the model's own full-size textures this part no longer draws
   let changed = false
   const mats = list.map((m) => {
     const made = reduceMaterial(m, max)
@@ -727,11 +728,15 @@ function resolveOriginal(store, mesh, ov) {
     changed = true
     owned.push(made.material)
     textures.push(...made.textures)
+    stoodIn.push(...made.replaced)
     const alpha = store.alpha && store.alpha.get(m)
     if (alpha) store.alpha.set(made.material, { ...alpha })
     return made.material
   })
   if (!changed) return original // nothing is bigger than the cap
+  // The full-size copies no longer need to sit on the graphics card for this part. (dispose() only frees the
+  // GPU copy: a part that still draws one uploads it again by itself, and the pixels are untouched.)
+  for (const t of stoodIn) t.dispose()
   if (!store.reduced) store.reduced = new Map()
   const mat = Array.isArray(original) ? mats : mats[0]
   store.reduced.set(mesh, { max, src: original, mat, owned, textures })

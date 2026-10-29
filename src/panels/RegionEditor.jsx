@@ -115,15 +115,18 @@ export default function RegionEditor({ meshUuid, resolveMesh }) {
     setPending(growRegion(meshRef.current, seed.tri, { mode, tolerance, source: getOriginalMaterials(meshRef.current) }))
   }, [seed, mode, tolerance])
 
-  // The highlight: magenta for the selection being made, cyan for the chosen region.
+  // The highlight: magenta for the selection being made, cyan for the chosen region. It follows the region's
+  // FACES, not its look: dragging a colour / glow slider replaces the region object on every tick, and
+  // rebuilding the overlay (every face of the region copied into a new buffer) for that was wasted work.
+  const selectedTris = selected ? selected.tris : null
   useEffect(() => {
     const target = meshRef.current
     if (!target) return undefined
     if (pending && pending.length) setRegionOverlay(target, pending, 0xff2bd6)
-    else if (selected && highlight) setRegionOverlay(target, fromRanges(selected.tris), 0x2bd6ff)
+    else if (selectedTris && highlight) setRegionOverlay(target, fromRanges(selectedTris), 0x2bd6ff)
     else setRegionOverlay(target, null)
     return () => setRegionOverlay(target, null)
-  }, [pending, selected, highlight, meshUuid, regions])
+  }, [pending, selectedTris, highlight, meshUuid])
 
   if (!capable) {
     return (

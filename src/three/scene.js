@@ -16,8 +16,11 @@ import {
 import { resolveShadowQuality, computeShadowFilter, chooseShadowMapSize, normalizeShadows, normalizeNight, shadowsFromProject } from './shadowSettings.js'
 import { VideoCapture, findVideoConfig, webCodecsAvailable } from './videoCapture.js'
 import { computeOutputSize, videoBitrate, pickVideoFormat, MAX_VIDEO_SIDE } from './exportSize.js'
-import { setDecimatorReadyHandler, ensureDecimatorReady } from './decimate.js'
+import { setDecimatorReadyHandler } from './decimate.js'
 import { bakeLookIntoMaterials, lookExportNotes } from './bakeLook.js'
+import { createShadowRefresh, canReuseShadows, cullSignature, planKeyShadow } from './shadowReuse.js'
+import { trimMemory } from './memoryTrim.js'
+import { estimateTextureMB } from './textureImport.js'
 import { fitShadowExtents, needsRefit, collectFloorReceivers, probeFloor } from './shadowFit.js'
 import {
   recordOriginalMaterials,
@@ -302,6 +305,8 @@ const state = {
   camTransition: null, // { elapsed, duration, fromPos, fromQuat, fromFov, toPos, toQuat, toFov, finalId } while gliding
 
   renderScheduled: false,
+  shadowRefresh: createShadowRefresh(), // has something other than the camera changed since the last draw? (see shadowReuse.js)
+  cullSignature: 0, // which roots the last draw hid (a change means a caster came into / left the shadow pass)
   continuous: false, // when true, render every frame (for animation playback)
   continuousReasons: new Set(), // who's asking for a continuous loop right now ('anim', 'cloth', …)
   animId: 0,
@@ -328,6 +333,17 @@ const state = {
 // Fallback map size; the real one follows the Shadow quality setting (see shadowSettings.js).
 const SHADOW_MAP_SIZE = 4096
 
+// Bake the studio room into an environment texture, then free the room's own geometry and materials (only the
+// baked texture is kept).
+function bakeStudioEnvironment(generator) {
+  const room = new RoomEnvironment()
+  try {
+    return generator.fromScene(room, 0.04).texture
+  } finally {
+    room.dispose?.()
+  }
+}
+
 export function initScene(container) {
   installShadowDarkening() // before any material compiles
   if (state.renderer) return // already initialised
@@ -344,7 +360,9 @@ export function initScene(container) {
   try {
     renderer = new THREE.WebGLRenderer({
       alpha: true,
-      antialias: true,
+      // Edge smoothing (MSAA) multiplies the canvas's colour and depth memory; it can only be chosen when the
+      // viewport starts, so the setting (View panel) applies from the next launch.
+      antialias: useStore.getState().edgeSmoothing !== false,
       preserveDrawingBuffer: true,
     })
   } catch (err) {
@@ -415,7 +433,7 @@ export function initScene(container) {
   // look — see setEnvironmentLighting.
   const pmremGenerator = new THREE.PMREMGenerator(renderer)
   state.pmremGenerator = pmremGenerator
-  state.envMap = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture
+  state.envMap = bakeStudioEnvironment(pmremGenerator)
 
   // --- WebGL context loss ---
   // The GPU process can reset under heavy load (or be restarted after a driver
@@ -434,7 +452,7 @@ export function initScene(container) {
       const oldMap = state.envMap
       state.pmremGenerator?.dispose()
       state.pmremGenerator = new THREE.PMREMGenerator(renderer)
-      state.envMap = state.pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture
+      state.envMap = bakeStudioEnvironment(state.pmremGenerator)
       if (state.scene && state.scene.environment === oldMap) state.scene.environment = state.envMap
     } catch (err) {
       console.warn('Could not rebuild the environment map after context restore', err)
@@ -473,7 +491,7 @@ export function initScene(container) {
     state.viewDragBefore = null
     requestRender()
   })
-  controls.addEventListener('change', requestRender)
+  controls.addEventListener('change', requestCameraRender)
   controls.update()
   state.controls = controls
 
@@ -514,8 +532,7 @@ export function initScene(container) {
   })
 
   // Reduce detail needs its (WebAssembly) simplifier; parts saved as reduced are applied the moment it is ready.
-  setDecimatorReadyHandler(() => applyModelMaterials())
-  ensureDecimatorReady()
+  setDecimatorReadyHandler(() => applyModelMaterials()) // the simplifier is loaded the first time a reduced part needs it
 
   // --- Mesh editing (part gizmo + click-to-pick, active in Mesh mode) ---
   initMeshEdit({
@@ -655,6 +672,7 @@ export function initScene(container) {
   const dirLight = new THREE.DirectionalLight(0xffffff, 2.0)
   dirLight.position.set(2, 4, 3)
   dirLight.castShadow = false // enabled only in "realistic shadows" mode
+  state.keyShadowWanted = false // what the settings ask for; the light itself only casts while something can cast on it (see planKeyShadow)
   // Resolution follows the Shadow quality setting (applyShadowMode); performance mode drops it.
   dirLight.shadow.mapSize.set(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE)
   dirLight.shadow.bias = -0.0005
@@ -737,11 +755,23 @@ export function initScene(container) {
 
 // Coalesced single-frame render. Multiple calls in one tick => one draw.
 export function requestRender() {
+  state.shadowRefresh.markChanged() // anything may have moved: redraw the shadow maps too
+  scheduleRender()
+}
+
+// The camera moved and nothing else did (orbit / pan / zoom). Cast shadows do not depend on where the
+// viewer stands, so this frame can reuse the shadow maps of the last one — the shadow pass is a large
+// share of the cost of every frame in a scene with real shadows and lights.
+function requestCameraRender() {
+  scheduleRender()
+}
+
+function scheduleRender() {
   if (state.continuous || state.renderScheduled || !state.renderer) return
   state.renderScheduled = true
   requestAnimationFrame(() => {
     state.renderScheduled = false
-    renderOnce()
+    renderOnce({ cameraOnly: !state.shadowRefresh.take() })
   })
 }
 
@@ -821,7 +851,7 @@ function commitFramingChange(frame) {
   commitViewportView(before)
 }
 
-function renderOnce() {
+function renderOnce({ cameraOnly = false } = {}) {
   if (!state.renderer || state.contextLost) return
   const now = typeof performance !== 'undefined' ? performance.now() : 0
   if (state.lastRenderAt > 0 && now > state.lastRenderAt) {
@@ -835,7 +865,12 @@ function renderOnce() {
   updateLightSources() // ghost source sphere on the selected light + size-driven shadow softness
   const camera = state.viewCamera || state.camera
   if (camera === state.camera) updateFreeCameraClipping()
+  const culledBefore = state.cullSignature
   const restoreCulling = applyRenderCulling(camera)
+  // Reuse the last shadow maps only on a camera-only frame (see requestCameraRender) where the set of
+  // casters in the shadow pass is also unchanged (an object coming into view must get its shadow drawn).
+  const shadowMap = state.renderer.shadowMap || {}
+  shadowMap.autoUpdate = !canReuseShadows({ cameraOnly, continuous: state.continuous, signatureBefore: culledBefore, signatureAfter: state.cullSignature })
   try {
     // Flicker: lights with a built-in effect are dimmed for THIS draw only (put back in finally).
     applyLightEffects()
@@ -853,6 +888,7 @@ function renderOnce() {
     // Same task as the draw, so the canvas still holds this frame.
     if (state.videoCapture) state.videoCapture.onFrame(now)
   } finally {
+    shadowMap.autoUpdate = true // every other draw (exports, previews) refreshes them as usual
     restoreLightEffects()
     restoreCulling()
   }
@@ -871,6 +907,9 @@ function renderOnce() {
 //
 // Same pass also gathers the casters' bounds so the key light's shadow camera
 // can be fitted to the whole scene (see updateShadowFit).
+const _cullBox = new THREE.Box3()
+const _cullSpheres = [] // reused bounding spheres (see applyRenderCulling)
+
 function applyRenderCulling(camera) {
   if (!camera || !state.scene) return () => {}
 
@@ -880,7 +919,7 @@ function applyRenderCulling(camera) {
   state.scene.traverse((obj) => {
     if (obj.isLight && obj.castShadow && obj !== state.dirLight) anotherShadowLight = true
   })
-  const shadowEnabled = state.shadowMap && (state.dirLight?.castShadow || anotherShadowLight)
+  const shadowEnabled = state.shadowMap && (state.keyShadowWanted || anotherShadowLight)
   const shadowFrustum = shadowEnabled && shadowCamera ? makeCameraFrustum(shadowCamera) : null
   const objectRoots = getObjectRoots()
   const objectRootSet = new Set(objectRoots)
@@ -888,13 +927,15 @@ function applyRenderCulling(camera) {
   for (const root of objectRoots) roots.add(root)
   const changed = []
   const casterSpheres = []
+  let casterSphereCount = 0
   const maxCasterRadius = Math.max(state.modelRadius * 10, 20)
 
   for (const root of roots) {
     if (!root || !root.visible) continue
     root.updateMatrixWorld(true)
-    const sphere = new THREE.Sphere()
-    new THREE.Box3().setFromObject(root).getBoundingSphere(sphere)
+    // Scratch objects, reused every frame (this runs for every root on every draw).
+    const sphere = _cullSpheres[casterSphereCount] || (_cullSpheres[casterSphereCount] = new THREE.Sphere())
+    _cullBox.makeEmpty().setFromObject(root).getBoundingSphere(sphere)
     const inView = viewFrustum.intersectsSphere(sphere)
     const distantBackground = state.performanceMode && state.performanceBackgroundObjects &&
       objectRootSet.has(root) && camera.position.distanceTo(sphere.center) > Math.max(6, state.modelRadius * 4)
@@ -904,7 +945,10 @@ function applyRenderCulling(camera) {
       root.traverse((obj) => {
         if (obj.isMesh && obj.castShadow) castsShadow = true
       })
-      if (castsShadow && sphere.radius > 0 && sphere.radius <= maxCasterRadius) casterSpheres.push(sphere)
+      if (castsShadow && sphere.radius > 0 && sphere.radius <= maxCasterRadius) {
+        casterSpheres.push(sphere)
+        casterSphereCount++ // that Sphere is now taken; the next root gets the next one
+      }
     }
     if (inView && !distantBackground) continue
 
@@ -924,9 +968,25 @@ function applyRenderCulling(camera) {
     updateShadowFit(casterSpheres)
     updateShadowFloor()
   }
+  syncKeyShadowAllocation(casterSpheres.length > 0)
+
+  state.cullSignature = cullSignature(changed.map((c) => c.root))
 
   return () => {
     for (const previous of changed) previous.root.visible = previous.visible
+  }
+}
+
+// The key light only casts while something can cast on it, so an empty scene (nothing loaded, or right
+// after New Project) holds no shadow map at all (see planKeyShadow).
+function syncKeyShadowAllocation(hasCasters) {
+  const dl = state.dirLight
+  if (!dl) return
+  const plan = planKeyShadow({ wanted: state.keyShadowWanted, hasCasters, castShadow: dl.castShadow, hasMap: !!dl.shadow.map })
+  if (plan.change) dl.castShadow = plan.cast
+  if (plan.freeMap) {
+    dl.shadow.map.dispose()
+    dl.shadow.map = null
   }
 }
 
@@ -1154,7 +1214,7 @@ export async function loadModelFile(file, { addNew = false } = {}) {
   const previousCharacterState = isAddition ? captureCharacterUndoContext(store) : null
   store.setLoading(true)
   try {
-    const parsed = await loadModel(file, { autoDecimate: store.autoDecimate })
+    const parsed = await loadModel(file, { autoDecimate: store.autoDecimate, textureMax: store.importTextureMax })
     parsed.file = parsed.persistFile || file // retain the source blob so the model can be saved to a project (a .blend's converted .glb)
     prepareModelTextures(parsed)
 
@@ -1877,7 +1937,7 @@ function disposeCharacter(id) {
 // character). Selects it so the gizmo is ready. Errors propagate to the caller.
 export async function addObjectFile(file, { animationKey, recordHistory = true } = {}) {
   const shouldFrameInitialObject = state.characters.size === 0 && useStore.getState().sceneObjects.length === 0
-  const parsed = await loadModel(file)
+  const parsed = await loadModel(file, { textureMax: useStore.getState().importTextureMax })
   const meta = addObject(parsed, parsed.info.name, parsed.info.format, parsed.persistFile || file, animationKey)
   registerObjectMeshes(meta.id, parsed.meshes) // makes its parts pickable/editable in Mesh mode
   useStore.getState().addSceneObject(meta) // sets selectedObjectId = meta.id
@@ -3475,6 +3535,8 @@ export function clearProjectScene() {
   clearUndoHistory()
   runWithoutHistoryCapture(() => useStore.setState({ stopAtFirstClipEnd: false, materialLook: { ...TEXTURE_LOOK_DEFAULT } })) // per-project settings
   markProjectClean() // a blank project has nothing to lose
+  requestRender() // draws the empty scene, which also lets the shadow map go (see syncKeyShadowAllocation)
+  trimMemory(state.renderer)
 }
 
 // Restore a project record: tear down the current session, then rebuild every
@@ -4180,6 +4242,7 @@ function applyShadowMode() {
   syncShadowReceiverVisibility()
   updateShadowDarkness()
   if (state.dirLight) {
+    state.keyShadowWanted = realOn
     state.dirLight.castShadow = realOn
     const quality = getShadowQuality()
     if (!quality.blob) setPlacedLightShadowSize(quality.lightSize)
@@ -4234,6 +4297,7 @@ export function getStats() {
     calls: info.render.calls,
     geometries: info.memory.geometries,
     textures: info.memory.textures,
+    textureMB: Math.round(estimateTextureMB(state.scene)),
     heapMB: mem ? Math.round(mem.usedJSHeapSize / 1048576) : null,
   }
 }

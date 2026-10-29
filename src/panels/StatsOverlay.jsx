@@ -39,6 +39,12 @@ export default function StatsOverlay() {
         <span>Tex</span>
         <b>{stats.textures}</b>
       </div>
+      {stats.textureMB != null && (
+        <div title="Estimated memory of the textures in the scene (decoded, with mipmaps)">
+          <span>Tex MB</span>
+          <b>{stats.textureMB}</b>
+        </div>
+      )}
       {stats.heapMB != null && (
         <div>
           <span>Heap</span>

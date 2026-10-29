@@ -221,6 +221,13 @@ export function removeLight(id) {
   )
 }
 
+// A removed light must give its shadow map back: three keeps it on the graphics card until the shadow is
+// disposed (a point light's is tens of MB), whether the light was deleted for good or only for Undo — if it
+// is brought back, three simply draws a new one.
+function freeLightShadow(light) {
+  if (light && light.shadow && light.shadow.map) light.shadow.dispose()
+}
+
 function detachLightEntry(entry) {
   releaseLightAttachment(entry) // back into the scene (same world spot) before it's removed
   if (l.selected === entry.light) {
@@ -228,6 +235,7 @@ function detachLightEntry(entry) {
     l.selected = null
   }
   l.scene.remove(entry.light)
+  freeLightShadow(entry.light)
   if (entry.light.target && entry.light.target.parent) l.scene.remove(entry.light.target)
   const index = l.lights.indexOf(entry)
   if (index >= 0) l.lights.splice(index, 1)
@@ -236,6 +244,7 @@ function detachLightEntry(entry) {
 
 function disposeLightEntry(entry) {
   if (entry.light.target && entry.light.target.parent) entry.light.target.parent.remove(entry.light.target)
+  freeLightShadow(entry.light)
   disposeBulb(entry.bulb)
   if (entry.cone) {
     entry.cone.geometry.dispose()
@@ -606,14 +615,15 @@ export function updateLightSources() {
 const _coneForward = new THREE.Vector3(0, 0, -1)
 const _coneDir = new THREE.Vector3()
 
+const _targetQuat = new THREE.Quaternion()
+
 function updateDirectionalTargets() {
   for (const entry of l.lights) {
     if (!entry.directional || !entry.directionLocal) continue
-    entry.light.updateMatrixWorld(true)
+    // getWorldPosition / getWorldQuaternion bring the light and its parents up to date themselves; a full
+    // updateMatrixWorld(true) here also walked the light's bulb, cone and glow children every frame for nothing.
     entry.light.getWorldPosition(entry.light.target.position)
-    entry.light.target.position.add(
-      liveDirection(entry, _fxDir).applyQuaternion(entry.light.getWorldQuaternion(new THREE.Quaternion())),
-    )
+    entry.light.target.position.add(liveDirection(entry, _fxDir).applyQuaternion(entry.light.getWorldQuaternion(_targetQuat)))
     entry.light.target.updateMatrixWorld()
   }
 }

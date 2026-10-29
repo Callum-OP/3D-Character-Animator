@@ -32,7 +32,8 @@ app.commandLine.appendSwitch('ignore-gpu-blocklist')
 // loaded characters) doesn't hit the default heap limit and white-screen;
 // this only raises the ceiling; see clearProjectScene/disposeScene work
 // below for what actually keeps steady-state usage down.
-app.commandLine.appendSwitch('js-flags', '--max-old-space-size=4096')
+// --expose-gc lets the app ask for one collection after a project is cleared (see src/three/memoryTrim.js).
+app.commandLine.appendSwitch('js-flags', '--max-old-space-size=4096 --expose-gc')
 
 protocol.registerSchemesAsPrivileged([
   {

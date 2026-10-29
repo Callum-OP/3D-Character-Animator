@@ -293,6 +293,6 @@ export function applyMeshDecimation(mesh, spec) {
   }
   Object.defineProperty(reduced.userData, MARK, { value: { src, key }, enumerable: false, configurable: true, writable: true })
   mesh.geometry = reduced
-  if (mark) current.dispose()
+  current.dispose() // the geometry no longer drawn (the full one, or the previous reduction) frees its graphics memory; the data stays for restoring
   return true
 }

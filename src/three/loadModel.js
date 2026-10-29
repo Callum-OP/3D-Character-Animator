@@ -1,3 +1,4 @@
+import { limitTextureSizes, releaseLoaderCaches } from './textureImport.js'
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { SimplifyModifier } from 'three/examples/jsm/modifiers/SimplifyModifier.js'
@@ -120,7 +121,15 @@ export const SUPPORTED_EXTENSION_RE = new RegExp(
  * export uses Draco mesh compression, the loader will throw; we surface a clear
  * message telling the user to re-export without it.
  */
-export async function loadModel(file, { autoDecimate = true } = {}) {
+export async function loadModel(file, { autoDecimate = true, textureMax = 0 } = {}) {
+  const parsed = await loadModelRaw(file, { autoDecimate })
+  releaseLoaderCaches(parsed)
+  // Decoded textures are most of a model's memory: redraw the oversized ones smaller (see textureImport.js).
+  if (textureMax) limitTextureSizes(parsed.root, textureMax)
+  return parsed
+}
+
+async function loadModelRaw(file, { autoDecimate = true } = {}) {
   const ext = extensionOf(file.name)
   if (ext === 'zip' || ext === 'rar') return loadBundleFile(file, { autoDecimate })
   if (ext === 'blend') {

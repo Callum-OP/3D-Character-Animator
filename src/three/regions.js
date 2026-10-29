@@ -44,9 +44,11 @@ export function regionVertexCount(geometry) {
 export function ensureRegionGeometry(mesh) {
   let geo = mesh.geometry
   if (geo.index) {
+    const indexed = geo
     geo = geo.toNonIndexed()
-    geo.userData = { ...(mesh.geometry.userData || {}) }
+    geo.userData = { ...(indexed.userData || {}) }
     mesh.geometry = geo
+    carryRegionCaches(indexed, geo) // same triangles in the same order: no need to work the connections out again
   }
   const count = geo.attributes.position.count
   const attr = geo.getAttribute('regionId')
@@ -57,6 +59,18 @@ export function ensureRegionGeometry(mesh) {
   return geo
 }
 
+// The text form of a region's triangle ranges, worked out once per list (they are replaced, not edited,
+// when a region changes) — materials are re-applied on every Look / lighting change and must not rebuild it.
+const trisSigCache = new WeakMap()
+function trisSignature(tris) {
+  let sig = trisSigCache.get(tris)
+  if (sig === undefined) {
+    sig = tris.map((t) => t[0] + '-' + t[1]).join(',')
+    trisSigCache.set(tris, sig)
+  }
+  return sig
+}
+
 // Write the region numbers (1-based; 0 = none) for a mesh's regions. Returns false (and
 // paints nothing) when the saved regions no longer fit this geometry.
 export function applyRegionIds(mesh, regions) {
@@ -64,7 +78,7 @@ export function applyRegionIds(mesh, regions) {
   const expected = regionVertexCount(mesh.geometry)
   if (regions.some((r) => r.vertexCount != null && r.vertexCount !== expected)) return false
   const geo = ensureRegionGeometry(mesh)
-  const sig = regions.map((r) => r.id + ':' + r.tris.map((t) => t[0] + '-' + t[1]).join(',')).join('|')
+  const sig = regions.map((r) => r.id + ':' + trisSignature(r.tris)).join('|')
   if (geo.userData.regionSig === sig) return true
   const attr = geo.getAttribute('regionId')
   attr.array.fill(0)
@@ -159,42 +173,133 @@ function sampleTexture(px, texture, u, v, out) {
 // --- face colours and adjacency ----------------------------------------------------
 
 const adjacencyCache = new WeakMap()
+const colorCache = new WeakMap() // geometry -> { mats, colors (Float32 rgb per triangle), has (Uint8) }
 const QUANT = 1e4
+
+function carryRegionCaches(from, to) {
+  const adj = adjacencyCache.get(from)
+  if (adj) adjacencyCache.set(to, { count: to.attributes.position.count, adj: adj.adj })
+  const col = colorCache.get(from)
+  if (col) colorCache.set(to, col)
+}
+
+const nextPow2 = (n) => {
+  let p = 16
+  while (p < n) p <<= 1
+  return p
+}
 
 // For every triangle, the triangles that share an edge with it (matched by POSITION, so a
 // mesh whose vertices are split along UV seams still counts as connected).
+// Returned in a compact form: `adj.list[adj.offsets[t] .. adj.offsets[t + 1])` are the neighbours of
+// triangle `t`, and `adj.length` is the number of triangles. Built with typed arrays and hash tables
+// (no strings, no per-triangle arrays), so a big part is worked out in a fraction of the time and memory.
 export function getAdjacency(geometry) {
   const cached = adjacencyCache.get(geometry)
   if (cached && cached.count === geometry.attributes.position.count) return cached.adj
   const pos = geometry.attributes.position
+  const nVerts = pos.count
   const nTris = Math.floor(regionVertexCount(geometry) / 3)
   const index = geometry.index
-  const vert = (t, k) => (index ? index.getX(t * 3 + k) : t * 3 + k)
 
-  const ids = new Map()
-  const idOf = (v) => {
-    const key = Math.round(pos.getX(v) * QUANT) + ',' + Math.round(pos.getY(v) * QUANT) + ',' + Math.round(pos.getZ(v) * QUANT)
-    let id = ids.get(key)
-    if (id === undefined) ids.set(key, (id = ids.size))
-    return id
+  // 1. Vertices at the same place share one id.
+  const px = new Float64Array(nVerts)
+  const py = new Float64Array(nVerts)
+  const pz = new Float64Array(nVerts)
+  for (let v = 0; v < nVerts; v++) {
+    px[v] = Math.round(pos.getX(v) * QUANT)
+    py[v] = Math.round(pos.getY(v) * QUANT)
+    pz[v] = Math.round(pos.getZ(v) * QUANT)
   }
-  const edges = new Map()
-  for (let t = 0; t < nTris; t++) {
-    const a = idOf(vert(t, 0))
-    const b = idOf(vert(t, 1))
-    const c = idOf(vert(t, 2))
-    for (const [p, q] of [[a, b], [b, c], [c, a]]) {
-      const key = p < q ? p + '_' + q : q + '_' + p
-      const list = edges.get(key)
-      if (list) list.push(t)
-      else edges.set(key, [t])
+  const vCap = nextPow2(nVerts * 2)
+  const vMask = vCap - 1
+  const vSlot = new Int32Array(vCap) // 0 = empty, else first vertex seen at that place + 1
+  const weld = new Int32Array(nVerts)
+  for (let v = 0; v < nVerts; v++) {
+    let h = (Math.imul(px[v] | 0, 73856093) ^ Math.imul(py[v] | 0, 19349663) ^ Math.imul(pz[v] | 0, 83492791)) & vMask
+    for (;;) {
+      const at = vSlot[h]
+      if (at === 0) {
+        vSlot[h] = v + 1
+        weld[v] = v
+        break
+      }
+      const w = at - 1
+      if (px[w] === px[v] && py[w] === py[v] && pz[w] === pz[v]) {
+        weld[v] = w
+        break
+      }
+      h = (h + 1) & vMask
     }
   }
-  const adj = Array.from({ length: nTris }, () => [])
-  for (const list of edges.values()) {
-    if (list.length < 2) continue
-    for (const a of list) for (const b of list) if (a !== b) adj[a].push(b)
+
+  // 2. Group the triangle edges (a, b) that are the same edge. Edge e = triangle * 3 + corner.
+  const nEdges = nTris * 3
+  const ea = new Int32Array(nEdges)
+  const eb = new Int32Array(nEdges)
+  for (let t = 0; t < nTris; t++) {
+    const base = t * 3
+    const v0 = weld[index ? index.getX(base) : base]
+    const v1 = weld[index ? index.getX(base + 1) : base + 1]
+    const v2 = weld[index ? index.getX(base + 2) : base + 2]
+    ea[base] = v0 < v1 ? v0 : v1
+    eb[base] = v0 < v1 ? v1 : v0
+    ea[base + 1] = v1 < v2 ? v1 : v2
+    eb[base + 1] = v1 < v2 ? v2 : v1
+    ea[base + 2] = v2 < v0 ? v2 : v0
+    eb[base + 2] = v2 < v0 ? v0 : v2
   }
+  const eCap = nextPow2(nEdges * 2)
+  const eMask = eCap - 1
+  const eSlot = new Int32Array(eCap) // 0 = empty, else the first edge with that key + 1
+  const nextSame = new Int32Array(nEdges).fill(-1) // the other edges with the same key, chained
+  const heads = new Int32Array(nEdges)
+  let headCount = 0
+  for (let e = 0; e < nEdges; e++) {
+    const a = ea[e]
+    const b = eb[e]
+    if (a === b) continue // a collapsed edge joins nothing
+    let h = (Math.imul(a, 73856093) ^ Math.imul(b, 19349663)) & eMask
+    for (;;) {
+      const at = eSlot[h]
+      if (at === 0) {
+        eSlot[h] = e + 1
+        heads[headCount++] = e
+        break
+      }
+      const r = at - 1
+      if (ea[r] === a && eb[r] === b) {
+        nextSame[e] = nextSame[r]
+        nextSame[r] = e
+        break
+      }
+      h = (h + 1) & eMask
+    }
+  }
+
+  // 3. Neighbour lists: every triangle on an edge neighbours the others on it.
+  const offsets = new Uint32Array(nTris + 1)
+  for (let i = 0; i < headCount; i++) {
+    let size = 0
+    for (let e = heads[i]; e !== -1; e = nextSame[e]) size++
+    if (size < 2) continue
+    for (let e = heads[i]; e !== -1; e = nextSame[e]) offsets[Math.floor(e / 3) + 1] += size - 1
+  }
+  for (let t = 0; t < nTris; t++) offsets[t + 1] += offsets[t]
+  const list = new Int32Array(offsets[nTris])
+  const fill = offsets.slice(0, nTris)
+  for (let i = 0; i < headCount; i++) {
+    let size = 0
+    for (let e = heads[i]; e !== -1; e = nextSame[e]) size++
+    if (size < 2) continue
+    for (let e = heads[i]; e !== -1; e = nextSame[e]) {
+      const t = Math.floor(e / 3)
+      for (let o = heads[i]; o !== -1; o = nextSame[o]) {
+        if (o !== e) list[fill[t]++] = Math.floor(o / 3)
+      }
+    }
+  }
+  const adj = { offsets, list, length: nTris }
   adjacencyCache.set(geometry, { count: pos.count, adj })
   return adj
 }
@@ -210,41 +315,80 @@ function materialForTriangle(mesh, tri, mats = mesh.material) {
 
 // The colour (sRGB, 0..1) a triangle shows in the texture: the average of four points inside it, or the material's flat colour when it has no readable texture. `source`
 // lets callers pass the ORIGINAL material (the viewport may be showing a toon stand-in).
+const _flat = new THREE.Color()
 export function triangleColor(mesh, tri, out = [0, 0, 0], source = null) {
   const geo = mesh.geometry
   const mat = materialForTriangle(mesh, tri, source || mesh.material)
   const uv = geo.attributes.uv
   const px = mat && mat.map && uv ? getTexturePixels(mat.map) : null
   if (!px) {
-    const c = mat && mat.color ? mat.color.clone().convertLinearToSRGB() : { r: 1, g: 1, b: 1 }
-    out[0] = c.r
-    out[1] = c.g
-    out[2] = c.b
+    if (mat && mat.color) {
+      _flat.copy(mat.color).convertLinearToSRGB()
+      out[0] = _flat.r
+      out[1] = _flat.g
+      out[2] = _flat.b
+    } else {
+      out[0] = out[1] = out[2] = 1
+    }
     return out
   }
   const index = geo.index
-  const v = (k) => (index ? index.getX(tri * 3 + k) : tri * 3 + k)
-  const u0 = uv.getX(v(0)), v0 = uv.getY(v(0))
-  const u1 = uv.getX(v(1)), v1 = uv.getY(v(1))
-  const u2 = uv.getX(v(2)), v2 = uv.getY(v(2))
+  const base = tri * 3
+  const i0 = index ? index.getX(base) : base
+  const i1 = index ? index.getX(base + 1) : base + 1
+  const i2 = index ? index.getX(base + 2) : base + 2
+  const u0 = uv.getX(i0), v0 = uv.getY(i0)
+  const u1 = uv.getX(i1), v1 = uv.getY(i1)
+  const u2 = uv.getX(i2), v2 = uv.getY(i2)
   // The middle of the face plus three points halfway out to its corners: sampling the corners
   // themselves would bleed into the neighbouring swatch of an atlas texture.
   const cu = (u0 + u1 + u2) / 3
   const cv = (v0 + v1 + v2) / 3
-  const pts = [[cu, cv], [(cu + u0) / 2, (cv + v0) / 2], [(cu + u1) / 2, (cv + v1) / 2], [(cu + u2) / 2, (cv + v2) / 2]]
-  const s = [0, 0, 0]
-  let r = 0, g = 0, b = 0
-  for (const [pu, pvv] of pts) {
-    sampleTexture(px, mat.map, pu, pvv, s)
-    r += s[0]; g += s[1]; b += s[2]
-  }
-  out[0] = r / 4
-  out[1] = g / 4
-  out[2] = b / 4
+  const s = _sample
+  const map = mat.map
+  sampleTexture(px, map, cu, cv, s)
+  let r = s[0], g = s[1], b = s[2]
+  sampleTexture(px, map, (cu + u0) / 2, (cv + v0) / 2, s)
+  r += s[0]; g += s[1]; b += s[2]
+  sampleTexture(px, map, (cu + u1) / 2, (cv + v1) / 2, s)
+  r += s[0]; g += s[1]; b += s[2]
+  sampleTexture(px, map, (cu + u2) / 2, (cv + v2) / 2, s)
+  out[0] = (r + s[0]) / 4
+  out[1] = (g + s[1]) / 4
+  out[2] = (b + s[2]) / 4
   return out
 }
+const _sample = [0, 0, 0]
 
-const colorDistance = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) / Math.sqrt(3)
+// triangleColor, remembered per triangle (a part is read from the same texture however many times the
+// selection is regrown while a slider is dragged). Filled lazily, so only the triangles a growth reaches
+// are ever read. Dropped when the materials it was read from change.
+function colorLookup(mesh, source) {
+  const geo = mesh.geometry
+  const mats = source || mesh.material
+  const nTris = Math.floor(regionVertexCount(geo) / 3)
+  let cache = colorCache.get(geo)
+  if (!cache || cache.mats !== mats || cache.has.length !== nTris) {
+    cache = { mats, colors: new Float32Array(nTris * 3), has: new Uint8Array(nTris) }
+    colorCache.set(geo, cache)
+  }
+  const tmp = [0, 0, 0]
+  return (tri, out) => {
+    const i = tri * 3
+    if (!cache.has[tri]) {
+      triangleColor(mesh, tri, tmp, source)
+      cache.colors[i] = tmp[0]
+      cache.colors[i + 1] = tmp[1]
+      cache.colors[i + 2] = tmp[2]
+      cache.has[tri] = 1
+    }
+    out[0] = cache.colors[i]
+    out[1] = cache.colors[i + 1]
+    out[2] = cache.colors[i + 2]
+    return out
+  }
+}
+
 
 // Grow a selection from one clicked triangle.
 //   mode 'face'       just that triangle
@@ -261,23 +405,34 @@ export function growRegion(mesh, seedTri, { mode = 'color', tolerance = 0.25, so
 
   const tol = Math.min(1, Math.max(0, tolerance))
   const threshold = 0.02 + tol * 0.5 + tol * tol * 0.48 // fine control at the low end; 1 reaches any colour
-  const seedColor = triangleColor(mesh, seedTri, [0, 0, 0], source)
+  const colorOf = colorLookup(mesh, source)
+  const seedColor = colorOf(seedTri, [0, 0, 0])
   const scratch = [0, 0, 0]
-  const matches = (t) => mode === 'piece' || colorDistance(triangleColor(mesh, t, scratch, source), seedColor) <= threshold
+  // Squared distance in colour space against the squared limit (distance / sqrt(3) <= threshold): no square roots.
+  const limit = threshold * threshold * 3
+  const matches = (t) => {
+    if (mode === 'piece') return true
+    colorOf(t, scratch)
+    const dr = scratch[0] - seedColor[0]
+    const dg = scratch[1] - seedColor[1]
+    const db = scratch[2] - seedColor[2]
+    return dr * dr + dg * dg + db * db <= limit
+  }
 
   const out = []
   if (mode === 'everywhere') {
     for (let t = 0; t < nTris; t++) if (matches(t)) out.push(t)
     return out
   }
-  const adj = getAdjacency(geo)
+  const { offsets, list } = getAdjacency(geo)
   const seen = new Uint8Array(nTris)
   const stack = [seedTri]
   seen[seedTri] = 1
   while (stack.length) {
     const t = stack.pop()
     out.push(t)
-    for (const n of adj[t]) {
+    for (let i = offsets[t], end = offsets[t + 1]; i < end; i++) {
+      const n = list[i]
       if (seen[n]) continue
       seen[n] = 1
       if (matches(n)) stack.push(n)

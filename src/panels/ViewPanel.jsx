@@ -21,6 +21,10 @@ export default function ViewPanel() {
   const performanceResolution = useStore((s) => s.performanceResolution)
   const performanceEffects = useStore((s) => s.performanceEffects)
   const autoDecimate = useStore((s) => s.autoDecimate)
+  const importTextureMax = useStore((s) => s.importTextureMax)
+  const edgeSmoothing = useStore((s) => s.edgeSmoothing)
+  const setEdgeSmoothing = useStore((s) => s.setEdgeSmoothing)
+  const setImportTextureMax = useStore((s) => s.setImportTextureMax)
   const undoLimit = useStore((s) => s.undoLimit)
   const setShowGrid = useStore((s) => s.setShowGrid)
   const setShowGround = useStore((s) => s.setShowGround)
@@ -208,6 +212,25 @@ export default function ViewPanel() {
       </label>
       <p className="panel-hint">
         Static meshes are reduced in stages at 150k, 500k and 1m vertices. Existing models are not changed.
+      </p>
+
+      <label className="toggle-row" title="Smooths jagged edges (MSAA). It multiplies the viewport's memory use, roughly 150 MB on a 1080p window. Takes effect the next time the app starts.">
+        <input type="checkbox" checked={edgeSmoothing} onChange={(e) => setEdgeSmoothing(e.target.checked)} />
+        Smooth edges (MSAA) — applies on next launch
+      </label>
+
+      <label className="toggle-row" title="Textures bigger than this are redrawn smaller when a model is imported. A 4096 px texture takes about 150 MB of memory, 2048 px about a quarter of that.">
+        <span>Texture size on import</span>
+        <select value={importTextureMax} onChange={(e) => setImportTextureMax(e.target.value)} aria-label="Texture size on import">
+          <option value={0}>Original</option>
+          <option value={4096}>4096 px</option>
+          <option value={2048}>2048 px</option>
+          <option value={1024}>1024 px</option>
+          <option value={512}>512 px</option>
+        </select>
+      </label>
+      <p className="panel-hint">
+        Large textures are most of a model&apos;s memory. 2048 px stays sharp and uses a quarter of 4096 px. Applies to models imported from now on.
       </p>
 
       <label className="toggle-row" title="Maximum undo and redo steps retained for each editing mode">

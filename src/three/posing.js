@@ -497,7 +497,9 @@ export function updateBoneHelpers() {
   const col = p.pointsGeom.attributes.color
   for (let i = 0; i < p.pickable.length; i++) {
     const bone = p.pickable[i]
-    bone.getWorldPosition(_v)
+    // The world matrices were just refreshed for the whole model above, so read the position straight from
+    // the matrix. getWorldPosition re-derives the bone's matrix and every ancestor's, bone after bone, every frame.
+    _v.setFromMatrixPosition(bone.matrixWorld)
     pos.setXYZ(i, _v.x, _v.y, _v.z)
     const c = (p.selectedBones.length > 1 ? p.selectedBones.includes(bone) : bone === p.selected) ? SELECTED_COLOR : BASE_COLOR
     col.setXYZ(i, c.r, c.g, c.b)

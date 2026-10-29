@@ -102,6 +102,9 @@ export function reduceTexture(tex, max) {
     const canvas = drawSmaller(tex.image, size, target)
     if (!canvas) return tex
     source = new THREE.Source(canvas)
+    // Only the latest couple of sizes are remembered per texture: stepping the slider through every size
+    // used to keep a canvas for each of them alive. A texture already using an older one keeps its own reference.
+    while (bySize.size >= 2) bySize.delete(bySize.keys().next().value)
     bySize.set(key, source)
   }
   const copy = tex.clone()
@@ -110,21 +113,26 @@ export function reduceTexture(tex, max) {
   return copy
 }
 
-// A copy of a material whose textures are capped at `max`. Returns { material, textures } (the new
-// textures, so they can be disposed later), or null when no texture would change.
+// A copy of a material whose textures are capped at `max`. Returns { material, textures, replaced } (the new
+// textures, so they can be disposed later, and the model's own textures they stand in for), or null when no
+// texture would change.
 export function reduceMaterial(material, max) {
   if (!material) return null
   const swaps = []
+  const replaced = []
   for (const [key, tex] of texturesOf(material)) {
     const next = reduceTexture(tex, max)
-    if (next !== tex) swaps.push([key, next])
+    if (next !== tex) {
+      swaps.push([key, next])
+      replaced.push(tex)
+    }
   }
   if (!swaps.length) return null
   const copy = material.clone()
   copy.userData = {} // Material.clone JSON-copies userData, which would carry the "rim light installed" flag without its hook
   for (const [key, next] of swaps) copy[key] = next
   copy.needsUpdate = true
-  return { material: copy, textures: swaps.map(([, t]) => t) }
+  return { material: copy, textures: swaps.map(([, t]) => t), replaced }
 }
 
 // What a cap does to the textures of some materials, for the panel: unique textures only

@@ -176,6 +176,13 @@ export function setDepthOfField(enabled, focusDistance, aperture, maxBlurPx) {
   state.material.uniforms.uFocusDistance.value = state.focusDistance
   state.material.uniforms.uAperture.value = state.aperture
   state.material.uniforms.uMaxBlurPx.value = state.maxBlurPx
+  releaseTargetIfIdle()
+}
+
+// The effect's render target is a full-size colour + depth texture (tens of MB). It is only needed while
+// an effect is on; three allocates it again by itself the next time one is switched on.
+function releaseTargetIfIdle() {
+  if (!state.dofEnabled && !state.blurEnabled && state.target) state.target.dispose()
 }
 
 export function setBlurEffect(enabled, blurPx) {
@@ -184,6 +191,7 @@ export function setBlurEffect(enabled, blurPx) {
   if (!state.material) return
   state.material.uniforms.uBlurEnabled.value = state.blurEnabled
   state.material.uniforms.uBlurPx.value = state.blurPx
+  releaseTargetIfIdle()
 }
 
 export function resizePostFX(width, height, pixelRatio = 1) {
