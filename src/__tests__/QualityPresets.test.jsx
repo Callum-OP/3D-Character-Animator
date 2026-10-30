@@ -117,11 +117,11 @@ describe('limitMeshTriangles (mesh budget on import)', () => {
 describe('Quality section', () => {
   it('shows the four presets and applies the one clicked', () => {
     render(<QualitySection />)
-    for (const label of ['High', 'Standard', 'Low', 'Very low']) expect(screen.getByRole('button', { name: label })).toBeTruthy()
+    for (const label of ['High', 'Standard', 'Low', 'Potato']) expect(screen.getByRole('button', { name: label })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Standard' }).getAttribute('aria-pressed')).toBe('true')
     fireEvent.click(screen.getByRole('button', { name: 'Low' }))
     expect(useStore.getState().qualityPreset).toBe('low')
     expect(screen.getByRole('button', { name: 'Low' }).getAttribute('aria-pressed')).toBe('true')
-    expect(screen.queryByText(/MB/)).toBeNull() // simple descriptions: no estimates
+    expect(screen.queryByText(/MB/)).toBeNull() // simple descriptions
   })
 })
