@@ -2309,18 +2309,45 @@ export function hasCopiedObjectData() {
 
 // Style/outline a prop (updates the scene + the store). 'auto' matches the
 // character's current Look; an explicit mode pins the prop regardless.
-export function setObjectStyleById(id, style) {
+// Each of these is one undo step (pass record = false when restoring a saved project or
+// replaying an undo, so loading never fills the history).
+function sceneObjectMeta(id) {
+  return useStore.getState().sceneObjects.find((o) => o.id === id)
+}
+
+export function setObjectStyleById(id, style, record = true) {
+  const before = sceneObjectMeta(id)?.style ?? 'auto'
+  if (record && before !== style) {
+    pushSceneHistory(
+      () => setObjectStyleById(id, before, false),
+      () => setObjectStyleById(id, style, false),
+    )
+  }
   setObjectStyle(id, style)
   useStore.getState().setObjectStyle(id, style)
 }
 
-export function setObjectOutlineById(id, outline) {
+export function setObjectOutlineById(id, outline, record = true) {
+  const before = sceneObjectMeta(id)?.outline ?? null
+  if (record && before !== outline) {
+    pushSceneHistory(
+      () => setObjectOutlineById(id, before, false),
+      () => setObjectOutlineById(id, outline, false),
+    )
+  }
   setObjectOutline(id, outline)
   useStore.getState().setObjectOutline(id, outline)
 }
 
 // Toggle whether a prop casts shadows (updates the scene + the store).
-export function setObjectCastShadowById(id, castShadow) {
+export function setObjectCastShadowById(id, castShadow, record = true) {
+  const before = sceneObjectMeta(id)?.castShadow !== false
+  if (record && before !== (castShadow !== false)) {
+    pushSceneHistory(
+      () => setObjectCastShadowById(id, before, false),
+      () => setObjectCastShadowById(id, castShadow, false),
+    )
+  }
   setObjectCastShadow(id, castShadow)
   useStore.getState().setObjectCastShadow(id, castShadow)
 }
@@ -3623,7 +3650,7 @@ export async function applyProjectData(record) {
       }
     }
     applyMeshEditsData(c.meshEdits)
-    if (c.nightImmune) setObjectNightImmuneById(id, true)
+    if (c.nightImmune) setObjectNightImmuneById(id, true, false)
     if (c.shadowImmune) setObjectShadowImmuneById(id, true, false)
     if (c.rimImmune) setObjectRimImmuneById(id, true, false)
     if (c.meshOverridesByIndex) {
@@ -3734,12 +3761,12 @@ export async function applyProjectData(record) {
       // 'lit' is the old (pre-styles) save field: false meant "flat/unlit".
       // Map it onto the new style system so older project files still work.
       const style = obj.style || (obj.lit === false ? 'unlit' : 'auto')
-      if (style !== 'auto') setObjectStyleById(meta.id, style)
+      if (style !== 'auto') setObjectStyleById(meta.id, style, false)
       // 'off' / 'on' (or an older save's true) are the person's own choice; anything else follows the style
-      if (obj.outline === 'off') setObjectOutlineById(meta.id, false)
-      else if (obj.outline === 'on' || obj.outline === true) setObjectOutlineById(meta.id, true)
-      if (obj.castShadow === false) setObjectCastShadowById(meta.id, false)
-      if (obj.nightImmune) setObjectNightImmuneById(meta.id, true)
+      if (obj.outline === 'off') setObjectOutlineById(meta.id, false, false)
+      else if (obj.outline === 'on' || obj.outline === true) setObjectOutlineById(meta.id, true, false)
+      if (obj.castShadow === false) setObjectCastShadowById(meta.id, false, false)
+      if (obj.nightImmune) setObjectNightImmuneById(meta.id, true, false)
       if (obj.shadowImmune) setObjectShadowImmuneById(meta.id, true, false)
       if (obj.rimImmune) setObjectRimImmuneById(meta.id, true, false)
     }
@@ -4099,8 +4126,17 @@ function applyBackgroundColour() {
 }
 
 // Make one object / character ignore Night mode (updates the scene + the store).
-export function setObjectNightImmuneById(id, immune) {
+export function setObjectNightImmuneById(id, immune, record = true) {
   const model = state.characters.get(id) || getObjectMaterialModelById(id)
+  if (record && model && model.meshes) {
+    const before = isNightImmune(model)
+    if (before !== !!immune) {
+      pushSceneHistory(
+        () => setObjectNightImmuneById(id, before, false),
+        () => setObjectNightImmuneById(id, !!immune, false),
+      )
+    }
+  }
   if (model && model.meshes) {
     for (const mesh of model.meshes) {
       if (immune) mesh.userData.nightImmune = true
@@ -4366,6 +4402,18 @@ export function getTransparentMeshUuidsForObject(object) {
   if (!object) return []
   const model = object.isCharacter ? state.characters.get(object.id) : getObjectMaterialModelById(object.id)
   return getTransparentMeshes(model).map((mesh) => mesh.uuid)
+}
+
+// Does this one part have transparency / alpha textures of its own (so its Transparency switch
+// does something)? Works for a character's parts and for a prop's.
+export function meshHasAlpha(uuid) {
+  const mesh = getMeshByUuid(uuid)
+  if (!mesh) return false
+  for (const model of state.characters.values()) {
+    if (model.meshes && model.meshes.includes(mesh)) return getTransparentMeshes(model).includes(mesh)
+  }
+  const owner = getObjectMaterialModelForMesh(mesh)
+  return !!owner && getTransparentMeshes(owner).includes(mesh)
 }
 
 // uuids of EVERY mesh of a scene object (character or model prop) — what the

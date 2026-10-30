@@ -48,7 +48,8 @@ import { useRowMenu, RowMenuButton } from './rowMenu.jsx'
 import { partMenu, partTargets } from './rowMenus.js'
 import LightFromPart from './LightFromPart.jsx'
 import { withGlowRegion } from '../three/glowRegions.js'
-import { recordOverrideEdit } from '../three/materialHistory.js'
+import { meshHasAlpha } from '../three/scene.js'
+import { recordOverrideEdit, setPartLook } from '../three/materialHistory.js'
 
 // Side-panel section for Mesh mode: pick a part of the character (eyes, hair,
 // clothing…) and move, rotate, resize or recolour it. Click a part in the
@@ -485,6 +486,41 @@ export default function MeshPanel() {
             onChange={applyColor}
             onClear={() => applyColor({ color: null })}
           />
+        </div>
+      )}
+
+      {selectedMeshUuids.length > 0 && (
+        <div className="joint-controls" style={{ marginTop: 10 }}>
+          <div className="joint-header">
+            <span className="joint-name">Part settings</span>
+            <span className="joint-parent">{multi ? `${selectedMeshUuids.length} parts` : selectedMesh?.name}</span>
+          </div>
+          {selectedMeshUuids.some((u) => meshHasAlpha(u)) && (
+            <label className="slider-row" title="Off = this part is drawn solid, so see-through textures stop showing what is behind them">
+              <input
+                type="checkbox"
+                checked={meshOverrides[selectedMeshUuid]?.alpha !== false}
+                onChange={(e) => setPartLook(selectedMeshUuids.filter((u) => meshHasAlpha(u)), { alpha: e.target.checked })}
+              />
+              Transparency
+            </label>
+          )}
+          <label className="slider-row" title="Draw the ink outline around this part">
+            <input
+              type="checkbox"
+              checked={meshOverrides[selectedMeshUuid]?.outline !== false}
+              onChange={(e) => setPartLook(selectedMeshUuids, { outline: e.target.checked })}
+            />
+            Ink outline
+          </label>
+          <label className="slider-row" title="Off = this part throws no shadow">
+            <input
+              type="checkbox"
+              checked={meshOverrides[selectedMeshUuid]?.castShadow !== false}
+              onChange={(e) => setPartLook(selectedMeshUuids, { castShadow: e.target.checked })}
+            />
+            Casts shadows
+          </label>
         </div>
       )}
 

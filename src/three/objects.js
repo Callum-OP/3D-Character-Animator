@@ -703,7 +703,8 @@ export function pasteObject() {
     root.traverse((obj) => {
       if (!obj.isMesh) return
       meshes.push(obj)
-      obj.castShadow = clip.kind === 'image' ? false : clip.castShadow !== false
+      obj.castShadow = clip.kind === 'image' ? false : clip.castShadow !== false && !(obj.userData && obj.userData.partNoCast)
+      if (obj.userData) obj.userData.objectNoCast = clip.kind !== 'image' && clip.castShadow === false
       obj.receiveShadow = clip.kind !== 'image'
     })
     const id = ++idCounter
@@ -939,7 +940,11 @@ export function setObjectCastShadow(id, castShadow) {
   const entry = o.objects.find((e) => e.id === id && e.kind === 'model')
   if (!entry) return
   entry.castShadow = castShadow
-  for (const mesh of entry.meshes) mesh.castShadow = castShadow
+  // A part can also be switched off on its own (materials.js sets partNoCast): both must allow it.
+  for (const mesh of entry.meshes) {
+    mesh.userData.objectNoCast = castShadow === false
+    mesh.castShadow = castShadow !== false && !mesh.userData.partNoCast
+  }
   o.requestRender()
 }
 

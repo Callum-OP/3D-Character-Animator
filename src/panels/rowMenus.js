@@ -16,6 +16,7 @@ import {
   setCameraToObject,
   setCameraToMesh,
   getTransparentMeshUuidsForObject,
+  meshHasAlpha,
   setMeshVisibleByUuid,
   setMeshesVisibleByUuids,
   applyModelMaterials,
@@ -24,6 +25,7 @@ import {
   setObjectParentById,
   mergeObjectsToOne,
 } from '../three/scene.js'
+import { setPartLook } from '../three/materialHistory.js'
 import { copyCurrentEdit, pasteCurrentEdit } from '../three/editClipboard.js'
 import { copySceneItem, pasteSceneItem } from '../three/sceneClipboard.js'
 import {
@@ -243,8 +245,7 @@ export function objectMenu(targets, ctx, state = useStore.getState()) {
     }
     if (id === 'alpha') {
       const next = !alphaStates[0].alpha.on
-      for (const { o, alpha } of alphaStates) st.setMeshesAlpha(alpha.meshes, next, o.isCharacter ? o.id : null)
-      applyModelMaterials()
+      for (const { o, alpha } of alphaStates) setPartLook(alpha.meshes, { alpha: next }, o.isCharacter ? o.id : null)
       return
     }
     if (id === 'cast') {
@@ -477,9 +478,26 @@ export function partMenu(uuids, ctx, state = useStore.getState()) {
   const hidden = state.meshOverrides[first]?.visible === false
   const canKey = !multi && ctx.isCharacterPart?.(first)
 
+  const ov = state.meshOverrides[first] || {}
+  const alphaParts = uuids.filter((u) => meshHasAlpha(u))
+  const look = [
+    ...(alphaParts.length
+      ? [{
+          id: 'alpha',
+          label: 'Transparency',
+          checked: ov.alpha !== false,
+          hint: 'Off = this part is drawn solid. Switch off a part whose see-through texture shows things behind it that should be hidden; leave on for glass, hair, lashes.',
+        }]
+      : []),
+    { id: 'outline', label: 'Ink outline', checked: ov.outline !== false, hint: 'Draw the ink outline around this part (needs outlines on in the Lighting tab)' },
+    { id: 'cast', label: 'Casts shadows', checked: ov.castShadow !== false, hint: 'Off = this part throws no shadow, even if its object does' },
+  ]
+
   const items = [
     { header: multi ? plural(uuids.length, 'part') + ' selected' : ctx.nameOf?.(first) || 'Part' },
     { id: 'visibility', label: hidden ? 'Show' : 'Hide', shortcut: 'H' },
+    { separator: true },
+    ...look,
     ...(multi ? [{ id: 'only', label: 'Select only this part' }] : []),
     { separator: true },
     { id: 'reset', label: multi ? `Reset ${uuids.length} parts` : 'Reset part', hint: 'Put the part back where it started' },
@@ -498,6 +516,9 @@ export function partMenu(uuids, ctx, state = useStore.getState()) {
       else setMeshVisibleByUuid(first, hidden)
       return
     }
+    if (id === 'alpha') return setPartLook(alphaParts, { alpha: ov.alpha === false })
+    if (id === 'outline') return setPartLook(uuids, { outline: ov.outline === false })
+    if (id === 'cast') return setPartLook(uuids, { castShadow: ov.castShadow === false })
     if (id === 'only') return st.setSelectedMeshUuid(first)
     if (id === 'reset') return multi ? resetMeshes(uuids) : resetMesh(first)
     if (id === 'frame') return setCameraToMesh(first)

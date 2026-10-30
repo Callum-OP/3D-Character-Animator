@@ -1,6 +1,7 @@
 import { useStore } from '../store.js'
 import EditableValue from './EditableValue.jsx'
 import { setMeshVisibleByUuid } from '../three/scene.js'
+import { recordOverrideEdit } from '../three/materialHistory.js'
 import ShadowPanel, { NightPanel } from './ShadowPanel.jsx'
 import { PRESET_SHADOW_STYLE, DEFAULT_SHADOW_STYLE } from '../three/shadowSettings.js'
 
@@ -759,7 +760,7 @@ export default function MaterialPanel() {
                       type="checkbox"
                       checked={outlineOn}
                       disabled={!visible}
-                      onChange={(e) => setMeshOutline(m.uuid, e.target.checked)}
+                      onChange={(e) => recordOverrideEdit([m.uuid], () => setMeshOutline(m.uuid, e.target.checked))}
                     />
                   </label>
                   <select
@@ -767,7 +768,7 @@ export default function MaterialPanel() {
                     value={shading}
                     disabled={!visible}
                     title="Shading for this part (Flat = no lighting)"
-                    onChange={(e) => setMeshShading(m.uuid, e.target.value)}
+                    onChange={(e) => recordOverrideEdit([m.uuid], () => setMeshShading(m.uuid, e.target.value))}
                   >
                     {SHADING_OPTIONS.map((o) => (
                       <option key={o.value} value={o.value}>
@@ -783,7 +784,7 @@ export default function MaterialPanel() {
                     value={Math.min(ov.outlineWidth ?? outlineWidth, outlineWidth)}
                     disabled={!visible || !outlineOn}
                     title="Per-part outline width"
-                    onChange={(e) => setMeshOutlineWidth(m.uuid, Number(e.target.value))}
+                    onChange={(e) => recordOverrideEdit([m.uuid], () => setMeshOutlineWidth(m.uuid, Number(e.target.value)))}
                   />
                 </div>
               )

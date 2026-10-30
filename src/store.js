@@ -753,6 +753,28 @@ export const useStore = create((set) => ({
       return { meshOverrides: write(s.meshOverrides) }
     }),
 
+  // Per-part look switches in one go: { alpha?: bool, outline?: bool, castShadow?: bool }.
+  // castShadow only ever stores `false` (the default is "casts"), so a cleared flag leaves the
+  // override entry as it was before. A character that isn't the active one keeps its overrides in
+  // the roster, so the write goes there.
+  setMeshesLook: (uuids, patch, characterId = null) =>
+    set((s) => {
+      const write = (map) => {
+        const next = { ...map }
+        for (const uuid of uuids) {
+          const merged = { outline: true, shading: 'full', ...map[uuid], ...patch }
+          if (merged.castShadow !== false) delete merged.castShadow
+          next[uuid] = merged
+        }
+        return next
+      }
+      if (characterId != null && characterId !== s.activeCharacterId && s.characters[characterId]) {
+        const c = s.characters[characterId]
+        return { characters: { ...s.characters, [characterId]: { ...c, meshOverrides: write(c.meshOverrides || {}) } } }
+      }
+      return { meshOverrides: write(s.meshOverrides) }
+    }),
+
   setMeshVisible: (uuid, visible) =>
     set((s) => ({
       meshOverrides: {

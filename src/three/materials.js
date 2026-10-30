@@ -574,6 +574,10 @@ export function applyMaterials(model, opts) {
     // Per-mesh visibility (hide clothing layers, etc.).
     mesh.visible = !(ov && ov.visible === false)
 
+    // Per-part "casts shadows" (on top of the object's own switch — see setObjectCastShadow).
+    mesh.userData.partNoCast = !!(ov && ov.castShadow === false)
+    mesh.castShadow = !mesh.userData.partNoCast && !mesh.userData.objectNoCast
+
     // Transparency: this mesh's own switch, else the default.
     const alphaOn = ov && typeof ov.alpha === 'boolean' ? ov.alpha : transparencyDefault !== false
     applyAlphaState(original, original, store, alphaOn)
