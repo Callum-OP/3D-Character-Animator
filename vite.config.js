@@ -6,6 +6,8 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   base: './',
   plugins: [react()],
+  // The USD reader runs in an inline (blob) module worker; module workers keep `import.meta.url` working.
+  worker: { format: 'es' },
   build: {
     rollupOptions: {
       output: {

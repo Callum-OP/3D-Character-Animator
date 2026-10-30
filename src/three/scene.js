@@ -2000,9 +2000,17 @@ export async function importBVHAuto(file) {
   return { name, matched, total }
 }
 
+// A bare USD file is a static scene (this importer reads no skeletons), so it is a prop: no probe load. The probe
+// would read a big scene (seconds, hundreds of MB) twice just to learn that.
+const isBareUsdFile = (file) => /\.(usdz|usd|usda|usdc)$/i.test(file?.name || '')
+
 export async function importModelAuto(file) {
   useStore.getState().setLoading(true)
   try {
+    if (isBareUsdFile(file)) {
+      const meta = await addObjectFile(file)
+      return { kind: 'object', name: meta.name }
+    }
     const probe = await loadModel(file, { autoDecimate: false })
     const isRigged = !!(probe.info?.bones?.length)
     // Computed from the probe, shown once the real import has succeeded.

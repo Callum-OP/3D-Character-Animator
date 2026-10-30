@@ -92,7 +92,10 @@ async function getFbxLoader() {
 // Supported input extensions, in the order we advertise them to the user. A .zip
 // is a bundle: a model plus the textures/materials/buffers it references (see
 // modelBundle.js — folders and multi-file picks are packed into one too).
-export const SUPPORTED_EXTENSIONS = ['glb', 'gltf', 'fbx', 'obj', 'dae', 'stl', 'ply', 'blend', 'zip', 'rar']
+export const SUPPORTED_EXTENSIONS = ['glb', 'gltf', 'fbx', 'obj', 'dae', 'stl', 'ply', 'usdz', 'usd', 'usda', 'usdc', 'blend', 'zip', 'rar']
+
+// Pixar USD files. A .usdz is a zip of the scene and its textures; .usd may be text or binary.
+const USD_EXTS = ['usdz', 'usd', 'usda', 'usdc']
 
 // A single regex used both to validate drops and to strip the extension off the
 // display name. Built from SUPPORTED_EXTENSIONS so the two never drift apart.
@@ -141,7 +144,7 @@ async function loadModelRaw(file, { autoDecimate = true } = {}) {
   }
   const url = URL.createObjectURL(file)
   try {
-    if (ext === 'obj' || ext === 'dae' || ext === 'stl' || ext === 'ply' || ext === 'fbx') {
+    if (ext === 'obj' || ext === 'dae' || ext === 'stl' || ext === 'ply' || ext === 'fbx' || USD_EXTS.includes(ext)) {
       // A lone file of these formats goes down the same code path as a bundle, just with
       // nothing else in it — so anything it refers to that ISN'T there (textures, an .mtl)
       // is found out and reported (info.bundle.missingTextures / missingFiles) instead of
@@ -308,6 +311,13 @@ function revokeAll(blobUrls) {
 const textDecoder = new TextDecoder()
 
 async function parseMainModel(ext, bytes, mainPath, base, files, manager) {
+  if (USD_EXTS.includes(ext)) {
+    // Read in a worker that is thrown away afterwards (see usd/usdImport.js); the file's bytes are handed over,
+    // so give it its own copy.
+    const { loadUsdRoot } = await import('./usd/usdImport.js')
+    const root = await loadUsdRoot(new Uint8Array(bytes), mainPath)
+    return { root, animations: [], source: null }
+  }
   const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
   if (ext === 'fbx') {
     const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js')

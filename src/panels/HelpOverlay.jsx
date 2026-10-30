@@ -31,7 +31,7 @@ export default function HelpOverlay() {
             <ol className="help-steps">
               <li>
                 <b>Load a character.</b> Drag a <code>.glb</code>, <code>.gltf</code>{' '}
-                or <code>.fbx</code> file onto the view, or use{' '}
+                <code>.fbx</code> or <code>.usdz</code> file onto the view, or use{' '}
                 <b>Load object or character</b> in the Character panel. Files with
                 bones come in as a character; anything else as an object.
               </li>

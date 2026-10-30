@@ -21,7 +21,7 @@ import { isRarBytes } from './archive.js'
 
 // Main-model formats, in the order we prefer one when a folder holds several.
 // .blend is last: it needs Blender (desktop app), so any other format in the folder wins.
-export const MODEL_EXTENSIONS = ['fbx', 'glb', 'gltf', 'dae', 'obj', 'ply', 'stl', 'blend']
+export const MODEL_EXTENSIONS = ['fbx', 'glb', 'gltf', 'dae', 'obj', 'ply', 'stl', 'usdz', 'usd', 'usda', 'usdc', 'blend']
 // Archives: a bundle of a model plus its textures. Read by readArchive (zip via fflate, rar via
 // WebAssembly UnRAR); both kinds may sit inside each other.
 export const BUNDLE_EXTENSIONS = ['zip', 'rar']
@@ -40,7 +40,7 @@ export const isImageName = (name) => IMAGE_EXTENSIONS.includes(extOf(name))
 const isSupportName = (name) => SUPPORT_EXTENSIONS.includes(extOf(name))
 // 3D program project files people often have next to an export — can't be opened
 // here, so say what to do instead of a vague "no model found".
-const UNSUPPORTED_MODEL_EXTENSIONS = ['max', 'ma', 'mb', 'c4d', '3ds', 'usd', 'usda', 'usdc', 'usdz', 'abc', 'skp', 'lwo', 'x3d', '3mf', 'off']
+const UNSUPPORTED_MODEL_EXTENSIONS = ['max', 'ma', 'mb', 'c4d', '3ds', 'abc', 'skp', 'lwo', 'x3d', '3mf', 'off']
 const isJunkPath = (path) => /(^|\/)(__MACOSX|\.DS_Store|Thumbs\.db|desktop\.ini)(\/|$)/i.test(path) || /(^|\/)\._/.test(path)
 
 // The string for a file input's `accept` — models, a zip bundle, and the loose
