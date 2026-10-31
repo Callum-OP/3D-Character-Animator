@@ -10,19 +10,24 @@ const m = vi.hoisted(() => ({
   removeLight: vi.fn(),
   setLightVisible: vi.fn(),
   removeCamera: vi.fn(),
+  setObjectCastShadowById: vi.fn(),
+  setObjectRimImmuneById: vi.fn(),
 }))
 vi.mock('../three/editClipboard.js', () => ({
   copyCurrentEdit: m.copyCurrentEdit,
   pasteCurrentEdit: m.pasteCurrentEdit,
   canPasteCurrentEdit: m.canPasteCurrentEdit,
 }))
-vi.mock('../three/scene.js', () => ({
+vi.mock('../three/scene.js', async (importOriginal) => ({
+  ...(await importOriginal()),
   removeObjectById: m.removeObjectById,
   setObjectVisibleById: m.setObjectVisibleById,
   applyModelMaterials: m.applyModelMaterials,
+  setObjectCastShadowById: m.setObjectCastShadowById,
+  setObjectRimImmuneById: m.setObjectRimImmuneById,
 }))
-vi.mock('../three/lights.js', () => ({ removeLight: m.removeLight, setLightVisible: m.setLightVisible }))
-vi.mock('../three/cameras.js', () => ({ removeCamera: m.removeCamera }))
+vi.mock('../three/lights.js', async (importOriginal) => ({ ...(await importOriginal()), removeLight: m.removeLight, setLightVisible: m.setLightVisible }))
+vi.mock('../three/cameras.js', async (importOriginal) => ({ ...(await importOriginal()), removeCamera: m.removeCamera }))
 
 import { createRightClickGesture, resolveContextTarget, selectContextTarget, getContextMenuItems, runContextMenuAction } from '../three/contextMenu.js'
 import { useStore } from '../store.js'
@@ -191,13 +196,31 @@ describe('selectContextTarget', () => {
 })
 
 describe('getContextMenuItems', () => {
-  const ids = (items) => items.filter((i) => !i.separator).map((i) => i.id)
+  const ids = (items) => items.filter((i) => !i.separator && i.id).map((i) => i.id)
 
   it('an object offers Copy, Paste, Hide and Delete', () => {
     const items = getContextMenuItems({ kind: 'objects', ids: [2] }, st())
     expect(ids(items)).toEqual(['copy', 'paste', 'visibility', 'delete'])
     expect(items.find((i) => i.id === 'visibility').label).toBe('Hide')
     expect(items.find((i) => i.id === 'delete').danger).toBe(true)
+  })
+
+  it('an object also offers its Look & shadow switches, same as the Objects panel menu', () => {
+    const items = getContextMenuItems({ kind: 'objects', ids: [2] }, st())
+    const fly = items.find((i) => i.label === 'Look & shadow')
+    expect(fly).toBeTruthy()
+    const childIds = fly.children.filter((i) => i.id).map((i) => i.id)
+    expect(childIds).toEqual(expect.arrayContaining(['receive', 'rim', 'night']))
+  })
+
+  it('running one of those switches acts on the right-clicked object', () => {
+    useStore.setState({
+      sceneObjects: [{ id: 5, name: 'Lamp post', kind: 'model', visible: true, castShadow: true, rimImmune: false }],
+    })
+    runContextMenuAction('cast', { kind: 'objects', ids: [5] }, st())
+    expect(m.setObjectCastShadowById).toHaveBeenCalledWith(5, false)
+    runContextMenuAction('rim', { kind: 'objects', ids: [5] }, st())
+    expect(m.setObjectRimImmuneById).toHaveBeenCalledWith(5, true)
   })
 
   it('a hidden object offers Show instead of Hide', () => {

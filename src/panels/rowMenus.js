@@ -85,30 +85,13 @@ function alphaStateFor(object, state) {
   return { meshes, on: meshes.every((uuid) => overrides[uuid]?.alpha !== false) }
 }
 
-// ctx: { boneNames, keyAtPlayhead, setKeyAtPlayhead(bool), startRename(id), notify(msg) }
-export function objectMenu(targets, ctx, state = useStore.getState()) {
+// The look / light-and-shadow switches of an object. ONE definition, used by the list menu
+// (objectMenu) and by the right-click menu in the 3D viewport (three/contextMenu.js), so both
+// show the same entries in the same state and do the same thing.
+export function objectSettingItems(targets, state = useStore.getState()) {
   const first = targets[0]
-  const count = targets.length
-  const multi = count > 1
   const anyModel = targets.some((o) => o.kind === 'model')
   const alphaStates = targets.map((o) => ({ o, alpha: alphaStateFor(o, state) })).filter((x) => x.alpha)
-  const props = targets.filter((o) => !o.isCharacter)
-  const canAttach = !multi && !first.isCharacter && (ctx.boneNames || []).length > 0
-  const attachData = canAttach ? state.objectAttachmentData?.[first.animationKey] : null
-  const t = state.globalTime || 0
-
-  const items = [{ header: multi ? plural(count, 'object') + ' selected' : first.isCharacter ? `${first.name} (character)` : first.name }]
-  if (!multi) {
-    items.push({ id: 'rename', label: 'Rename', shortcut: 'Dbl-click' })
-    items.push({ id: 'duplicate', label: 'Duplicate' })
-  } else if (targets.every((o) => !o.isCharacter && o.kind === 'model')) {
-    items.push({
-      id: 'merge',
-      label: `Merge ${count} objects into one`,
-      hint: 'Join them into a single object. Lights, cameras and props attached to any of them follow the new object.',
-    })
-  }
-  items.push({ id: 'visibility', label: first.visible === false ? 'Show' : 'Hide', shortcut: 'H' })
 
   const look = []
   if (anyModel) {
@@ -130,11 +113,8 @@ export function objectMenu(targets, ctx, state = useStore.getState()) {
       hint: 'Turn off if inner parts (mouth, teeth) show through the skin — hair, lashes or glass that rely on it will look solid.',
     })
   }
-  if (look.length) items.push({ separator: true }, ...look)
 
-  items.push(
-    { separator: true },
-    { header: 'Light & shadow' },
+  const shadow = [
     ...(anyModel ? [{ id: 'cast', label: 'Casts shadows', checked: first.castShadow !== false }] : []),
     {
       id: 'receive',
@@ -154,7 +134,77 @@ export function objectMenu(targets, ctx, state = useStore.getState()) {
       checked: !first.nightImmune,
       hint: state.night?.enabled ? 'Off = stays in daylight when Night mode is on' : 'Only matters while Night mode is on',
     },
-  )
+  ]
+  return { look, shadow }
+}
+
+// Runs one of the switches above on every target. Returns true when `id` was one of them.
+export function runObjectSetting(id, targets, state = useStore.getState()) {
+  const first = targets[0]
+  const models = targets.filter((x) => x.kind === 'model')
+  if (id.startsWith('style:')) {
+    for (const o of models) setObjectStyleById(o.id, id.slice(6))
+    return true
+  }
+  if (id === 'outline') {
+    const next = !(first.outline ?? !!state.outlineEnabled)
+    for (const o of models) setObjectOutlineById(o.id, next)
+    return true
+  }
+  if (id === 'alpha') {
+    const alphaStates = targets.map((o) => ({ o, alpha: alphaStateFor(o, state) })).filter((x) => x.alpha)
+    if (!alphaStates.length) return true
+    const next = !alphaStates[0].alpha.on
+    for (const { o, alpha } of alphaStates) setPartLook(alpha.meshes, { alpha: next }, o.isCharacter ? o.id : null)
+    return true
+  }
+  if (id === 'cast') {
+    const next = first.castShadow === false
+    for (const o of models) setObjectCastShadowById(o.id, next)
+    return true
+  }
+  if (id === 'receive') {
+    for (const o of targets) setObjectShadowImmuneById(o.id, !first.shadowImmune)
+    return true
+  }
+  if (id === 'rim') {
+    for (const o of targets) setObjectRimImmuneById(o.id, !first.rimImmune)
+    return true
+  }
+  if (id === 'night') {
+    for (const o of targets) setObjectNightImmuneById(o.id, !first.nightImmune)
+    return true
+  }
+  return false
+}
+
+// ctx: { boneNames, keyAtPlayhead, setKeyAtPlayhead(bool), startRename(id), notify(msg) }
+export function objectMenu(targets, ctx, state = useStore.getState()) {
+  const first = targets[0]
+  const count = targets.length
+  const multi = count > 1
+  const props = targets.filter((o) => !o.isCharacter)
+  const canAttach = !multi && !first.isCharacter && (ctx.boneNames || []).length > 0
+  const attachData = canAttach ? state.objectAttachmentData?.[first.animationKey] : null
+  const t = state.globalTime || 0
+
+  const items = [{ header: multi ? plural(count, 'object') + ' selected' : first.isCharacter ? `${first.name} (character)` : first.name }]
+  if (!multi) {
+    items.push({ id: 'rename', label: 'Rename', shortcut: 'Dbl-click' })
+    items.push({ id: 'duplicate', label: 'Duplicate' })
+  } else if (targets.every((o) => !o.isCharacter && o.kind === 'model')) {
+    items.push({
+      id: 'merge',
+      label: `Merge ${count} objects into one`,
+      hint: 'Join them into a single object. Lights, cameras and props attached to any of them follow the new object.',
+    })
+  }
+  items.push({ id: 'visibility', label: first.visible === false ? 'Show' : 'Hide', shortcut: 'H' })
+
+  const { look, shadow } = objectSettingItems(targets, state)
+  if (look.length) items.push({ separator: true }, ...look)
+
+  items.push({ separator: true }, { header: 'Light & shadow' }, ...shadow)
 
   // Another prop to ride on (a flag on a pole, a gun on a car roof): follows every move of it.
   const parentChoices = !multi && !first.isCharacter
@@ -235,35 +285,7 @@ export function objectMenu(targets, ctx, state = useStore.getState()) {
       for (const o of targets) setObjectVisibleById(o.id, visible)
       return
     }
-    if (id.startsWith('style:')) {
-      for (const o of targets.filter((x) => x.kind === 'model')) setObjectStyleById(o.id, id.slice(6))
-      return
-    }
-    if (id === 'outline') {
-      for (const o of targets.filter((x) => x.kind === 'model')) setObjectOutlineById(o.id, !(first.outline ?? !!state.outlineEnabled))
-      return
-    }
-    if (id === 'alpha') {
-      const next = !alphaStates[0].alpha.on
-      for (const { o, alpha } of alphaStates) setPartLook(alpha.meshes, { alpha: next }, o.isCharacter ? o.id : null)
-      return
-    }
-    if (id === 'cast') {
-      for (const o of targets.filter((x) => x.kind === 'model')) setObjectCastShadowById(o.id, first.castShadow === false)
-      return
-    }
-    if (id === 'receive') {
-      for (const o of targets) setObjectShadowImmuneById(o.id, !first.shadowImmune)
-      return
-    }
-    if (id === 'rim') {
-      for (const o of targets) setObjectRimImmuneById(o.id, !first.rimImmune)
-      return
-    }
-    if (id === 'night') {
-      for (const o of targets) setObjectNightImmuneById(o.id, !first.nightImmune)
-      return
-    }
+    if (runObjectSetting(id, targets, state)) return
     if (id === 'merge') {
       return mergeObjectsToOne(targets.map((o) => o.id)).then((r) => ctx.notify?.(r.message))
     }
@@ -471,16 +493,12 @@ export function partTargets(uuid, state = useStore.getState()) {
   return sel.length > 1 && sel.includes(uuid) ? [...sel] : [uuid]
 }
 
-// ctx: { isCharacterPart(uuid), keyPart(uuid), extract(uuids, removeOriginals), extracting }
-export function partMenu(uuids, ctx, state = useStore.getState()) {
-  const multi = uuids.length > 1
-  const first = uuids[0]
-  const hidden = state.meshOverrides[first]?.visible === false
-  const canKey = !multi && ctx.isCharacterPart?.(first)
-
-  const ov = state.meshOverrides[first] || {}
+// Transparency / ink outline / casts shadows of one or more parts — shared by the parts list
+// menu and the viewport right-click menu in Mesh mode.
+export function partSettingItems(uuids, state = useStore.getState()) {
+  const ov = state.meshOverrides[uuids[0]] || {}
   const alphaParts = uuids.filter((u) => meshHasAlpha(u))
-  const look = [
+  return [
     ...(alphaParts.length
       ? [{
           id: 'alpha',
@@ -492,6 +510,35 @@ export function partMenu(uuids, ctx, state = useStore.getState()) {
     { id: 'outline', label: 'Ink outline', checked: ov.outline !== false, hint: 'Draw the ink outline around this part (needs outlines on in the Lighting tab)' },
     { id: 'cast', label: 'Casts shadows', checked: ov.castShadow !== false, hint: 'Off = this part throws no shadow, even if its object does' },
   ]
+}
+
+// Returns true when `id` was one of the three switches above.
+export function runPartSetting(id, uuids, state = useStore.getState()) {
+  const ov = state.meshOverrides[uuids[0]] || {}
+  if (id === 'alpha') {
+    const alphaParts = uuids.filter((u) => meshHasAlpha(u))
+    if (alphaParts.length) setPartLook(alphaParts, { alpha: ov.alpha === false })
+    return true
+  }
+  if (id === 'outline') {
+    setPartLook(uuids, { outline: ov.outline === false })
+    return true
+  }
+  if (id === 'cast') {
+    setPartLook(uuids, { castShadow: ov.castShadow === false })
+    return true
+  }
+  return false
+}
+
+// ctx: { isCharacterPart(uuid), keyPart(uuid), extract(uuids, removeOriginals), extracting }
+export function partMenu(uuids, ctx, state = useStore.getState()) {
+  const multi = uuids.length > 1
+  const first = uuids[0]
+  const hidden = state.meshOverrides[first]?.visible === false
+  const canKey = !multi && ctx.isCharacterPart?.(first)
+
+  const look = partSettingItems(uuids, state)
 
   const items = [
     { header: multi ? plural(uuids.length, 'part') + ' selected' : ctx.nameOf?.(first) || 'Part' },
@@ -516,9 +563,7 @@ export function partMenu(uuids, ctx, state = useStore.getState()) {
       else setMeshVisibleByUuid(first, hidden)
       return
     }
-    if (id === 'alpha') return setPartLook(alphaParts, { alpha: ov.alpha === false })
-    if (id === 'outline') return setPartLook(uuids, { outline: ov.outline === false })
-    if (id === 'cast') return setPartLook(uuids, { castShadow: ov.castShadow === false })
+    if (runPartSetting(id, uuids, state)) return
     if (id === 'only') return st.setSelectedMeshUuid(first)
     if (id === 'reset') return multi ? resetMeshes(uuids) : resetMesh(first)
     if (id === 'frame') return setCameraToMesh(first)

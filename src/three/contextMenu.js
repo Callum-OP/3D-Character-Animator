@@ -13,6 +13,7 @@ import {
 import { resetMesh, resetMeshes } from './meshedit.js'
 import { removeLight, setLightVisible } from './lights.js'
 import { removeCamera } from './cameras.js'
+import { objectSettingItems, runObjectSetting, partSettingItems, runPartSetting } from '../panels/rowMenus.js'
 
 // ---------------------------------------------------------------------------
 // Right-click menu for the viewport (Object mode)
@@ -106,6 +107,16 @@ export function getContextMenuItems(target, state = useStore.getState()) {
     if (canMerge(target.ids, state)) {
       items.push({ id: 'merge', label: `Merge ${target.ids.length} objects into one`, hint: 'Join them into a single object; attached lights and cameras follow it' })
     }
+    // The same Look / shadow switches the Objects panel's menu has, so they can be reached
+    // by right-clicking the object itself.
+    const chosen = target.ids.map((id) => state.sceneObjects.find((o) => o.id === id)).filter(Boolean)
+    if (chosen.length) {
+      const { look, shadow } = objectSettingItems(chosen, state)
+      items.push(
+        { separator: true },
+        { label: 'Look & shadow', children: [...look, ...(look.length ? [{ separator: true }] : []), ...shadow] },
+      )
+    }
   } else if (target.kind === 'light') {
     const hidden = state.sceneLights.find((x) => x.id === target.id)?.visible === false
     items.push({ id: 'visibility', label: hidden ? 'Show' : 'Hide', shortcut: 'H' })
@@ -132,6 +143,8 @@ function getPartMenuItems(target, state, paste) {
     paste,
     { id: 'visibility', label: hidden ? 'Show' : 'Hide', shortcut: 'H' },
     { separator: true },
+    ...partSettingItems(target.uuids, state),
+    { separator: true },
     { id: 'reset', label: count > 1 ? `Reset ${count} parts` : 'Reset part', hint: 'Put the part back where it started' },
     ...(count === 1 ? [{ id: 'frame', label: 'Frame in viewport', shortcut: 'F' }] : []),
     { separator: true },
@@ -142,6 +155,7 @@ function getPartMenuItems(target, state, paste) {
 
 function runPartAction(actionId, target, state) {
   const uuids = target.uuids
+  if (runPartSetting(actionId, uuids, state)) return { setting: true }
   if (actionId === 'visibility') {
     const visible = state.meshOverrides[uuids[0]]?.visible === false
     if (uuids.length > 1) setMeshesVisibleByUuids(uuids, visible)
@@ -169,6 +183,11 @@ export function runContextMenuAction(actionId, target, state = useStore.getState
 
   if (actionId === 'copy') return copyCurrentEdit(state)
   if (target.kind === 'meshes') return runPartAction(actionId, target, state)
+
+  if (target.kind === 'objects') {
+    const chosen = target.ids.map((id) => state.sceneObjects.find((o) => o.id === id)).filter(Boolean)
+    if (chosen.length && runObjectSetting(actionId, chosen, state)) return { setting: true }
+  }
 
   if (actionId === 'merge' && target.kind === 'objects') {
     return mergeObjectsToOne(target.ids).then((r) => {

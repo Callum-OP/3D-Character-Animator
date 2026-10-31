@@ -49,9 +49,20 @@ describe('right-click in Mesh mode', () => {
     expect(useStore.getState().selectedMeshUuids).toEqual(['a', 'b'])
   })
 
-  it('offers copy, paste, hide, reset, frame and the make-an-object options', () => {
+  it('offers copy, paste, hide, the part look switches, reset, frame and the make-an-object options', () => {
     const items = getContextMenuItems({ kind: 'meshes', uuids: ['a'] })
-    expect(labels(items)).toEqual(['Copy', 'Paste', 'Hide', 'Reset part', 'Frame in viewport', 'Extract to object', 'Copy to object'])
+    expect(labels(items)).toEqual(['Copy', 'Paste', 'Hide', 'Ink outline', 'Casts shadows', 'Reset part', 'Frame in viewport', 'Extract to object', 'Copy to object'])
+  })
+
+  it('the part switches (ink outline, casts shadows) change just that part, and undo', async () => {
+    const { performUndo } = await import('../three/undoPriority.js')
+    runContextMenuAction('cast', { kind: 'meshes', uuids: ['a'] })
+    expect(useStore.getState().meshOverrides.a.castShadow).toBe(false)
+    runContextMenuAction('outline', { kind: 'meshes', uuids: ['a', 'b'] })
+    expect(useStore.getState().meshOverrides.b.outline).toBe(false)
+    performUndo(useStore.getState())
+    expect(useStore.getState().meshOverrides.b?.outline).not.toBe(false)
+    expect(useStore.getState().meshOverrides.a.castShadow).toBe(false)
   })
 
   it('says Show for a hidden part, and speaks for the whole group when several are selected', () => {
