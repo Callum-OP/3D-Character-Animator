@@ -16,6 +16,7 @@ import { downloadPose, readPoseFile } from '../three/poses.js'
 import { collectActiveDangleDescendants, resetActiveDangle, setCameraToBones } from '../three/scene.js'
 import { performUndo, performRedo } from '../three/undoPriority.js'
 import EditableValue from './EditableValue.jsx'
+import IkPinsSection from './IkPinsSection.jsx'
 
 const AXES = ['x', 'y', 'z']
 
@@ -620,6 +621,8 @@ export default function BonePanel() {
           ))}
         </div>
       )}
+
+      <IkPinsSection />
 
       <div className="pose-hint">
         {boneViewMode === 'parts'

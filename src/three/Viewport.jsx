@@ -82,6 +82,7 @@ import {
   consumeCameraGizmoGrab,
   pickCameraId,
 } from './cameras.js'
+import { selectIkPin, setIkMarkersVisible, setIkGizmoMode, consumeIkGizmoGrab, pickIkMarker } from './ikpins.js'
 import {
   selectLight,
   setLightGizmoMode,
@@ -530,6 +531,19 @@ function Viewport() {
     setCamerasEnabled(mode === 'object')
   }, [mode])
 
+  // --- IK pin markers: selection, gizmo mode and visibility (hidden in the look-only View mode) ---
+  const selectedIkPinId = useStore((s) => s.selectedIkPinId)
+  const showIkMarkers = useStore((s) => s.showIkMarkers)
+  useEffect(() => {
+    selectIkPin(selectedIkPinId)
+  }, [selectedIkPinId])
+  useEffect(() => {
+    setIkGizmoMode(objectMode)
+  }, [objectMode])
+  useEffect(() => {
+    setIkMarkersVisible(mode !== 'view' && showIkMarkers)
+  }, [mode, showIkMarkers])
+
   const selectedLightId = useStore((s) => s.selectedLightId)
   useEffect(() => {
     selectLight(selectedLightId)
@@ -598,7 +612,7 @@ function Viewport() {
 
       // Always consume the gizmo-grab flags so a real drag never leaks into
       // the next, unrelated click.
-      const grabbed = consumeObjectGizmoGrab() || consumeCameraGizmoGrab() || consumeLightGizmoGrab()
+      const grabbed = consumeObjectGizmoGrab() || consumeCameraGizmoGrab() || consumeLightGizmoGrab() || consumeIkGizmoGrab()
       if (!start || e.button !== 0 || grabbed) return
       const dx = e.clientX - start.x
       const dy = e.clientY - start.y
@@ -622,6 +636,12 @@ function Viewport() {
         const cameraHitId = s.mode === 'object' ? pickCameraId(ndcX, ndcY) : null
         const lightHitId = s.mode === 'object' ? pickLightId(ndcX, ndcY) : null
         const hitId = pickObjectId(ndcX, ndcY)
+        const ikHitId = s.mode === 'object' ? pickIkMarker(ndcX, ndcY) : null
+
+        if (ikHitId != null) {
+          s.setSelectedIkPinId(ikHitId)
+          return
+        }
 
         if (cameraHitId != null) {
           s.setSelectedCameraId(cameraHitId)
@@ -659,6 +679,7 @@ function Viewport() {
 
       if (s.selectedObjectId != null) s.setSelectedObjectId(null)
       if (s.selectedCameraId != null) s.setSelectedCameraId(null)
+      if (s.mode === 'object' && s.selectedIkPinId != null) s.setSelectedIkPinId(null)
       if (s.selectedLightId != null) {
         s.setSelectedLightId(null)
         selectLight(null) // Lights panel drives its own gizmo attach, not a store effect

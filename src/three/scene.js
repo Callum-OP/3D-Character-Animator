@@ -128,6 +128,7 @@ import {
   resetDangle,
   collectDescendantBoneNames,
 } from './dangle.js'
+import { initIk, disposeIk, setIkConfig, clearIk, stepIkPins, writePins as writeIkPins } from './ikpins.js'
 import {
   initAnimation,
   setAnimationModel,
@@ -640,6 +641,16 @@ export function initScene(container) {
     getSceneScale: () => state.modelRadius,
   })
 
+  // --- IK pins: markers that hold a hand / foot / limb in place while an animation plays ---
+  initIk({
+    scene,
+    camera,
+    renderer,
+    controls,
+    requestRender,
+    getSceneScale: () => state.modelRadius,
+  })
+
   // --- Placeable point lights (add and move light sources around the scene) ---
   initLights({
     scene,
@@ -865,6 +876,9 @@ function renderOnce({ cameraOnly = false } = {}) {
     state.fps = state.fps ? state.fps * 0.9 + frameRate * 0.1 : frameRate
   }
   state.lastRenderAt = now
+  // While playing, the tick already solved this frame; for a one-off render (a scrub, a pose edit, a moved
+  // marker) solve here. A camera-only frame (orbiting) changed no pose, so it skips it.
+  if (!cameraOnly && !state.continuous) stepIkPins()
   followIdleClothPose() // keep enabled-but-not-draping cloth tracking the body/gizmo, not frozen
   updateBoneHelpers() // park bone dots on their (possibly just-moved) bones
   updateMeshEditHelpers() // keep the part-selection box hugging its mesh
@@ -1121,6 +1135,7 @@ export function setContinuousRender(on, reason = 'anim') {
       try {
         updateAnimation(animationDelta) // advance the mixer before drawing
         stepObjectAnimation(animationDelta, globalClock ? globalClockLoop : undefined)
+        stepIkPins() // hold pinned hands / feet on their markers (after the animation and any moving object)
         advanceGlobalClock(animationDelta)
         stepClothLive(animationDelta) // step any LIVE cloth sims, following the current pose
         stepDangleLive(animationDelta) // swing any dangle (hair/accessory) bones under gravity
@@ -1654,6 +1669,7 @@ export function pasteCopiedCharacter() {
     currentTime: 0,
   })
   setDangleConfig(id, model, fields.dangleEnabled, fields.dangleChains)
+  setIkConfig(id, model, fields.ikEnabled, fields.ikPins)
   applyModelMaterials()
   recordCharacterAdded(id, previousState)
   requestRender()
@@ -1873,6 +1889,7 @@ function restoreCharacterPresence(batch) {
   setActiveCharacter(id, model) // re-point posing / mesh-edit / animation at it
   const fields = rec.storeRecord.fields
   setDangleConfig(id, model, fields.dangleEnabled, fields.dangleChains)
+  setIkConfig(id, model, fields.ikEnabled, fields.ikPins)
   applyModelMaterials() // re-apply the current Look settings
   // Deleting the last character forced Object mode; put the old mode back.
   if (batch.prevMode && useStore.getState().mode !== batch.prevMode) useStore.getState().setMode(batch.prevMode)
@@ -1923,6 +1940,7 @@ function disposeCharacter(id) {
   if (!isAnyPlaying()) setContinuousRender(false)
   clearClothForMeshes(model.meshes) // only THIS character's cloth, others keep simulating
   clearDangle(id) // only THIS character's dangle chains
+  clearIk(id) // and its IK markers
   releaseFollowersOf(model.root) // lights/cameras mounted on it go back to the scene
   // Props riding this character's bones -> back into the scene, not disposed
   // along with the skeleton (disposeObject below would otherwise free their
@@ -3495,6 +3513,26 @@ function meshOverridesFromIndex(model, byIndex) {
 // currently active, we briefly make it active to read its pose/mesh-edit/
 // animation state through the normal capture path, then switch back. That
 // happens synchronously within this function, so nothing visibly changes.
+// IK pin markers attached to an object are saved as that object's position in the scene list (ids
+// don't survive a reload); the transform is already relative to the object.
+export function ikPinsForSave(pins) {
+  const objects = useStore.getState().sceneObjects
+  return (pins || []).map((pin) => {
+    const { attachObjectId, ...rest } = pin
+    const idx = attachObjectId != null ? objects.findIndex((o) => o.id === attachObjectId) : -1
+    return { ...rest, attachedObjectIndex: idx >= 0 ? idx : null }
+  })
+}
+
+export function ikPinsFromSave(saved) {
+  const objects = useStore.getState().sceneObjects
+  return (saved || []).map((pin) => {
+    const { attachedObjectIndex, ...rest } = pin
+    const target = attachedObjectIndex != null ? objects[attachedObjectIndex] : null
+    return { ...rest, attachObjectId: target ? target.id : null }
+  })
+}
+
 export function getProjectData() {
   const s = useStore.getState()
   const originalActiveId = state.activeCharacterId
@@ -3533,6 +3571,8 @@ export function getProjectData() {
       playbackSource: live.playbackSource,
       dangleEnabled: live.dangleEnabled,
       dangleChains: live.dangleChains,
+      ikEnabled: live.ikEnabled,
+      ikPins: ikPinsForSave(live.ikPins),
       isActive: id === originalActiveId,
     })
   }
@@ -3598,6 +3638,8 @@ export async function applyProjectData(record) {
   // 1. Clear the current props/images, cameras and every character.
   clearProjectScene()
 
+
+  const pendingIk = [] // each character's saved IK pins, applied once the objects exist (step 4d)
 
   // 2. Load every saved character. Older (project-v1) saves have a single
   // `record.character` instead of a `record.characters` array — normalise.
@@ -3676,8 +3718,11 @@ export async function applyProjectData(record) {
       playbackSource: c.playbackSource || 'edit',
       dangleEnabled: c.dangleEnabled ?? true,
       dangleChains: c.dangleChains || [],
+      ikEnabled: c.ikEnabled ?? true,
+      ikPins: [],
     })
     setDangleConfig(id, model, c.dangleEnabled ?? true, c.dangleChains || [])
+    pendingIk.push({ id, model, enabled: c.ikEnabled ?? true, saved: c.ikPins || [] })
     if (c.isActive || (record.format === 'project-v1' && i === 0)) activeIdToRestore = id
   }
   if (activeIdToRestore) setActiveCharacter(activeIdToRestore)
@@ -3816,6 +3861,13 @@ export async function applyProjectData(record) {
       useStore.setState({ rimFollowLight: true, rimFollowLightId: metas[st.rimFollowLightIndex].id })
       applyModelMaterials()
     }
+  }
+
+  // 4d. IK pins: now that the objects exist, markers attached to one can find it again.
+  for (const { id, model, enabled, saved } of pendingIk) {
+    const pins = ikPinsFromSave(saved)
+    writeIkPins(id, pins)
+    setIkConfig(id, model, enabled, pins)
   }
 
   // 5. (animData is already restored per-character inside the load loop
@@ -4614,6 +4666,7 @@ export function disposeScene() {
   disposeCurrentModel()
   disposeObjects()
   disposeCameras()
+  disposeIk()
   disposeLights()
   disposeClothMod()
   disposePosing()

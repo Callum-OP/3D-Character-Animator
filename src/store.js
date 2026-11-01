@@ -88,6 +88,8 @@ const CHARACTER_FIELDS = [
   'poseClipboard',
   'dangleEnabled',
   'dangleChains',
+  'ikEnabled',
+  'ikPins',
 ]
 
 function snapshotCharacterFields(s) {
@@ -138,6 +140,8 @@ function defaultCharacterFields(modelInfo) {
     poseClipboard: null,
     dangleEnabled: true,
     dangleChains: [],
+    ikEnabled: true,
+    ikPins: [],
   }
 }
 
@@ -814,6 +818,21 @@ export const useStore = create((set) => ({
     set((s) => ({
       dangleChains: s.dangleChains.map((c) => (c.id === id ? { ...c, ...patch } : c)),
     })),
+
+  // ---- IK pins (hold hands / feet / any bone on a marker while the animation plays) ----
+  // ikPins (per active character, see CHARACTER_FIELDS):
+  //   [{ id, name, boneName, chainLength, enabled, weight, matchRotation,
+  //      attachObjectId (null = fixed in the world), position, quaternion }]
+  // position / quaternion are world values, or relative to the object when attached.
+  // Edits go through three/ikpins.js (it records the undo steps and moves the markers).
+  ikEnabled: true,
+  ikPins: [],
+  selectedIkPinId: null,
+  showIkMarkers: true,
+  setIkEnabled: (ikEnabled) => set({ ikEnabled }),
+  setIkPins: (ikPins) => set({ ikPins }),
+  setSelectedIkPinId: (selectedIkPinId) => set({ selectedIkPinId }),
+  setShowIkMarkers: (showIkMarkers) => set({ showIkMarkers }),
 
   // ---- Bone posing ----
   selectedBoneName: null, // "primary" bone — last one clicked; drives the panel's single-target controls
