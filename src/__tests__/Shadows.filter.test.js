@@ -23,6 +23,13 @@ import {
   lightTanFromSize,
   MIN_BLUR_TEXELS,
 } from '../three/shadowSettings.js'
+import {
+  flatCount,
+  flatPivot,
+  flatUp,
+  flatParams,
+  flatMore,
+} from '../three/flattenerShader.js'
 import { useStore } from '../store.js'
 
 describe('shadow filter shader patch', () => {
@@ -57,9 +64,29 @@ describe('shadow filter shader patch', () => {
   it('every shader gets the shared uniforms', () => {
     const uniforms = {}
     addShadowUniforms(uniforms)
-    expect(Object.keys(uniforms).sort()).toEqual(['uNightAmt', 'uNightImmune', 'uNightLightsKeep', 'uNightTint', 'uShadowDarkness', 'uShadowFilterA', 'uShadowFilterB', 'uShadowImmune', 'uShadowTint'])
+    expect(Object.keys(uniforms).sort()).toEqual([
+      'uFlatCount',
+      'uFlatMore',
+      'uFlatParams',
+      'uFlatPivot',
+      'uFlatUp',
+      'uNightAmt',
+      'uNightImmune',
+      'uNightLightsKeep',
+      'uNightTint',
+      'uShadowDarkness',
+      'uShadowFilterA',
+      'uShadowFilterB',
+      'uShadowImmune',
+      'uShadowTint',
+    ])
     expect(uniforms.uShadowFilterA).toBe(shadowFilterA)
     expect(uniforms.uShadowFilterB).toBe(shadowFilterB)
+    expect(uniforms.uFlatCount).toBe(flatCount)
+    expect(uniforms.uFlatPivot).toBe(flatPivot)
+    expect(uniforms.uFlatUp).toBe(flatUp)
+    expect(uniforms.uFlatParams).toBe(flatParams)
+    expect(uniforms.uFlatMore).toBe(flatMore)
   })
 
   it('can fall back to the stock filter, with a new program cache key so materials recompile', () => {
