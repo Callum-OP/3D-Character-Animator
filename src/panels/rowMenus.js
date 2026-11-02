@@ -509,6 +509,15 @@ export function partSettingItems(uuids, state = useStore.getState()) {
       : []),
     { id: 'outline', label: 'Ink outline', checked: ov.outline !== false, hint: 'Draw the ink outline around this part (needs outlines on in the Lighting tab)' },
     { id: 'cast', label: 'Casts shadows', checked: ov.castShadow !== false, hint: 'Off = this part throws no shadow, even if its object does' },
+    // Only meaningful once the character has a flattener.
+    ...(state.flatteners && state.flatteners.length
+      ? [
+          { id: 'flatten', label: 'Flattened (flattener)', checked: ov.flatten !== false, hint: 'Off = the flattener leaves this part 3D (keep ear tips, hair strands or glasses round)' },
+          ...(ov.flatten !== false
+            ? [{ id: 'flattenShade', label: 'Flatten its lighting too', checked: ov.flatShade !== false, hint: 'Off = the shape is flattened but the part keeps its own lighting. Try this on hair if it shows dark patches.' }]
+            : []),
+        ]
+      : []),
   ]
 }
 
@@ -526,6 +535,14 @@ export function runPartSetting(id, uuids, state = useStore.getState()) {
   }
   if (id === 'cast') {
     setPartLook(uuids, { castShadow: ov.castShadow === false })
+    return true
+  }
+  if (id === 'flatten') {
+    setPartLook(uuids, { flatten: ov.flatten === false })
+    return true
+  }
+  if (id === 'flattenShade') {
+    setPartLook(uuids, { flatShade: ov.flatShade === false })
     return true
   }
   return false

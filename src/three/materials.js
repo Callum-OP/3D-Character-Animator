@@ -575,6 +575,8 @@ export function applyMaterials(model, opts) {
     mesh.visible = !(ov && ov.visible === false)
 
     // Per-part "casts shadows" (on top of the object's own switch — see setObjectCastShadow).
+    mesh.userData.flatOff = !!(ov && ov.flatten === false) // a part the flattener leaves 3D
+    mesh.userData.flatShade = ov && ov.flatShade === false ? 0 : 1 // a part flattened in shape but keeping its own lighting
     mesh.userData.partNoCast = !!(ov && ov.castShadow === false)
     mesh.castShadow = !mesh.userData.partNoCast && !mesh.userData.objectNoCast
 

@@ -90,6 +90,8 @@ const CHARACTER_FIELDS = [
   'dangleChains',
   'ikEnabled',
   'ikPins',
+  'flattenerEnabled',
+  'flatteners',
 ]
 
 function snapshotCharacterFields(s) {
@@ -142,6 +144,8 @@ function defaultCharacterFields(modelInfo) {
     dangleChains: [],
     ikEnabled: true,
     ikPins: [],
+    flattenerEnabled: true,
+    flatteners: [],
   }
 }
 
@@ -768,6 +772,8 @@ export const useStore = create((set) => ({
         for (const uuid of uuids) {
           const merged = { outline: true, shading: 'full', ...map[uuid], ...patch }
           if (merged.castShadow !== false) delete merged.castShadow
+          if (merged.flatten !== false) delete merged.flatten
+          if (merged.flatShade !== false) delete merged.flatShade
           next[uuid] = merged
         }
         return next
@@ -833,6 +839,15 @@ export const useStore = create((set) => ({
   setIkPins: (ikPins) => set({ ikPins }),
   setSelectedIkPinId: (selectedIkPinId) => set({ selectedIkPinId }),
   setShowIkMarkers: (showIkMarkers) => set({ showIkMarkers }),
+
+  // ---- Flattener (flatten a head toward the camera for the 2D anime look) ----
+  // flatteners (per active character, see CHARACTER_FIELDS), edited through three/flattener.js:
+  //   [{ id, name, boneName, enabled, strength, start, falloff, thickness, headSize, pivotLocal, upLocal }]
+  flattenerEnabled: true,
+  flatteners: [],
+  showFlattenerGuide: false,
+  setFlattenerEnabled: (flattenerEnabled) => set({ flattenerEnabled }),
+  setShowFlattenerGuide: (showFlattenerGuide) => set({ showFlattenerGuide }),
 
   // ---- Bone posing ----
   selectedBoneName: null, // "primary" bone — last one clicked; drives the panel's single-target controls

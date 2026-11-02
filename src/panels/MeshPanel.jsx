@@ -75,6 +75,7 @@ export default function MeshPanel() {
   const meshGizmoMode = useStore((s) => s.meshGizmoMode)
   const setMeshGizmoMode = useStore((s) => s.setMeshGizmoMode)
   const meshOverrides = useStore((s) => s.meshOverrides)
+  const flatteners = useStore((s) => s.flatteners)
   const linkedShapeKeys = useStore((s) => s.linkedShapeKeys)
   const setLinkedShapeKeys = useStore((s) => s.setLinkedShapeKeys)
   const animData = useStore((s) => s.animData)
@@ -521,6 +522,26 @@ export default function MeshPanel() {
             />
             Casts shadows
           </label>
+          {flatteners.length > 0 && (
+            <label className="slider-row" title="Off = the flattener leaves this part 3D (keep ear tips, hair strands or glasses round)">
+              <input
+                type="checkbox"
+                checked={meshOverrides[selectedMeshUuid]?.flatten !== false}
+                onChange={(e) => setPartLook(selectedMeshUuids, { flatten: e.target.checked })}
+              />
+              Flattened (flattener)
+            </label>
+          )}
+          {flatteners.length > 0 && meshOverrides[selectedMeshUuid]?.flatten !== false && (
+            <label className="slider-row" title="Off = the shape is flattened but the part keeps its own lighting. Try this on hair if it shows dark patches.">
+              <input
+                type="checkbox"
+                checked={meshOverrides[selectedMeshUuid]?.flatShade !== false}
+                onChange={(e) => setPartLook(selectedMeshUuids, { flatShade: e.target.checked })}
+              />
+              Flatten its lighting too
+            </label>
+          )}
         </div>
       )}
 

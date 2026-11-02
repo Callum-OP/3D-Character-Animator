@@ -128,6 +128,14 @@ import {
   resetDangle,
   collectDescendantBoneNames,
 } from './dangle.js'
+import { installFlattenerShader } from './flattenerShader.js'
+import {
+  initFlattener,
+  disposeFlattener,
+  setFlattenerConfig,
+  clearFlattener,
+  updateFlattenerGuides,
+} from './flattener.js'
 import { initIk, disposeIk, setIkConfig, clearIk, stepIkPins, writePins as writeIkPins } from './ikpins.js'
 import {
   initAnimation,
@@ -351,6 +359,7 @@ function bakeStudioEnvironment(generator) {
 
 export function initScene(container) {
   installShadowDarkening() // before any material compiles
+  installFlattenerShader()
   if (state.renderer) return // already initialised
 
   state.container = container
@@ -641,6 +650,8 @@ export function initScene(container) {
     getSceneScale: () => state.modelRadius,
   })
 
+  initFlattener({ scene, requestRender })
+
   // --- IK pins: markers that hold a hand / foot / limb in place while an animation plays ---
   initIk({
     scene,
@@ -879,6 +890,7 @@ function renderOnce({ cameraOnly = false } = {}) {
   // While playing, the tick already solved this frame; for a one-off render (a scrub, a pose edit, a moved
   // marker) solve here. A camera-only frame (orbiting) changed no pose, so it skips it.
   if (!cameraOnly && !state.continuous) stepIkPins()
+  updateFlattenerGuides() // the chin line, when it is switched on
   followIdleClothPose() // keep enabled-but-not-draping cloth tracking the body/gizmo, not frozen
   updateBoneHelpers() // park bone dots on their (possibly just-moved) bones
   updateMeshEditHelpers() // keep the part-selection box hugging its mesh
@@ -1670,6 +1682,7 @@ export function pasteCopiedCharacter() {
   })
   setDangleConfig(id, model, fields.dangleEnabled, fields.dangleChains)
   setIkConfig(id, model, fields.ikEnabled, fields.ikPins)
+  setFlattenerConfig(id, model, fields.flattenerEnabled, fields.flatteners)
   applyModelMaterials()
   recordCharacterAdded(id, previousState)
   requestRender()
@@ -1890,6 +1903,7 @@ function restoreCharacterPresence(batch) {
   const fields = rec.storeRecord.fields
   setDangleConfig(id, model, fields.dangleEnabled, fields.dangleChains)
   setIkConfig(id, model, fields.ikEnabled, fields.ikPins)
+  setFlattenerConfig(id, model, fields.flattenerEnabled, fields.flatteners)
   applyModelMaterials() // re-apply the current Look settings
   // Deleting the last character forced Object mode; put the old mode back.
   if (batch.prevMode && useStore.getState().mode !== batch.prevMode) useStore.getState().setMode(batch.prevMode)
@@ -1941,6 +1955,7 @@ function disposeCharacter(id) {
   clearClothForMeshes(model.meshes) // only THIS character's cloth, others keep simulating
   clearDangle(id) // only THIS character's dangle chains
   clearIk(id) // and its IK markers
+  clearFlattener(id) // and its flattener
   releaseFollowersOf(model.root) // lights/cameras mounted on it go back to the scene
   // Props riding this character's bones -> back into the scene, not disposed
   // along with the skeleton (disposeObject below would otherwise free their
@@ -3573,6 +3588,8 @@ export function getProjectData() {
       dangleChains: live.dangleChains,
       ikEnabled: live.ikEnabled,
       ikPins: ikPinsForSave(live.ikPins),
+      flattenerEnabled: live.flattenerEnabled,
+      flatteners: live.flatteners,
       isActive: id === originalActiveId,
     })
   }
@@ -3720,7 +3737,10 @@ export async function applyProjectData(record) {
       dangleChains: c.dangleChains || [],
       ikEnabled: c.ikEnabled ?? true,
       ikPins: [],
+      flattenerEnabled: c.flattenerEnabled ?? true,
+      flatteners: c.flatteners || [],
     })
+    setFlattenerConfig(id, model, c.flattenerEnabled ?? true, c.flatteners || [])
     setDangleConfig(id, model, c.dangleEnabled ?? true, c.dangleChains || [])
     pendingIk.push({ id, model, enabled: c.ikEnabled ?? true, saved: c.ikPins || [] })
     if (c.isActive || (record.format === 'project-v1' && i === 0)) activeIdToRestore = id
@@ -4667,6 +4687,7 @@ export function disposeScene() {
   disposeObjects()
   disposeCameras()
   disposeIk()
+  disposeFlattener()
   disposeLights()
   disposeClothMod()
   disposePosing()

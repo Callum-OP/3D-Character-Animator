@@ -17,6 +17,7 @@ import { collectActiveDangleDescendants, resetActiveDangle, setCameraToBones } f
 import { performUndo, performRedo } from '../three/undoPriority.js'
 import EditableValue from './EditableValue.jsx'
 import IkPinsSection from './IkPinsSection.jsx'
+import FlattenerSection from './FlattenerSection.jsx'
 
 const AXES = ['x', 'y', 'z']
 
@@ -623,6 +624,8 @@ export default function BonePanel() {
       )}
 
       <IkPinsSection />
+
+      <FlattenerSection />
 
       <div className="pose-hint">
         {boneViewMode === 'parts'

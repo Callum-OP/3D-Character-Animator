@@ -1,3 +1,4 @@
+import { addFlattenerUniforms, patchFlattenerOutline } from './flattenerShader.js'
 import * as THREE from 'three'
 
 // Real shadow-map shadows only remove a light's DIRECT contribution. In a scene
@@ -203,6 +204,7 @@ export function addShadowUniforms(uniforms, material) {
   uniforms.uShadowTint = shadowTint
   uniforms.uShadowFilterA = shadowFilterA
   uniforms.uShadowFilterB = shadowFilterB
+  addFlattenerUniforms(uniforms)
 }
 
 export const SHADOW_FILTER_GLSL = `
@@ -363,6 +365,10 @@ export function installShadowDarkening() {
   // shared uniforms. (The app's custom-styled materials add them themselves.)
   THREE.Material.prototype.onBeforeCompile = function onBeforeCompile(shader) {
     addShadowUniforms(shader.uniforms, this)
+    // Shadow maps are drawn from the light, with these materials: they must see the real 3D shape,
+    // not the camera-flattened one (see flattenerShader.js).
+    if (this.isMeshDepthMaterial || this.isMeshDistanceMaterial) shader.vertexShader = `#define FLATTENER_OFF\n${shader.vertexShader}`
+    shader.vertexShader = patchFlattenerOutline(shader.vertexShader)
   }
   THREE.Material.prototype.customProgramCacheKey = function customProgramCacheKey() {
     return this.onBeforeCompile.toString() + shadowFilterKey()

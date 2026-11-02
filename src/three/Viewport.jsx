@@ -82,6 +82,7 @@ import {
   consumeCameraGizmoGrab,
   pickCameraId,
 } from './cameras.js'
+import { setFlattenerGuideVisible, setFlattenerGuidesAllowed } from './flattener.js'
 import { selectIkPin, setIkMarkersVisible, setIkGizmoMode, consumeIkGizmoGrab, pickIkMarker } from './ikpins.js'
 import {
   selectLight,
@@ -543,6 +544,15 @@ function Viewport() {
   useEffect(() => {
     setIkMarkersVisible(mode !== 'view' && showIkMarkers)
   }, [mode, showIkMarkers])
+
+  // --- Flattener: the chin-line guide (hidden in the look-only View mode) ---
+  const showFlattenerGuide = useStore((s) => s.showFlattenerGuide)
+  useEffect(() => {
+    setFlattenerGuideVisible(showFlattenerGuide)
+  }, [showFlattenerGuide])
+  useEffect(() => {
+    setFlattenerGuidesAllowed(mode !== 'view')
+  }, [mode])
 
   const selectedLightId = useStore((s) => s.selectedLightId)
   useEffect(() => {
