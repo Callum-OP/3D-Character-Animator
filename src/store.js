@@ -11,7 +11,7 @@ import { normalizeVideoFps } from './three/exportSize.js'
 const APP_SETTINGS_FIELDS = [
   'undoLimit', 'cameraIgnoresUndo', 'settingsVersion',
   'exportScale', 'exportImageResolution', 'exportVideoResolution', 'exportAspect',
-  'exportVideoFps', 'exportVideoQuality', 'exportVideoFormat',
+  'exportVideoFps', 'exportVideoQuality', 'exportVideoFormat', 'showTargetFrameRateInPreview',
   'showGrid', 'showGround', 'solidBackground', 'backgroundColor', 'shadows', 'showStats',
   'performanceMode', 'performanceBackgroundObjects', 'performanceLowPoly',
   'performanceResolution', 'performanceEffects', 'autoDecimate', 'importTextureLimit', 'edgeSmoothing', 'qualityPreset',
@@ -476,6 +476,7 @@ export const useStore = create((set) => ({
   exportVideoResolution: '1080p', // 'viewport' or a fixed preset: 720p / 1080p / 1440p / 4k
   exportAspect: 'viewport', // 'viewport' or 16:9 / 9:16 / 1:1 / 4:3 / 21:9 (images + video)
   exportVideoFps: 30, // 24 / 30 / 60
+  showTargetFrameRateInPreview: true,
   exportVideoQuality: 'high', // 'standard' | 'high' | 'max' (sets the bitrate)
   exportVideoFormat: 'mp4', // 'mp4' (falls back to webm if unsupported) | 'webm'
   recording: false, // true while capturing a video
@@ -486,6 +487,7 @@ export const useStore = create((set) => ({
   setExportVideoResolution: (exportVideoResolution) => set({ exportVideoResolution }),
   setExportAspect: (exportAspect) => set({ exportAspect }),
   setExportVideoFps: (exportVideoFps) => set({ exportVideoFps: normalizeVideoFps(exportVideoFps) }),
+  setShowTargetFrameRateInPreview: (showTargetFrameRateInPreview) => set({ showTargetFrameRateInPreview: !!showTargetFrameRateInPreview }),
   setExportVideoQuality: (exportVideoQuality) => set({ exportVideoQuality }),
   setExportVideoFormat: (exportVideoFormat) => set({ exportVideoFormat }),
   setRecording: (recording) => set({ recording }),

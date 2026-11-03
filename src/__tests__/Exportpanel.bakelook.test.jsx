@@ -24,6 +24,7 @@ afterEach(() => {
   cleanup()
   vi.clearAllMocks()
   useStore.getState().setExportVideoFps(30)
+  useStore.getState().setShowTargetFrameRateInPreview(true)
 })
 
 describe('Export panel — Include Material look in export', () => {
@@ -69,5 +70,19 @@ describe('Export panel — custom frame rate', () => {
 
     expect(useStore.getState().exportVideoFps).toBe(240)
     expect(input.value).toBe('240')
+  })
+})
+
+describe('Export panel — preview frame rate', () => {
+  it('uses the target frame rate in preview by default and saves the toggle preference', () => {
+    render(<ExportPanel />)
+    const toggle = screen.getByLabelText('Show target frame rate in preview')
+
+    expect(toggle.checked).toBe(true)
+    expect(useStore.getState().showTargetFrameRateInPreview).toBe(true)
+
+    fireEvent.click(toggle)
+    expect(useStore.getState().showTargetFrameRateInPreview).toBe(false)
+    expect(JSON.parse(localStorage.getItem('3d-animator-app-settings')).showTargetFrameRateInPreview).toBe(false)
   })
 })

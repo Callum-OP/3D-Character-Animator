@@ -54,6 +54,7 @@ export default function ExportPanel() {
   const videoResolution = useStore((s) => s.exportVideoResolution)
   const aspect = useStore((s) => s.exportAspect)
   const videoFps = useStore((s) => s.exportVideoFps)
+  const showTargetFrameRateInPreview = useStore((s) => s.showTargetFrameRateInPreview)
   const videoQuality = useStore((s) => s.exportVideoQuality)
   const videoFormat = useStore((s) => s.exportVideoFormat)
   // Subscribed so the "Films …" caption stays current as cameras/cuts change.
@@ -242,6 +243,14 @@ export default function ExportPanel() {
           onChange={(event) => setStopAtFirstClipEnd(event.target.checked)}
         />
         Stop at the shortest character clip
+      </label>
+      <label className="toggle-row">
+        <input
+          type="checkbox"
+          checked={showTargetFrameRateInPreview}
+          onChange={(event) => st().setShowTargetFrameRateInPreview(event.target.checked)}
+        />
+        Show target frame rate in preview
       </label>
       <div className="field" style={{ marginTop: 10 }}>
         <label className="field-label">Video quality</label>

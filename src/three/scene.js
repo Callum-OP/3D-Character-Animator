@@ -335,6 +335,7 @@ const state = {
   recorder: null, // MediaRecorder while capturing a video
   recordingFrameInterval: 0, // limit rendering to the export frame rate while recording
   lastRecordingFrameAt: -Infinity,
+  lastPreviewFrameAt: -Infinity,
   recordedChunks: [],
   videoCapture: null, // WebCodecs MP4 capture in progress (see videoCapture.js)
   recorderStarting: false,
@@ -1120,12 +1121,20 @@ export function setContinuousRender(on, reason = 'anim') {
       if (!state.continuous) return
       state.animId = requestAnimationFrame(tick)
       const now = performance.now()
+      const store = useStore.getState()
+      const previewFrameInterval =
+        store.previewing && store.showTargetFrameRateInPreview
+          ? 1000 / normalizeVideoFps(store.exportVideoFps)
+          : 0
       if (
         state.recordingFrameInterval &&
         now - state.lastRecordingFrameAt < state.recordingFrameInterval - 2 // half a refresh of slack, or 30 fps on a 60 Hz screen keeps landing on 50 ms
       ) return
       if (state.recordingFrameInterval) state.lastRecordingFrameAt = now
-      else if (state.qualityFrameInterval) {
+      else if (previewFrameInterval) {
+        if (now - state.lastPreviewFrameAt < previewFrameInterval - 2) return
+        state.lastPreviewFrameAt = now
+      } else if (state.qualityFrameInterval) {
         // The Quality preset's frame-rate cap (the animation clock keeps real time: skipped frames just make the next one cover more)
         if (now - state.lastQualityFrameAt < state.qualityFrameInterval - 2) return
         state.lastQualityFrameAt = now
