@@ -111,6 +111,9 @@ export default function MeshPanel() {
   // (cloth/morphs/keyframing) which don't apply to a standalone prop part.
   const objectMesh = !characterMesh && selectedMeshUuid ? getMeshByUuid(selectedMeshUuid) : null
   const selectedMesh = characterMesh || objectMesh
+  const selectedClothMeshes = selectedMeshUuids
+    .map((uuid) => currentModel?.meshes?.find((mesh) => mesh.uuid === uuid) || getMeshByUuid(uuid))
+    .filter(Boolean)
   const isPropPart = !!objectMesh && isObjectMesh(objectMesh)
   const selectedIndex = selectedMeta ? meshes.indexOf(selectedMeta) : -1
   const delta = selectedMesh ? getMeshDelta(selectedMesh.uuid) : null
@@ -154,6 +157,7 @@ export default function MeshPanel() {
   }
 
   const clothOn = selectedMesh ? isClothEnabled(selectedMesh.uuid) : false
+  const clothEditorOn = multi ? selectedClothMeshes.some((mesh) => isClothEnabled(mesh.uuid)) : clothOn
   const softZoneCount = useStore((s) => (selectedMesh ? (s.meshOverrides[selectedMesh.uuid]?.softZones || []).filter((z) => z.enabled !== false).length : 0))
 
   function bumpCloth() {
@@ -623,7 +627,7 @@ export default function MeshPanel() {
         />
       )}
 
-      {selectedMesh && !multi && (
+      {selectedMesh && (
         <details className="joint-controls" style={{ marginTop: 10 }}>
           <summary style={{ cursor: 'pointer' }}>
             <span className="joint-name">Cloth</span>{' '}
@@ -632,10 +636,12 @@ export default function MeshPanel() {
                 ? 'full simulation on'
                 : softZoneCount
                   ? `${softZoneCount} soft effect${softZoneCount === 1 ? '' : 's'}`
+                : multi
+                  ? `soft motion across ${selectedClothMeshes.length} parts`
                   : 'soft motion, or drape a cape…'}
             </span>
           </summary>
-          {!isPropPart && (
+          {!multi && !isPropPart && (
             <div className="row" style={{ gap: 6, margin: '6px 0' }} role="group" aria-label="Cloth type">
               <button
                 className={`btn ${clothMode === 'soft' ? '' : 'secondary'}`}
@@ -655,8 +661,10 @@ export default function MeshPanel() {
               </button>
             </div>
           )}
-          {(clothMode === 'soft' || isPropPart) && <SoftClothEditor mesh={selectedMesh} clothOn={clothOn} />}
-          {clothMode === 'full' && !isPropPart && (
+          {(multi || clothMode === 'soft' || isPropPart) && (
+            <SoftClothEditor mesh={selectedMesh} meshes={selectedClothMeshes} clothOn={clothEditorOn} />
+          )}
+          {clothMode === 'full' && !isPropPart && !multi && (
             <>
           <label
             className="morph-label"

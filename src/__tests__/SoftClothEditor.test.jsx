@@ -32,7 +32,7 @@ beforeEach(() => {
 })
 afterEach(cleanup)
 
-const zonesOf = () => useStore.getState().meshOverrides[mesh.uuid]?.softZones || []
+const zonesOf = (target = mesh) => useStore.getState().meshOverrides[target.uuid]?.softZones || []
 
 describe('Soft cloth editor', () => {
   it('adds a soft cloth effect on the whole part, and it is one undo step', () => {
@@ -73,6 +73,43 @@ describe('Soft cloth editor', () => {
     expect(zone.area.kind).toBe('tris')
     expect(zone.area.tris.length).toBeGreaterThan(0)
     expect(zone.lockTop).toBe(0) // an area picked by hand is not given a held top
+  })
+
+  it('clicking the selected area again deselects it', () => {
+    render(<SoftClothEditor mesh={mesh} />)
+    const where = screen.getAllByRole('combobox').find((s) => [...s.options].some((o) => o.value === 'picked'))
+    fireEvent.change(where, { target: { value: 'picked' } })
+    act(() => picker.handler({ uuid: mesh.uuid, faceIndex: 5 }))
+    expect(screen.getByRole('button', { name: 'Add effect' }).disabled).toBe(false)
+    act(() => picker.handler({ uuid: mesh.uuid, faceIndex: 5 }))
+    expect(screen.getByRole('button', { name: 'Add effect' }).disabled).toBe(true)
+    expect(screen.getByText(/click one or more selected parts/i)).toBeTruthy()
+  })
+
+  it('applies one whole-part effect to every selected mesh as one undo step', () => {
+    const secondMesh = makeMesh()
+    render(<SoftClothEditor mesh={mesh} meshes={[mesh, secondMesh]} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Add effect' }))
+    expect(zonesOf()).toHaveLength(1)
+    expect(zonesOf(secondMesh)).toHaveLength(1)
+    performUndo(useStore.getState())
+    expect(zonesOf()).toHaveLength(0)
+    expect(zonesOf(secondMesh)).toHaveLength(0)
+    performRedo(useStore.getState())
+    expect(zonesOf()).toHaveLength(1)
+    expect(zonesOf(secondMesh)).toHaveLength(1)
+  })
+
+  it('applies picked areas only to selected meshes where an area was clicked', () => {
+    const secondMesh = makeMesh()
+    render(<SoftClothEditor mesh={mesh} meshes={[mesh, secondMesh]} />)
+    const where = screen.getAllByRole('combobox').find((s) => [...s.options].some((o) => o.value === 'picked'))
+    fireEvent.change(where, { target: { value: 'picked' } })
+    act(() => picker.handler({ uuid: secondMesh.uuid, faceIndex: 5 }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add effect' }))
+    expect(zonesOf()).toHaveLength(0)
+    expect(zonesOf(secondMesh)).toHaveLength(1)
+    expect(zonesOf(secondMesh)[0].area.kind).toBe('tris')
   })
 
   it('a click on a different part is refused', () => {
