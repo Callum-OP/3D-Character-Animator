@@ -6,7 +6,7 @@ import { refreshSoftCloth } from '../three/scene.js'
 import { setFacePickHandler } from '../three/meshedit.js'
 import { growRegion, toRanges, fromRanges } from '../three/regions.js'
 import { getOriginalMaterials } from '../three/surfaceMaterials.js'
-import { makeSoftZone, setSoftOverlay, getSoftEntry, resetSoftCloth, SOFT_PRESETS, SOFT_MODES } from '../three/softcloth.js'
+import { makeSoftZone, newZoneId, setSoftOverlay, getSoftEntry, resetSoftCloth, SOFT_PRESETS, SOFT_MODES } from '../three/softcloth.js'
 import EditableValue from './EditableValue.jsx'
 
 const EMPTY = []
@@ -73,6 +73,7 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
   const [areaKind, setAreaKind] = useState('all')
   const [regionId, setRegionId] = useState('')
   const [preset, setPreset] = useState('jacket')
+  const [coupling, setCoupling] = useState('independent')
   const [picking, setPicking] = useState(false)
   const [growMode, setGrowMode] = useState('radius')
   const [tolerance, setTolerance] = useState(0.25)
@@ -99,6 +100,7 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
     setShowId(null)
     setMessage('')
     setAreaKind('all')
+    setCoupling('independent')
   }, [targetKey])
 
   // The presets of the mode being added
@@ -217,6 +219,7 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
   const add = () => {
     const updates = {}
     const added = []
+    const couplingGroup = coupling === 'independent' ? null : newZoneId()
     for (const target of targets) {
       let area = { kind: 'all' }
       let name = null
@@ -230,6 +233,10 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
       }
       const zones = zonesByUuid[target.uuid] || []
       const zone = makeSoftZone(addMode, area, preset)
+      if (couplingGroup) {
+        zone.couplingGroup = couplingGroup
+        zone.couplingMode = coupling
+      }
       const same = zones.filter((z) => z.mode === addMode).length
       zone.name = name ? `${name}` : `${SOFT_MODES[addMode]}${same ? ` ${same + 1}` : ''}`
       updates[target.uuid] = [...zones, zone]
@@ -275,6 +282,7 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
                 <summary className="dangle-chain-summary" style={{ opacity: z.enabled === false ? 0.55 : 1 }}>
                   {targets.length > 1 ? `${target.name || 'Part'} · ` : ''}{z.name} · {SOFT_MODES[mode]}
                   {z.area.kind === 'tris' ? ' · area' : ' · whole part'}
+                    {z.couplingMode === 'seams' ? ' · seam-connected' : z.couplingMode === 'rigid' ? ' · shared sway' : ''}
                 </summary>
                 <div className="row" style={{ justifyContent: 'space-between', marginTop: 8, gap: 6 }}>
                   <label className="row">
@@ -457,6 +465,16 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
             {targets.length === 1 && regions.length > 0 && <option value="region">A painted region…</option>}
           </select>
         </label>
+        {targets.length > 1 && (
+          <label className="field" title="Choose whether effects added across these meshes move separately or together.">
+            <span>Connection for new effects</span>
+            <select value={coupling} onChange={(e) => setCoupling(e.target.value)} disabled={clothOn}>
+              <option value="independent">Independently</option>
+              <option value="seams">Connect at nearby seams</option>
+              <option value="rigid">As one rigid piece</option>
+            </select>
+          </label>
+        )}
 
         {areaKind === 'region' && (
           <label className="field">

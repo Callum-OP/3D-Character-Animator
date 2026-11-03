@@ -97,6 +97,7 @@ export function zoneStructure(zone) {
 const sc = {
   requestRender: () => {},
   entries: new Map(), // mesh -> entry
+  couplings: [],
   suspended: false,
   overlays: new Map(), // mesh -> overlay
   dirty: false, // some entry currently has offsets written into its geometry
@@ -108,6 +109,7 @@ export function initSoftCloth(refs = {}) {
 
 export function disposeSoftCloth() {
   for (const mesh of [...sc.entries.keys()]) disposeEntry(mesh)
+  sc.couplings = []
   for (const mesh of [...sc.overlays.keys()]) setSoftOverlay(mesh, null)
 }
 
@@ -983,6 +985,160 @@ function disposeEntry(mesh) {
   entry.geo.dispose()
 }
 
+function closestSites(entry, targetEntry, sites, buckets, cellSize) {
+  const nearest = new Map()
+  for (const site of sites) {
+    const x = entry.T0[3 * site]
+    const y = entry.T0[3 * site + 1]
+    const z = entry.T0[3 * site + 2]
+    const cx = Math.floor(x / cellSize)
+    const cy = Math.floor(y / cellSize)
+    const cz = Math.floor(z / cellSize)
+    let best = -1
+    let bestD2 = cellSize * cellSize
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dz = -1; dz <= 1; dz++) {
+          const candidates = buckets.get(`${cx + dx},${cy + dy},${cz + dz}`)
+          if (!candidates) continue
+          for (const candidate of candidates) {
+            const ox = x - targetEntry.T0[3 * candidate]
+            const oy = y - targetEntry.T0[3 * candidate + 1]
+            const oz = z - targetEntry.T0[3 * candidate + 2]
+            const d2 = ox * ox + oy * oy + oz * oz
+            if (d2 < bestD2) {
+              best = candidate
+              bestD2 = d2
+            }
+          }
+        }
+      }
+    }
+    if (best >= 0) nearest.set(site, best)
+  }
+  return nearest
+}
+
+function seamLinks(a, b) {
+  if (a.entry === b.entry) return []
+  // Match mutually nearest sites close enough to represent the same garment seam.
+  const cellSize = Math.max(1e-5, Math.min(a.entry.unit, b.entry.unit) * 0.015)
+  const buckets = new Map()
+  for (const site of b.zone.aff) {
+    const key = `${Math.floor(b.entry.T0[3 * site] / cellSize)},${Math.floor(b.entry.T0[3 * site + 1] / cellSize)},${Math.floor(b.entry.T0[3 * site + 2] / cellSize)}`
+    const bucket = buckets.get(key)
+    if (bucket) bucket.push(site)
+    else buckets.set(key, [site])
+  }
+  const forward = closestSites(a.entry, b.entry, a.zone.aff, buckets, cellSize)
+
+  const reverseBuckets = new Map()
+  for (const site of a.zone.aff) {
+    const key = `${Math.floor(a.entry.T0[3 * site] / cellSize)},${Math.floor(a.entry.T0[3 * site + 1] / cellSize)},${Math.floor(a.entry.T0[3 * site + 2] / cellSize)}`
+    const bucket = reverseBuckets.get(key)
+    if (bucket) bucket.push(site)
+    else reverseBuckets.set(key, [site])
+  }
+  const reverse = closestSites(b.entry, a.entry, b.zone.aff, reverseBuckets, cellSize)
+  const links = []
+  for (const [siteA, siteB] of forward) {
+    if (reverse.get(siteB) === siteA) links.push({ a: { entry: a.entry, site: siteA }, b: { entry: b.entry, site: siteB } })
+  }
+  return links
+}
+
+function rebuildCouplings() {
+  const grouped = new Map()
+  for (const entry of sc.entries.values()) {
+    for (const zone of entry.zones.values()) {
+      const id = zone.cfg.couplingGroup
+      if (!id || !zone.cfg.couplingMode) continue
+      let group = grouped.get(id)
+      if (!group) {
+        group = { id, mode: zone.cfg.couplingMode, parts: [] }
+        grouped.set(id, group)
+      }
+      group.parts.push({ entry, zone })
+    }
+  }
+  sc.couplings = []
+  for (const group of grouped.values()) {
+    if (group.parts.length < 2) continue
+    if (group.mode === 'seams') {
+      group.links = []
+      for (let i = 0; i < group.parts.length; i++) {
+        for (let j = i + 1; j < group.parts.length; j++) {
+          group.links.push(...seamLinks(group.parts[i], group.parts[j]))
+        }
+      }
+    }
+    sc.couplings.push(group)
+  }
+}
+
+function applyCouplings() {
+  for (const group of sc.couplings) {
+    if (group.mode === 'rigid') {
+      const sites = new Map()
+      for (const { entry, zone } of group.parts) {
+        for (const site of zone.aff) sites.set(entry, (sites.get(entry) || new Set()).add(site))
+      }
+      let x = 0
+      let y = 0
+      let z = 0
+      let count = 0
+      for (const [entry, partSites] of sites) {
+        for (const site of partSites) {
+          x += entry.siteD[3 * site]
+          y += entry.siteD[3 * site + 1]
+          z += entry.siteD[3 * site + 2]
+          count++
+        }
+      }
+      if (!count) continue
+      x /= count
+      y /= count
+      z /= count
+      for (const [entry, partSites] of sites) {
+        for (const site of partSites) {
+          entry.siteD[3 * site] = x
+          entry.siteD[3 * site + 1] = y
+          entry.siteD[3 * site + 2] = z
+        }
+      }
+    } else if (group.mode === 'seams') {
+      const sums = new Map()
+      const add = (ref, other) => {
+        let value = sums.get(ref.entry)
+        if (!value) {
+          value = new Map()
+          sums.set(ref.entry, value)
+        }
+        let total = value.get(ref.site)
+        if (!total) {
+          total = [0, 0, 0, 0]
+          value.set(ref.site, total)
+        }
+        total[0] += other.entry.siteD[3 * other.site]
+        total[1] += other.entry.siteD[3 * other.site + 1]
+        total[2] += other.entry.siteD[3 * other.site + 2]
+        total[3]++
+      }
+      for (const link of group.links) {
+        add(link.a, link.b)
+        add(link.b, link.a)
+      }
+      for (const [entry, sites] of sums) {
+        for (const [site, [x, y, z, count]] of sites) {
+          entry.siteD[3 * site] = (entry.siteD[3 * site] + x) / (count + 1)
+          entry.siteD[3 * site + 1] = (entry.siteD[3 * site + 1] + y) / (count + 1)
+          entry.siteD[3 * site + 2] = (entry.siteD[3 * site + 2] + z) / (count + 1)
+        }
+      }
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -1013,6 +1169,7 @@ export function syncSoftCloth(groups) {
     }
   }
   for (const mesh of [...sc.entries.keys()]) if (!keep.has(mesh)) disposeEntry(mesh)
+  rebuildCouplings()
   sc.requestRender()
 }
 
@@ -1027,6 +1184,7 @@ export function restoreSoftRest() {
 
 export function clearSoftClothForMeshes(meshes) {
   for (const mesh of meshes || []) disposeEntry(mesh)
+  rebuildCouplings()
 }
 
 // Hold the effects off (clean pose, no overlay) while something is exported.
@@ -1071,6 +1229,10 @@ export function stepSoftCloth(dt) {
         }
       }
     }
+  }
+  applyCouplings()
+  for (const entry of sc.entries.values()) {
+    if (!entry.unionVerts.length) continue
     writeOffsets(entry)
     entry.live = true
   }

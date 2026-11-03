@@ -155,6 +155,64 @@ describe('soft zones: building and cleaning up', () => {
 })
 
 describe('soft cloth: following the pose', () => {
+  it('couples matching vertices across linked mesh seams', () => {
+    const first = makeSheet({ skinned: false })
+    const second = makeSheet({ skinned: false })
+    second.root.position.x = 1
+    second.root.updateMatrixWorld(true)
+    const a = { ...makeSoftZone('soft', { kind: 'all' }), couplingGroup: 'joined', couplingMode: 'seams', gravity: 0.1 }
+    const b = { ...makeSoftZone('soft', { kind: 'all' }), couplingGroup: 'joined', couplingMode: 'seams', gravity: 0.9 }
+    syncSoftCloth([{
+      meshes: [first.mesh, second.mesh],
+      overrides: { [first.mesh.uuid]: { softZones: [a] }, [second.mesh.uuid]: { softZones: [b] } },
+    }])
+    const entryA = getSoftEntry(first.mesh)
+    const entryB = getSoftEntry(second.mesh)
+    for (let frame = 0; frame < 60; frame++) stepSoftCloth(1 / 60)
+    const positionsB = new Map()
+    for (const site of entryB.zones.get(b.id).aff) {
+      const key = `${entryB.T0[3 * site].toFixed(4)},${entryB.T0[3 * site + 1].toFixed(4)}`
+      positionsB.set(key, site)
+    }
+    let pairs = 0
+    for (const site of entryA.zones.get(a.id).aff) {
+      if (Math.abs(entryA.T0[3 * site] - 0.5) > 1e-4) continue
+      const key = `${entryA.T0[3 * site].toFixed(4)},${entryA.T0[3 * site + 1].toFixed(4)}`
+      const other = positionsB.get(key)
+      if (other === undefined) continue
+      expect(entryA.siteD.slice(3 * site, 3 * site + 3)).toEqual(entryB.siteD.slice(3 * other, 3 * other + 3))
+      pairs++
+    }
+    expect(pairs).toBeGreaterThan(0)
+  })
+
+  it('gives linked meshes the same displacement in shared rigid mode', () => {
+    const first = makeSheet({ skinned: false })
+    const second = makeSheet({ skinned: false })
+    second.root.position.x = 1
+    second.root.updateMatrixWorld(true)
+    const a = { ...makeSoftZone('soft', { kind: 'all' }), couplingGroup: 'joined', couplingMode: 'rigid', gravity: 0.1 }
+    const b = { ...makeSoftZone('soft', { kind: 'all' }), couplingGroup: 'joined', couplingMode: 'rigid', gravity: 0.9 }
+    syncSoftCloth([{
+      meshes: [first.mesh, second.mesh],
+      overrides: { [first.mesh.uuid]: { softZones: [a] }, [second.mesh.uuid]: { softZones: [b] } },
+    }])
+    const entries = [getSoftEntry(first.mesh), getSoftEntry(second.mesh)]
+    for (let frame = 0; frame < 60; frame++) stepSoftCloth(1 / 60)
+    const firstZone = entries[0].zones.values().next().value
+    const firstSite = firstZone.aff[0]
+    const displacement = [...entries[0].siteD.slice(3 * firstSite, 3 * firstSite + 3)]
+    let sites = 0
+    for (const entry of entries) {
+      const zone = entry.zones.values().next().value
+      for (const site of zone.aff) {
+        expect([...entry.siteD.slice(3 * site, 3 * site + 3)]).toEqual(displacement)
+        sites++
+      }
+    }
+    expect(sites).toBeGreaterThan(0)
+  })
+
   it('a vertex always lands exactly where the spring wants it — through skinning, rotation and scale', () => {
     rig = makeSheet()
     const zone = { ...makeSoftZone('soft', { kind: 'all' }, 'hem'), lockTop: 0.2, range: 0.2, gravity: 0.6 }

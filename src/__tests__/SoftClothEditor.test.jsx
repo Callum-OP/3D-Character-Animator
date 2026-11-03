@@ -100,6 +100,17 @@ describe('Soft cloth editor', () => {
     expect(zonesOf(secondMesh)).toHaveLength(1)
   })
 
+  it('stores the selected multi-mesh coupling mode on the effects', () => {
+    const secondMesh = makeMesh()
+    render(<SoftClothEditor mesh={mesh} meshes={[mesh, secondMesh]} />)
+    fireEvent.change(screen.getByLabelText('Connection for new effects'), { target: { value: 'seams' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add effect' }))
+    const firstZone = zonesOf()[0]
+    const secondZone = zonesOf(secondMesh)[0]
+    expect(firstZone.couplingMode).toBe('seams')
+    expect(firstZone.couplingGroup).toBe(secondZone.couplingGroup)
+  })
+
   it('applies picked areas only to selected meshes where an area was clicked', () => {
     const secondMesh = makeMesh()
     render(<SoftClothEditor mesh={mesh} meshes={[mesh, secondMesh]} />)
