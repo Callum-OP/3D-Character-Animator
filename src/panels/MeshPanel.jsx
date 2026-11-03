@@ -48,7 +48,8 @@ import { useRowMenu, RowMenuButton } from './rowMenu.jsx'
 import { partMenu, partTargets } from './rowMenus.js'
 import LightFromPart from './LightFromPart.jsx'
 import { withGlowRegion } from '../three/glowRegions.js'
-import { meshHasAlpha } from '../three/scene.js'
+import { meshHasAlpha, refreshSoftCloth } from '../three/scene.js'
+import SoftClothEditor from './SoftClothEditor.jsx'
 import { recordOverrideEdit, setPartLook } from '../three/materialHistory.js'
 
 // Side-panel section for Mesh mode: pick a part of the character (eyes, hair,
@@ -90,6 +91,7 @@ export default function MeshPanel() {
   const [morphEntries, setMorphEntries] = useState([])
   const [morphValues, setMorphValues] = useState({})
   const [clothVersion, setClothVersion] = useState(0)
+  const [clothMode, setClothMode] = useState('soft') // 'soft' (cheap soft cloth / swing) or 'full' (the simulation)
   const [pinTool, setPinToolState] = useState('add')
   const [brushSize, setBrushSizeState] = useState(3)
   const [fabricPreset, setFabricPreset] = useState('cotton')
@@ -152,6 +154,7 @@ export default function MeshPanel() {
   }
 
   const clothOn = selectedMesh ? isClothEnabled(selectedMesh.uuid) : false
+  const softZoneCount = useStore((s) => (selectedMesh ? (s.meshOverrides[selectedMesh.uuid]?.softZones || []).filter((z) => z.enabled !== false).length : 0))
 
   function bumpCloth() {
     setClothVersion((v) => v + 1)
@@ -160,6 +163,16 @@ export default function MeshPanel() {
   function onToggleCloth(on) {
     if (!selectedMesh || !currentModel) return
     if (on) {
+      // the two can't both drive a part: switch its soft zones off first
+      const soft = useStore.getState().meshOverrides[selectedMesh.uuid]?.softZones
+      if (soft && soft.some((z) => z.enabled !== false)) {
+        recordOverrideEdit([selectedMesh.uuid], () =>
+          useStore.getState().setMeshSoftZones(selectedMesh.uuid, soft.map((z) => ({ ...z, enabled: false }))),
+        null,
+        { discrete: true },
+        )
+        refreshSoftCloth()
+      }
       const others = currentModel.meshes.filter((mesh) => mesh !== selectedMesh && mesh.visible)
       enableCloth(selectedMesh, others, { preset: fabricPreset, shrinkwrap })
     } else {
@@ -610,12 +623,41 @@ export default function MeshPanel() {
         />
       )}
 
-      {selectedMesh && !isPropPart && !multi && (
+      {selectedMesh && !multi && (
         <details className="joint-controls" style={{ marginTop: 10 }}>
           <summary style={{ cursor: 'pointer' }}>
             <span className="joint-name">Cloth</span>{' '}
-            <span className="joint-parent">{clothOn ? 'on' : 'drape a cape, skirt, sash…'}</span>
+            <span className="joint-parent">
+              {clothOn
+                ? 'full simulation on'
+                : softZoneCount
+                  ? `${softZoneCount} soft effect${softZoneCount === 1 ? '' : 's'}`
+                  : 'soft motion, or drape a cape…'}
+            </span>
           </summary>
+          {!isPropPart && (
+            <div className="row" style={{ gap: 6, margin: '6px 0' }} role="group" aria-label="Cloth type">
+              <button
+                className={`btn ${clothMode === 'soft' ? '' : 'secondary'}`}
+                aria-pressed={clothMode === 'soft'}
+                onClick={() => setClothMode('soft')}
+                title="Cheap and quick: parts of the cloth follow the animation on a spring (jackets, sleeves, hoods, zip pulls)"
+              >
+                Soft cloth &amp; swing
+              </button>
+              <button
+                className={`btn ${clothMode === 'full' ? '' : 'secondary'}`}
+                aria-pressed={clothMode === 'full'}
+                onClick={() => setClothMode('full')}
+                title="The full cloth simulation: drapes and collides with the body (capes, skirts, sashes). Heavier."
+              >
+                Full simulation
+              </button>
+            </div>
+          )}
+          {(clothMode === 'soft' || isPropPart) && <SoftClothEditor mesh={selectedMesh} clothOn={clothOn} />}
+          {clothMode === 'full' && !isPropPart && (
+            <>
           <label
             className="morph-label"
             style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}
@@ -725,6 +767,8 @@ export default function MeshPanel() {
               >
                 Clear all pins
               </button>
+            </>
+          )}
             </>
           )}
         </details>

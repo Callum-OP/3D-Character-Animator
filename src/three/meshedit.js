@@ -1240,7 +1240,7 @@ function onPointerUp(e) {
   // selection exactly as it is.
   if (m.facePick) {
     const h = pickHitAt(e.clientX, e.clientY)
-    m.facePick(h && !h.proxied ? { mesh: h.object, uuid: h.object.uuid, faceIndex: h.faceIndex } : null)
+    m.facePick(h && (!h.proxied || m.facePickSkinned) ? { mesh: h.object, uuid: h.object.uuid, faceIndex: h.faceIndex } : null)
     return
   }
 
@@ -1256,8 +1256,11 @@ function onPointerUp(e) {
 // props, posed skins via their proxies — see the posed-skin block above).
 // While a handler is set, a plain click reports { mesh, uuid, faceIndex } (or null on empty
 // space) to it instead of selecting parts. Pass null to go back to normal picking.
-export function setFacePickHandler(fn) {
+// `allowSkinned`: also report faces of parts bent by a skeleton (their posed copy keeps the original
+// triangle order, so the face number is the part's own face).
+export function setFacePickHandler(fn, { allowSkinned = false } = {}) {
   m.facePick = fn || null
+  m.facePickSkinned = !!(fn && allowSkinned)
   if (m.renderer && m.renderer.domElement) m.renderer.domElement.style.cursor = fn ? 'crosshair' : ''
 }
 

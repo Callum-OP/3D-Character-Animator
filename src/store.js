@@ -1103,6 +1103,15 @@ export const useStore = create((set) => ({
     set((s) => ({
       sceneObjects: s.sceneObjects.map((o) => (o.id === id ? { ...o, rimImmune } : o)),
     })),
+  // Soft cloth / swing zones (see three/softcloth.js): replace a mesh's whole zone list.
+  setMeshSoftZones: (uuid, zones) =>
+    set((s) => {
+      const base = { outline: true, shading: 'full', ...s.meshOverrides[uuid] }
+      if (zones && zones.length) base.softZones = zones
+      else delete base.softZones
+      return { meshOverrides: { ...s.meshOverrides, [uuid]: base } }
+    }),
+
   // Regions (per-face looks, see three/regions.js): replace a mesh's whole region list.
   setMeshRegions: (uuid, regions) =>
     set((s) => {
