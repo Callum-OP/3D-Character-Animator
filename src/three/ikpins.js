@@ -409,6 +409,7 @@ function lookOf(e) {
 }
 
 function applyLook(e) {
+  e.visual.visible = k.selected === e
   e.mat.color.setHex(lookOf(e))
   e.mat.opacity = e.cfg.enabled ? 0.92 : 0.55
 }

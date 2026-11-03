@@ -352,7 +352,7 @@ export default function ExportPanel() {
       </div>
 
       <button className="btn secondary" style={{ marginTop: 6 }} onClick={onExportBVH}>
-        Export animation (.bvh)
+        Export mocap file (bvh)
       </button>
 
       <div className="field" style={{ marginTop: 10 }}>
