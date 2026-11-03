@@ -15,7 +15,7 @@ import {
 } from './shadowDarkening.js'
 import { resolveShadowQuality, computeShadowFilter, chooseShadowMapSize, normalizeShadows, normalizeNight, shadowsFromProject } from './shadowSettings.js'
 import { VideoCapture, findVideoConfig, webCodecsAvailable } from './videoCapture.js'
-import { computeOutputSize, videoBitrate, pickVideoFormat, MAX_VIDEO_SIDE } from './exportSize.js'
+import { computeOutputSize, videoBitrate, pickVideoFormat, normalizeVideoFps, MAX_VIDEO_SIDE } from './exportSize.js'
 import { setDecimatorReadyHandler } from './decimate.js'
 import { bakeLookIntoMaterials, lookExportNotes } from './bakeLook.js'
 import { createShadowRefresh, canReuseShadows, cullSignature, planKeyShadow } from './shadowReuse.js'
@@ -3157,7 +3157,7 @@ export async function startRecording() {
   if (!canWebCodecs && !canRecordVideo()) return null
   state.recorderStarting = true
   try {
-    const fps = [24, 30, 60].includes(s.exportVideoFps) ? s.exportVideoFps : 30
+    const fps = normalizeVideoFps(s.exportVideoFps)
     const size = previewOutputSize('video')
     const fixed = s.exportVideoResolution !== 'viewport' || s.exportAspect !== 'viewport'
     const restore = fixed ? applyOutputSize(size.width, size.height) : () => {}

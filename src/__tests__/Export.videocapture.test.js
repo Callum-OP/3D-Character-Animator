@@ -146,6 +146,20 @@ describe('VideoCapture (WebCodecs MP4)', () => {
     expect(cap.captured).toBeLessThanOrEqual(241)
   })
 
+  it('keeps periodic keyframes at a fractional custom frame rate', () => {
+    const encoderState = {}
+    const cap = new VideoCapture({
+      canvas: {}, width: 1920, height: 1080, fps: 29.97, config: {}, Muxer, ArrayBufferTarget,
+      EncoderClass: makeEncoderClass(encoderState), FrameClass: FakeFrame,
+    })
+    for (let i = 0; i < 240; i++) cap.onFrame(i * (1000 / 60))
+
+    expect(cap.captured).toBeGreaterThanOrEqual(119)
+    expect(cap.captured).toBeLessThanOrEqual(121)
+    expect(encoderState.instance.keyFlags[0]).toBe(true)
+    expect(encoderState.instance.keyFlags[60]).toBe(true)
+  })
+
   it('stamps frames with real time: a stall holds a frame instead of shortening the video', async () => {
     const cap = makeCapture()
     cap.onFrame(0)

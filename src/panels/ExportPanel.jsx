@@ -7,7 +7,7 @@ import {
   enterFullscreen,
 } from '../three/scene.js'
 import { exportAnimationBVH } from '../three/animation.js'
-import { pickVideoFormat, videoBitrate, VIDEO_FPS } from '../three/exportSize.js'
+import { pickVideoFormat, videoBitrate, VIDEO_FPS, MIN_VIDEO_FPS, MAX_VIDEO_FPS, normalizeVideoFps } from '../three/exportSize.js'
 import { webCodecsAvailable } from '../three/videoCapture.js'
 import { runExportShot, resolveShotView, canRecordVideo, hideGizmosForShot } from '../three/exportShot.js'
 
@@ -66,6 +66,7 @@ export default function ExportPanel() {
   const st = useStore.getState
   const [msg, setMsg] = useState(null)
   const [exportingModel, setExportingModel] = useState(false)
+  const [videoFpsDraft, setVideoFpsDraft] = useState(String(videoFps))
   // 'baked' = pose becomes the file's bind pose (best for Blender); 'current' = skinned pose
   // using the model's original bind data; 'rest' = un-posed. See exportPose.js.
   const [exportPoseMode, setExportPoseMode] = useState('baked')
@@ -102,6 +103,21 @@ export default function ExportPanel() {
   const bitrateMbps = (
     videoBitrate({ width: videoSize.width, height: videoSize.height, fps: videoFps, quality: videoQuality }) / 1e6
   ).toFixed(0)
+
+  function commitVideoFps() {
+    if (videoFpsDraft.trim() === '') {
+      setVideoFpsDraft(String(videoFps))
+      return
+    }
+    const value = Number(videoFpsDraft)
+    if (!Number.isFinite(value)) {
+      setVideoFpsDraft(String(videoFps))
+      return
+    }
+    const fps = Math.min(MAX_VIDEO_FPS, Math.max(MIN_VIDEO_FPS, value))
+    st().setExportVideoFps(fps)
+    setVideoFpsDraft(String(fps))
+  }
 
   function onExportBVH() {
     const s = st()
@@ -248,13 +264,38 @@ export default function ExportPanel() {
               <button
                 key={f}
                 className={'seg-btn' + (videoFps === f ? ' active' : '')}
-                onClick={() => st().setExportVideoFps(f)}
+                onClick={() => {
+                  st().setExportVideoFps(f)
+                  setVideoFpsDraft(String(f))
+                }}
                 disabled={busy}
               >
                 {f}
               </button>
             ))}
           </div>
+          <label style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+            <input
+              aria-label="Custom FPS"
+              type="number"
+              min={MIN_VIDEO_FPS}
+              max={MAX_VIDEO_FPS}
+              step="any"
+              value={videoFpsDraft}
+              onChange={(event) => {
+                const value = event.target.value
+                setVideoFpsDraft(value)
+                const fps = Number(value)
+                if (value !== '' && Number.isFinite(fps) && fps >= MIN_VIDEO_FPS && fps <= MAX_VIDEO_FPS) {
+                  st().setExportVideoFps(normalizeVideoFps(value))
+                }
+              }}
+              onBlur={commitVideoFps}
+              disabled={busy}
+              title={`Choose a frame rate from ${MIN_VIDEO_FPS} to ${MAX_VIDEO_FPS} fps`}
+              style={{ width: 72 }}
+            />
+          </label>
         </div>
         <label className="radio-hint" style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 4 }}>
           Quality
@@ -289,7 +330,7 @@ export default function ExportPanel() {
           {videoFormatInfo ? `, .${videoFormatInfo.ext}` : ''}
           {videoFormatInfo?.fellBack ? ' (MP4 isn’t supported in this browser — will use WebM)' : ''}
           {videoSize.clamped ? ' (size reduced to your GPU’s limit)' : ''}.
-          {' '}It’s captured live, so a heavy scene at high resolution or 60 fps can drop frames — Preview first.
+          {' '}It’s captured live, so a heavy scene at high resolution or a high frame rate can drop frames — Preview first.
         </div>
       </div>
 

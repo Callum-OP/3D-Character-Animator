@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { useStore } from '../store.js'
-import { computeOutputSize, videoBitrate, pickVideoFormat, MAX_VIDEO_SIDE } from '../three/exportSize.js'
+import { computeOutputSize, videoBitrate, pickVideoFormat, normalizeVideoFps, MAX_VIDEO_SIDE } from '../three/exportSize.js'
 import { initCameras, addCamera, getCameraById } from '../three/cameras.js'
 import {
   setViewCameraById,
@@ -18,6 +18,24 @@ describe('computeOutputSize', () => {
     expect(computeOutputSize({ resolution: '1080p', aspect: '9:16', ...vp })).toMatchObject({ width: 1080, height: 1920 })
     expect(computeOutputSize({ resolution: '4k', aspect: '16:9', ...vp })).toMatchObject({ width: 3840, height: 2160 })
     expect(computeOutputSize({ resolution: '720p', aspect: '1:1', ...vp })).toMatchObject({ width: 720, height: 720 })
+  })
+
+  describe('custom video frame rates', () => {
+    it('accepts fractional custom rates within the supported range and falls back outside it', () => {
+      expect(normalizeVideoFps(29.97)).toBe(29.97)
+      expect(normalizeVideoFps('48')).toBe(48)
+      expect(normalizeVideoFps(240)).toBe(240)
+      expect(normalizeVideoFps(0)).toBe(30)
+      expect(normalizeVideoFps(241)).toBe(30)
+      expect(normalizeVideoFps(Number.NaN)).toBe(30)
+    })
+
+    it('stores a valid custom frame rate in app preferences', () => {
+      useStore.getState().setExportVideoFps(48)
+      expect(useStore.getState().exportVideoFps).toBe(48)
+      expect(JSON.parse(localStorage.getItem('3d-animator-app-settings')).exportVideoFps).toBe(48)
+      useStore.getState().setExportVideoFps(30)
+    })
   })
 
   it("'viewport' aspect keeps the viewport's shape", () => {
