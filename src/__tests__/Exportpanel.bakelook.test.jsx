@@ -34,12 +34,12 @@ describe('Export panel — Include Material look in export', () => {
     expect(box.checked).toBe(false)
     fireEvent.click(screen.getByText('Save as .glb'))
     await waitFor(() => expect(exportSceneModel).toHaveBeenCalledTimes(1))
-    expect(exportSceneModel.mock.calls[0][3]).toEqual({ bakeLook: false })
+    expect(exportSceneModel.mock.calls[0][3]).toEqual({ bakeLook: false, combineMeshes: false })
 
     fireEvent.click(box)
     fireEvent.click(screen.getByText('Save as .glb'))
     await waitFor(() => expect(exportSceneModel).toHaveBeenCalledTimes(2))
-    expect(exportSceneModel.mock.calls[1][3]).toEqual({ bakeLook: true })
+    expect(exportSceneModel.mock.calls[1][3]).toEqual({ bakeLook: true, combineMeshes: false })
   })
 })
 
@@ -84,5 +84,21 @@ describe('Export panel — preview frame rate', () => {
     fireEvent.click(toggle)
     expect(useStore.getState().showTargetFrameRateInPreview).toBe(false)
     expect(JSON.parse(localStorage.getItem('3d-animator-app-settings')).showTargetFrameRateInPreview).toBe(false)
+  })
+})
+
+describe('Export panel — Combine meshes into one', () => {
+  it('is off by default and passes the choice to the scene export', async () => {
+    render(<ExportPanel />)
+    const box = screen.getByLabelText('Combine meshes into one')
+    expect(box.checked).toBe(false)
+    fireEvent.click(screen.getByText('Save as .glb'))
+    await waitFor(() => expect(exportSceneModel).toHaveBeenCalledTimes(1))
+    expect(exportSceneModel.mock.calls[0][3]).toEqual({ bakeLook: false, combineMeshes: false })
+
+    fireEvent.click(box)
+    fireEvent.click(screen.getByText('Save as .glb'))
+    await waitFor(() => expect(exportSceneModel).toHaveBeenCalledTimes(2))
+    expect(exportSceneModel.mock.calls[1][3]).toEqual({ bakeLook: false, combineMeshes: true })
   })
 })

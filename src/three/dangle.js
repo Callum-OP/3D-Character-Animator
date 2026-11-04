@@ -1,3 +1,6 @@
+import { useStore } from '../store.js'
+import { pushSceneHistory } from './sceneHistory.js'
+import { getHistorySequence, getHistoryEpoch } from './undoHistory.js'
 import * as THREE from 'three'
 
 // ---------------------------------------------------------------------------
@@ -295,4 +298,110 @@ export function collectDescendantBoneNames(model, rootName, maxBones = 40) {
     for (const c of b.children) if (c.isBone && byName.has(c.name)) stack.push(c)
   }
   return out
+}
+
+// ---------------------------------------------------------------------------
+// Editing the dangle chains as undo steps
+//
+// The panel edits go through these: adding / removing a chain, a slider, the master switch. A
+// slider drag (many quick edits of the same chain's same settings) is ONE step. The store is the
+// source of truth; the physics is told right away, so a character that is not the active one is
+// undone correctly too.
+// ---------------------------------------------------------------------------
+
+const COALESCE_MS = 800
+const cloneData = (v) => JSON.parse(JSON.stringify(v))
+let lastEdit = null
+
+function readDangle(characterId) {
+  const s = useStore.getState()
+  const src = s.activeCharacterId === characterId ? s : s.characters[characterId] || {}
+  return { enabled: src.dangleEnabled !== false, chains: src.dangleChains || [] }
+}
+
+function writeDangle(characterId, value) {
+  useStore.setState((s) => {
+    if (s.activeCharacterId === characterId) return { dangleEnabled: value.enabled, dangleChains: value.chains }
+    const c = s.characters[characterId]
+    if (!c) return {}
+    return { characters: { ...s.characters, [characterId]: { ...c, dangleEnabled: value.enabled, dangleChains: value.chains } } }
+  })
+  const rt = runtimes.get(characterId)
+  if (rt) setDangleConfig(characterId, rt.model, value.enabled, value.chains)
+  if (dg.requestRender) dg.requestRender()
+}
+
+// Change a character's dangle settings and record it. `mutate` gets a copy of { enabled, chains } and
+// returns the new one.
+export function editDangle(characterId, mutate, { key = null, discrete = false } = {}) {
+  const before = cloneData(readDangle(characterId))
+  const next = mutate(cloneData(before))
+  if (!next || JSON.stringify(before) === JSON.stringify(next)) return
+  writeDangle(characterId, next)
+
+  const now = Date.now()
+  if (discrete) lastEdit = null
+  if (
+    key &&
+    lastEdit &&
+    lastEdit.key === key &&
+    lastEdit.characterId === characterId &&
+    lastEdit.epoch === getHistoryEpoch() &&
+    lastEdit.seq === getHistorySequence() &&
+    now - lastEdit.time < COALESCE_MS
+  ) {
+    lastEdit.after = cloneData(next)
+    lastEdit.time = now
+    return
+  }
+  const rec = { key, characterId, before, after: cloneData(next), time: now, seq: 0, epoch: getHistoryEpoch() }
+  pushSceneHistory(
+    () => {
+      lastEdit = null // an edit straight after an undo must not merge into the step that was just undone
+      writeDangle(characterId, cloneData(rec.before))
+    },
+    () => {
+      lastEdit = null
+      writeDangle(characterId, cloneData(rec.after))
+    },
+  )
+  rec.seq = getHistorySequence()
+  lastEdit = discrete ? null : rec
+}
+
+const activeId = () => useStore.getState().activeCharacterId
+
+export function setDangleEnabledUndoable(enabled) {
+  editDangle(activeId(), (d) => ({ ...d, enabled: !!enabled }), { discrete: true })
+}
+
+export function addDangleChainUndoable(name, boneNames) {
+  editDangle(
+    activeId(),
+    (d) => ({
+      ...d,
+      chains: [
+        ...d.chains,
+        {
+          id: `dangle_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+          name,
+          boneNames,
+          stiffness: 0.15,
+          gravity: 1,
+          damping: 0.8,
+        },
+      ],
+    }),
+    { discrete: true },
+  )
+}
+
+export function removeDangleChainUndoable(chainId) {
+  editDangle(activeId(), (d) => ({ ...d, chains: d.chains.filter((c) => c.id !== chainId) }), { discrete: true })
+}
+
+export function updateDangleChainUndoable(chainId, patch) {
+  editDangle(activeId(), (d) => ({ ...d, chains: d.chains.map((c) => (c.id === chainId ? { ...c, ...patch } : c)) }), {
+    key: `${chainId}:${Object.keys(patch).join(',')}`,
+  })
 }

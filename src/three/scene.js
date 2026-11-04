@@ -128,6 +128,7 @@ import {
   resetDangle,
   collectDescendantBoneNames,
 } from './dangle.js'
+import { combineMeshes as combineExportMeshes, describeCombine } from './combineMeshes.js'
 import { installFlattenerShader } from './flattenerShader.js'
 import {
   initFlattener,
@@ -2672,7 +2673,7 @@ function downloadBlob(blob, filename) {
 // poseMode: 'current' (default) exports the pose on screen; 'rest' exports every
 // character in its un-posed rest pose (on the export copy only — the live
 // character is never touched). See exportPose.js.
-export async function exportSceneModel(format = 'glb', name = 'scene', poseMode = 'current', { bakeLook = false } = {}) {
+export async function exportSceneModel(format = 'glb', name = 'scene', poseMode = 'current', { bakeLook = false, combineMeshes: combineOption = false } = {}) {
   const items = getAllRootsForExport()
   if (!items.length) {
     return { ok: false, message: 'Nothing to export — load a character or add an object first.' }
@@ -2703,6 +2704,8 @@ export async function exportSceneModel(format = 'glb', name = 'scene', poseMode 
       useExportMaterials(root, dup, model, bake)
       exportGroup.add(dup)
     }
+    // "Combine meshes": the copy being exported gets its meshes merged (the live scene is never touched)
+    const combineReport = combineOption ? combineExportMeshes(exportGroup) : null
     const textureReport = checkExportTextures(exportGroup)
 
     const binary = format !== 'gltf'
@@ -2724,6 +2727,7 @@ export async function exportSceneModel(format = 'glb', name = 'scene', poseMode 
       message += ` with ${textureReport.embedded} texture${textureReport.embedded === 1 ? '' : 's'} embedded in the file`
     }
     message += '.'
+    if (combineReport) message += ` ${describeCombine(combineReport)}`
     if (textureReport.unreadable) {
       message += ` ${textureReport.unreadable} texture${textureReport.unreadable === 1 ? ' was' : 's were'} not ready to embed and left out.`
     }
