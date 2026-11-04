@@ -264,7 +264,7 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
         Makes each selected part (or just a piece of it) move a little differently from the body so it does not look stuck on. Much
         cheaper than the full cloth simulation. <b>Soft cloth</b> is for fabric (a jacket, sleeves, a hood); <b>Swing</b> is for a
         piece that hangs and swings (a zip pull, a fastener). It plays while an animation plays; stopped or scrubbed frames
-        show the plain pose.
+        show the plain pose. Picked soft-cloth areas can blend into unselected vertices on the same mesh to soften their boundary.
       </div>
 
       {clothOn && (
@@ -357,6 +357,54 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
                   format={pct}
                   onChange={(v) => update(target.uuid, z.id, { gravity: v })}
                 />
+                {z.area.kind === 'tris' && (
+                  <>
+                    <label className="row" style={{ margin: '8px 0' }} title="Let the simulation ease into the rest of this mesh instead of ending abruptly at the picked faces.">
+                      <input
+                        type="checkbox"
+                        aria-label="Blend into unselected area"
+                        checked={z.blendOutside !== false}
+                        onChange={(e) => update(target.uuid, z.id, { blendOutside: e.target.checked }, true)}
+                      />
+                      <span>Blend into unselected area</span>
+                    </label>
+                    {z.blendOutside !== false && (
+                      <>
+                        <label className="field">
+                          <span>Blend where</span>
+                          <select
+                            aria-label="Blend where"
+                            value={z.outsideMode === 'all' ? 'all' : 'connected'}
+                            onChange={(e) => update(target.uuid, z.id, { outsideMode: e.target.value }, true)}
+                          >
+                            <option value="connected">Near the connected edge</option>
+                            <option value="all">All unselected mesh areas</option>
+                          </select>
+                        </label>
+                        {z.outsideMode !== 'all' && (
+                          <Slider
+                            label="Blend distance"
+                            hint="How far the effect fades into the unselected mesh from the picked edge."
+                            value={z.outsideRange ?? 0.35}
+                            min={0.05}
+                            max={1}
+                            format={pct}
+                            onChange={(v) => update(target.uuid, z.id, { outsideRange: v })}
+                          />
+                        )}
+                        <Slider
+                          label="Outside influence"
+                          hint="Maximum cloth influence outside the picked area. Lower values keep the rest of the mesh closer to its animated pose."
+                          value={z.outsideStrength ?? 0.18}
+                          min={0}
+                          max={0.5}
+                          format={pct}
+                          onChange={(v) => update(target.uuid, z.id, { outsideStrength: v })}
+                        />
+                      </>
+                    )}
+                  </>
+                )}
                 {mode === 'soft' ? (
                   <>
                     <Slider

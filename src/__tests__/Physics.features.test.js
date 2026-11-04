@@ -104,6 +104,33 @@ describe('secondary motion', () => {
     clearDangle('character-1')
     expect(() => stepDangleLive(1 / 60)).not.toThrow()
   })
+
+  it('makes low damping retain more swing than high damping', () => {
+    const swingAfterImpulse = (damping) => {
+      const root = new THREE.Bone()
+      const strand = new THREE.Bone()
+      strand.name = 'Strand'
+      strand.position.y = 1
+      root.add(strand)
+      const model = { root, bones: [root, strand] }
+      const id = `dangle-${damping}`
+      setDangleConfig(id, model, true, [{ id: 'hair', boneNames: ['Strand'], stiffness: 0.1, gravity: 0, damping }])
+
+      root.rotation.z = 0.6
+      root.updateMatrixWorld(true)
+      stepDangleLive(1 / 60)
+      root.rotation.z = 0
+      for (let frame = 0; frame < 12; frame++) {
+        root.updateMatrixWorld(true)
+        stepDangleLive(1 / 60)
+      }
+      const angle = strand.quaternion.angleTo(new THREE.Quaternion())
+      clearDangle(id)
+      return angle
+    }
+
+    expect(swingAfterImpulse(0)).toBeGreaterThan(swingAfterImpulse(1))
+  })
 })
 
 describe('cloth simulation workflow', () => {

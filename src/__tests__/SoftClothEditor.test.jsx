@@ -75,6 +75,36 @@ describe('Soft cloth editor', () => {
     expect(zone.lockTop).toBe(0) // an area picked by hand is not given a held top
   })
 
+  it('lets picked soft cloth blend beyond its boundary by default and configure the affected area', () => {
+    render(<SoftClothEditor mesh={mesh} />)
+    const where = screen.getAllByRole('combobox').find((s) => [...s.options].some((o) => o.value === 'picked'))
+    fireEvent.change(where, { target: { value: 'picked' } })
+    act(() => picker.handler({ uuid: mesh.uuid, faceIndex: 5 }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add effect' }))
+
+    expect(screen.getByLabelText('Blend into unselected area').checked).toBe(true)
+    expect(zonesOf()[0].blendOutside).toBe(true)
+
+    fireEvent.change(screen.getByLabelText('Blend where'), { target: { value: 'all' } })
+    expect(zonesOf()[0].outsideMode).toBe('all')
+    fireEvent.click(screen.getByLabelText('Blend into unselected area'))
+    expect(zonesOf()[0].blendOutside).toBe(false)
+  })
+
+  it('offers the same boundary blend settings for picked Swing zones', () => {
+    render(<SoftClothEditor mesh={mesh} />)
+    fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: 'swing' } })
+    const where = screen.getAllByRole('combobox').find((s) => [...s.options].some((o) => o.value === 'picked'))
+    fireEvent.change(where, { target: { value: 'picked' } })
+    act(() => picker.handler({ uuid: mesh.uuid, faceIndex: 5 }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add effect' }))
+
+    expect(zonesOf()[0].mode).toBe('swing')
+    expect(screen.getByLabelText('Blend into unselected area').checked).toBe(true)
+    fireEvent.change(screen.getByLabelText('Blend where'), { target: { value: 'all' } })
+    expect(zonesOf()[0].outsideMode).toBe('all')
+  })
+
   it('clicking the selected area again deselects it', () => {
     render(<SoftClothEditor mesh={mesh} />)
     const where = screen.getAllByRole('combobox').find((s) => [...s.options].some((o) => o.value === 'picked'))

@@ -42,16 +42,16 @@ const AFFECT_MIN = 0.004 // a vertex weight below this counts as locked
 
 export const SOFT_PRESETS = {
   soft: [
-    { id: 'jacket', label: 'Jacket / hoodie', hint: 'The body of a loose top: a gentle, slow sway', values: { stiffness: 0.45, damping: 0.55, gravity: 0.2, range: 0.06, smoothing: 0.7, blend: 0.5, lockTop: 0.25, amount: 1 } },
+    { id: 'jacket', label: 'Jacket / hoodie', hint: 'The body of a loose top: a gentle, slow sway', values: { stiffness: 0.4, damping: 0.4, gravity: 0.2, range: 0.09, smoothing: 0.65, blend: 0.45, lockTop: 0.25, amount: 1 } },
     { id: 'sleeves', label: 'Loose sleeves', hint: 'Sleeves lag behind the arms and swing a little', values: { stiffness: 0.35, damping: 0.45, gravity: 0.3, range: 0.1, smoothing: 0.65, blend: 0.55, lockTop: 0.15, amount: 1 } },
-    { id: 'hood', label: 'Hood', hint: 'A hood bobbing on the back', values: { stiffness: 0.3, damping: 0.4, gravity: 0.5, range: 0.12, smoothing: 0.6, blend: 0.6, lockTop: 0.2, amount: 1 } },
+    { id: 'hood', label: 'Hood', hint: 'A hood bobbing on the back', values: { stiffness: 0.22, damping: 0.2, gravity: 0.55, range: 0.2, smoothing: 0.55, blend: 0.45, lockTop: 0.2, amount: 1 } },
     { id: 'hem', label: 'Skirt / coat tails', hint: 'Free-hanging cloth below a locked top', values: { stiffness: 0.25, damping: 0.35, gravity: 0.6, range: 0.18, smoothing: 0.55, blend: 0.7, lockTop: 0.3, amount: 1 } },
     { id: 'tight', label: 'Tight fabric', hint: 'Barely moves, just enough to break the rigid look', values: { stiffness: 0.7, damping: 0.7, gravity: 0.1, range: 0.025, smoothing: 0.8, blend: 0.35, lockTop: 0.2, amount: 1 } },
   ],
   swing: [
     { id: 'zip', label: 'Zip pull', hint: 'A small pull tab hanging from the zip', values: { stiffness: 0.2, damping: 0.3, gravity: 0.9, swingLimit: 75, blend: 0.15, amount: 1 } },
     { id: 'fastener', label: 'Fastener / charm', hint: 'A button, buckle or charm that bounces', values: { stiffness: 0.3, damping: 0.4, gravity: 0.7, swingLimit: 55, blend: 0.15, amount: 1 } },
-    { id: 'tassel', label: 'Tassel / drawstring end', hint: 'A loose end that swings freely', values: { stiffness: 0.1, damping: 0.25, gravity: 1, swingLimit: 90, blend: 0.2, amount: 1 } },
+    { id: 'tassel', label: 'Tassel / drawstring end', hint: 'A loose end that swings freely', values: { stiffness: 0.1, damping: 0.18, gravity: 1, swingLimit: 90, blend: 0.08, amount: 1 } },
     { id: 'plate', label: 'Loose plate', hint: 'A stiff piece (armour, a badge) that rattles a little', values: { stiffness: 0.55, damping: 0.5, gravity: 0.4, swingLimit: 25, blend: 0.15, amount: 1 } },
   ],
 }
@@ -81,13 +81,29 @@ export function makeSoftZone(mode, area, presetId = null) {
   // locking the top band only makes sense for fabric on the whole part
   if (zone.mode === 'swing') zone.lockTop = 0
   else if (zone.area.kind === 'tris') zone.lockTop = 0
+  if (zone.area.kind === 'tris') {
+    zone.blendOutside = true
+    zone.outsideMode = 'connected'
+    zone.outsideRange = 0.35
+    zone.outsideStrength = 0.18
+  }
   return zone
 }
 
 // The parts of a zone that decide HOW it is built (rebuilt when they change); every other
 // number is read live, so a slider never resets the motion.
 export function zoneStructure(zone) {
-  return JSON.stringify([zone.mode, zone.area, zone.lockTop || 0, zone.blend])
+  const outsideBlend = zone.area?.kind === 'tris' && zone.blendOutside !== false
+  return JSON.stringify([
+    zone.mode,
+    zone.area,
+    zone.lockTop || 0,
+    zone.blend,
+    outsideBlend,
+    outsideBlend ? (zone.outsideMode === 'all' ? 'all' : 'connected') : null,
+    outsideBlend ? zone.outsideRange ?? 0.35 : null,
+    outsideBlend ? zone.outsideStrength ?? 0.18 : null,
+  ])
 }
 
 // ---------------------------------------------------------------------------
@@ -525,6 +541,8 @@ function buildZone(entry, cfg) {
 
   const inArea = new Uint8Array(nSites)
   const locked = new Uint8Array(nSites)
+  const boundary = new Uint8Array(nSites)
+  const blendOutside = area.kind === 'tris' && cfg.blendOutside !== false
   if (area.kind === 'tris') {
     const triIn = new Uint8Array(triCount)
     for (const [first, last] of area.tris || []) {
@@ -538,7 +556,11 @@ function buildZone(entry, cfg) {
         else touchedOutside[s] = 1
       }
     }
-    for (let s = 0; s < nSites; s++) if (inArea[s] && touchedOutside[s]) locked[s] = 1
+    for (let s = 0; s < nSites; s++) {
+      if (!inArea[s] || !touchedOutside[s]) continue
+      boundary[s] = 1
+      if (!blendOutside) locked[s] = 1
+    }
   } else {
     inArea.fill(1)
   }
@@ -564,12 +586,12 @@ function buildZone(entry, cfg) {
     for (let s = 0; s < nSites; s++) if (inArea[s] && T0[3 * s + 1] >= limit) locked[s] = 1
   }
 
-  // distance along the surface from the nearest locked site
+  // Distance from held sites and the selection edge, measured along the surface.
   const dist = new Float32Array(nSites).fill(Infinity)
   const heap = new MinHeap()
   let anyLocked = false
   for (let s = 0; s < nSites; s++) {
-    if (inArea[s] && locked[s]) {
+    if (inArea[s] && (locked[s] || boundary[s])) {
       dist[s] = 0
       heap.push(0, s)
       anyLocked = true
@@ -588,12 +610,52 @@ function buildZone(entry, cfg) {
       }
     }
   }
+
+  const outsideDist = new Float32Array(nSites).fill(Infinity)
+  if (blendOutside) {
+    const outsideHeap = new MinHeap()
+    for (let s = 0; s < nSites; s++) {
+      if (!boundary[s]) continue
+      outsideDist[s] = 0
+      outsideHeap.push(0, s)
+    }
+    while (outsideHeap.size) {
+      const [d, s] = outsideHeap.pop()
+      if (d > outsideDist[s]) continue
+      for (let e = graph.start[s]; e < graph.start[s + 1]; e++) {
+        const n = graph.adj[e]
+        if (inArea[n]) continue
+        const nd = d + Math.hypot(T0[3 * s] - T0[3 * n], T0[3 * s + 1] - T0[3 * n + 1], T0[3 * s + 2] - T0[3 * n + 2])
+        if (nd < outsideDist[n]) {
+          outsideDist[n] = nd
+          outsideHeap.push(nd, n)
+        }
+      }
+    }
+  }
+
   const blendDist = Math.max(1e-6, (cfg.blend ?? 0.4) * size)
+  const outsideRange = Math.max(1e-6, (cfg.outsideRange ?? 0.35) * Math.max(size, entry.unit))
+  const outsideStrength = clamp01(cfg.outsideStrength ?? 0.18)
+  const outsideMode = cfg.outsideMode === 'all' ? 'all' : 'connected'
   const weightOf = new Float32Array(nSites)
   const affList = []
   for (let s = 0; s < nSites; s++) {
-    if (!inArea[s] || locked[s]) continue
-    const w = anyLocked && Number.isFinite(dist[s]) ? smooth01(dist[s] / blendDist) : 1
+    if (locked[s]) continue
+    let w
+    if (inArea[s]) {
+      w = boundary[s]
+        ? outsideStrength
+        : anyLocked && Number.isFinite(dist[s])
+          ? smooth01(dist[s] / blendDist)
+          : 1
+    } else if (blendOutside) {
+      const edgeFade = Number.isFinite(outsideDist[s]) ? 1 - smooth01(outsideDist[s] / outsideRange) : 0
+      const allAreaFloor = outsideMode === 'all' ? outsideStrength * 0.65 : 0
+      w = Math.max(allAreaFloor, outsideStrength * edgeFade)
+    } else {
+      continue
+    }
     if (w < AFFECT_MIN) continue
     weightOf[s] = w
     affList.push(s)
@@ -618,7 +680,7 @@ function buildZone(entry, cfg) {
   for (const s of aff) {
     for (let e = graph.start[s]; e < graph.start[s + 1]; e++) {
       const n = graph.adj[e]
-      if (local[n] < 0) anchorSet.add(n)
+      if (local[n] < 0 || (cfg.mode === 'swing' && !inArea[n])) anchorSet.add(n)
     }
   }
   const anchors = Int32Array.from(anchorSet)
@@ -628,6 +690,7 @@ function buildZone(entry, cfg) {
     cfg,
     structure: zoneStructure(cfg),
     mode: cfg.mode === 'swing' ? 'swing' : 'soft',
+    core: inArea,
     aff,
     local,
     weight: Float32Array.from(aff, (s) => weightOf[s]),
@@ -649,7 +712,7 @@ function buildZone(entry, cfg) {
   return zr
 }
 
-// Pieces of a swinging zone: groups of connected sites, each with its own pendulum.
+// Pieces of a swinging zone: connected vertex islands, each with its own pendulum.
 function buildComponents(entry, zr) {
   const n = zr.aff.length
   const seen = new Uint8Array(n)
@@ -657,7 +720,7 @@ function buildComponents(entry, zr) {
   zr.anchors.forEach((s, i) => anchorOf.set(s, i))
   const graph = entry.graph
   for (let start = 0; start < n; start++) {
-    if (seen[start]) continue
+    if (seen[start] || !zr.core[zr.aff[start]]) continue
     const members = []
     const stack = [start]
     seen[start] = 1
@@ -669,10 +732,10 @@ function buildComponents(entry, zr) {
       for (let e = graph.start[s]; e < graph.start[s + 1]; e++) {
         const nb = graph.adj[e]
         const j = zr.local[nb]
-        if (j < 0) {
+        if (!zr.core[nb]) {
           const a = anchorOf.get(nb)
           if (a !== undefined) attach.add(a)
-        } else if (!seen[j]) {
+        } else if (j >= 0 && !seen[j]) {
           seen[j] = 1
           stack.push(j)
         }
@@ -681,14 +744,52 @@ function buildComponents(entry, zr) {
     // no attachment (a loose chunk): hang it from its highest point
     let top = members[0]
     for (const i of members) if (entry.T0[3 * zr.aff[i] + 1] > entry.T0[3 * zr.aff[top] + 1]) top = i
+    let topAttach = Int32Array.from(attach)
+    if (attach.size > 1) {
+      let highestY = -Infinity
+      for (const ai of attach) highestY = Math.max(highestY, entry.T0[3 * zr.anchors[ai] + 1])
+      const topBand = Math.max(1e-6, zr.size * 0.04)
+      topAttach = Int32Array.from([...attach].filter((ai) => highestY - entry.T0[3 * zr.anchors[ai] + 1] <= topBand))
+    }
     zr.comps.push({
       members: Int32Array.from(members),
-      attach: Int32Array.from(attach),
+      attach: topAttach,
       top,
       q: new Float32Array(3),
       qv: new Float32Array(3),
       ready: false,
+      blendMembers: [],
     })
+  }
+
+  // Expanded vertices follow their nearest swinging island, without changing
+  // the island's pendulum centre or rigid shape.
+  const owner = new Int32Array(n).fill(-1)
+  const queue = []
+  for (let ci = 0; ci < zr.comps.length; ci++) {
+    for (const i of zr.comps[ci].members) {
+      const site = zr.aff[i]
+      for (let e = graph.start[site]; e < graph.start[site + 1]; e++) {
+        const outside = graph.adj[e]
+        const j = zr.local[outside]
+        if (j < 0 || zr.core[outside] || owner[j] >= 0) continue
+        owner[j] = ci
+        queue.push(j)
+      }
+    }
+  }
+  for (let head = 0; head < queue.length; head++) {
+    const i = queue[head]
+    const ci = owner[i]
+    zr.comps[ci].blendMembers.push(i)
+    const site = zr.aff[i]
+    for (let e = graph.start[site]; e < graph.start[site + 1]; e++) {
+      const outside = graph.adj[e]
+      const j = zr.local[outside]
+      if (j < 0 || zr.core[outside] || owner[j] >= 0) continue
+      owner[j] = ci
+      queue.push(j)
+    }
   }
 }
 
@@ -703,6 +804,7 @@ const _q = new THREE.Quaternion()
 const _qi = new THREE.Quaternion()
 const _rx = new THREE.Vector3()
 const _bob = new THREE.Vector3()
+const _physDir = new THREE.Vector3()
 
 function springParams(cfg) {
   const s = clamp01(cfg.stiffness ?? 0.4)
@@ -848,7 +950,8 @@ function stepSwing(entry, zr, dt) {
   const D = entry.siteD
 
   for (const comp of zr.comps) {
-    // pivot: where the piece hangs from
+    // Simulate the bob relative to its attachment, so moving the whole garment
+    // cannot leave the particle behind in world space.
     if (comp.attach.length) {
       _a.set(0, 0, 0)
       for (const ai of comp.attach) _a.add(_b.set(anchorT[3 * ai], anchorT[3 * ai + 1], anchorT[3 * ai + 2]))
@@ -857,59 +960,81 @@ function stepSwing(entry, zr, dt) {
       const t = comp.top
       _a.set(T[3 * t], T[3 * t + 1], T[3 * t + 2])
     }
-    // bob: the piece's centre
+    // The pose direction is measured from the support to the island's centre.
     _b.set(0, 0, 0)
     for (const i of comp.members) _b.add(_c.set(T[3 * i], T[3 * i + 1], T[3 * i + 2]))
     _b.multiplyScalar(1 / comp.members.length)
-    const len = _b.distanceTo(_a)
+    _c.copy(_b).sub(_a)
+    const len = _c.length()
     if (len < 1e-6) continue
+    _c.multiplyScalar(1 / len)
 
     if (!comp.ready) {
-      comp.q[0] = _b.x
-      comp.q[1] = _b.y
-      comp.q[2] = _b.z
+      comp.q[0] = _c.x * len
+      comp.q[1] = _c.y * len
+      comp.q[2] = _c.z * len
       comp.qv.fill(0)
       comp.ready = true
     }
+
     let qx = comp.q[0]
     let qy = comp.q[1]
     let qz = comp.q[2]
     for (let s = 0; s < steps; s++) {
-      comp.qv[0] += (k * (_b.x - qx) - c * comp.qv[0] + _g.x) * h
-      comp.qv[1] += (k * (_b.y - qy) - c * comp.qv[1] + _g.y) * h
-      comp.qv[2] += (k * (_b.z - qz) - c * comp.qv[2] + _g.z) * h
+      comp.qv[0] += (k * (_c.x * len - qx) - c * comp.qv[0] + _g.x) * h
+      comp.qv[1] += (k * (_c.y * len - qy) - c * comp.qv[1] + _g.y) * h
+      comp.qv[2] += (k * (_c.z * len - qz) - c * comp.qv[2] + _g.z) * h
       qx += comp.qv[0] * h
       qy += comp.qv[1] * h
       qz += comp.qv[2] * h
-      // rigid: stay the same distance from the pivot
-      let dx = qx - _a.x
-      let dy = qy - _a.y
-      let dz = qz - _a.z
-      const dl = Math.hypot(dx, dy, dz) || 1
-      dx /= dl
-      dy /= dl
-      dz /= dl
-      qx = _a.x + dx * len
-      qy = _a.y + dy * len
-      qz = _a.z + dz * len
-      const radial = comp.qv[0] * dx + comp.qv[1] * dy + comp.qv[2] * dz
-      comp.qv[0] -= dx * radial
-      comp.qv[1] -= dy * radial
-      comp.qv[2] -= dz * radial
+
+      // Keep a fixed string length and remove velocity along the string.
+      _physDir.set(qx, qy, qz)
+      const radius = _physDir.length()
+      if (radius < 1e-8) _physDir.copy(_c)
+      else _physDir.multiplyScalar(1 / radius)
+      qx = _physDir.x * len
+      qy = _physDir.y * len
+      qz = _physDir.z * len
+      let radial = comp.qv[0] * _physDir.x + comp.qv[1] * _physDir.y + comp.qv[2] * _physDir.z
+      comp.qv[0] -= _physDir.x * radial
+      comp.qv[1] -= _physDir.y * radial
+      comp.qv[2] -= _physDir.z * radial
+
+      // Enforce the angle limit in the simulation itself, not just in rendering.
+      let dot = THREE.MathUtils.clamp(_physDir.dot(_c), -1, 1)
+      const angle = Math.acos(dot)
+      if (angle > limit) {
+        _q.setFromUnitVectors(_physDir, _c)
+        _qi.identity().slerp(_q, (angle - limit) / angle)
+        _physDir.applyQuaternion(_qi)
+        qx = _physDir.x * len
+        qy = _physDir.y * len
+        qz = _physDir.z * len
+
+        dot = THREE.MathUtils.clamp(_physDir.dot(_c), -1, 1)
+        _bob.copy(_physDir).multiplyScalar(dot).sub(_c)
+        if (_bob.lengthSq() > 1e-10) {
+          _bob.normalize()
+          radial = comp.qv[0] * _bob.x + comp.qv[1] * _bob.y + comp.qv[2] * _bob.z
+          if (radial > 0) {
+            comp.qv[0] -= _bob.x * radial
+            comp.qv[1] -= _bob.y * radial
+            comp.qv[2] -= _bob.z * radial
+          }
+        }
+      }
     }
     comp.q[0] = qx
     comp.q[1] = qy
     comp.q[2] = qz
 
-    // swing from the pose direction to the pendulum direction, limited
-    _c.set(_b.x - _a.x, _b.y - _a.y, _b.z - _a.z).normalize() // pose
-    _bob.set(qx - _a.x, qy - _a.y, qz - _a.z).normalize()
+    // Apply the pendulum's relative rotation to the entire connected island.
+    _bob.set(qx, qy, qz).normalize()
     _q.setFromUnitVectors(_c, _bob)
-    const angle = 2 * Math.acos(Math.min(1, Math.abs(_q.w)))
-    if (angle > limit) _q.slerpQuaternions(_qi.identity(), _q, limit / angle)
     if (amount < 1) _q.slerpQuaternions(_qi.identity(), _q, amount)
 
-    for (const i of comp.members) {
+    const applySwingOffset = (i) => {
       _b.set(T[3 * i] - _a.x, T[3 * i + 1] - _a.y, T[3 * i + 2] - _a.z)
       _rx.copy(_b).applyQuaternion(_q)
       const w = weight[i]
@@ -918,6 +1043,8 @@ function stepSwing(entry, zr, dt) {
       D[3 * s + 1] += (_rx.y - _b.y) * w
       D[3 * s + 2] += (_rx.z - _b.z) * w
     }
+    for (const i of comp.members) applySwingOffset(i)
+    for (const i of comp.blendMembers) applySwingOffset(i)
   }
 }
 

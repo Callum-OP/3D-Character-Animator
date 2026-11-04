@@ -144,6 +144,17 @@ describe('soft zones: building and cleaning up', () => {
       }
     }
     expect(makeSoftZone('swing', { kind: 'all' }).lockTop).toBe(0)
+    const hood = SOFT_PRESETS.soft.find((preset) => preset.id === 'hood').values
+    expect(hood.damping).toBeLessThan(0.3)
+    expect(hood.range).toBeGreaterThan(0.15)
+  })
+
+  it('enables picked-area blending by default and includes it in zone structure', () => {
+    const zone = makeSoftZone('soft', { kind: 'tris', tris: [[0, 3]], vertexCount: 12 })
+    expect(zone.blendOutside).toBe(true)
+    expect(zone.outsideMode).toBe('connected')
+    expect(zoneStructure({ ...zone, outsideMode: 'all' })).not.toBe(zoneStructure(zone))
+    expect(zoneStructure({ ...zone, blendOutside: false })).not.toBe(zoneStructure(zone))
   })
 
   it('only the shape-changing settings rebuild a zone', () => {
@@ -309,7 +320,7 @@ describe('soft cloth: following the pose', () => {
       const quad = row * cols + c
       tris.push(2 * quad, 2 * quad + 1)
     }
-    const zone = { ...makeSoftZone('soft', { kind: 'tris', tris: tris.map((t) => [t, t]), vertexCount: 6 * 6 * 8 }, 'hem'), blend: 0.3, range: 0.3 }
+    const zone = { ...makeSoftZone('soft', { kind: 'tris', tris: tris.map((t) => [t, t]), vertexCount: 6 * 6 * 8 }, 'hem'), blend: 0.3, range: 0.3, blendOutside: false }
     syncSoftCloth(groupsFor(rig.mesh, [zone]))
     const entry = getSoftEntry(rig.mesh)
     play(rig, 30, (f) => {
@@ -326,6 +337,63 @@ describe('soft cloth: following the pose', () => {
       else if (changed) insideMoved++
     }
     expect(insideMoved).toBeGreaterThan(0)
+  })
+
+  it('blends picked-area motion into nearby unselected vertices and can extend it across the mesh', () => {
+    rig = makeSheet({ skinned: false })
+    const tris = []
+    const cols = 6
+    for (let row = 5; row < 8; row++) for (let c = 0; c < 3; c++) {
+      const quad = row * cols + c
+      tris.push(2 * quad, 2 * quad + 1)
+    }
+    const area = { kind: 'tris', tris: tris.map((t) => [t, t]), vertexCount: 6 * 6 * 8 }
+    const zone = { ...makeSoftZone('soft', area, 'hem'), outsideRange: 0.45, range: 0.3 }
+    syncSoftCloth(groupsFor(rig.mesh, [zone]))
+    let entry = getSoftEntry(rig.mesh)
+    let runtime = entry.zones.get(zone.id)
+    const selected = new Set()
+    for (const t of tris) for (let k = 0; k < 3; k++) selected.add(entry.index.getX(3 * t + k))
+    const connectedOutside = [...runtime.aff].filter((site) => !selected.has(entry.sites.rep[site]))
+    expect(connectedOutside.length).toBeGreaterThan(0)
+    expect(connectedOutside.length).toBeLessThan(entry.sites.count - selected.size)
+
+    play(rig, 30, (f) => {
+      rig.mesh.rotation.z = Math.sin(f * 0.4) * 0.3
+    })
+    expect(connectedOutside.some((site) => Math.hypot(...entry.siteD.slice(3 * site, 3 * site + 3)) > 1e-5)).toBe(true)
+
+    const allZone = { ...zone, outsideMode: 'all' }
+    syncSoftCloth(groupsFor(rig.mesh, [allZone]))
+    entry = getSoftEntry(rig.mesh)
+    runtime = entry.zones.get(zone.id)
+    expect(runtime.aff.length).toBeGreaterThan(connectedOutside.length)
+    expect([...runtime.aff].some((site) => !selected.has(entry.sites.rep[site]) && runtime.weight[runtime.local[site]] > 0)).toBe(true)
+  })
+
+  it('lets Swing influence unselected vertices without making them part of its rigid pendulum', () => {
+    rig = makeSheet()
+    const tris = []
+    const cols = 6
+    for (let row = 5; row < 8; row++) for (let c = 0; c < 3; c++) {
+      const quad = row * cols + c
+      tris.push(2 * quad, 2 * quad + 1)
+    }
+    const zone = makeSoftZone('swing', { kind: 'tris', tris: tris.map((t) => [t, t]), vertexCount: 6 * 6 * 8 }, 'tassel')
+    syncSoftCloth(groupsFor(rig.mesh, [zone]))
+    const entry = getSoftEntry(rig.mesh)
+    const runtime = entry.zones.get(zone.id)
+    const component = runtime.comps[0]
+
+    expect(zone.blendOutside).toBe(true)
+    expect(component.blendMembers.length).toBeGreaterThan(0)
+    expect(component.members.every((i) => runtime.core[runtime.aff[i]])).toBe(true)
+    expect(component.blendMembers.every((i) => !runtime.core[runtime.aff[i]])).toBe(true)
+
+    play(rig, 35, (f) => {
+      rig.b0.position.x = Math.sin(f * 0.4) * 0.4
+    })
+    expect(component.blendMembers.some((i) => Math.hypot(...entry.siteD.slice(3 * runtime.aff[i], 3 * runtime.aff[i] + 3)) > 1e-5)).toBe(true)
   })
 
   it('vertices that share a place (a UV seam) stay together', () => {
@@ -476,6 +544,20 @@ describe('swing: a separate piece hanging from a point', () => {
     expect(maxMove).toBeGreaterThan(1e-4) // and it did move
   })
 
+  it('does not turn a whole-part translation into a false swing', () => {
+    rig = makePull()
+    syncSoftCloth(groupsFor(rig.mesh, [makeSoftZone('swing', { kind: 'all' }, 'zip')]))
+    const entry = getSoftEntry(rig.mesh)
+    rig.root.position.set(3, 0, -2)
+    play(rig, 1)
+
+    for (let i = 0; i < 4; i++) {
+      const clean = worldOf(rig.mesh, entry.orig, i)
+      const drawn = worldOf(rig.mesh, rig.mesh.geometry, i)
+      expect(drawn.distanceTo(clean)).toBeLessThan(1e-3)
+    }
+  })
+
   it('hangs from its top: the top barely moves, the bottom swings out', () => {
     rig = makePull()
     syncSoftCloth(groupsFor(rig.mesh, [{ ...makeSoftZone('swing', { kind: 'all' }, 'tassel'), stiffness: 0.05 }]))
@@ -491,6 +573,27 @@ describe('swing: a separate piece hanging from a point', () => {
     })
     expect(bottomMax).toBeGreaterThan(0)
     expect(bottomMax).toBeGreaterThan(topMax)
+  })
+
+  it('uses the upper edge of a picked region as its swing attachment', () => {
+    rig = makeSheet({ skinned: false })
+    const pos = rig.mesh.geometry.getAttribute('position')
+    const index = rig.mesh.geometry.index
+    const tris = []
+    for (let t = 0; t < index.count / 3; t++) {
+      const y = (pos.getY(index.getX(3 * t)) + pos.getY(index.getX(3 * t + 1)) + pos.getY(index.getX(3 * t + 2))) / 3
+      const x = (pos.getX(index.getX(3 * t)) + pos.getX(index.getX(3 * t + 1)) + pos.getX(index.getX(3 * t + 2))) / 3
+      if (y < 0.9 && Math.abs(x) < 0.35) tris.push([t, t])
+    }
+    const zone = makeSoftZone('swing', { kind: 'tris', tris, vertexCount: pos.count }, 'tassel')
+    syncSoftCloth(groupsFor(rig.mesh, [zone]))
+    const entry = getSoftEntry(rig.mesh)
+    const runtime = entry.zones.get(zone.id)
+    const component = runtime.comps[0]
+    const attachmentYs = [...component.attach].map((i) => entry.T0[3 * runtime.anchors[i] + 1])
+    expect(component.attach.length).toBeGreaterThan(0)
+    expect(component.attach.length).toBeLessThan(runtime.anchors.length)
+    expect(Math.min(...attachmentYs)).toBeGreaterThan(0.89)
   })
 
   it('never swings past its limit', () => {

@@ -122,7 +122,7 @@ function buildChain(model, cfg) {
   for (const name of cfg.boneNames) {
     const bone = byName.get(name)
     if (!bone) continue
-    nodesByBone.set(bone, { bone, name, children: [], physPos: null, physPrev: null })
+    nodesByBone.set(bone, { bone, name, children: [], physPos: null, physPrev: null, lastPivot: null })
   }
   if (!nodesByBone.size) return null
 
@@ -168,6 +168,7 @@ function buildChain(model, cfg) {
     const tip = pivot.clone().add(node.tipLocalOffset.clone().applyQuaternion(parentWorldQuat))
     node.physPos = tip
     node.physPrev = tip.clone()
+    node.lastPivot = pivot
   }
 
   return {
@@ -189,6 +190,7 @@ export function resetDangle(id, chainId) {
     for (const node of chain.order) {
       const pivot = node.bone.getWorldPosition(new THREE.Vector3())
       const parentWorldQuat = node.bone.getWorldQuaternion(new THREE.Quaternion())
+      node.lastPivot.copy(pivot)
       const tip = pivot.add(node.tipLocalOffset.clone().applyQuaternion(parentWorldQuat))
       node.physPos.copy(tip)
       node.physPrev.copy(tip)
@@ -226,8 +228,9 @@ export function stepDangleLive(dt) {
     if (!rt.enabled || !rt.chains.size) continue
     for (const chain of rt.chains.values()) {
       const { stiffness, gravity, damping } = chain.params
-      // Air-resistance style damping: fraction of velocity kept per substep.
-      const velocityKeep = 0.86 + damping * 0.13 // 0 -> 0.86, 1 -> 0.99
+      // Exponential damping keeps the response consistent at different frame rates.
+      const velocityKeep = Math.exp(-damping * 6 * subDt)
+      const springFactor = 1 - Math.exp(-stiffness * 40 * subDt)
       for (let s = 0; s < SUBSTEPS; s++) {
         for (const node of chain.order) {
           const parentWorldQuat = node.parentNode
@@ -237,6 +240,11 @@ export function stepDangleLive(dt) {
               : _parentWQ.identity()
 
           node.bone.getWorldPosition(_pivot)
+          // Carry the simulation with a translating attachment instead of leaving it behind.
+          _vel.copy(_pivot).sub(node.lastPivot)
+          node.physPos.add(_vel)
+          node.physPrev.add(_vel)
+          node.lastPivot.copy(_pivot)
           _targetWQ.copy(parentWorldQuat).multiply(node.restLocalQuat)
           _targetTip.copy(node.tipLocalOffset).applyQuaternion(_targetWQ).add(_pivot)
 
@@ -246,7 +254,7 @@ export function stepDangleLive(dt) {
           node.physPos.add(_vel)
           node.physPos.y -= GRAVITY_MS2 * gravity * subDt * subDt
           // Spring back toward the animated target (recovery force / "stiffness").
-          node.physPos.lerp(_targetTip, THREE.MathUtils.clamp(stiffness, 0, 1))
+          node.physPos.lerp(_targetTip, springFactor)
           // Rigid re-projection: the bone doesn't stretch.
           _dir.copy(node.physPos).sub(_pivot)
           if (_dir.lengthSq() > 1e-10) {
