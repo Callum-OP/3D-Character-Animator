@@ -13,6 +13,12 @@ import {
   applyLimitsToPose,
 } from '../three/posing.js'
 import { downloadPose, readPoseFile } from '../three/poses.js'
+import {
+  setDangleEnabledUndoable as setDangleEnabled,
+  addDangleChainUndoable as addDangleChain,
+  removeDangleChainUndoable as removeDangleChain,
+  updateDangleChainUndoable as updateDangleChain,
+} from '../three/dangle.js'
 import { collectActiveDangleDescendants, resetActiveDangle, setCameraToBones } from '../three/scene.js'
 import { performUndo, performRedo } from '../three/undoPriority.js'
 import EditableValue from './EditableValue.jsx'
@@ -128,10 +134,6 @@ export default function BonePanel() {
 
   const dangleEnabled = useStore((s) => s.dangleEnabled)
   const dangleChains = useStore((s) => s.dangleChains)
-  const setDangleEnabled = useStore((s) => s.setDangleEnabled)
-  const addDangleChain = useStore((s) => s.addDangleChain)
-  const removeDangleChain = useStore((s) => s.removeDangleChain)
-  const updateDangleChain = useStore((s) => s.updateDangleChain)
 
   const fileInputRef = useRef(null)
   const [poseMsg, setPoseMsg] = useState(null)

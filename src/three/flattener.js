@@ -393,17 +393,33 @@ export function setFlattenerEnabledFor(characterId, enabled) {
 }
 
 // Hook every mesh of the character so its flattener numbers are in the shader exactly while it is drawn.
+//
+// The outline effect draws every mesh a second time, and for that pass it REPLACES the mesh's
+// onBeforeRender with its own (and puts the old one back afterwards). A plain function here would be
+// swapped out, the outline would be drawn without the flattener and show up as a dark ghost of the
+// unflattened shape. So onBeforeRender is an accessor: whatever is assigned to it runs AFTER ours, and
+// putting our own function back restores what was there before.
 function bindMeshes(characterId, model) {
   for (const mesh of model.meshes || []) {
     mesh.userData.flattenerCharacter = characterId
     if (hooked.has(mesh)) continue
     hooked.add(mesh)
-    const before = mesh.onBeforeRender
-    const after = mesh.onAfterRender
-    mesh.onBeforeRender = function onBeforeRender(...args) {
-      before.apply(this, args)
+    const base = mesh.onBeforeRender
+    let inner = base
+    const composite = function onBeforeRender(...args) {
       fillUniforms(this)
+      inner.apply(this, args)
     }
+    Object.defineProperty(mesh, 'onBeforeRender', {
+      configurable: true,
+      enumerable: true,
+      get: () => composite,
+      set: (fn) => {
+        // our own function handed back (the outline effect restoring what it read): back to the original
+        inner = fn === composite || typeof fn !== 'function' ? base : fn
+      },
+    })
+    const after = mesh.onAfterRender
     mesh.onAfterRender = function onAfterRender(...args) {
       after.apply(this, args)
       flatCount.value = 0

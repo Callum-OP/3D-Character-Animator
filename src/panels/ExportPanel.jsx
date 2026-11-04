@@ -71,6 +71,8 @@ export default function ExportPanel() {
   const [exportPoseMode, setExportPoseMode] = useState('baked')
   // Write the Look > Material settings (clay, flat colour, noir, pixel …) into the model's own textures and colours.
   const [exportBakeLook, setExportBakeLook] = useState(false)
+  // Merge each character's / object's meshes into one in the exported file (the scene itself is untouched).
+  const [exportCombine, setExportCombine] = useState(false)
 
   const name = modelInfo?.name || 'render'
   const canRecord = canRecordVideo()
@@ -130,7 +132,7 @@ export default function ExportPanel() {
     if (exportingModel) return
     setExportingModel(true)
     setMsg(format === 'glb' ? 'Exporting scene as .glb…' : 'Exporting scene as .gltf…')
-    const result = await exportSceneModel(format, name, exportPoseMode, { bakeLook: exportBakeLook })
+    const result = await exportSceneModel(format, name, exportPoseMode, { bakeLook: exportBakeLook, combineMeshes: exportCombine })
     setExportingModel(false)
     setMsg(result.message)
   }
@@ -339,6 +341,13 @@ export default function ExportPanel() {
           Bakes what a file can hold: colour grade (clay, noir, sepia, vivid …), flat colour, smoothed / pixel
           textures, bump flattening and finish. Manga ink and pencil hatching depend on the lighting, so they stay
           in the app.
+        </div>
+        <label className="toggle-row" style={{ marginTop: 6 }} title="Merges each character's parts (body, clothes, hair, shoes…) into ONE mesh in the exported file, and each object's pieces into one mesh. Every part keeps its own material; parts with shape keys (a face) become a mesh of their own. Only the exported file changes; the scene is untouched.">
+          <input type="checkbox" checked={exportCombine} onChange={(e) => setExportCombine(e.target.checked)} />
+          Combine meshes into one
+        </label>
+        <div className="radio-hint" style={{ marginTop: 2 }}>
+          One mesh per character and per object in the file, each part keeping its own material. Parts with shape keys (a face) form a mesh of their own.
         </div>
         <div className="radio-hint" style={{ marginTop: 4 }}>
           Combines every visible character and object into one file at their

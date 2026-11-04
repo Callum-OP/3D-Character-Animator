@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import * as THREE from 'three'
+import { OutlineEffect } from 'three/examples/jsm/effects/OutlineEffect.js'
 import { useStore } from '../store.js'
 import {
   installFlattenerShader,
@@ -303,6 +304,59 @@ describe('what the shader is told while a mesh is drawn', () => {
     expect(seen.params.x).toBe(1)
     expect(flatMore.value[0].toArray()).toEqual([1, 1, 0, 0.15]) // lighting, part lighting, keep screen, edge
     expect(flatCount.value).toBe(0) // cleared: nothing else drawn afterwards is flattened
+  })
+
+  it('survives the outline effect swapping the mesh\'s onBeforeRender for its own pass', () => {
+    addFlattener('head', { characterId: CHAR })
+    const mesh = model.headMesh
+    // what three's OutlineEffect does: read the current function, put its own in, draw, put the old one back
+    const calls = []
+    const saved = mesh.onBeforeRender
+    mesh.onBeforeRender = function outlineBeforeRender() {
+      calls.push('outline')
+    }
+    mesh.onBeforeRender()
+    expect(flatCount.value).toBe(1) // the flattener was still switched on for the outline pass
+    expect(calls).toEqual(['outline']) // and the outline effect's own function still ran
+    mesh.onAfterRender()
+    expect(flatCount.value).toBe(0)
+    mesh.onBeforeRender = saved // the effect puts the old one back
+    calls.length = 0
+    mesh.onBeforeRender()
+    expect(flatCount.value).toBe(1)
+    expect(calls).toEqual([]) // the outline effect's function is gone again, nothing left behind
+    mesh.onAfterRender()
+  })
+
+  it('is on for BOTH passes of the real outline effect (the ghost of the unflattened shape)', () => {
+    addFlattener('head', { characterId: CHAR })
+    const seen = [] // [what was drawn, how many flattener zones were switched on]
+    const renderer = {
+      autoClear: true,
+      shadowMap: { enabled: false, type: 0, autoUpdate: true },
+      domElement: document.createElement('canvas'),
+      clear: () => {},
+      // a draw call as three makes it: each mesh's onBeforeRender, then the draw, then onAfterRender
+      render(drawScene, camera) {
+        drawScene.traverse((o) => {
+          if (!o.isMesh || o !== model.headMesh) return
+          o.onBeforeRender(renderer, drawScene, camera, o.geometry, o.material)
+          seen.push([Array.isArray(o.material) ? 'array' : o.material.type, flatCount.value])
+          o.onAfterRender(renderer, drawScene, camera, o.geometry, o.material)
+        })
+      },
+    }
+    const effect = new OutlineEffect(renderer, { defaultThickness: 0.01 })
+    effect.render(scene, new THREE.PerspectiveCamera())
+    expect(seen).toHaveLength(2)
+    expect(seen[0]).toEqual(['MeshStandardMaterial', 1]) // the normal pass
+    expect(seen[1][0]).not.toBe('MeshStandardMaterial') // the outline pass: three's own outline material...
+    expect(seen[1][1]).toBe(1) // ...drawn flattened too
+    expect(flatCount.value).toBe(0)
+    // and the effect put the mesh back the way it found it
+    model.headMesh.onBeforeRender()
+    expect(flatCount.value).toBe(1)
+    model.headMesh.onAfterRender()
   })
 
   it('follows the bone: tilting the head tilts the zone with it', () => {
