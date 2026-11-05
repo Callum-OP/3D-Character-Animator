@@ -794,7 +794,7 @@ export const useStore = create((set) => ({
     })),
 
   // ---- Dangle bones (gravity/physics on selected bones — hair, accessories) ----
-  // dangleChains: [{ id, name, boneNames: string[], stiffness, gravity, damping }]
+  // dangleChains: [{ id, name, boneNames, type, stiffness, gravity, damping, collideWithBones, collideWithMesh }]
   // per active character (see CHARACTER_FIELDS). boneNames is a flat set —
   // dangle.js works out the parent/child structure from the live skeleton.
   dangleEnabled: true,
@@ -802,7 +802,7 @@ export const useStore = create((set) => ({
 
   setDangleEnabled: (dangleEnabled) => set({ dangleEnabled }),
 
-  addDangleChain: (name, boneNames) =>
+  addDangleChain: (name, boneNames, type = 'dangle') =>
     set((s) => ({
       dangleChains: [
         ...s.dangleChains,
@@ -810,9 +810,12 @@ export const useStore = create((set) => ({
           id: `dangle_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
           name,
           boneNames,
-          stiffness: 0.15,
-          gravity: 1,
-          damping: 0.8,
+          type: type === 'cloth' ? 'cloth' : 'dangle',
+          stiffness: type === 'cloth' ? 0.4 : 0.15,
+          gravity: type === 'cloth' ? 0.35 : 1,
+          damping: type === 'cloth' ? 0.55 : 0.8,
+          collideWithBones: false,
+          collideWithMesh: false,
         },
       ],
     })),

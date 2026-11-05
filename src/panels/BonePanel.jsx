@@ -156,12 +156,12 @@ export default function BonePanel() {
   // strand's root sweeps up the whole strand, say). If several separate
   // bones are selected they all go into the one chain, so e.g. both bunches
   // of a pair of pigtails can swing under a single set of settings.
-  function onAddDangleChain() {
+  function onAddDangleChain(type = 'dangle') {
     const roots = selectedBoneNames.length ? selectedBoneNames : selectedBoneName ? [selectedBoneName] : []
     if (!roots.length) return
     const boneNames = [...new Set(roots.flatMap((r) => collectActiveDangleDescendants(r)))]
     const name = roots.length === 1 ? roots[0] : `${roots.length} bones incl. ${roots[0]}`
-    addDangleChain(name, boneNames)
+    addDangleChain(name, boneNames, type)
   }
 
   // Preview of what "Add selected as dangle chain" would sweep in — one line
@@ -494,25 +494,35 @@ export default function BonePanel() {
         </div>
       )}
 
-      <h2 style={{ marginTop: 18 }}>Dangle Physics</h2>
+      <h2 style={{ marginTop: 18 }}>Bone Physics</h2>
       <p className="panel-hint">
-        Select a bone (a hair strand's root, a ponytail, an earring, a cape tie) above, then add it here — it and
-        everything hanging off it will swing under gravity and inertia instead of rigidly following the rig.
+        Select a bone above, then add a chain. Dangle suits hair, ties and accessories; rigged cloth suits
+        bone-weighted capes, sleeves and loose clothing. Each chain can optionally collide with the model or other bones.
       </p>
 
       <label className="row" style={{ marginBottom: 10 }}>
         <input type="checkbox" checked={dangleEnabled} onChange={(e) => setDangleEnabled(e.target.checked)} />
-        <span>Enable dangle physics</span>
+        <span>Enable bone physics</span>
       </label>
 
-      <button
-        className="btn secondary"
-        onClick={onAddDangleChain}
-        disabled={!selectedBoneNames.length && !selectedBoneName}
-        title="Add the selected bone(s) and their children as a dangle chain"
-      >
-        Add selected as dangle chain
-      </button>
+      <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+        <button
+          className="btn secondary"
+          onClick={() => onAddDangleChain('dangle')}
+          disabled={!selectedBoneNames.length && !selectedBoneName}
+          title="Add the selected bone(s) and their children as a swinging dangle chain"
+        >
+          Add selected as dangle
+        </button>
+        <button
+          className="btn secondary"
+          onClick={() => onAddDangleChain('cloth')}
+          disabled={!selectedBoneNames.length && !selectedBoneName}
+          title="Add the selected bone(s) and their children as a softer rigged-cloth chain"
+        >
+          Add selected as rigged cloth
+        </button>
+      </div>
 
       {dangleSelectionPreview.length > 0 && (
         <details className="dangle-bone-list" style={{ marginTop: 6 }}>
@@ -529,15 +539,35 @@ export default function BonePanel() {
 
       {dangleChains.length === 0 ? (
         <div className="empty" style={{ marginTop: 10 }}>
-          No dangle chains yet — select a bone above and add it.
+          No bone physics chains yet — select a bone above and add one.
         </div>
       ) : (
         <div style={{ marginTop: 10 }}>
           {dangleChains.map((chain) => (
             <details className="dangle-chain" key={chain.id} style={{ marginBottom: 10, paddingBottom: 8, borderBottom: '1px solid var(--border, #333)' }}>
               <summary className="dangle-chain-summary">
-                {chain.name} ({chain.boneNames.length} bone{chain.boneNames.length === 1 ? '' : 's'})
+                {chain.name} · {chain.type === 'cloth' ? 'Rigged cloth' : 'Dangle'} ({chain.boneNames.length} bone{chain.boneNames.length === 1 ? '' : 's'})
               </summary>
+
+              <label className="row" style={{ marginTop: 8 }}>
+                <span>Physics type</span>
+                <select
+                  aria-label={`${chain.name} physics type`}
+                  value={chain.type === 'cloth' ? 'cloth' : 'dangle'}
+                  onChange={(e) => {
+                    const type = e.target.value
+                    updateDangleChain(chain.id, {
+                      type,
+                      stiffness: type === 'cloth' ? 0.4 : 0.15,
+                      gravity: type === 'cloth' ? 0.35 : 1,
+                      damping: type === 'cloth' ? 0.55 : 0.8,
+                    })
+                  }}
+                >
+                  <option value="dangle">Dangle</option>
+                  <option value="cloth">Rigged cloth</option>
+                </select>
+              </label>
 
               <div className="row" style={{ justifyContent: 'flex-end', marginTop: 8 }}>
                 <button className="btn secondary" onClick={() => resetActiveDangle(chain.id)} title="Snap this chain back onto the current pose">
@@ -556,6 +586,23 @@ export default function BonePanel() {
                   ))}
                 </ul>
               </details>
+
+              <label className="row" title="Keep this chain's bone tips away from nearby skeleton bones.">
+                <input
+                  type="checkbox"
+                  checked={chain.collideWithBones === true}
+                  onChange={(e) => updateDangleChain(chain.id, { collideWithBones: e.target.checked })}
+                />
+                <span>Collide with other bones</span>
+              </label>
+              <label className="row" title="Use visible model meshes as a lightweight barrier for this chain.">
+                <input
+                  type="checkbox"
+                  checked={chain.collideWithMesh === true}
+                  onChange={(e) => updateDangleChain(chain.id, { collideWithMesh: e.target.checked })}
+                />
+                <span>Collide with visible model mesh</span>
+              </label>
 
               <label className="slider-row">
                 <span className="slider-label" title="How strongly it springs back to the animated pose. Low = loose and floppy, high = barely moves.">

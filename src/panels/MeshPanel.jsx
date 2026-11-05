@@ -630,7 +630,7 @@ export default function MeshPanel() {
       {selectedMesh && (
         <details className="joint-controls" style={{ marginTop: 10 }}>
           <summary style={{ cursor: 'pointer' }}>
-            <span className="joint-name">Cloth</span>{' '}
+            <span className="joint-name">Mesh Physics</span>{' '}
             <span className="joint-parent">
               {clothOn
                 ? 'full simulation on'

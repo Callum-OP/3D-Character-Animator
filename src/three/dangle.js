@@ -59,9 +59,15 @@ function defaultConfig() {
   return { stiffness: 0.15, gravity: 1, damping: 0.8 }
 }
 
+function defaultsForType(type) {
+  return type === 'cloth'
+    ? { stiffness: 0.4, gravity: 0.35, damping: 0.55 }
+    : defaultConfig()
+}
+
 // Build (or rebuild) the physics runtime for one character from its saved/
 // edited chain configs. `chains` is the store's plain-data array:
-// [{ id, name, boneNames: [...], stiffness, gravity, damping }]. Safe to call
+// [{ id, name, boneNames, type, stiffness, gravity, damping, collideWithBones, collideWithMesh }]. Safe to call
 // repeatedly (e.g. every store update) — it only rebuilds a chain when its
 // bone list actually changed, and preserves in-flight particle motion for
 // chains that didn't change so tweaking a slider mid-swing doesn't pop the pose.
@@ -102,11 +108,15 @@ export function setDangleConfig(id, model, enabled, chains) {
 }
 
 function paramsFrom(cfg) {
-  const d = defaultConfig()
+  const type = cfg.type === 'cloth' ? 'cloth' : 'dangle'
+  const d = defaultsForType(type)
   return {
+    type,
     stiffness: THREE.MathUtils.clamp(cfg.stiffness ?? d.stiffness, 0, 1),
     gravity: THREE.MathUtils.clamp(cfg.gravity ?? d.gravity, 0, 3),
     damping: THREE.MathUtils.clamp(cfg.damping ?? d.damping, 0, 1),
+    collideWithBones: cfg.collideWithBones === true,
+    collideWithMesh: cfg.collideWithMesh === true,
   }
 }
 
@@ -176,6 +186,7 @@ function buildChain(model, cfg) {
 
   return {
     boneNamesKey: cfg.boneNames.join('|'),
+    boneSet: new Set(order.map((node) => node.bone)),
     order,
     params: paramsFrom(cfg),
   }
@@ -217,6 +228,82 @@ const _physDir = new THREE.Vector3()
 const _qSwing = new THREE.Quaternion()
 const _finalWQ = new THREE.Quaternion()
 const _localQ = new THREE.Quaternion()
+const _boneStart = new THREE.Vector3()
+const _boneEnd = new THREE.Vector3()
+const _closest = new THREE.Vector3()
+const _collisionDelta = new THREE.Vector3()
+const _surfaceNormal = new THREE.Vector3()
+const _normalMatrix = new THREE.Matrix3()
+const _boneLine = new THREE.Line3()
+const _raycaster = new THREE.Raycaster()
+const _meshHits = []
+
+function visibleInHierarchy(object) {
+  for (let current = object; current; current = current.parent) {
+    if (!current.visible) return false
+  }
+  return true
+}
+
+function collideWithModelMesh(meshes, node, radius) {
+  const delta = _collisionDelta.copy(node.physPos).sub(_pivot)
+  const distance = delta.length()
+  if (distance < 1e-6) return
+  delta.multiplyScalar(1 / distance)
+  _raycaster.ray.origin.copy(_pivot)
+  _raycaster.ray.direction.copy(delta)
+  _raycaster.near = 0
+  _raycaster.far = distance
+  _meshHits.length = 0
+  if (!meshes.length) return
+  _raycaster.intersectObjects(meshes, false, _meshHits)
+  let hit = _meshHits[0]
+  let fromTip = false
+  if (!hit) {
+    _raycaster.ray.origin.copy(node.physPos)
+    _raycaster.ray.direction.copy(delta).negate()
+    _meshHits.length = 0
+    _raycaster.intersectObjects(meshes, false, _meshHits)
+    hit = _meshHits[0]
+    fromTip = !!hit
+  }
+  if (!hit) return
+  if (!hit.face) return
+  _surfaceNormal.copy(hit.face.normal).applyMatrix3(_normalMatrix.getNormalMatrix(hit.object.matrixWorld)).normalize()
+  _collisionDelta.copy(fromTip ? node.physPos : _pivot).sub(hit.point)
+  if (_collisionDelta.dot(_surfaceNormal) < 0) _surfaceNormal.negate()
+  _collisionDelta.copy(node.physPos).sub(hit.point)
+  const signedDistance = _collisionDelta.dot(_surfaceNormal)
+  const penetration = radius - signedDistance
+  if (penetration > 0) node.physPos.addScaledVector(_surfaceNormal, penetration)
+  node.physPrev.copy(node.physPos)
+}
+
+function collideWithOtherBones(rt, chain, node, radius) {
+  const radiusSq = radius * radius
+  for (const other of rt.model.bones || []) {
+    if (chain.boneSet.has(other) || other === node.parentBone) continue
+    const parent = other.parent?.isBone ? other.parent : null
+    if (parent && chain.boneSet.has(parent)) continue
+    if (parent) parent.getWorldPosition(_boneStart)
+    else other.getWorldPosition(_boneStart)
+    other.getWorldPosition(_boneEnd)
+    if (_boneStart.distanceToSquared(_boneEnd) < 1e-10) continue
+    _boneLine.start.copy(_boneStart)
+    _boneLine.end.copy(_boneEnd)
+    _boneLine.closestPointToPoint(node.physPos, true, _closest)
+    _collisionDelta.copy(node.physPos).sub(_closest)
+    const distanceSq = _collisionDelta.lengthSq()
+    if (distanceSq >= radiusSq) continue
+    if (distanceSq < 1e-10) {
+      _collisionDelta.copy(_dir)
+      if (_collisionDelta.lengthSq() < 1e-10) _collisionDelta.set(0, 1, 0)
+    }
+    _collisionDelta.setLength(radius)
+    node.physPos.copy(_closest).add(_collisionDelta)
+    node.physPrev.copy(node.physPos)
+  }
+}
 
 // Advance every enabled character's dangle chains by `dt` seconds. Call once
 // per rendered frame, after the animation mixer has updated bone poses and
@@ -229,8 +316,19 @@ export function stepDangleLive(dt) {
 
   for (const rt of runtimes.values()) {
     if (!rt.enabled || !rt.chains.size) continue
+    let needsMeshCollision = false
     for (const chain of rt.chains.values()) {
-      const { stiffness, gravity, damping } = chain.params
+      if (chain.params.collideWithMesh) {
+        needsMeshCollision = true
+        break
+      }
+    }
+    const collisionMeshes = needsMeshCollision
+      ? (rt.model.meshes || []).filter((mesh) => mesh.isMesh && visibleInHierarchy(mesh))
+      : []
+    if (needsMeshCollision) rt.model.root?.updateMatrixWorld(true)
+    for (const chain of rt.chains.values()) {
+      const { stiffness, gravity, damping, collideWithBones, collideWithMesh } = chain.params
       // Exponential damping keeps the response consistent at different frame rates.
       const velocityKeep = Math.exp(-damping * 6 * subDt)
       const springFactor = 1 - Math.exp(-stiffness * 40 * subDt)
@@ -265,6 +363,14 @@ export function stepDangleLive(dt) {
             node.physPos.copy(_pivot).add(_dir)
           } else {
             node.physPos.copy(_targetTip)
+          }
+          const collisionRadius = node.tipLength * 0.12
+          if (collideWithMesh) collideWithModelMesh(collisionMeshes, node, collisionRadius)
+          if (collideWithBones) collideWithOtherBones(rt, chain, node, collisionRadius)
+          _dir.copy(node.physPos).sub(_pivot)
+          if (_dir.lengthSq() > 1e-10) {
+            _dir.setLength(node.tipLength)
+            node.physPos.copy(_pivot).add(_dir)
           }
 
           // Swing the bone's rotation from "no physics" onto "where the
@@ -383,7 +489,8 @@ export function setDangleEnabledUndoable(enabled) {
   editDangle(activeId(), (d) => ({ ...d, enabled: !!enabled }), { discrete: true })
 }
 
-export function addDangleChainUndoable(name, boneNames) {
+export function addDangleChainUndoable(name, boneNames, type = 'dangle') {
+  const cloth = type === 'cloth'
   editDangle(
     activeId(),
     (d) => ({
@@ -394,9 +501,12 @@ export function addDangleChainUndoable(name, boneNames) {
           id: `dangle_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
           name,
           boneNames,
-          stiffness: 0.15,
-          gravity: 1,
-          damping: 0.8,
+          type: cloth ? 'cloth' : 'dangle',
+          stiffness: cloth ? 0.4 : 0.15,
+          gravity: cloth ? 0.35 : 1,
+          damping: cloth ? 0.55 : 0.8,
+          collideWithBones: false,
+          collideWithMesh: false,
         },
       ],
     }),
