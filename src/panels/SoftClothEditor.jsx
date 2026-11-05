@@ -84,6 +84,7 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
   const [pendingByUuid, setPendingByUuid] = useState({})
   const [fillsByUuid, setFillsByUuid] = useState({}) // faces added by the fill tool, kept as they were filled
   const [showId, setShowId] = useState(null)
+  const [editingZone, setEditingZone] = useState(null)
   const [message, setMessage] = useState('')
   const meshesRef = useRef(targets)
   meshesRef.current = targets
@@ -93,6 +94,8 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
   pendingRef.current = pendingByUuid
   const fillsRef = useRef(fillsByUuid)
   fillsRef.current = fillsByUuid
+  const editingZoneRef = useRef(editingZone)
+  editingZoneRef.current = editingZone
   const growSettingsRef = useRef({ growMode, tolerance, radius, tool })
   growSettingsRef.current = { growMode, tolerance, radius, tool }
 
@@ -140,6 +143,7 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
     setPendingByUuid({})
     setPicking(false)
     setShowId(null)
+    setEditingZone(null)
     setMessage('')
     setAreaKind('all')
     setCoupling('independent')
@@ -164,10 +168,50 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
           setMessage('That is a different part: click one of the selected parts.')
           return
         }
+        if (editingZoneRef.current && hit.uuid !== editingZoneRef.current.uuid) {
+          setMessage('That is a different part: click the part whose area you are editing.')
+          return
+        }
         setMessage('')
         const settings = growSettingsRef.current
         if (settings.tool === 'fill') {
+          if (editingZoneRef.current) {
+            const current = new Set(pendingRef.current[hit.uuid] || [])
+            if (current.has(hit.faceIndex)) {
+              setMessage('That face is already selected. Use Pick faces to remove it.')
+              return
+            }
+            const flood = fillConnected(getSoftEntry(target)?.orig || target.geometry, hit.faceIndex, current)
+            if (!flood.length) return
+            setPendingByUuid((prev) => ({
+              ...prev,
+              [hit.uuid]: [...new Set([...(prev[hit.uuid] || []), ...flood])],
+            }))
+            setMessage(`Filled ${flood.length} face${flood.length === 1 ? '' : 's'}.`)
+            return
+          }
           fillAt(target, hit.faceIndex)
+          return
+        }
+        if (editingZoneRef.current) {
+          const current = pendingRef.current[hit.uuid] || []
+          const area =
+            settings.growMode === 'radius'
+              ? growByRadius(target, hit.faceIndex, settings.radius)
+              : settings.growMode === 'face'
+                ? [hit.faceIndex]
+                : growRegion(target, hit.faceIndex, {
+                    mode: settings.growMode,
+                    tolerance: settings.tolerance,
+                    source: getOriginalMaterials(target),
+                  })
+          const selected = new Set(current)
+          const next = selected.has(hit.faceIndex)
+            ? current.filter((tri) => !area.includes(tri))
+            : keepRef.current
+              ? Array.from(new Set([...current, ...area]))
+              : area
+          setPendingByUuid((prev) => ({ ...prev, [hit.uuid]: next }))
           return
         }
         // a brush click that replaces the area replaces the filled faces too
@@ -202,6 +246,7 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
 
   // Grow the picked spots into areas whenever a pick, mode or setting changes.
   useEffect(() => {
+    if (editingZone) return
     const next = {}
     for (const target of targets) {
       const picks = picksByUuid[target.uuid] || []
@@ -217,7 +262,7 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
       if (all.size) next[target.uuid] = Array.from(all)
     }
     setPendingByUuid(next)
-  }, [picksByUuid, fillsByUuid, growMode, tolerance, radius, targetKey])
+  }, [picksByUuid, fillsByUuid, growMode, tolerance, radius, targetKey, editingZone])
 
   const zoneEntries = targets.flatMap((target) =>
     (zonesByUuid[target.uuid] || []).map((zone) => ({ target, zone, key: `${target.uuid}:${zone.id}` })),
@@ -261,6 +306,7 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
   const pendingCount = Object.values(pendingByUuid).reduce((total, faces) => total + faces.length, 0)
   const canAdd =
     !clothOn &&
+    !editingZone &&
     (areaKind === 'all' ||
       (areaKind === 'picked' && pendingCount > 0) ||
       (areaKind === 'region' && targets.length === 1 && region))
@@ -297,6 +343,52 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
     setFillsByUuid({})
     setPendingByUuid({})
     setPicking(false)
+  }
+
+  const editArea = (target, zone, key) => {
+    setEditingZone({ uuid: target.uuid, id: zone.id })
+    setAreaKind('picked')
+    setPicksByUuid({})
+    setFillsByUuid({})
+    setPendingByUuid({ [target.uuid]: fromRanges(zone.area.tris) })
+    setShowId(key)
+    setMessage('')
+    setPicking(true)
+  }
+
+  const saveEditedArea = () => {
+    if (!editingZone || pendingCount === 0) return
+    const target = targets.find((candidate) => candidate.uuid === editingZone.uuid)
+    const zone = target && (zonesByUuid[target.uuid] || []).find((candidate) => candidate.id === editingZone.id)
+    if (!target || !zone) return
+    update(
+      target.uuid,
+      zone.id,
+      {
+        area: {
+          kind: 'tris',
+          tris: toRanges(pendingByUuid[target.uuid] || []),
+          vertexCount: (pendingByUuid[target.uuid] || []).length * 3,
+        },
+      },
+      true,
+    )
+    setEditingZone(null)
+    setPicksByUuid({})
+    setFillsByUuid({})
+    setPendingByUuid({})
+    setPicking(false)
+    setShowId(`${target.uuid}:${zone.id}`)
+  }
+
+  const cancelEditedArea = () => {
+    setEditingZone(null)
+    setPicksByUuid({})
+    setFillsByUuid({})
+    setPendingByUuid({})
+    setPicking(false)
+    setShowId(null)
+    setMessage('')
   }
 
   const applyPreset = (uuid, zone, id) => {
@@ -341,10 +433,15 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
                   </label>
                   <span style={{ display: 'inline-flex', gap: 6 }}>
                     {z.area.kind === 'tris' && (
-                      <label className="row" title="Show which faces this effect moves">
-                        <input type="checkbox" checked={showId === key} onChange={(e) => setShowId(e.target.checked ? key : null)} />
-                        <span>Show area</span>
-                      </label>
+                      <>
+                        <label className="row" title="Show which faces this effect moves">
+                          <input type="checkbox" checked={showId === key} onChange={(e) => setShowId(e.target.checked ? key : null)} />
+                          <span>Show area</span>
+                        </label>
+                        <button className="btn secondary" disabled={!!editingZone} onClick={() => editArea(target, z, key)}>
+                          Edit area
+                        </button>
+                      </>
                     )}
                     <button className="btn secondary" onClick={() => resetSoftCloth()} title="Stop the motion and start again from the pose">
                       Reset
@@ -556,46 +653,52 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
 
       <div className="dangle-add" style={{ borderTop: zoneEntries.length ? '1px solid var(--border, #333)' : 'none', paddingTop: zoneEntries.length ? 8 : 0 }}>
         <div className="joint-name" style={{ marginBottom: 6 }}>
-          Add an effect
+          {editingZone ? 'Edit selected area' : 'Add an effect'}
         </div>
-        <label className="field">
-          <span>Kind</span>
-          <select value={addMode} onChange={(e) => setAddMode(e.target.value)} disabled={clothOn}>
-            <option value="soft">Soft cloth (fabric that follows loosely)</option>
-            <option value="swing">Swing (a piece that hangs and swings)</option>
-          </select>
-        </label>
-        <label className="field">
-          <span>Preset</span>
-          <select value={preset} onChange={(e) => setPreset(e.target.value)} disabled={clothOn}>
-            {SOFT_PRESETS[addMode].map((p) => (
-              <option key={p.id} value={p.id} title={p.hint}>
-                {p.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="field">
-          <span>Where</span>
-          <select
-            value={areaKind}
-            onChange={(e) => {
-              setAreaKind(e.target.value)
-              setPicking(e.target.value === 'picked')
-              if (e.target.value !== 'picked') {
-                setPicksByUuid({})
-                setFillsByUuid({})
-                setPendingByUuid({})
-              }
-            }}
-            disabled={clothOn}
-          >
-            <option value="all">{targets.length > 1 ? 'Every selected part' : 'The whole part'}</option>
-            <option value="picked">An area I pick on the part…</option>
-            {targets.length === 1 && regions.length > 0 && <option value="region">A painted region…</option>}
-          </select>
-        </label>
-        {targets.length > 1 && (
+        {!editingZone && (
+          <label className="field">
+            <span>Kind</span>
+            <select value={addMode} onChange={(e) => setAddMode(e.target.value)} disabled={clothOn}>
+              <option value="soft">Soft cloth (fabric that follows loosely)</option>
+              <option value="swing">Swing (a piece that hangs and swings)</option>
+            </select>
+          </label>
+        )}
+        {!editingZone && (
+          <label className="field">
+            <span>Preset</span>
+            <select value={preset} onChange={(e) => setPreset(e.target.value)} disabled={clothOn}>
+              {SOFT_PRESETS[addMode].map((p) => (
+                <option key={p.id} value={p.id} title={p.hint}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {!editingZone && (
+          <label className="field">
+            <span>Where</span>
+            <select
+              value={areaKind}
+              onChange={(e) => {
+                setAreaKind(e.target.value)
+                setPicking(e.target.value === 'picked')
+                if (e.target.value !== 'picked') {
+                  setPicksByUuid({})
+                  setFillsByUuid({})
+                  setPendingByUuid({})
+                }
+              }}
+              disabled={clothOn}
+            >
+              <option value="all">{targets.length > 1 ? 'Every selected part' : 'The whole part'}</option>
+              <option value="picked">An area I pick on the part…</option>
+              {targets.length === 1 && regions.length > 0 && <option value="region">A painted region…</option>}
+            </select>
+          </label>
+        )}
+        {!editingZone && targets.length > 1 && (
           <label className="field" title="Choose whether effects added across these meshes move separately or together.">
             <span>Connection for new effects</span>
             <select value={coupling} onChange={(e) => setCoupling(e.target.value)} disabled={clothOn}>
@@ -606,7 +709,7 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
           </label>
         )}
 
-        {areaKind === 'region' && (
+        {!editingZone && areaKind === 'region' && (
           <label className="field">
             <span>Region</span>
             <select value={regionId} onChange={(e) => setRegionId(e.target.value)}>
@@ -620,12 +723,14 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
           </label>
         )}
 
-        {areaKind === 'picked' && (
+        {(editingZone || areaKind === 'picked') && (
           <div style={{ marginTop: 4 }}>
             <div className="radio-hint">
-              {pendingCount
-                ? `${pendingCount} face${pendingCount === 1 ? '' : 's'} selected across ${Object.keys(pendingByUuid).length} part${Object.keys(pendingByUuid).length === 1 ? '' : 's'} (shown in pink). Click a selected area again to remove it.`
-                : 'Click one or more selected parts in the viewport where the effect should be (a hood, a cuff, the zip pull).'}
+              {editingZone
+                ? `${pendingCount} face${pendingCount === 1 ? '' : 's'} selected (shown in pink). Click to adjust the area, then save or cancel.`
+                : pendingCount
+                  ? `${pendingCount} face${pendingCount === 1 ? '' : 's'} selected across ${Object.keys(pendingByUuid).length} part${Object.keys(pendingByUuid).length === 1 ? '' : 's'} (shown in pink). Click a selected area again to remove it.`
+                  : 'Click one or more selected parts in the viewport where the effect should be (a hood, a cuff, the zip pull).'}
             </div>
             <label className="field">
               <span>Tool</span>
@@ -635,15 +740,15 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
               </select>
             </label>
             {tool === 'brush' && (
-            <label className="field">
-              <span>Grow by</span>
-              <select value={growMode} onChange={(e) => setGrowMode(e.target.value)}>
-                <option value="radius">Distance around the click</option>
-                <option value="piece">The whole connected piece</option>
-                <option value="color">Connected faces of a similar colour</option>
-                <option value="face">Just that face</option>
-              </select>
-            </label>
+              <label className="field">
+                <span>Grow by</span>
+                <select value={growMode} onChange={(e) => setGrowMode(e.target.value)}>
+                  <option value="radius">Distance around the click</option>
+                  <option value="piece">The whole connected piece</option>
+                  <option value="color">Connected faces of a similar colour</option>
+                  <option value="face">Just that face</option>
+                </select>
+              </label>
             )}
             {tool === 'fill' && (
               <div className="radio-hint">
@@ -675,20 +780,31 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
               />
             )}
             {tool === 'brush' && (
-            <label className="row" title="Each click adds to the area instead of replacing it">
-              <input type="checkbox" checked={keepAdding} onChange={(e) => setKeepAdding(e.target.checked)} />
-              <span>Each click adds to the area</span>
-            </label>
+              <label className="row" title="Each click adds to the area instead of replacing it">
+                <input type="checkbox" checked={keepAdding} onChange={(e) => setKeepAdding(e.target.checked)} />
+                <span>Each click adds to the area</span>
+              </label>
             )}
           </div>
         )}
         {message && <div className="radio-hint">{message}</div>}
 
         <div className="row" style={{ marginTop: 8, gap: 6 }}>
-          <button className="btn secondary" disabled={!canAdd} onClick={add}>
-            Add effect
-          </button>
-          {areaKind === 'picked' && pendingCount > 0 && (
+          {editingZone ? (
+            <>
+              <button className="btn secondary" disabled={pendingCount === 0} onClick={saveEditedArea}>
+                Save area
+              </button>
+              <button className="btn secondary" onClick={cancelEditedArea}>
+                Cancel
+              </button>
+            </>
+          ) : (
+            <button className="btn secondary" disabled={!canAdd} onClick={add}>
+              Add effect
+            </button>
+          )}
+          {!editingZone && areaKind === 'picked' && pendingCount > 0 && (
             <button
               className="btn secondary"
               onClick={() => {

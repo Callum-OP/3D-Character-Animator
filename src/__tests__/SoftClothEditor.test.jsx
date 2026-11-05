@@ -116,6 +116,44 @@ describe('Soft cloth editor', () => {
     expect(screen.getByText(/click one or more selected parts/i)).toBeTruthy()
   })
 
+  it('edits an existing picked area and saves the change as one undoable step', () => {
+    render(<SoftClothEditor mesh={mesh} />)
+    const where = screen.getAllByRole('combobox').find((s) => [...s.options].some((o) => o.value === 'picked'))
+    fireEvent.change(where, { target: { value: 'picked' } })
+    const growBy = screen.getAllByRole('combobox').find((s) => [...s.options].some((o) => o.value === 'face'))
+    fireEvent.change(growBy, { target: { value: 'face' } })
+    act(() => picker.handler({ uuid: mesh.uuid, faceIndex: 5 }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add effect' }))
+    const originalArea = zonesOf()[0].area
+
+    fireEvent.click(screen.getByText(/Soft cloth.*area/))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit area' }))
+    expect(screen.getByText(/1 face selected.*shown in pink/)).toBeTruthy()
+    act(() => picker.handler({ uuid: mesh.uuid, faceIndex: 6 }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save area' }))
+    expect(zonesOf()[0].area.tris).toEqual([[6, 6]])
+
+    performUndo(useStore.getState())
+    expect(zonesOf()[0].area).toEqual(originalArea)
+  })
+
+  it('cancels area editing without changing the saved area', () => {
+    render(<SoftClothEditor mesh={mesh} />)
+    const where = screen.getAllByRole('combobox').find((s) => [...s.options].some((o) => o.value === 'picked'))
+    fireEvent.change(where, { target: { value: 'picked' } })
+    const growBy = screen.getAllByRole('combobox').find((s) => [...s.options].some((o) => o.value === 'face'))
+    fireEvent.change(growBy, { target: { value: 'face' } })
+    act(() => picker.handler({ uuid: mesh.uuid, faceIndex: 5 }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add effect' }))
+    const originalArea = zonesOf()[0].area
+
+    fireEvent.click(screen.getByText(/Soft cloth.*area/))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit area' }))
+    act(() => picker.handler({ uuid: mesh.uuid, faceIndex: 6 }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(zonesOf()[0].area).toEqual(originalArea)
+  })
+
   it('applies one whole-part effect to every selected mesh as one undo step', () => {
     const secondMesh = makeMesh()
     render(<SoftClothEditor mesh={mesh} meshes={[mesh, secondMesh]} />)
