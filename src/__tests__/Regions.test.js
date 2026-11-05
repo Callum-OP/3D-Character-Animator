@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import * as THREE from 'three'
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import {
   toRanges, fromRanges, growRegion, applyRegionIds, ensureRegionGeometry, bakeRegionsForExport,
   regionVertexCount, isRegionCapable, triangleColor, getAdjacency, setRegionOverlay, withOverlaysHidden,
@@ -260,5 +261,74 @@ describe('store', () => {
     expect(useStore.getState().meshOverrides.m9.color).toBe('#ff0000')
     useStore.getState().setMeshRegions('m9', [])
     expect(useStore.getState().meshOverrides.m9.regions).toBeUndefined()
+  })
+})
+
+// --- flood fill and highlight redraws ---------------------------------------------------------------
+import { fillConnected, setRegionOverlay, setRegionsRenderHook } from '../three/regions.js'
+
+describe('fillConnected', () => {
+  const grid = (n) => new THREE.PlaneGeometry(1, 1, n, n) // n x n quads, 2 triangles each
+  const quadTris = (n, r, c) => [2 * (r * n + c), 2 * (r * n + c) + 1]
+  const ring = (n, r0, r1, c0, c1) => {
+    const out = new Set()
+    for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) if (r === r0 || r === r1 || c === c0 || c === c1) quadTris(n, r, c).forEach((t) => out.add(t))
+    return out
+  }
+
+  it('fills the inside of a closed outline and stops at it', () => {
+    const geo = grid(8)
+    const barrier = ring(8, 2, 5, 2, 5) // the border of a 4x4 block: encloses the inner 2x2
+    const inside = fillConnected(geo, quadTris(8, 3, 3)[0], barrier)
+    expect(inside.length).toBe(8) // 2x2 quads
+    for (const t of inside) expect(barrier.has(t)).toBe(false)
+  })
+
+  it('an outline with a gap lets the fill out, across the whole connected piece', () => {
+    const geo = grid(8)
+    const barrier = ring(8, 2, 5, 2, 5)
+    for (const t of quadTris(8, 2, 3)) barrier.delete(t) // open a gap in the top edge
+    const filled = fillConnected(geo, quadTris(8, 3, 3)[0], barrier)
+    expect(filled.length).toBe(2 * 64 - barrier.size)
+  })
+
+  it('never reaches faces that are not connected to the click, however close they are', () => {
+    const a = grid(3)
+    const b = grid(3).translate(0.001, 0, 0.2) // a second sheet right next to the first, not joined to it
+    const merged = mergeGeometries([a, b])
+    const nA = a.index.count / 3
+    const filled = fillConnected(merged, 0, null)
+    expect(filled.length).toBe(nA)
+    expect(filled.every((t) => t < nA)).toBe(true)
+  })
+
+  it('crosses a texture seam (vertices split at the same place still count as connected)', () => {
+    const geo = grid(2).toNonIndexed() // every triangle has its own vertices
+    expect(fillConnected(geo, 0, null).length).toBe(8)
+  })
+
+  it('can be limited to a set of faces', () => {
+    const geo = grid(4)
+    const within = new Set([0, 1, 2, 3])
+    const found = fillConnected(geo, 0, null, within)
+    expect(found.every((t) => within.has(t))).toBe(true)
+    expect(fillConnected(geo, 10, null, within)).toEqual([])
+  })
+})
+
+describe('region highlight redraws', () => {
+  it('asks for a new frame whenever the highlight is added, changed or removed (the viewport draws on demand)', () => {
+    let frames = 0
+    setRegionsRenderHook(() => frames++)
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1, 2, 2), new THREE.MeshBasicMaterial())
+    setRegionOverlay(mesh, [0, 1, 2])
+    expect(frames).toBe(1)
+    setRegionOverlay(mesh, [0, 1]) // changed
+    expect(frames).toBe(2)
+    setRegionOverlay(mesh, null) // removed
+    expect(frames).toBe(3)
+    setRegionOverlay(mesh, null) // nothing was showing: nothing to draw
+    expect(frames).toBe(3)
+    setRegionsRenderHook(null)
   })
 })

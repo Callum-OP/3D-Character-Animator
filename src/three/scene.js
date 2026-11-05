@@ -266,7 +266,7 @@ import { markProjectClean, markProjectCleanAfterLoad } from './projectDirty.js'
 import { resolveTextureLook, normalizeMaterialLook, TEXTURE_LOOK_DEFAULT } from './textureLookOptions.js'
 import { withExportSafeMaterials } from './materialUserData.js'
 import { buildPartsGroup, safeFileStem } from './extractParts.js'
-import { bakeRegionsForExport, fromRanges } from './regions.js'
+import { bakeRegionsForExport, fromRanges, setRegionsRenderHook } from './regions.js'
 import { analyseSurface, outwardDirection, adjustDirection, faceOfObject, averageSurfaceColor, lightColourFrom } from './lightFromPart.js'
 import { getOriginalMaterials } from './surfaceMaterials.js'
 import { pushSceneHistory } from './sceneHistory.js'
@@ -665,6 +665,7 @@ export function initScene(container) {
 
   initFlattener({ scene, requestRender })
   initSoftCloth({ requestRender })
+  setRegionsRenderHook(requestRender)
 
   // --- IK pins: markers that hold a hand / foot / limb in place while an animation plays ---
   initIk({

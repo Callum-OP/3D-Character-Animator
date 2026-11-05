@@ -223,3 +223,91 @@ describe('Soft cloth editor', () => {
     expect(zonesOf()[0].stiffness).toBe(0.9)
   })
 })
+
+describe('Soft cloth editor: fill tool and highlight', () => {
+  const N = 6
+  const quadTris = (r, c) => [2 * (r * N + c), 2 * (r * N + c) + 1]
+  const bigMesh = () => new THREE.Mesh(new THREE.PlaneGeometry(1, 1, N, N), new THREE.MeshBasicMaterial({ color: 0xff0000 }))
+
+  function pickMode() {
+    const where = screen.getAllByRole('combobox').find((s) => [...s.options].some((o) => o.value === 'picked'))
+    fireEvent.change(where, { target: { value: 'picked' } })
+  }
+  const selectByValue = (value) => screen.getAllByRole('combobox').find((s) => [...s.options].some((o) => o.value === value))
+
+  function drawRing() {
+    // a ring around the inner 2x2 quads (rows/cols 2..3): the border of the 4x4 block at rows/cols 1..4
+    fireEvent.change(selectByValue('face'), { target: { value: 'face' } })
+    fireEvent.click(screen.getByLabelText('Each click adds to the area'))
+    for (let r = 1; r <= 4; r++) {
+      for (let c = 1; c <= 4; c++) {
+        if (r > 1 && r < 4 && c > 1 && c < 4) continue
+        for (const t of quadTris(r, c)) act(() => picker.handler({ uuid: mesh.uuid, faceIndex: t }))
+      }
+    }
+  }
+
+  it('fills the inside of an outline, and clicking inside the fill again takes it away', () => {
+    mesh = bigMesh()
+    render(<SoftClothEditor mesh={mesh} />)
+    pickMode()
+    drawRing()
+    expect(screen.getByText(/24 faces selected/)).toBeTruthy()
+    fireEvent.change(selectByValue('fill'), { target: { value: 'fill' } })
+    act(() => picker.handler({ uuid: mesh.uuid, faceIndex: quadTris(2, 2)[0] }))
+    expect(screen.getByText(/Filled 8 faces/)).toBeTruthy()
+    expect(screen.getByText(/32 faces selected/)).toBeTruthy()
+    // the zone keeps outline + fill
+    fireEvent.click(screen.getByRole('button', { name: 'Add effect' }))
+    const faces = zonesOf()[0].area.tris.reduce((total, [a, b]) => total + (b - a + 1), 0)
+    expect(faces).toBe(32)
+  })
+
+  it('clicking inside a fill again removes just that fill', () => {
+    mesh = bigMesh()
+    render(<SoftClothEditor mesh={mesh} />)
+    pickMode()
+    drawRing()
+    fireEvent.change(selectByValue('fill'), { target: { value: 'fill' } })
+    act(() => picker.handler({ uuid: mesh.uuid, faceIndex: quadTris(2, 2)[0] }))
+    expect(screen.getByText(/32 faces selected/)).toBeTruthy()
+    act(() => picker.handler({ uuid: mesh.uuid, faceIndex: quadTris(3, 3)[1] }))
+    expect(screen.getByText(/24 faces selected/)).toBeTruthy()
+  })
+
+  it('warns when the outline has a gap and the fill runs out across the connected piece', () => {
+    mesh = bigMesh()
+    render(<SoftClothEditor mesh={mesh} />)
+    pickMode()
+    fireEvent.change(selectByValue('face'), { target: { value: 'face' } })
+    fireEvent.click(screen.getByLabelText('Each click adds to the area'))
+    // only the top and left sides of the outline: it is not closed
+    for (let i = 1; i <= 4; i++) {
+      for (const t of [...quadTris(1, i), ...quadTris(i, 1)]) act(() => picker.handler({ uuid: mesh.uuid, faceIndex: t }))
+    }
+    fireEvent.change(selectByValue('fill'), { target: { value: 'fill' } })
+    act(() => picker.handler({ uuid: mesh.uuid, faceIndex: quadTris(2, 2)[0] }))
+    expect(screen.getByText(/outline probably has a gap/)).toBeTruthy()
+  })
+
+  it('does not fill a face that is part of the outline', () => {
+    mesh = bigMesh()
+    render(<SoftClothEditor mesh={mesh} />)
+    pickMode()
+    drawRing()
+    fireEvent.change(selectByValue('fill'), { target: { value: 'fill' } })
+    act(() => picker.handler({ uuid: mesh.uuid, faceIndex: quadTris(1, 1)[0] }))
+    expect(screen.getByText(/part of the outline/)).toBeTruthy()
+    expect(screen.getByText(/24 faces selected/)).toBeTruthy()
+  })
+
+  it('switching to the fill tool and back does not change the faces already picked', () => {
+    mesh = bigMesh()
+    render(<SoftClothEditor mesh={mesh} />)
+    pickMode()
+    drawRing()
+    fireEvent.change(selectByValue('fill'), { target: { value: 'fill' } })
+    fireEvent.change(selectByValue('brush'), { target: { value: 'brush' } })
+    expect(screen.getByText(/24 faces selected/)).toBeTruthy()
+  })
+})

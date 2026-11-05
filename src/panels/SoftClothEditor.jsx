@@ -4,7 +4,7 @@ import { useStore } from '../store.js'
 import { recordOverrideEdit } from '../three/materialHistory.js'
 import { refreshSoftCloth } from '../three/scene.js'
 import { setFacePickHandler } from '../three/meshedit.js'
-import { growRegion, toRanges, fromRanges } from '../three/regions.js'
+import { growRegion, toRanges, fromRanges, fillConnected } from '../three/regions.js'
 import { getOriginalMaterials } from '../three/surfaceMaterials.js'
 import { makeSoftZone, newZoneId, setSoftOverlay, getSoftEntry, resetSoftCloth, SOFT_PRESETS, SOFT_MODES } from '../three/softcloth.js'
 import EditableValue from './EditableValue.jsx'
@@ -76,11 +76,13 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
   const [coupling, setCoupling] = useState('independent')
   const [picking, setPicking] = useState(false)
   const [growMode, setGrowMode] = useState('radius')
+  const [tool, setTool] = useState('brush') // 'brush' picks faces (grown by growMode), 'fill' fills inside an outline
   const [tolerance, setTolerance] = useState(0.25)
   const [radius, setRadius] = useState(0.1)
   const [keepAdding, setKeepAdding] = useState(false)
   const [picksByUuid, setPicksByUuid] = useState({})
   const [pendingByUuid, setPendingByUuid] = useState({})
+  const [fillsByUuid, setFillsByUuid] = useState({}) // faces added by the fill tool, kept as they were filled
   const [showId, setShowId] = useState(null)
   const [message, setMessage] = useState('')
   const meshesRef = useRef(targets)
@@ -89,12 +91,52 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
   keepRef.current = keepAdding
   const pendingRef = useRef(pendingByUuid)
   pendingRef.current = pendingByUuid
-  const growSettingsRef = useRef({ growMode, tolerance, radius })
-  growSettingsRef.current = { growMode, tolerance, radius }
+  const fillsRef = useRef(fillsByUuid)
+  fillsRef.current = fillsByUuid
+  const growSettingsRef = useRef({ growMode, tolerance, radius, tool })
+  growSettingsRef.current = { growMode, tolerance, radius, tool }
+
+  // Fill tool: click inside an outline (picked faces) and every face connected to the click, up to the
+  // outline, is selected. Faces that are not connected to the click are never reached. Clicking inside
+  // a filled area again takes that fill away.
+  const fillAt = (target, face) => {
+    const geometry = getSoftEntry(target)?.orig || target.geometry
+    const uuid = target.uuid
+    const fills = fillsRef.current[uuid] || []
+    const barrier = new Set(pendingRef.current[uuid] || [])
+    if (fills.includes(face)) {
+      const connected = new Set(fillConnected(geometry, face, null, new Set(fills)))
+      const keep = fills.filter((t) => !connected.has(t))
+      setFillsByUuid((prev) => ({ ...prev, [uuid]: keep }))
+      setMessage('Took that fill away.')
+      return
+    }
+    if (barrier.has(face)) {
+      setMessage('That face is part of the outline. Click inside it to fill.')
+      return
+    }
+    const flood = fillConnected(geometry, face, barrier)
+    if (!flood.length) return
+    // an outline with a gap lets the fill run out across the whole connected piece: say so
+    let separated = flood.length // the faces the outline could have kept the fill out of
+    if (barrier.size) {
+      const island = new Set(fillConnected(geometry, face, null))
+      let outline = 0
+      for (const t of barrier) if (island.has(t)) outline++
+      separated = island.size - outline
+    }
+    setFillsByUuid((prev) => ({ ...prev, [uuid]: [...(prev[uuid] || []), ...flood] }))
+    setMessage(
+      barrier.size && flood.length >= separated * 0.9
+        ? `Filled ${flood.length} faces, but that is almost the whole connected piece: the outline probably has a gap. Click inside the fill again to take it away, close the gap, and fill again.`
+        : `Filled ${flood.length} face${flood.length === 1 ? '' : 's'}.`,
+    )
+  }
 
   // A different selection: drop any half-made area.
   useEffect(() => {
     setPicksByUuid({})
+    setFillsByUuid({})
     setPendingByUuid({})
     setPicking(false)
     setShowId(null)
@@ -124,6 +166,12 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
         }
         setMessage('')
         const settings = growSettingsRef.current
+        if (settings.tool === 'fill') {
+          fillAt(target, hit.faceIndex)
+          return
+        }
+        // a brush click that replaces the area replaces the filled faces too
+        if (!keepRef.current) setFillsByUuid((prev) => (prev[hit.uuid]?.length ? { ...prev, [hit.uuid]: [] } : prev))
         setPicksByUuid((prev) => {
           const current = prev[hit.uuid] || []
           const selected = pendingRef.current[hit.uuid] || []
@@ -157,8 +205,9 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
     const next = {}
     for (const target of targets) {
       const picks = picksByUuid[target.uuid] || []
-      if (!picks.length) continue
-      const all = new Set()
+      const fills = fillsByUuid[target.uuid] || []
+      if (!picks.length && !fills.length) continue
+      const all = new Set(fills)
       const source = getOriginalMaterials(target)
       for (const tri of picks) {
         const grown =
@@ -168,7 +217,7 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
       if (all.size) next[target.uuid] = Array.from(all)
     }
     setPendingByUuid(next)
-  }, [picksByUuid, growMode, tolerance, radius, targetKey])
+  }, [picksByUuid, fillsByUuid, growMode, tolerance, radius, targetKey])
 
   const zoneEntries = targets.flatMap((target) =>
     (zonesByUuid[target.uuid] || []).map((zone) => ({ target, zone, key: `${target.uuid}:${zone.id}` })),
@@ -245,6 +294,7 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
     commitMany(updates)
     if (added.length) setShowId(`${added[0].target.uuid}:${added[0].zone.id}`)
     setPicksByUuid({})
+    setFillsByUuid({})
     setPendingByUuid({})
     setPicking(false)
   }
@@ -408,6 +458,15 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
                 {mode === 'soft' ? (
                   <>
                     <Slider
+                      label="Bounce (up and down)"
+                      hint="How freely the cloth bobs up and down as the body moves. Less = held firmly, 100% = normal, more = loose and bouncy, like a hood on a run."
+                      value={z.bounce ?? 1}
+                      min={0}
+                      max={2.5}
+                      format={pct}
+                      onChange={(v) => update(target.uuid, z.id, { bounce: v })}
+                    />
+                    <Slider
                       label="Range"
                       hint="The furthest it may drift from the pose, as a share of the size of the area."
                       value={z.range ?? 0.08}
@@ -457,8 +516,30 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
                       onChange={(v) => update(target.uuid, z.id, { swingLimit: v })}
                     />
                     <Slider
+                      label="Body reaction"
+                      hint="How strongly it is thrown about when the body speeds up, stops or turns. 0 = only gravity and the pose move it, 100% = realistic, more = exaggerated."
+                      value={z.reaction ?? 1}
+                      min={0}
+                      max={2}
+                      format={pct}
+                      onChange={(v) => update(target.uuid, z.id, { reaction: v })}
+                    />
+                    <label className="row" title="Tick for a string, strap or cord that is fixed at its top end: the top stays held to the garment and it bends out from there. Leave off for a small separate piece (a zip pull, a charm) that swings as one rigid piece. It is on automatically when the piece is joined to, or touches, another part with an effect.">
+                      <input type="checkbox" checked={z.hangs === true} onChange={(e) => update(target.uuid, z.id, { hangs: e.target.checked }, true)} />
+                      <span>Hangs from its top end</span>
+                    </label>
+                    <Slider
+                      label="Rigid top"
+                      hint="How much of the piece, from where it joins the mesh, is locked solid to it (it moves exactly with the cloth it hangs from). Only below this does it swing."
+                      value={z.holdTop ?? 0}
+                      min={0}
+                      max={0.7}
+                      format={pct}
+                      onChange={(v) => update(target.uuid, z.id, { holdTop: v })}
+                    />
+                    <Slider
                       label="Edge hold"
-                      hint="If the piece is joined to the rest of the part, how far in from the join it stays fixed. 0 = it swings completely free."
+                      hint="If the piece is joined to the rest of the part, how far from the join it bends before the rest swings stiff. 0 = it swings from the join like a hinge."
                       value={z.blend ?? 0.15}
                       min={0.02}
                       max={1}
@@ -503,6 +584,7 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
               setPicking(e.target.value === 'picked')
               if (e.target.value !== 'picked') {
                 setPicksByUuid({})
+                setFillsByUuid({})
                 setPendingByUuid({})
               }
             }}
@@ -546,6 +628,14 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
                 : 'Click one or more selected parts in the viewport where the effect should be (a hood, a cuff, the zip pull).'}
             </div>
             <label className="field">
+              <span>Tool</span>
+              <select value={tool} onChange={(e) => setTool(e.target.value)}>
+                <option value="brush">Pick faces</option>
+                <option value="fill">Fill inside an outline</option>
+              </select>
+            </label>
+            {tool === 'brush' && (
+            <label className="field">
               <span>Grow by</span>
               <select value={growMode} onChange={(e) => setGrowMode(e.target.value)}>
                 <option value="radius">Distance around the click</option>
@@ -554,7 +644,15 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
                 <option value="face">Just that face</option>
               </select>
             </label>
-            {growMode === 'radius' && (
+            )}
+            {tool === 'fill' && (
+              <div className="radio-hint">
+                Outline the area first with &quot;Pick faces&quot; (with &quot;Each click adds to the area&quot; on, click a ring or a line of
+                faces around it, using a small size or &quot;Just that face&quot;), switch to Fill, then click inside it: every connected face up to the outline is selected. Separate pieces are never
+                reached, so filling a hood does not pick up the jacket. Click inside a fill again to take it away.
+              </div>
+            )}
+            {tool === 'brush' && growMode === 'radius' && (
               <Slider
                 label="Size"
                 hint="How far around the click it reaches, as a share of the size of the part."
@@ -565,7 +663,7 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
                 onChange={setRadius}
               />
             )}
-            {growMode === 'color' && (
+            {tool === 'brush' && growMode === 'color' && (
               <Slider
                 label="Colour match"
                 hint="How different a colour may be and still be included."
@@ -576,10 +674,12 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
                 onChange={setTolerance}
               />
             )}
+            {tool === 'brush' && (
             <label className="row" title="Each click adds to the area instead of replacing it">
               <input type="checkbox" checked={keepAdding} onChange={(e) => setKeepAdding(e.target.checked)} />
               <span>Each click adds to the area</span>
             </label>
+            )}
           </div>
         )}
         {message && <div className="radio-hint">{message}</div>}
@@ -593,6 +693,7 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
               className="btn secondary"
               onClick={() => {
                 setPicksByUuid({})
+                setFillsByUuid({})
                 setPendingByUuid({})
               }}
             >
