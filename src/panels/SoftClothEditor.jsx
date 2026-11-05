@@ -57,6 +57,61 @@ function growByRadius(mesh, seedTri, fraction) {
 // Pose panel > Mesh > Cloth: soft cloth and swing zones for selected parts.
 // A zone makes a whole part, or a picked area, follow the animation on a spring (Soft cloth) or hang
 // and swing as one piece (Swing). See three/softcloth.js.
+// What an effect is joined to, and how far to look. A held top (soft cloth) or a hinge (swing) follows the
+// vertices of another effect that touch it, on this part or another, so a hood and its drawstrings move as one.
+function joinStatus(target, zone) {
+  const entry = getSoftEntry(target)
+  const zr = entry && entry.zones.get(zone.id)
+  if (!zr) return null
+  if (zr.mode === 'swing') {
+    let linked = 0
+    let total = 0
+    for (const comp of zr.comps) {
+      total += comp.hingeLinks.length
+      linked += comp.hingeLinks.filter(Boolean).length
+    }
+    return { linked, total, held: total, mode: 'swing' }
+  }
+  return { linked: zr.attach.length, total: zr.lockedSites.length, held: zr.lockedSites.length, mode: 'soft' }
+}
+
+function JoinSettings({ target, zone, update }) {
+  const status = joinStatus(target, zone)
+  const text = !status
+    ? ''
+    : status.linked
+      ? `Joined: ${status.linked} of ${status.total} ${status.mode === 'swing' ? 'hinge' : 'held'} vertices touch another effect and move with it.`
+      : status.held
+        ? 'Not joined to anything: no other effect has vertices near the held part. Raise the range if it should be.'
+        : zone.couplingMode === 'seams'
+          ? 'No held points to attach, but matching seam vertices in this group share motion.'
+          : zone.couplingMode === 'rigid'
+            ? 'No held points to attach; this effect shares one cloth motion with its group.'
+            : 'Nothing is held on this effect, so there is nothing to join. (Soft cloth holds its top with "Hold the top".)'
+  return (
+    <>
+      <div className="radio-hint" style={{ margin: '4px 0' }}>{text}</div>
+      {(!status || status.held > 0) && (
+        <>
+          <Slider
+            label="Join range"
+            hint="How close another effect's vertices must be for this one to count as joined to it (a hood's cloth and its drawstrings, a jacket and its sleeves). Parts with few vertices are searched a little further automatically."
+            value={zone.attachRange ?? 0.04}
+            min={0.01}
+            max={0.25}
+            format={pct}
+            onChange={(v) => update(target.uuid, zone.id, { attachRange: v })}
+          />
+          <label className="row" title="Move the held vertices exactly onto the vertices they are joined to, closing any gap between the parts while the effect is running. (With the effect off, or paused on the plain pose, the parts are where the model puts them.)">
+            <input type="checkbox" checked={zone.closeGap === true} onChange={(e) => update(target.uuid, zone.id, { closeGap: e.target.checked }, true)} />
+            <span>Pull the join together</span>
+          </label>
+        </>
+      )}
+    </>
+  )
+}
+
 export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
   const targets = (meshes?.length ? meshes : [mesh]).filter(Boolean)
   const targetUuids = targets.map((target) => target.uuid)
@@ -401,37 +456,52 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
   }
 
   return (
-    <div style={{ marginTop: 6 }}>
-      <div className="radio-hint" style={{ marginBottom: 8 }}>
-        Makes each selected part (or just a piece of it) move a little differently from the body so it does not look stuck on. Much
-        cheaper than the full cloth simulation. <b>Soft cloth</b> is for fabric (a jacket, sleeves, a hood); <b>Swing</b> is for a
-        piece that hangs and swings (a zip pull, a fastener). It plays while an animation plays; stopped or scrubbed frames
-        show the plain pose. Picked soft-cloth areas can blend into unselected vertices on the same mesh to soften their boundary.
-      </div>
+    <div className="soft-cloth-editor">
+      <header className="soft-cloth-intro">
+        <div className="soft-cloth-eyebrow">CLOTH &amp; MOTION</div>
+        <h3>Add a little movement to clothing</h3>
+        <p>
+          Add a soft spring to fabric, or make a separate piece swing. Select several meshes first to make one
+          effect span parts such as a jacket and its sleeves.
+        </p>
+        <div className="soft-cloth-intro-note">Runs during playback · paused or scrubbed frames show the clean pose</div>
+      </header>
 
       {clothOn && (
-        <div className="radio-hint" style={{ marginBottom: 8, color: 'var(--warn, #e0a030)' }}>
-          The full cloth simulation is on for at least one selected part. Turn it off to use soft cloth or swing.
+        <div className="soft-cloth-alert">
+          The full cloth simulation is on for a selected part. Turn it off before adding soft cloth or swing.
         </div>
       )}
 
       {zoneEntries.length > 0 && (
-        <div style={{ marginBottom: 10 }}>
+        <section className="soft-cloth-effects" aria-label="Cloth effects">
+          <div className="soft-cloth-section-heading">
+            <div>
+              <div className="soft-cloth-step">STEP 1</div>
+              <h4>Effects on these parts</h4>
+            </div>
+            <span className="soft-cloth-count" aria-label={`${zoneEntries.length} effects`}>{zoneEntries.length}</span>
+          </div>
           {zoneEntries.map(({ target, zone: z, key }) => {
             const mode = z.mode
             return (
-              <details key={key} className="dangle-chain" style={{ marginBottom: 8 }}>
-                <summary className="dangle-chain-summary" style={{ opacity: z.enabled === false ? 0.55 : 1 }}>
-                  {targets.length > 1 ? `${target.name || 'Part'} · ` : ''}{z.name} · {SOFT_MODES[mode]}
-                  {z.area.kind === 'tris' ? ' · area' : ' · whole part'}
-                    {z.couplingMode === 'seams' ? ' · seam-connected' : z.couplingMode === 'rigid' ? ' · shared sway' : ''}
+              <details key={key} className={`soft-cloth-zone${z.enabled === false ? ' is-disabled' : ''}`}>
+                <summary className="soft-cloth-zone-summary">
+                  <span className={`soft-cloth-zone-title${mode === 'swing' ? ' is-swing' : ''}`}>
+                    {targets.length > 1 ? `${target.name || 'Part'} · ` : ''}{z.name} · {z.area.kind === 'tris' ? 'area' : 'whole part'}
+                  </span>
+                  <span>{SOFT_MODES[mode]}</span>
+                  {z.area.kind === 'tris' && <span className="soft-cloth-zone-area">Picked faces</span>}
+                  {z.area.kind !== 'tris' && <span className="soft-cloth-zone-area">Whole part</span>}
+                  {z.couplingMode === 'seams' && <span className="soft-cloth-zone-area">Seam-connected</span>}
+                  {z.couplingMode === 'rigid' && <span className="soft-cloth-zone-area">Shared sway</span>}
                 </summary>
-                <div className="row" style={{ justifyContent: 'space-between', marginTop: 8, gap: 6 }}>
+                <div className="soft-cloth-zone-actions">
                   <label className="row">
                     <input type="checkbox" checked={z.enabled !== false} onChange={(e) => update(target.uuid, z.id, { enabled: e.target.checked }, true)} />
                     <span>On</span>
                   </label>
-                  <span style={{ display: 'inline-flex', gap: 6 }}>
+                  <span>
                     {z.area.kind === 'tris' && (
                       <>
                         <label className="row" title="Show which faces this effect moves">
@@ -443,7 +513,7 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
                         </button>
                       </>
                     )}
-                    <button className="btn secondary" onClick={() => resetSoftCloth()} title="Stop the motion and start again from the pose">
+                    <button className="btn secondary" onClick={() => resetSoftCloth(target, z.id)} title="Stop this effect and start it again from the current pose">
                       Reset
                     </button>
                     <button className="btn secondary" onClick={() => remove(target.uuid, z.id, key)} title="Remove this effect" aria-label="Remove this effect">
@@ -452,6 +522,7 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
                   </span>
                 </div>
 
+                <div className="soft-cloth-fields">
                 <label className="field">
                   <span>Name</span>
                   <input type="text" value={z.name} onChange={(e) => update(target.uuid, z.id, { name: e.target.value })} />
@@ -504,6 +575,7 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
                   format={pct}
                   onChange={(v) => update(target.uuid, z.id, { gravity: v })}
                 />
+                <JoinSettings target={target} zone={z} update={update} />
                 {z.area.kind === 'tris' && (
                   <>
                     <label className="row" style={{ margin: '8px 0' }} title="Let the simulation ease into the rest of this mesh instead of ending abruptly at the picked faces.">
@@ -645,15 +717,19 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
                     />
                   </>
                 )}
+                </div>
               </details>
             )
           })}
-        </div>
+        </section>
       )}
 
-      <div className="dangle-add" style={{ borderTop: zoneEntries.length ? '1px solid var(--border, #333)' : 'none', paddingTop: zoneEntries.length ? 8 : 0 }}>
-        <div className="joint-name" style={{ marginBottom: 6 }}>
-          {editingZone ? 'Edit selected area' : 'Add an effect'}
+      <section className="soft-cloth-add">
+        <div className="soft-cloth-section-heading">
+          <div>
+            <div className="soft-cloth-step">{editingZone ? 'EDIT' : 'STEP 2'}</div>
+            <h4>{editingZone ? 'Adjust the selected area' : 'Add an effect'}</h4>
+          </div>
         </div>
         {!editingZone && (
           <label className="field">
@@ -699,14 +775,20 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
           </label>
         )}
         {!editingZone && targets.length > 1 && (
-          <label className="field" title="Choose whether effects added across these meshes move separately or together.">
-            <span>Connection for new effects</span>
+          <label className="field" title="Choose how new effects on these selected meshes move in relation to each other.">
+            <span>Group these meshes</span>
             <select value={coupling} onChange={(e) => setCoupling(e.target.value)} disabled={clothOn}>
-              <option value="independent">Independently</option>
-              <option value="seams">Connect at nearby seams</option>
-              <option value="rigid">As one rigid piece</option>
+              <option value="independent">Keep effects independent</option>
+              <option value="seams">Join matching seam vertices</option>
+              <option value="rigid">Share one cloth motion</option>
             </select>
           </label>
+        )}
+        {!editingZone && targets.length > 1 && (
+          <p className="soft-cloth-help">
+            Add the same effect to all selected parts to keep their motion connected. Seam matching works best when
+            their edges already touch; shared motion is useful for overlapping panels.
+          </p>
         )}
 
         {!editingZone && areaKind === 'region' && (
@@ -724,8 +806,8 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
         )}
 
         {(editingZone || areaKind === 'picked') && (
-          <div style={{ marginTop: 4 }}>
-            <div className="radio-hint">
+          <div className="soft-cloth-picking">
+            <div className="soft-cloth-help">
               {editingZone
                 ? `${pendingCount} face${pendingCount === 1 ? '' : 's'} selected (shown in pink). Click to adjust the area, then save or cancel.`
                 : pendingCount
@@ -751,7 +833,7 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
               </label>
             )}
             {tool === 'fill' && (
-              <div className="radio-hint">
+              <div className="soft-cloth-help">
                 Outline the area first with &quot;Pick faces&quot; (with &quot;Each click adds to the area&quot; on, click a ring or a line of
                 faces around it, using a small size or &quot;Just that face&quot;), switch to Fill, then click inside it: every connected face up to the outline is selected. Separate pieces are never
                 reached, so filling a hood does not pick up the jacket. Click inside a fill again to take it away.
@@ -789,7 +871,7 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
         )}
         {message && <div className="radio-hint">{message}</div>}
 
-        <div className="row" style={{ marginTop: 8, gap: 6 }}>
+        <div className="soft-cloth-footer">
           {editingZone ? (
             <>
               <button className="btn secondary" disabled={pendingCount === 0} onClick={saveEditedArea}>
@@ -817,7 +899,7 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
             </button>
           )}
         </div>
-      </div>
+      </section>
     </div>
   )
 }

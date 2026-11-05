@@ -6,6 +6,7 @@ import {
   syncSoftCloth,
   stepSoftCloth,
   settleSoftCloth,
+  resetSoftCloth,
   suspendSoftCloth,
   resumeSoftCloth,
   restoreSoftRest,
@@ -448,6 +449,23 @@ describe('soft cloth: following the pose', () => {
 })
 
 describe('playing and stopping', () => {
+  it('resets only the selected effect', () => {
+    rig = makeSheet()
+    const first = makeSoftZone('soft', { kind: 'all' }, 'jacket')
+    const second = makeSoftZone('soft', { kind: 'all' }, 'sleeves')
+    syncSoftCloth(groupsFor(rig.mesh, [first, second]))
+    play(rig, 2)
+
+    const entry = getSoftEntry(rig.mesh)
+    expect(entry.zones.get(first.id).ready).toBe(true)
+    expect(entry.zones.get(second.id).ready).toBe(true)
+
+    resetSoftCloth(rig.mesh, first.id)
+
+    expect(entry.zones.get(first.id).ready).toBe(false)
+    expect(entry.zones.get(second.id).ready).toBe(true)
+  })
+
   it('a still frame (paused, scrubbed, posed) is always the clean pose', () => {
     rig = makeSheet()
     syncSoftCloth(groupsFor(rig.mesh, [{ ...makeSoftZone('soft', { kind: 'all' }, 'hem'), range: 0.3 }]))

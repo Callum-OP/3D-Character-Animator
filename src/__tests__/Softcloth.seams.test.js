@@ -62,7 +62,7 @@ function makeRig() {
   b0.add(b1)
   root.add(b0)
   const skeleton = new THREE.Skeleton([b0, b1])
-  const hood = skinnedGrid([0, 9], [0, NX - 1], skeleton)
+  const hood = skinnedGrid([0, 8], [0, NX - 1], skeleton) // its bottom edge (node row 9) is where the string hangs
   const string = skinnedGrid([9, 31], [10, 13], skeleton) // hangs from the hood's row 9
   const hoodMesh = new THREE.SkinnedMesh(hood.geo, new THREE.MeshBasicMaterial())
   const stringMesh = new THREE.SkinnedMesh(string.geo, new THREE.MeshBasicMaterial())
@@ -159,7 +159,7 @@ describe('a drawstring part and the hood part it hangs from', () => {
     b0.add(b1)
     root.add(b0)
     const skeleton = new THREE.Skeleton([b0, b1])
-    const hood = skinnedGrid([0, 9], [0, NX - 1], skeleton)
+    const hood = skinnedGrid([0, 8], [0, NX - 1], skeleton) // its bottom edge (node row 9) is where the string hangs
     const string = skinnedGrid([9, 31], [10, 13], skeleton)
     const nHood = hood.geo.index.count / 3
     const nString = string.geo.index.count / 3
@@ -237,5 +237,59 @@ describe('a drawstring part and the hood part it hangs from', () => {
     }
     expect(swing).toBeGreaterThan(0.05)
     expect(stretch).toBeLessThan(0.12)
+  })
+
+  it('finds the hood even when it is a sparse, low-poly part with few vertices near the string', () => {
+    // a hood whose vertices are 12 cm apart: the string top sits between them
+    scene.remove(rig.root)
+    disposeSoftCloth()
+    const root = new THREE.Group()
+    const b0 = new THREE.Bone()
+    const b1 = new THREE.Bone()
+    b1.position.set(0, 1, 0)
+    b0.add(b1)
+    root.add(b0)
+    const skeleton = new THREE.Skeleton([b0, b1])
+    const hoodGeo = new THREE.PlaneGeometry(1, 0.34, 8, 2).translate(0, 1.33, 0)
+    const hn = hoodGeo.getAttribute('position').count
+    hoodGeo.setAttribute('skinIndex', new THREE.BufferAttribute(new Uint16Array(4 * hn).map((_, i) => (i % 4 === 1 ? 1 : 0)), 4))
+    const w = new Float32Array(4 * hn)
+    for (let i = 0; i < hn; i++) w[4 * i] = 1
+    hoodGeo.setAttribute('skinWeight', new THREE.BufferAttribute(w, 4))
+    const string = skinnedGrid([9, 31], [10, 13], skeleton)
+    const hoodMesh = new THREE.SkinnedMesh(hoodGeo, new THREE.MeshBasicMaterial())
+    const stringMesh = new THREE.SkinnedMesh(string.geo, new THREE.MeshBasicMaterial())
+    root.add(hoodMesh, stringMesh)
+    root.updateMatrixWorld(true)
+    hoodMesh.bind(skeleton)
+    stringMesh.bind(skeleton)
+    scene.add(root)
+    rig = { root }
+    syncSoftCloth([
+      {
+        meshes: [hoodMesh, stringMesh],
+        overrides: {
+          [hoodMesh.uuid]: { softZones: [hoodSoft()] },
+          [stringMesh.uuid]: { softZones: [makeSoftZone('swing', { kind: 'all' }, 'drawstring')] },
+        },
+      },
+    ])
+    const zr = [...getSoftEntry(stringMesh).zones.values()][0]
+    expect(zr.comps[0].hingeLinks.every(Boolean)).toBe(true)
+  })
+
+  it('"Pull the join together" closes a gap between the parts, and leaves it alone when off', () => {
+    const run = (closeGap) => {
+      scene.remove(rig.root)
+      disposeSoftCloth()
+      rig = makeRig()
+      const pos = rig.string.geo.getAttribute('position')
+      for (let v = 0; v < pos.count; v++) pos.setY(v, pos.getY(v) - 0.025) // the strings end 2.5 cm short of the hood
+      rig.root.updateMatrixWorld(true)
+      rig.stringMesh.bind(rig.stringMesh.skeleton)
+      return joinGap(rig, [hoodSoft()], [{ ...makeSoftZone('swing', { kind: 'all' }, 'drawstring'), closeGap }])
+    }
+    expect(run(false)).toBeGreaterThan(0.02) // the gap in the model is kept
+    expect(run(true)).toBeLessThan(0.005) // closed
   })
 })

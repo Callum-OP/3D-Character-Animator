@@ -107,6 +107,7 @@ export function zoneStructure(zone) {
     outsideBlend ? zone.outsideRange ?? 0.35 : null,
     outsideBlend ? zone.outsideStrength ?? 0.18 : null,
     zone.mode === 'swing' ? !!zone.hangs : null,
+    zone.attachRange ?? null,
   ])
 }
 
@@ -1242,14 +1243,17 @@ function stepSwing(entry, zr, dt) {
     let dhz = 0
     for (let k = 0; k < comp.topBand.length; k++) {
       const link = comp.hingeLinks[k]
-      const src = link ? link.entry.siteD : D
-      const site = link ? link.site : zr.aff[comp.topBand[k]]
-      comp.hingeD[3 * k] = src[3 * site]
-      comp.hingeD[3 * k + 1] = src[3 * site + 1]
-      comp.hingeD[3 * k + 2] = src[3 * site + 2]
-      dhx += src[3 * site]
-      dhy += src[3 * site + 1]
-      dhz += src[3 * site + 2]
+      const own = zr.aff[comp.topBand[k]]
+      if (link) {
+        linkShift(entry, own, link, cfg.closeGap === true, comp.hingeD, 3 * k)
+      } else {
+        comp.hingeD[3 * k] = D[3 * own]
+        comp.hingeD[3 * k + 1] = D[3 * own + 1]
+        comp.hingeD[3 * k + 2] = D[3 * own + 2]
+      }
+      dhx += comp.hingeD[3 * k]
+      dhy += comp.hingeD[3 * k + 1]
+      dhz += comp.hingeD[3 * k + 2]
     }
     dhx /= comp.topBand.length
     dhy /= comp.topBand.length
@@ -1638,6 +1642,26 @@ function seamLinks(a, b) {
 // a swing) against the vertices another effect moves, on this part or another part of the same
 // character, at the same place. Done when effects change, not per frame.
 const ATTACH_TOL = 0.04 // of a character's height-ish unit: close enough to count as joined
+const ATTACH_CAP = 0.15 // ...and the furthest a join is ever looked for unless asked
+
+// A sparse (low-poly) part has few vertices, so the nearest one can be a good way off: the range grows
+// with how far apart that part's vertices are.
+function meanEdge(entry) {
+  if (entry.meanEdgeLen != null) return entry.meanEdgeLen
+  const { graph, T0 } = entry
+  let total = 0
+  let count = 0
+  for (let s = 0; s < entry.sites.count; s++) {
+    for (let e = graph.start[s]; e < graph.start[s + 1]; e++) {
+      const t = graph.adj[e]
+      if (t <= s) continue
+      total += Math.hypot(T0[3 * s] - T0[3 * t], T0[3 * s + 1] - T0[3 * t + 1], T0[3 * s + 2] - T0[3 * t + 2])
+      count++
+    }
+  }
+  entry.meanEdgeLen = count ? total / count : 0
+  return entry.meanEdgeLen
+}
 
 function rebuildAttach() {
   const entries = [...sc.entries.values()]
@@ -1647,7 +1671,10 @@ function rebuildAttach() {
   }
   const cands = []
   let cell = 0
-  for (const entry of entries) cell = Math.max(cell, ATTACH_TOL * entry.unit)
+  for (const entry of entries) {
+    cell = Math.max(cell, ATTACH_CAP * entry.unit)
+    for (const zr of entry.zones.values()) cell = Math.max(cell, (zr.cfg.attachRange ?? 0) * entry.unit)
+  }
   if (!(cell > 0)) return
   const buckets = new Map()
   const key = (x, y, z) => `${Math.floor(x / cell)},${Math.floor(y / cell)},${Math.floor(z / cell)}`
@@ -1668,9 +1695,10 @@ function rebuildAttach() {
   }
   const nearest = (entry, site, zr) => {
     targetOf(entry, entry.sites.rep[site], at)
-    const tol = ATTACH_TOL * entry.unit
+    const base = (zr.cfg.attachRange ?? ATTACH_TOL) * entry.unit
+    const cap = Math.max(ATTACH_CAP * entry.unit, base)
     let best = null
-    let bestD2 = tol * tol
+    let bestD2 = cap * cap
     const cx = Math.floor(at.x / cell)
     const cy = Math.floor(at.y / cell)
     const cz = Math.floor(at.z / cell)
@@ -1682,7 +1710,9 @@ function rebuildAttach() {
           for (const c of list) {
             if (c.zr === zr) continue // not to itself
             const d2 = (c.x - at.x) ** 2 + (c.y - at.y) ** 2 + (c.z - at.z) ** 2
-            if (d2 < bestD2) {
+            if (d2 >= bestD2) continue
+            const reach = Math.min(cap, Math.max(base, 0.75 * meanEdge(c.entry)))
+            if (d2 < reach * reach) {
               best = c
               bestD2 = d2
             }
@@ -1886,8 +1916,14 @@ export function resumeSoftCloth() {
 }
 
 // Zero the motion (a hard pose change, a restart).
-export function resetSoftCloth() {
-  for (const entry of sc.entries.values()) for (const zr of entry.zones.values()) zr.ready = false
+export function resetSoftCloth(mesh = null, zoneId = null) {
+  const entries = mesh ? [sc.entries.get(mesh)].filter(Boolean) : sc.entries.values()
+  for (const entry of entries) {
+    for (const [id, zr] of entry.zones) {
+      if (zoneId && id !== zoneId) continue
+      zr.ready = false
+    }
+  }
 }
 
 // Advance every effect by `dt` seconds, while playing.
@@ -1910,7 +1946,7 @@ function stepZoneFrame(entry, zr, dt) {
   }
   // a soft zone: shift its targets by how far its attachment has moved, then simulate
   const ho = zr.ho
-  attachShift(zr, ho)
+  attachShift(entry, zr, ho)
   if (ho[0] !== 0 || ho[1] !== 0 || ho[2] !== 0) {
     const T = zr.T
     for (let i = 0; i < zr.aff.length; i++) {
@@ -1939,13 +1975,12 @@ function stepZoneFrame(entry, zr, dt) {
       D[3 * s + 1] += ho[1]
       D[3 * s + 2] += ho[2]
     }
-    for (const link of zr.attach) {
-      const L = link.entry.siteD
+    zr.attach.forEach((link, k) => {
       const f = link.from
-      D[3 * f] += L[3 * link.site] - ho[0]
-      D[3 * f + 1] += L[3 * link.site + 1] - ho[1]
-      D[3 * f + 2] += L[3 * link.site + 2] - ho[2]
-    }
+      D[3 * f] += zr.linkVals[3 * k] - ho[0]
+      D[3 * f + 1] += zr.linkVals[3 * k + 1] - ho[1]
+      D[3 * f + 2] += zr.linkVals[3 * k + 2] - ho[2]
+    })
   }
 }
 
@@ -1953,18 +1988,39 @@ function stepZoneFrame(entry, zr, dt) {
 // moved by OTHER effects this frame, as one shift for the whole zone. The zone moves with it, and its own
 // springs work on top. Without this a part that hangs from another part (drawstrings on a hood) stays
 // where the plain pose puts it while the part it hangs from bounces away.
-function attachShift(zr, out) {
+const _ls1 = new THREE.Vector3()
+const _ls2 = new THREE.Vector3()
+
+// Where a held vertex goes because of what it is attached to: that vertex's displacement, and, with
+// "pull the join together", also the gap between the two at the pose, so they meet exactly.
+function linkShift(entry, site, link, close, out, o = 0) {
+  const D = link.entry.siteD
+  out[o] = D[3 * link.site]
+  out[o + 1] = D[3 * link.site + 1]
+  out[o + 2] = D[3 * link.site + 2]
+  if (close) {
+    targetOf(link.entry, link.entry.sites.rep[link.site], _ls1)
+    targetOf(entry, entry.sites.rep[site], _ls2)
+    out[o] += _ls1.x - _ls2.x
+    out[o + 1] += _ls1.y - _ls2.y
+    out[o + 2] += _ls1.z - _ls2.z
+  }
+}
+
+function attachShift(entry, zr, out) {
   out[0] = 0
   out[1] = 0
   out[2] = 0
   let count = 0
-  for (const link of zr.attach) {
-    const D = link.entry.siteD
-    out[0] += D[3 * link.site]
-    out[1] += D[3 * link.site + 1]
-    out[2] += D[3 * link.site + 2]
+  const close = zr.cfg.closeGap === true
+  if (!zr.linkVals || zr.linkVals.length !== 3 * zr.attach.length) zr.linkVals = new Float32Array(3 * zr.attach.length)
+  zr.attach.forEach((link, k) => {
+    linkShift(entry, link.from, link, close, zr.linkVals, 3 * k)
+    out[0] += zr.linkVals[3 * k]
+    out[1] += zr.linkVals[3 * k + 1]
+    out[2] += zr.linkVals[3 * k + 2]
     count++
-  }
+  })
   if (count) {
     out[0] /= count
     out[1] /= count

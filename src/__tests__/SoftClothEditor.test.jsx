@@ -13,6 +13,7 @@ vi.mock('../three/meshedit.js', async (importOriginal) => ({
 
 import { useStore } from '../store.js'
 import SoftClothEditor from '../panels/SoftClothEditor.jsx'
+import { disposeSoftCloth, getSoftEntry, makeSoftZone, syncSoftCloth } from '../three/softcloth.js'
 import { performUndo, performRedo } from '../three/undoPriority.js'
 import { clearUndoHistory } from '../three/undoHistory.js'
 
@@ -24,13 +25,17 @@ function makeMesh() {
 
 let mesh
 beforeEach(() => {
+  disposeSoftCloth()
   mesh = makeMesh()
   picker.handler = null
   picker.options = null
   clearUndoHistory()
   useStore.setState({ meshOverrides: {} })
 })
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  disposeSoftCloth()
+})
 
 const zonesOf = (target = mesh) => useStore.getState().meshOverrides[target.uuid]?.softZones || []
 
@@ -105,6 +110,19 @@ describe('Soft cloth editor', () => {
     expect(zonesOf()[0].outsideMode).toBe('all')
   })
 
+  it('does not show join controls when a picked cloth area has no held vertices', () => {
+    const zone = makeSoftZone('soft', { kind: 'tris', tris: [[0, 0]], vertexCount: 3 }, 'hood')
+    const overrides = { [mesh.uuid]: { softZones: [zone] } }
+    useStore.setState({ meshOverrides: overrides })
+    syncSoftCloth([{ meshes: [mesh], overrides }])
+    expect(getSoftEntry(mesh).zones.get(zone.id).lockedSites).toHaveLength(0)
+
+    render(<SoftClothEditor mesh={mesh} />)
+
+    expect(screen.getByText(/Nothing is held on this effect/)).toBeTruthy()
+    expect(screen.queryByRole('slider', { name: /Join range/ })).toBeNull()
+  })
+
   it('clicking the selected area again deselects it', () => {
     render(<SoftClothEditor mesh={mesh} />)
     const where = screen.getAllByRole('combobox').find((s) => [...s.options].some((o) => o.value === 'picked'))
@@ -126,7 +144,7 @@ describe('Soft cloth editor', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add effect' }))
     const originalArea = zonesOf()[0].area
 
-    fireEvent.click(screen.getByText(/Soft cloth.*area/))
+    fireEvent.click(screen.getByText('Picked faces'))
     fireEvent.click(screen.getByRole('button', { name: 'Edit area' }))
     expect(screen.getByText(/1 face selected.*shown in pink/)).toBeTruthy()
     act(() => picker.handler({ uuid: mesh.uuid, faceIndex: 6 }))
@@ -147,7 +165,7 @@ describe('Soft cloth editor', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add effect' }))
     const originalArea = zonesOf()[0].area
 
-    fireEvent.click(screen.getByText(/Soft cloth.*area/))
+    fireEvent.click(screen.getByText('Picked faces'))
     fireEvent.click(screen.getByRole('button', { name: 'Edit area' }))
     act(() => picker.handler({ uuid: mesh.uuid, faceIndex: 6 }))
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
@@ -171,7 +189,7 @@ describe('Soft cloth editor', () => {
   it('stores the selected multi-mesh coupling mode on the effects', () => {
     const secondMesh = makeMesh()
     render(<SoftClothEditor mesh={mesh} meshes={[mesh, secondMesh]} />)
-    fireEvent.change(screen.getByLabelText('Connection for new effects'), { target: { value: 'seams' } })
+    fireEvent.change(screen.getByLabelText('Group these meshes'), { target: { value: 'seams' } })
     fireEvent.click(screen.getByRole('button', { name: 'Add effect' }))
     const firstZone = zonesOf()[0]
     const secondZone = zonesOf(secondMesh)[0]
