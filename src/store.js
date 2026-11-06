@@ -15,6 +15,7 @@ const APP_SETTINGS_FIELDS = [
   'showGrid', 'showGround', 'solidBackground', 'backgroundColor', 'shadows', 'showStats',
   'performanceMode', 'performanceBackgroundObjects', 'performanceLowPoly',
   'performanceResolution', 'performanceEffects', 'autoDecimate', 'importTextureLimit', 'edgeSmoothing', 'qualityPreset',
+  'windEnabled', 'windDirection', 'windStrength', 'windFluctuation',
   'materialMode', 'toonSteps', 'colorGrading', 'materialLook', 'ambientOcclusionStrength',
   'backlightColor', 'backlightFalloff', 'rimLightColor', 'rimSideOnly',
   'rimSoftEnabled', 'rimSoftIntensity', 'rimSoftWidth', 'rimHardEnabled',
@@ -414,6 +415,10 @@ export const useStore = create((set) => ({
   night: { ...DEFAULT_NIGHT },
   settingsVersion: 3, // bump when a default changes in a way saved settings should pick up
   showStats: false, // FPS / memory readout overlay
+  windEnabled: false,
+  windDirection: [1, 0, 0],
+  windStrength: 5,
+  windFluctuation: 1,
   undoLimit: 100,
   // When on, nothing about the camera is recorded in undo/redo: view orbit/zoom/
   // framing, placed cameras (add/delete/move/aim) and camera keyframes, so Ctrl+Z
@@ -442,6 +447,17 @@ export const useStore = create((set) => ({
       return Object.keys(values).length ? { shadows: normalizeShadows({ ...s.shadows, ...values }) } : {}
     }),
   setShowStats: (showStats) => set({ showStats }),
+  setWindEnabled: (windEnabled) => set({ windEnabled: !!windEnabled }),
+  setWindDirection: (windDirection) =>
+    set({
+      windDirection: Array.from({ length: 3 }, (_, i) =>
+        Math.max(-1, Math.min(1, Number(windDirection?.[i]) || 0)),
+      ),
+    }),
+  setWindStrength: (windStrength) =>
+    set({ windStrength: Math.max(0, Math.min(100, Number(windStrength) || 0)) }),
+  setWindFluctuation: (windFluctuation) =>
+    set({ windFluctuation: Math.max(0, Math.min(1, Number(windFluctuation) || 0)) }),
   setUndoLimit: (undoLimit) => {
     const normalized = setUndoHistoryLimit(undoLimit)
     set({ undoLimit: normalized })

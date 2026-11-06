@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { applyWind } from './wind.js'
 
 // ---------------------------------------------------------------------------
 // Cloth modifier
@@ -117,12 +118,15 @@ class ClothSim {
     const g = this.params.gravity, drag = Math.max(0, 1 - this.params.damping * sdt)
     _windClock.t += 0.0007
     this._wind.set(Math.sin(_windClock.t * 1.7) * 0.6, 0, Math.cos(_windClock.t * 1.3))
+    applyWind(_ambientWind)
     const wind = this.params.wind, w = this._wind
 
     for (let i = 0; i < n; i++) {
       if (pinned[i]) { prev[3 * i] = pos[3 * i]; prev[3 * i + 1] = pos[3 * i + 1]; prev[3 * i + 2] = pos[3 * i + 2]; continue }
       const ix = 3 * i
-      vel[ix + 1] += g * sdt
+      vel[ix] += _ambientWind.x * sdt
+      vel[ix + 1] += (g + _ambientWind.y) * sdt
+      vel[ix + 2] += _ambientWind.z * sdt
       if (wind) { vel[ix] += w.x * wind * sdt; vel[ix + 2] += w.z * wind * sdt }
       vel[ix] *= drag; vel[ix + 1] *= drag; vel[ix + 2] *= drag
       prev[ix] = pos[ix]; prev[ix + 1] = pos[ix + 1]; prev[ix + 2] = pos[ix + 2]
@@ -231,6 +235,7 @@ class ClothSim {
 }
 
 const _windClock = { t: 0 }
+const _ambientWind = new THREE.Vector3()
 const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3()
 const _d = new THREE.Vector3(), _e = new THREE.Vector3()
 

@@ -494,9 +494,13 @@ function Viewport() {
   // silently keeping the previous character's.
   const dangleEnabled = useStore((s) => s.dangleEnabled)
   const dangleChains = useStore((s) => s.dangleChains)
+  const windEnabled = useStore((s) => s.windEnabled)
+  const windDirection = useStore((s) => s.windDirection)
+  const windStrength = useStore((s) => s.windStrength)
+  const windFluctuation = useStore((s) => s.windFluctuation)
   useEffect(() => {
-    syncActiveDangleConfig(dangleEnabled, dangleChains)
-  }, [dangleEnabled, dangleChains, modelInfo])
+    syncActiveDangleConfig(dangleEnabled, dangleChains, windEnabled, windDirection, windStrength, windFluctuation)
+  }, [dangleEnabled, dangleChains, modelInfo, windEnabled, windDirection, windStrength, windFluctuation])
 
   // --- Scene objects: push selection / gizmo mode into the objects manager ---
   // selectedObjectIds can hold several ids (shift/ctrl-click in the panel) —

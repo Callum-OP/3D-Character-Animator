@@ -857,6 +857,10 @@ export default function AnimationPanel() {
   const sceneLights = useStore((s) => s.sceneLights)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const selectedBoneName = useStore((s) => s.selectedBoneName)
+  const windEnabled = useStore((s) => s.windEnabled)
+  const windDirection = useStore((s) => s.windDirection)
+  const windStrength = useStore((s) => s.windStrength)
+  const windFluctuation = useStore((s) => s.windFluctuation)
 
   const playback = useStore((s) => s.playback)
   const source = useStore((s) => s.playbackSource)
@@ -1925,6 +1929,75 @@ export default function AnimationPanel() {
       <p className="panel-hint">
         Play a clip as-is, edit its poses, or start a new animation. Character movement is a separate track on the same playhead.
       </p>
+
+      <div className="wind-controls">
+        <div className="wind-heading">
+          <div>
+            <strong>Wind simulation</strong>
+            <div className="wind-hint">Gusts and side-to-side sway affect enabled pose and cloth physics while animating.</div>
+          </div>
+          <button
+            type="button"
+            className={'btn secondary' + (windEnabled ? ' active' : '')}
+            aria-pressed={windEnabled}
+            onClick={() => st().setWindEnabled(!windEnabled)}
+          >
+            {windEnabled ? 'On' : 'Off'}
+          </button>
+        </div>
+        {windEnabled && (
+          <div className="wind-fields">
+            <label className="slider-row">
+              <span className="slider-label">Strength</span>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={windStrength ?? 5}
+                onChange={(e) => st().setWindStrength(Number(e.target.value))}
+                aria-label="Wind strength"
+              />
+              <output className="slider-value">{(windStrength ?? 5).toFixed(0)} m/s²</output>
+            </label>
+            <label className="slider-row">
+              <span className="slider-label">Fluctuation</span>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={(windFluctuation ?? 1) * 100}
+                onChange={(e) => st().setWindFluctuation(Number(e.target.value) / 100)}
+                aria-label="Wind fluctuation"
+              />
+              <output className="slider-value">{Math.round((windFluctuation ?? 1) * 100)}%</output>
+            </label>
+            {['X', 'Y', 'Z'].map((axis, i) => (
+              <label className="slider-row" key={axis}>
+                <span className="slider-label">Direction {axis}</span>
+                <input
+                  type="range"
+                  min={-1}
+                  max={1}
+                  step={0.1}
+                  value={windDirection?.[i] ?? (i === 0 ? 1 : 0)}
+                  onChange={(e) => {
+                    const next = [...(windDirection || [1, 0, 0])]
+                    next[i] = Number(e.target.value)
+                    st().setWindDirection(next)
+                  }}
+                  aria-label={`Wind direction ${axis}`}
+                />
+                <output className="slider-value">
+                  {(windDirection?.[i] ?? (i === 0 ? 1 : 0)).toFixed(1)}
+                </output>
+              </label>
+            ))}
+            <div className="wind-hint">Direction is normalized automatically (world X/Y/Z).</div>
+          </div>
+        )}
+      </div>
 
       <div className="seg">
         <button

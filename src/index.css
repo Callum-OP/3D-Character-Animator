@@ -749,6 +749,37 @@ body {
   accent-color: var(--accent);
 }
 
+.wind-controls {
+  margin: 12px 0;
+  padding: 10px;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  background: var(--panel-bg);
+}
+
+.wind-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.wind-hint {
+  margin-top: 3px;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.wind-fields {
+  margin-top: 8px;
+}
+
+.wind-fields .slider-row {
+  grid-template-columns: 76px minmax(0, 1fr) 54px;
+}
+
 .undo-limit-input {
   width: 72px;
   margin-left: auto;

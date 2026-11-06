@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { CollisionProxy } from './collisionProxy.js'
+import { applyWind } from './wind.js'
 
 // ---------------------------------------------------------------------------
 // Soft cloth and Swing: a cheap alternative to the full cloth simulation
@@ -1058,6 +1059,7 @@ function buildSwing(entry, zr, ctx) {
 
 const _p = new THREE.Vector3()
 const _g = new THREE.Vector3()
+const _wind = new THREE.Vector3()
 const _a = new THREE.Vector3()
 const _b = new THREE.Vector3()
 const _c = new THREE.Vector3()
@@ -1158,6 +1160,8 @@ function stepSoft(entry, zr, dt, colliders = [], thickness = 0) {
   const range = Math.max(0, cfg.range ?? 0.08) * zr.size
   const maxCollisionDistance = Math.max(range + thickness, entry.unit * 0.05)
   _g.set(0, -GRAVITY_MS2 * entry.unit * clamp01(cfg.gravity ?? 0.3) * 1.2, 0)
+  applyWind(_wind, entry.unit)
+  _g.add(_wind)
   const { p, v, T, prevT, weight } = zr
   // Bounce: how freely the cloth moves up and down. More = softer, longer vertical springs, less
   // vertical damping and more vertical room; less = held firmly in the vertical.
@@ -1308,6 +1312,7 @@ function stepSwing(entry, zr, dt) {
   const react = Math.min(3, Math.max(0, cfg.reaction ?? 1))
   const userLimit = THREE.MathUtils.degToRad(Math.min(180, Math.max(1, cfg.swingLimit ?? 70)))
   const gy = -GRAVITY_MS2 * entry.unit * clamp01(cfg.gravity ?? 0.8)
+  applyWind(_wind, entry.unit)
   const minLen = 0.12 * entry.unit // a tiny piece swings like a short pendulum, not a blur
   const jumpDist = 0.35 * entry.unit
   const accMax = 80 * entry.unit
@@ -1397,9 +1402,9 @@ function stepSwing(entry, zr, dt) {
     let vy = comp.qv[1]
     let vz = comp.qv[2]
     for (let s = 0; s < steps; s++) {
-      vx += (k * (_c.x * L - qx) - cd * vx - _acc.x) * h
-      vy += (k * (_c.y * L - qy) - cd * vy - _acc.y + gy) * h
-      vz += (k * (_c.z * L - qz) - cd * vz - _acc.z) * h
+      vx += (k * (_c.x * L - qx) - cd * vx - _acc.x + _wind.x) * h
+      vy += (k * (_c.y * L - qy) - cd * vy - _acc.y + gy + _wind.y) * h
+      vz += (k * (_c.z * L - qz) - cd * vz - _acc.z + _wind.z) * h
       qx += vx * h
       qy += vy * h
       qz += vz * h

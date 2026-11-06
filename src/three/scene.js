@@ -142,6 +142,7 @@ import {
 import { initPartRig, getPartRigData, restorePartRigs } from './partRig.js'
 import { combineMeshes as combineExportMeshes, describeCombine } from './combineMeshes.js'
 import { installFlattenerShader } from './flattenerShader.js'
+import { advanceWind, setWindConfig } from './wind.js'
 import {
   initFlattener,
   disposeFlattener,
@@ -1172,6 +1173,7 @@ export function setContinuousRender(on, reason = 'anim') {
       // never updated again. Catch here so one bad frame logs a warning and
       // gets skipped instead of freezing everything after it.
       try {
+        advanceWind(animationDelta)
         updateAnimation(animationDelta) // advance the mixer before drawing
         stepObjectAnimation(animationDelta, globalClock ? globalClockLoop : undefined)
         stepIkPins() // hold pinned hands / feet on their markers (after the animation and any moving object)
@@ -1365,7 +1367,8 @@ export function setActiveCharacter(id, parsedArg, { frame = false, isNewLoad = f
 // dangleChains) into the physics engine. Called from a Viewport effect
 // whenever either changes — toggling the master switch, adding/removing a
 // chain, or dragging a stiffness/gravity/damping slider.
-export function syncActiveDangleConfig(enabled, chains) {
+export function syncActiveDangleConfig(enabled, chains, windEnabled, windDirection, windStrength, windFluctuation) {
+  setWindConfig(windEnabled, windDirection, windStrength, windFluctuation)
   if (!state.activeCharacterId || !state.currentModel) return
   setDangleConfig(state.activeCharacterId, state.currentModel, enabled, chains)
 }

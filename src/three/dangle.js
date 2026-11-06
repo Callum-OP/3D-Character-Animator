@@ -3,6 +3,7 @@ import { pushSceneHistory } from './sceneHistory.js'
 import { getHistorySequence, getHistoryEpoch } from './undoHistory.js'
 import * as THREE from 'three'
 import { CollisionProxy } from './collisionProxy.js'
+import { applyWind } from './wind.js'
 
 // ---------------------------------------------------------------------------
 // Dangle bones (secondary-motion / "jiggle" physics)
@@ -234,6 +235,7 @@ const _targetWQ = new THREE.Quaternion()
 const _targetTip = new THREE.Vector3()
 const _vel = new THREE.Vector3()
 const _dir = new THREE.Vector3()
+const _wind = new THREE.Vector3()
 const _targetDir = new THREE.Vector3()
 const _physDir = new THREE.Vector3()
 const _qSwing = new THREE.Quaternion()
@@ -491,6 +493,7 @@ export function stepDangleLive(dt) {
   if (!runtimes.size) return
   const clampedDt = Math.min(dt || 1 / 60, MAX_DT)
   const subDt = clampedDt / SUBSTEPS
+  applyWind(_wind)
   let touched = false
 
   for (const rt of runtimes.values()) {
@@ -543,6 +546,7 @@ export function stepDangleLive(dt) {
           node.physPrev.copy(node.physPos)
           node.physPos.add(_vel)
           node.physPos.y -= GRAVITY_MS2 * gravity * subDt * subDt
+          node.physPos.addScaledVector(_wind, subDt * subDt)
           // Spring back toward the animated target (recovery force / "stiffness").
           node.physPos.lerp(_targetTip, springFactor)
           // Rigid re-projection: the bone doesn't stretch.
