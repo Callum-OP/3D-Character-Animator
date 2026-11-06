@@ -2,6 +2,7 @@ import { useStore } from '../store.js'
 import { pushSceneHistory } from './sceneHistory.js'
 import { getHistorySequence, getHistoryEpoch } from './undoHistory.js'
 import * as THREE from 'three'
+import { CollisionProxy } from './collisionProxy.js'
 
 // ---------------------------------------------------------------------------
 // Dangle bones (secondary-motion / "jiggle" physics)
@@ -88,6 +89,7 @@ export function setDangleConfig(id, model, enabled, chains) {
   rt.enabled = true
 
   const seen = new Set()
+  const chainsBefore = [...rt.chains.keys()].join('|')
   for (const cfg of chains) {
     if (!cfg || !cfg.id || !cfg.boneNames || !cfg.boneNames.length) continue
     seen.add(cfg.id)
@@ -104,6 +106,14 @@ export function setDangleConfig(id, model, enabled, chains) {
   }
   for (const existingId of [...rt.chains.keys()]) {
     if (!seen.has(existingId)) rt.chains.delete(existingId)
+  }
+  // Which bones are "moving cloth" decides which mesh faces and bones count as the body to hit.
+  if ([...rt.chains.keys()].join('|') !== chainsBefore || rt.chains.size) {
+    const key = [...rt.chains.values()].map((c) => c.boneNamesKey).join('#')
+    if (key !== rt.chainKey) {
+      rt.chainKey = key
+      rt.version = (rt.version || 0) + 1
+    }
   }
 }
 
@@ -213,6 +223,7 @@ export function resetDangle(id, chainId) {
 }
 
 export function clearDangle(id) {
+  runtimes.get(id)?.col?.proxy?.dispose()
   runtimes.delete(id)
 }
 
@@ -228,15 +239,28 @@ const _physDir = new THREE.Vector3()
 const _qSwing = new THREE.Quaternion()
 const _finalWQ = new THREE.Quaternion()
 const _localQ = new THREE.Quaternion()
-const _boneStart = new THREE.Vector3()
-const _boneEnd = new THREE.Vector3()
-const _closest = new THREE.Vector3()
-const _collisionDelta = new THREE.Vector3()
-const _surfaceNormal = new THREE.Vector3()
-const _normalMatrix = new THREE.Matrix3()
-const _boneLine = new THREE.Line3()
-const _raycaster = new THREE.Raycaster()
-const _meshHits = []
+const _mid = new THREE.Vector3()
+const _decPos = new THREE.Vector3()
+const _decScale = new THREE.Vector3()
+const _identity = new THREE.Matrix4()
+const ALL_OWN = 1 // a whole mesh that hangs off a dangling bone
+
+// ---------------------------------------------------------------------------
+// Collision
+//
+// Mesh collision used to raycast the real skinned meshes, which re-skins every vertex of the whole
+// mesh for every ray (per bone, per sub-step) and ran at a frame every few seconds on a normal
+// character. Now each character keeps ONE CollisionProxy: a decimated copy of the body that is
+// re-posed (a couple of thousand vertices, not the whole mesh) and re-indexed once per frame, and
+// every bone then does a few cheap nearest-triangle lookups against it.
+//
+// The push-out goes along the surface's outward normal: the triangle winding when it can be trusted
+// (a normal body), otherwise the side the animated pose is on. Faces that are driven by the dangling bones themselves (the hair or
+// cape that is being simulated) are left out, otherwise a strand would collide with its own mesh.
+// ---------------------------------------------------------------------------
+
+const COLLIDER_TRIANGLES = 2500
+const COLLIDER_RECHECK_FRAMES = 15 // how often to notice a mesh being hidden or shown
 
 function visibleInHierarchy(object) {
   for (let current = object; current; current = current.parent) {
@@ -245,62 +269,217 @@ function visibleInHierarchy(object) {
   return true
 }
 
-function collideWithModelMesh(meshes, node, radius) {
-  const delta = _collisionDelta.copy(node.physPos).sub(_pivot)
-  const distance = delta.length()
-  if (distance < 1e-6) return
-  delta.multiplyScalar(1 / distance)
-  _raycaster.ray.origin.copy(_pivot)
-  _raycaster.ray.direction.copy(delta)
-  _raycaster.near = 0
-  _raycaster.far = distance
-  _meshHits.length = 0
-  if (!meshes.length) return
-  _raycaster.intersectObjects(meshes, false, _meshHits)
-  let hit = _meshHits[0]
-  let fromTip = false
-  if (!hit) {
-    _raycaster.ray.origin.copy(node.physPos)
-    _raycaster.ray.direction.copy(delta).negate()
-    _meshHits.length = 0
-    _raycaster.intersectObjects(meshes, false, _meshHits)
-    hit = _meshHits[0]
-    fromTip = !!hit
-  }
-  if (!hit) return
-  if (!hit.face) return
-  _surfaceNormal.copy(hit.face.normal).applyMatrix3(_normalMatrix.getNormalMatrix(hit.object.matrixWorld)).normalize()
-  _collisionDelta.copy(fromTip ? node.physPos : _pivot).sub(hit.point)
-  if (_collisionDelta.dot(_surfaceNormal) < 0) _surfaceNormal.negate()
-  _collisionDelta.copy(node.physPos).sub(hit.point)
-  const signedDistance = _collisionDelta.dot(_surfaceNormal)
-  const penetration = radius - signedDistance
-  if (penetration > 0) node.physPos.addScaledVector(_surfaceNormal, penetration)
-  node.physPrev.copy(node.physPos)
+function danglingBoneSet(rt) {
+  const set = new Set()
+  for (const chain of rt.chains.values()) for (const bone of chain.boneSet) set.add(bone)
+  return set
 }
 
-function collideWithOtherBones(rt, chain, node, radius) {
-  const radiusSq = radius * radius
-  for (const other of rt.model.bones || []) {
-    if (chain.boneSet.has(other) || other === node.parentBone) continue
-    const parent = other.parent?.isBone ? other.parent : null
-    if (parent && chain.boneSet.has(parent)) continue
-    if (parent) parent.getWorldPosition(_boneStart)
-    else other.getWorldPosition(_boneStart)
-    other.getWorldPosition(_boneEnd)
-    if (_boneStart.distanceToSquared(_boneEnd) < 1e-10) continue
-    _boneLine.start.copy(_boneStart)
-    _boneLine.end.copy(_boneEnd)
-    _boneLine.closestPointToPoint(node.physPos, true, _closest)
-    _collisionDelta.copy(node.physPos).sub(_closest)
-    const distanceSq = _collisionDelta.lengthSq()
-    if (distanceSq >= radiusSq) continue
-    if (distanceSq < 1e-10) {
-      _collisionDelta.copy(_dir)
-      if (_collisionDelta.lengthSq() < 1e-10) _collisionDelta.set(0, 1, 0)
+// Per vertex: is it driven mostly by a dangling bone? (ALL_OWN for a rigid mesh parented under one.)
+function ownVertexFlags(mesh, boneSet) {
+  if (mesh.isSkinnedMesh) {
+    const geometry = mesh.geometry
+    const skinIndex = geometry.getAttribute('skinIndex')
+    const skinWeight = geometry.getAttribute('skinWeight')
+    if (!skinIndex || !skinWeight || !mesh.skeleton) return null
+    const bones = mesh.skeleton.bones
+    const flags = new Uint8Array(skinIndex.count)
+    let any = false
+    for (let v = 0; v < flags.length; v++) {
+      let best = 0
+      let bestWeight = -1
+      for (let k = 0; k < 4; k++) {
+        const w = skinWeight.getComponent(v, k)
+        if (w > bestWeight) {
+          bestWeight = w
+          best = k
+        }
+      }
+      if (bestWeight > 0 && boneSet.has(bones[skinIndex.getComponent(v, best)])) {
+        flags[v] = 1
+        any = true
+      }
     }
-    _collisionDelta.setLength(radius)
-    node.physPos.copy(_closest).add(_collisionDelta)
+    return any ? flags : null
+  }
+  for (let parent = mesh.parent; parent; parent = parent.parent) {
+    if (parent.isBone && boneSet.has(parent)) return ALL_OWN
+  }
+  return null
+}
+
+function meshColliderFor(rt) {
+  let col = rt.col
+  if (!col) col = rt.col = { proxy: null, key: '', version: -1, checkedAt: -Infinity, own: new Map() }
+  if (!col.proxy || col.version !== rt.version || rt.frame - col.checkedAt >= COLLIDER_RECHECK_FRAMES) {
+    col.checkedAt = rt.frame
+    const meshes = (rt.model.meshes || []).filter((mesh) => mesh.isMesh && visibleInHierarchy(mesh))
+    const key = meshes.map((mesh) => mesh.uuid).join(',')
+    if (!col.proxy || col.version !== rt.version || col.key !== key) {
+      col.proxy?.dispose()
+      col.own.clear()
+      const boneSet = danglingBoneSet(rt)
+      col.proxy = new CollisionProxy(meshes, {
+        maxTriangles: COLLIDER_TRIANGLES,
+        pad: 0,
+        includeTriangle: (mesh, face) => {
+          let flags = col.own.get(mesh)
+          if (flags === undefined) {
+            flags = ownVertexFlags(mesh, boneSet)
+            col.own.set(mesh, flags)
+          }
+          if (!flags) return true
+          if (flags === ALL_OWN) return false
+          const index = mesh.geometry.index
+          let owned = 0
+          for (let c = 0; c < 3; c++) owned += flags[index ? index.getX(face * 3 + c) : face * 3 + c]
+          return owned < 2
+        },
+      })
+      col.key = key
+      col.version = rt.version
+    }
+  }
+  return col.proxy.update(rt.frame)
+}
+
+// Keep the particle out of the surface, whichever way the contact comes (a tip and the middle of
+// its bone are both tested, so a long bone cannot cut through a corner). Only the velocity INTO
+// the surface is removed, so a strand slides along the body instead of sticking to it.
+function contact(node, nx, ny, nz, push, leverage) {
+  const move = push * leverage
+  node.physPos.x += nx * move
+  node.physPos.y += ny * move
+  node.physPos.z += nz * move
+  node.physPrev.x += nx * move
+  node.physPrev.y += ny * move
+  node.physPrev.z += nz * move
+  const vx = node.physPos.x - node.physPrev.x
+  const vy = node.physPos.y - node.physPrev.y
+  const vz = node.physPos.z - node.physPrev.z
+  const inward = vx * nx + vy * ny + vz * nz
+  if (inward < 0) {
+    node.physPrev.x += nx * inward
+    node.physPrev.y += ny * inward
+    node.physPrev.z += nz * inward
+  }
+}
+
+function pushOutOfSurface(collider, node, point, radius, cells, leverage) {
+  const q = collider.query(point.x, point.y, point.z, cells, radius * 4)
+  if (!q) return
+  let nx = q.fnx
+  let ny = q.fny
+  let nz = q.fnz
+  if (nx * nx + ny * ny + nz * nz < 1e-8) {
+    nx = q.nx
+    ny = q.ny
+    nz = q.nz
+  }
+  if (collider.orientation) {
+    if (collider.orientation < 0) {
+      nx = -nx
+      ny = -ny
+      nz = -nz
+    }
+  } else if ((_targetTip.x - q.x) * nx + (_targetTip.y - q.y) * ny + (_targetTip.z - q.z) * nz < 0) {
+    // No trustworthy winding (flat or open surface): stay on the side the animated pose is on.
+    nx = -nx
+    ny = -ny
+    nz = -nz
+  }
+  const signed = (point.x - q.x) * nx + (point.y - q.y) * ny + (point.z - q.z) * nz
+  if (signed >= radius) return
+  contact(node, nx, ny, nz, radius - signed, leverage)
+}
+
+function collideWithSurface(collider, node, radius) {
+  const cells = Math.min(3, Math.max(1, Math.ceil((radius * 2) / collider.cell)))
+  pushOutOfSurface(collider, node, node.physPos, radius, cells, 1)
+  // The middle of the bone: moving it by d takes 2d at the tip, because the pivot is fixed.
+  _mid.copy(_pivot).add(node.physPos).multiplyScalar(0.5)
+  pushOutOfSurface(collider, node, _mid, radius, cells, 2)
+}
+
+// Every bone as a segment (its parent -> itself), read once per frame instead of once per bone per
+// sub-step. A chain skips its own bones, the bones directly under them, and the bone it hangs from.
+function prepareBoneSegments(rt) {
+  const bones = rt.model.bones || []
+  let seg = rt.seg
+  if (!seg || seg.bones !== bones || seg.count !== bones.length || seg.version !== rt.version) {
+    const indexOf = new Map()
+    bones.forEach((bone, i) => indexOf.set(bone, i))
+    const parentIndex = new Int32Array(bones.length)
+    bones.forEach((bone, i) => {
+      parentIndex[i] = bone.parent?.isBone && indexOf.has(bone.parent) ? indexOf.get(bone.parent) : -1
+    })
+    seg = rt.seg = {
+      bones,
+      count: bones.length,
+      version: rt.version,
+      indexOf,
+      parentIndex,
+      pos: new Float32Array(3 * bones.length),
+    }
+    for (const chain of rt.chains.values()) chain.skip = null
+  }
+  for (let i = 0; i < seg.count; i++) {
+    const e = bones[i].matrixWorld.elements
+    seg.pos[3 * i] = e[12]
+    seg.pos[3 * i + 1] = e[13]
+    seg.pos[3 * i + 2] = e[14]
+  }
+  for (const chain of rt.chains.values()) {
+    if (chain.skip) continue
+    const skip = (chain.skip = new Uint8Array(seg.count))
+    for (let i = 0; i < seg.count; i++) {
+      const bone = bones[i]
+      if (chain.boneSet.has(bone) || (bone.parent && chain.boneSet.has(bone.parent)) || seg.parentIndex[i] < 0) skip[i] = 1
+    }
+    for (const node of chain.order) {
+      if (node.parentBone && seg.indexOf.has(node.parentBone)) skip[seg.indexOf.get(node.parentBone)] = 1
+    }
+  }
+}
+
+function collideWithOtherBones(seg, chain, node, radius) {
+  const radiusSq = radius * radius
+  const pos = seg.pos
+  const skip = chain.skip
+  const px = node.physPos.x
+  const py = node.physPos.y
+  const pz = node.physPos.z
+  for (let i = 0; i < seg.count; i++) {
+    if (skip[i]) continue
+    const a = 3 * seg.parentIndex[i]
+    const b = 3 * i
+    const abx = pos[b] - pos[a]
+    const aby = pos[b + 1] - pos[a + 1]
+    const abz = pos[b + 2] - pos[a + 2]
+    const lenSq = abx * abx + aby * aby + abz * abz
+    if (lenSq < 1e-10) continue
+    let t = ((px - pos[a]) * abx + (py - pos[a + 1]) * aby + (pz - pos[a + 2]) * abz) / lenSq
+    t = t < 0 ? 0 : t > 1 ? 1 : t
+    const cx = pos[a] + abx * t
+    const cy = pos[a + 1] + aby * t
+    const cz = pos[a + 2] + abz * t
+    let dx = node.physPos.x - cx
+    let dy = node.physPos.y - cy
+    let dz = node.physPos.z - cz
+    const distSq = dx * dx + dy * dy + dz * dz
+    if (distSq >= radiusSq) continue
+    if (distSq < 1e-10) {
+      dx = _dir.x
+      dy = _dir.y
+      dz = _dir.z
+      if (dx * dx + dy * dy + dz * dz < 1e-10) {
+        dx = 0
+        dy = 1
+        dz = 0
+      }
+    }
+    const scale = radius / Math.sqrt(dx * dx + dy * dy + dz * dz)
+    node.physPos.set(cx + dx * scale, cy + dy * scale, cz + dz * scale)
     node.physPrev.copy(node.physPos)
   }
 }
@@ -316,31 +495,41 @@ export function stepDangleLive(dt) {
 
   for (const rt of runtimes.values()) {
     if (!rt.enabled || !rt.chains.size) continue
+    rt.frame = (rt.frame || 0) + 1
     let needsMeshCollision = false
+    let needsBoneCollision = false
     for (const chain of rt.chains.values()) {
-      if (chain.params.collideWithMesh) {
-        needsMeshCollision = true
-        break
-      }
+      if (chain.params.collideWithMesh) needsMeshCollision = true
+      if (chain.params.collideWithBones) needsBoneCollision = true
     }
-    const collisionMeshes = needsMeshCollision
-      ? (rt.model.meshes || []).filter((mesh) => mesh.isMesh && visibleInHierarchy(mesh))
-      : []
-    if (needsMeshCollision) rt.model.root?.updateMatrixWorld(true)
+    let collider = null
+    if (needsMeshCollision || needsBoneCollision) rt.model.root?.updateMatrixWorld(true)
+    if (needsMeshCollision) collider = meshColliderFor(rt)
+    if (needsBoneCollision) prepareBoneSegments(rt)
     for (const chain of rt.chains.values()) {
       const { stiffness, gravity, damping, collideWithBones, collideWithMesh } = chain.params
       // Exponential damping keeps the response consistent at different frame rates.
       const velocityKeep = Math.exp(-damping * 6 * subDt)
       const springFactor = 1 - Math.exp(-stiffness * 40 * subDt)
+      // What the chain hangs from does not move during the frame, so bring it up to date once. Inside
+      // the chain each bone's world matrix is then built from its parent's as it is processed,
+      // instead of re-walking the whole skeleton above it on every call.
+      for (const node of chain.order) if (!node.parentNode) node.bone.parent?.updateWorldMatrix(true, false)
       for (let s = 0; s < SUBSTEPS; s++) {
         for (const node of chain.order) {
-          const parentWorldQuat = node.parentNode
-            ? node.parentNode._finalWorldQuat
-            : node.bone.parent
-              ? node.bone.parent.getWorldQuaternion(_parentWQ)
-              : _parentWQ.identity()
+          const parent = node.bone.parent
+          const parentWorld = parent ? parent.matrixWorld : _identity
+          let parentWorldQuat
+          if (node.parentNode) {
+            parentWorldQuat = node.parentNode._finalWorldQuat
+          } else if (parent) {
+            parentWorld.decompose(_decPos, _parentWQ, _decScale)
+            parentWorldQuat = _parentWQ
+          } else {
+            parentWorldQuat = _parentWQ.identity()
+          }
 
-          node.bone.getWorldPosition(_pivot)
+          _pivot.copy(node.bone.position).applyMatrix4(parentWorld)
           // Carry the simulation with a translating attachment instead of leaving it behind.
           _vel.copy(_pivot).sub(node.lastPivot)
           node.physPos.add(_vel)
@@ -365,8 +554,8 @@ export function stepDangleLive(dt) {
             node.physPos.copy(_targetTip)
           }
           const collisionRadius = node.tipLength * 0.12
-          if (collideWithMesh) collideWithModelMesh(collisionMeshes, node, collisionRadius)
-          if (collideWithBones) collideWithOtherBones(rt, chain, node, collisionRadius)
+          if (collideWithMesh && collider) collideWithSurface(collider, node, collisionRadius)
+          if (collideWithBones && chain.skip) collideWithOtherBones(rt.seg, chain, node, collisionRadius)
           _dir.copy(node.physPos).sub(_pivot)
           if (_dir.lengthSq() > 1e-10) {
             _dir.setLength(node.tipLength)
@@ -381,6 +570,8 @@ export function stepDangleLive(dt) {
           _finalWQ.copy(_targetWQ).premultiply(_qSwing)
           _localQ.copy(parentWorldQuat).invert().multiply(_finalWQ)
           node.bone.quaternion.copy(_localQ)
+          node.bone.updateMatrix()
+          node.bone.matrixWorld.multiplyMatrices(parentWorld, node.bone.matrix)
 
           // Cache this node's resolved world rotation for its own dangled
           // children (processed right after it, since `order` is parent-first).

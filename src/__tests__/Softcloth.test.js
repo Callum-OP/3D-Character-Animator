@@ -350,7 +350,9 @@ describe('soft cloth: following the pose', () => {
     stepSoftCloth(1 / 60)
     const entry = getSoftEntry(rig.mesh)
     const firstCollider = entry.collider
-    expect(firstCollider.T).toBe(4000)
+    expect(firstCollider.T).toBeGreaterThan(1000)
+    expect(firstCollider.T).toBeLessThanOrEqual(4000)
+    stepSoftCloth(1 / 60)
     stepSoftCloth(1 / 60)
     expect(entry.collider).toBe(firstCollider)
     body.geometry.dispose()

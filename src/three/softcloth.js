@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { BodyCollider, mergeWorldGeometry } from './clothmod.js'
+import { CollisionProxy } from './collisionProxy.js'
 
 // ---------------------------------------------------------------------------
 // Soft cloth and Swing: a cheap alternative to the full cloth simulation
@@ -115,6 +115,9 @@ export function zoneStructure(zone) {
 // ---------------------------------------------------------------------------
 // Runtime
 // ---------------------------------------------------------------------------
+
+// How often to look for a collision mesh having been hidden or shown.
+const COLLIDER_RECHECK_FRAMES = 15
 
 const sc = {
   requestRender: () => {},
@@ -757,7 +760,7 @@ function buildZone(entry, cfg) {
     ready: false,
     comps: [],
     selfCollider: null,
-    selfColliderFrame: -Infinity,
+    selfProxy: null,
   }
   if (zr.mode === 'swing') {
     buildComponents(entry, zr)
@@ -1107,17 +1110,29 @@ function resolveMeshCollision(colliders, thickness, maxDistance, p, v, ix, tx, t
       ny = q.ny
       nz = q.nz
     }
-    const targetSide = (tx - q.x) * nx + (ty - q.y) * ny + (tz - q.z) * nz
-    if (targetSide < 0) {
-      nx = -nx
-      ny = -ny
-      nz = -nz
-    } else if (Math.abs(targetSide) < 1e-8) {
-      const currentSide = (p[ix] - q.x) * nx + (p[ix + 1] - q.y) * ny + (p[ix + 2] - q.z) * nz
-      if (currentSide < 0) {
+    if (collider.orientation) {
+      // A body with trustworthy winding: "outside" is known, wherever the cloth's own pose happens to
+      // be. Without this, a limb that moves past a vertex's animated position leaves that position
+      // inside the body, and the vertex is pushed further in instead of out.
+      if (collider.orientation < 0) {
         nx = -nx
         ny = -ny
         nz = -nz
+      }
+    } else {
+      // Flat or open pieces, or mixed winding: keep the vertex on the side its animated position is on.
+      const targetSide = (tx - q.x) * nx + (ty - q.y) * ny + (tz - q.z) * nz
+      if (targetSide < 0) {
+        nx = -nx
+        ny = -ny
+        nz = -nz
+      } else if (Math.abs(targetSide) < 1e-8) {
+        const currentSide = (p[ix] - q.x) * nx + (p[ix + 1] - q.y) * ny + (p[ix + 2] - q.z) * nz
+        if (currentSide < 0) {
+          nx = -nx
+          ny = -ny
+          nz = -nz
+        }
       }
     }
     const sd = (p[ix] - q.x) * nx + (p[ix + 1] - q.y) * ny + (p[ix + 2] - q.z) * nz
@@ -2139,26 +2154,26 @@ export function stepSoftCloth(dt) {
     }
     let cache = sc.colliderCache.get(entry.mesh)
     if (!cache) {
-      cache = { collider: null, refreshedAt: -Infinity }
+      cache = { proxy: null, key: '', checkedAt: -Infinity }
       sc.colliderCache.set(entry.mesh, cache)
     }
-    const refresh = !cache.collider || sc.frame - cache.refreshedAt >= 3
-    if (refresh) {
+    // The set of meshes to collide with only changes when one is hidden or shown, so look for that
+    // now and then. The surface itself is re-posed every frame (see CollisionProxy).
+    if (!cache.proxy || sc.frame - cache.checkedAt >= COLLIDER_RECHECK_FRAMES) {
+      cache.checkedAt = sc.frame
       const others = sc.meshes.filter((mesh) => {
         if (!mesh || mesh === entry.mesh || !mesh.isMesh || !mesh.geometry?.getAttribute?.('position')) return false
         if (topAncestor(mesh) !== entry.root) return false
         for (let parent = mesh; parent; parent = parent.parent) if (!parent.visible) return false
         return true
       })
-      const geometry = mergeWorldGeometry(others, 4000)
-      if (geometry) {
-        cache.collider = new BodyCollider(geometry, entry.collisionThickness)
-        cache.refreshedAt = sc.frame
-        geometry.dispose()
-      } else {
-        cache.collider = null
+      const key = others.map((mesh) => mesh.uuid).join(',')
+      if (!cache.proxy || cache.key !== key) {
+        cache.proxy = new CollisionProxy(others, { maxTriangles: 4000, pad: entry.collisionThickness })
+        cache.key = key
       }
     }
+    cache.collider = cache.proxy.update(sc.frame, entry.collisionThickness)
     collider = cache.collider
     entry.collisionThickness = entry.unit * 0.008
     entry.collider = collider
@@ -2168,25 +2183,26 @@ export function stepSoftCloth(dt) {
     for (const zr of entry.zones.values()) {
       if (zr.mode !== 'soft' || zr.cfg.collideWithSelf !== true) {
         zr.selfCollider = null
+        zr.selfProxy = null
         continue
       }
-      if (sc.frame - zr.selfColliderFrame < 3) continue
-      const geometry = mergeWorldGeometry(
-        [entry.mesh],
-        2000,
-        (mesh, face) => {
-          const index = mesh.geometry.index
-          for (let corner = 0; corner < 3; corner++) {
-            const vertex = index ? index.getX(face * 3 + corner) : face * 3 + corner
-            const site = entry.sites.siteOf[vertex]
-            if (zr.core[site] || zr.local[site] >= 0) return false
-          }
-          return true
-        },
-      )
-      zr.selfCollider = geometry ? new BodyCollider(geometry, entry.unit * 0.008) : null
-      zr.selfColliderFrame = sc.frame
-      geometry?.dispose()
+      if (!zr.selfProxy) {
+        // Which faces count only depends on the area, so it is worked out once.
+        zr.selfProxy = new CollisionProxy([entry.mesh], {
+          maxTriangles: 2000,
+          pad: entry.unit * 0.008,
+          includeTriangle: (mesh, face) => {
+            const index = mesh.geometry.index
+            for (let corner = 0; corner < 3; corner++) {
+              const vertex = index ? index.getX(face * 3 + corner) : face * 3 + corner
+              const site = entry.sites.siteOf[vertex]
+              if (zr.core[site] || zr.local[site] >= 0) return false
+            }
+            return true
+          },
+        })
+      }
+      zr.selfCollider = zr.selfProxy.update(sc.frame, entry.unit * 0.008)
     }
   }
   // Soft cloth first, then swings; within each, the effects that hang from nothing go before the ones

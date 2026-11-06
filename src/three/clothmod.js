@@ -236,26 +236,49 @@ const _d = new THREE.Vector3(), _e = new THREE.Vector3()
 
 export class BodyCollider {
   constructor(geometry, pad = 0.02) {
+    // `tris` is kept by reference: a caller that rewrites these positions in place can call
+    // refit() to re-index the moved surface without reallocating anything.
     this.tris = geometry.getAttribute('position').array
     this.index = geometry.index?.array || null
     this.T = Math.floor((this.index ? this.index.length : this.tris.length / 3) / 3)
     this.pad = pad
+    this.faceNormals = new Float32Array(this.T * 3)
+    this.min = new THREE.Vector3()
+    // Flat spatial index (counting sort): cellStart[c]..cellStart[c + 1] indexes into cellItems, the
+    // faces touching cell c. Typed arrays, grown only if a refit needs more room.
+    this.cellStart = new Int32Array(1)
+    this.cellItems = new Int32Array(1)
+    this._faceCells = new Int32Array(this.T * 6)
+    this.queryMarks = new Uint32Array(this.T)
+    this.queryMark = 0
+    this._build()
+  }
+
+  // Re-read the (moved) positions: new face normals and a new spatial index, with no new arrays
+  // unless the surface grew past what the pool already holds.
+  refit(pad = this.pad) {
+    this.pad = pad
+    this._build()
+  }
+
+  _build() {
+    const pad = this.pad
+    const t = this.tris
+    const index = this.index
 
     // True per-triangle outward normal (from winding order), independent of
     // which side a query point currently sits on. Used by shrinkwrap so it
     // can tell "outside" from "inside" even after a particle has tunnelled
     // through the body, instead of just pointing away-from-closest-point
     // (which flips sign the moment a particle crosses to the wrong side).
-    this.faceNormals = new Float32Array(this.T * 3)
-    const t0 = this.tris
     for (let f = 0; f < this.T; f++) {
       const i = 3 * f
-      const a = this.index ? 3 * this.index[i] : 3 * i
-      const b = this.index ? 3 * this.index[i + 1] : 3 * (i + 1)
-      const c = this.index ? 3 * this.index[i + 2] : 3 * (i + 2)
-      _a.set(t0[a], t0[a + 1], t0[a + 2])
-      _b.set(t0[b], t0[b + 1], t0[b + 2])
-      _c.set(t0[c], t0[c + 1], t0[c + 2])
+      const a = index ? 3 * index[i] : 3 * i
+      const b = index ? 3 * index[i + 1] : 3 * (i + 1)
+      const c = index ? 3 * index[i + 2] : 3 * (i + 2)
+      _a.set(t[a], t[a + 1], t[a + 2])
+      _b.set(t[b], t[b + 1], t[b + 2])
+      _c.set(t[c], t[c + 1], t[c + 2])
       _d.subVectors(_b, _a)
       _e.subVectors(_c, _a)
       _d.cross(_e)
@@ -266,23 +289,33 @@ export class BodyCollider {
       this.faceNormals[f * 3 + 2] = _d.z
     }
 
-    const bb = new THREE.Box3().setFromBufferAttribute(geometry.getAttribute('position'))
-    this.min = bb.min.clone()
-    const size = bb.getSize(new THREE.Vector3())
-    const diag = size.length() || 1
+    let mnx = Infinity, mny = Infinity, mnz = Infinity, mxx = -Infinity, mxy = -Infinity, mxz = -Infinity
+    for (let i = 0; i + 2 < t.length; i += 3) {
+      const x = t[i], y = t[i + 1], z = t[i + 2]
+      if (x < mnx) mnx = x; if (x > mxx) mxx = x
+      if (y < mny) mny = y; if (y > mxy) mxy = y
+      if (z < mnz) mnz = z; if (z > mxz) mxz = z
+    }
+    if (mnx === Infinity) { mnx = mny = mnz = 0; mxx = mxy = mxz = 0 }
+    this.min.set(mnx, mny, mnz)
+    const sx = mxx - mnx, sy = mxy - mny, sz = mxz - mnz
+    const diag = Math.sqrt(sx * sx + sy * sy + sz * sz) || 1
     this.cell = Math.max(diag / 48, 1e-3)
-    this.nx = Math.max(1, Math.ceil(size.x / this.cell) + 1)
-    this.ny = Math.max(1, Math.ceil(size.y / this.cell) + 1)
-    this.nz = Math.max(1, Math.ceil(size.z / this.cell) + 1)
-    this.grid = new Map()
-    this.queryMarks = new Uint32Array(this.T)
-    this.queryMark = 0
+    this.nx = Math.max(1, Math.ceil(sx / this.cell) + 1)
+    this.ny = Math.max(1, Math.ceil(sy / this.cell) + 1)
+    this.nz = Math.max(1, Math.ceil(sz / this.cell) + 1)
+    const nCells = this.nx * this.ny * this.nz
+    if (this.cellStart.length < nCells + 1) this.cellStart = new Int32Array(nCells + 1)
+    const start = this.cellStart
+    start.fill(0, 0, nCells + 1)
+    const fc = this._faceCells
 
-    const t = this.tris
+    // Pass 1: each face's range of cells (kept for pass 2), and how many faces each cell gets.
+    let entries = 0
     for (let f = 0; f < this.T; f++) {
       let lx = Infinity, ly = Infinity, lz = Infinity, hx = -Infinity, hy = -Infinity, hz = -Infinity
       for (let v = 0; v < 3; v++) {
-        const vi = this.index ? this.index[3 * f + v] : 3 * f + v
+        const vi = index ? index[3 * f + v] : 3 * f + v
         const x = t[3 * vi], y = t[3 * vi + 1], z = t[3 * vi + 2]
         if (x < lx) lx = x; if (y < ly) ly = y; if (z < lz) lz = z
         if (x > hx) hx = x; if (y > hy) hy = y; if (z > hz) hz = z
@@ -290,13 +323,27 @@ export class BodyCollider {
       const ci0 = this._ci(lx - pad), ci1 = this._ci(hx + pad)
       const cj0 = this._cj(ly - pad), cj1 = this._cj(hy + pad)
       const ck0 = this._ck(lz - pad), ck1 = this._ck(hz + pad)
-      for (let ci = ci0; ci <= ci1; ci++)
-        for (let cj = cj0; cj <= cj1; cj++)
-          for (let ck = ck0; ck <= ck1; ck++) {
-            const key = ci + this.nx * (cj + this.ny * ck)
-            let arr = this.grid.get(key); if (!arr) this.grid.set(key, arr = [])
-            arr.push(f)
-          }
+      fc[6 * f] = ci0; fc[6 * f + 1] = ci1; fc[6 * f + 2] = cj0; fc[6 * f + 3] = cj1; fc[6 * f + 4] = ck0; fc[6 * f + 5] = ck1
+      for (let ck = ck0; ck <= ck1; ck++)
+        for (let cj = cj0; cj <= cj1; cj++) {
+          const row = this.nx * (cj + this.ny * ck)
+          for (let ci = ci0; ci <= ci1; ci++) start[row + ci + 1]++
+          entries += ci1 - ci0 + 1
+        }
+    }
+    for (let c = 0; c < nCells; c++) start[c + 1] += start[c]
+    if (this.cellItems.length < entries) this.cellItems = new Int32Array(Math.ceil(entries * 1.25))
+    const items = this.cellItems
+    // Pass 2: fill. `fill` is a moving write head per cell; the prefix sums are restored afterwards.
+    const head = this._head && this._head.length >= nCells ? this._head : (this._head = new Int32Array(nCells))
+    for (let c = 0; c < nCells; c++) head[c] = start[c]
+    for (let f = 0; f < this.T; f++) {
+      const ci0 = fc[6 * f], ci1 = fc[6 * f + 1], cj0 = fc[6 * f + 2], cj1 = fc[6 * f + 3], ck0 = fc[6 * f + 4], ck1 = fc[6 * f + 5]
+      for (let ck = ck0; ck <= ck1; ck++)
+        for (let cj = cj0; cj <= cj1; cj++) {
+          const row = this.nx * (cj + this.ny * ck)
+          for (let ci = ci0; ci <= ci1; ci++) items[head[row + ci]++] = f
+        }
     }
   }
   _ci(x) { return Math.max(0, Math.min(this.nx - 1, Math.floor((x - this.min.x) / this.cell))) }
@@ -321,10 +368,10 @@ export class BodyCollider {
         for (let dz = -searchCells; dz <= searchCells; dz++) {
           const z = ck + dz
           if (z < 0 || z >= this.nz) continue
-          const arr = this.grid.get(x + this.nx * (y + this.ny * z))
-          if (!arr) continue
-          for (let n = 0; n < arr.length; n++) {
-            const f = arr[n]
+          const cell = x + this.nx * (y + this.ny * z)
+          const end = this.cellStart[cell + 1]
+          for (let n = this.cellStart[cell]; n < end; n++) {
+            const f = this.cellItems[n]
             if (this.queryMarks[f] === mark) continue
             this.queryMarks[f] = mark
             const i = 3 * f
