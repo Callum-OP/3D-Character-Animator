@@ -3434,6 +3434,7 @@ export function getSceneData() {
       position: root.position.toArray(),
       quaternion: root.quaternion.toArray(),
       scale: root.scale.toArray(),
+      partRigs: getPartRigData(state.currentModel),
       pose: getPose(),
       meshEdits: getMeshEditsData(),
     }
@@ -3448,6 +3449,7 @@ export function applySceneData(json) {
   }
   if (json.character && state.currentModel) {
     const root = state.currentModel.root
+    const model = state.currentModel
     const c = json.character
     if (c.position) root.position.fromArray(c.position)
     if (c.quaternion) root.quaternion.fromArray(c.quaternion)
@@ -3761,6 +3763,7 @@ export async function applyProjectData(record) {
       model.root.quaternion.fromArray(c.transform.quaternion)
       model.root.scale.fromArray(c.transform.scale)
     }
+    if (c.partRigs?.length) restorePartRigs(model, c.partRigs)
     if (c.pose) {
       try {
         applyPose(c.pose)

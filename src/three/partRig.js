@@ -3,6 +3,8 @@ import { planPartRig, normaliseOptions } from './partRigMath.js'
 import { pushSceneHistory } from './sceneHistory.js'
 import { getAdjacency, growRegion, toRanges, fromRanges, regionVertexCount } from './regions.js'
 
+export { fromRanges }
+
 // ---------------------------------------------------------------------------
 // Part rigging: give a piece of a skinned mesh (a hair strand, a hood, a cape, a scarf...) its own
 // chain of bones, with the skin weights worked out for you.
@@ -12,8 +14,8 @@ import { getAdjacency, growRegion, toRanges, fromRanges, regionVertexCount } fro
 //   - new Bones are parented to the bone the piece hangs from (and to each other along the chain),
 //     each a pure offset from its parent, so on the frame they are added NOTHING moves: a vertex
 //     weighted to a new bone gets exactly the transform its old parent bone gave it.
-//   - they are appended to the mesh's skeleton (bone + bone-inverse), so existing skin indices stay
-//     valid, and the touched vertices' skinIndex / skinWeight are rewritten.
+//   - they are appended to each selected mesh's skeleton (bone + bone-inverse), so existing skin
+//     indices stay valid, and the touched vertices' skinIndex / skinWeight are rewritten.
 // What is saved with a project is only the recipe (faces + options + bone names). It is replayed on
 // load, so a project file stays small and the model file is never modified.
 // ---------------------------------------------------------------------------
@@ -71,32 +73,102 @@ function resolveParentIndex(mesh, options) {
   return i >= 0 ? i : null
 }
 
-export function planForMesh(mesh, tris, options = {}) {
-  if (!isRigCapable(mesh)) return { ok: false, reason: 'This part is not skinned to a skeleton, so bones cannot be added to it.' }
-  const geo = mesh.geometry
-  const o = { ...normaliseOptions(options), parentBone: resolveParentIndex(mesh, options) }
-  if (options && options.parentBoneName && o.parentBone == null) {
+export function planForMesh(mesh, tris, options = {}, generatedBoneNames = []) {
+  return planForMeshes([mesh], [{ mesh, tris }], options, generatedBoneNames)
+}
+
+function compatibleRigMeshes(meshes) {
+  if (!meshes.length || meshes.some((mesh) => !isRigCapable(mesh))) return false
+  const first = meshes[0].skeleton
+  return meshes.every((mesh) =>
+    mesh.skeleton.bones.length === first.bones.length &&
+    mesh.skeleton.boneInverses.length === first.boneInverses.length &&
+    mesh.skeleton.bones.every((bone, i) => bone === first.bones[i]) &&
+    mesh.skeleton.boneInverses.every((matrix, i) =>
+      matrix && first.boneInverses[i]
+        ? matrix.elements.every((v, k) => Math.abs(v - first.boneInverses[i].elements[k]) < 1e-5)
+        : !!matrix === !!first.boneInverses[i],
+    ),
+  )
+}
+
+export function planForMeshes(meshes, selections, options = {}, generatedBoneNames = []) {
+  if (!compatibleRigMeshes(meshes)) {
+    return { ok: false, reason: 'Choose skinned parts from the same character skeleton to make one continuous rig.' }
+  }
+  const skeleton = meshes[0].skeleton
+  const parentBone = resolveParentIndex(meshes[0], options)
+  const o = { ...normaliseOptions(options), parentBone }
+  if (options && options.parentBoneName && parentBone == null) {
     return { ok: false, reason: 'That bone is not part of this mesh’s skeleton.' }
+  }
+  const totalVertices = meshes.reduce((n, mesh) => n + mesh.geometry.attributes.position.count, 0)
+  const totalIndices = meshes.reduce((n, mesh) => n + (mesh.geometry.index ? mesh.geometry.index.count : mesh.geometry.attributes.position.count), 0)
+  const positions = new Float32Array(totalVertices * 3)
+  const index = new Uint32Array(totalIndices)
+  const skinIndex = new Uint32Array(totalVertices * 4)
+  const skinWeight = new Float32Array(totalVertices * 4)
+  const tris = []
+  const vertexOffsets = new Map()
+  let vertexOffset = 0
+  let triangleOffset = 0
+  let indexOffset = 0
+  for (const mesh of meshes) {
+    const geo = mesh.geometry
+    const count = geo.attributes.position.count
+    vertexOffsets.set(mesh, vertexOffset)
+    positions.set(bindSpacePositions(mesh), vertexOffset * 3)
+    const sourceIndex = geo.index ? geo.index.array : null
+    for (let i = 0; i < (sourceIndex ? sourceIndex.length : count); i++) {
+      index[indexOffset + i] = (sourceIndex ? sourceIndex[i] : i) + vertexOffset
+    }
+    skinIndex.set(geo.attributes.skinIndex.array, vertexOffset * 4)
+    skinWeight.set(geo.attributes.skinWeight.array, vertexOffset * 4)
+    const selected = selections.find((s) => s.mesh === mesh)?.tris || []
+    for (const tri of selected) tris.push(triangleOffset + tri)
+    vertexOffset += count
+    const meshIndexCount = sourceIndex ? sourceIndex.length : count
+    triangleOffset += meshIndexCount / 3
+    indexOffset += meshIndexCount
+  }
+  if (!options.allowAddedBoneAttachment && generatedBoneNames.length) {
+    const generated = new Set(generatedBoneNames)
+    const remap = new Map()
+    skeleton.bones.forEach((bone, i) => {
+      if (!generated.has(bone.name)) return
+      let parent = bone.parent
+      while (parent && generated.has(parent.name)) parent = parent.parent
+      const parentIndex = skeleton.bones.indexOf(parent)
+      if (parentIndex >= 0) remap.set(i, parentIndex)
+    })
+    for (let i = 0; i < skinIndex.length; i++) {
+      const parentIndex = remap.get(skinIndex[i])
+      if (parentIndex != null) skinIndex[i] = parentIndex
+    }
+  }
+  const generatedSet = new Set(generatedBoneNames)
+  if (!options.allowAddedBoneAttachment && options.parentBoneName && generatedSet.has(options.parentBoneName)) {
+    return { ok: false, reason: 'Enable “Allow attachment to added bones” to attach this rig to an existing added bone.' }
   }
   const m4 = new THREE.Matrix4()
   const p = new THREE.Vector3()
   const bindCache = new Map()
   const plan = planPartRig({
-    positions: bindSpacePositions(mesh),
-    index: geo.index ? geo.index.array : null,
+    positions,
+    index,
     tris,
-    skinIndex: geo.attributes.skinIndex.array,
-    skinWeight: geo.attributes.skinWeight.array,
+    skinIndex,
+    skinWeight,
     boneBind: (i) => {
       if (!bindCache.has(i)) {
-        const m = boneBindMatrix(mesh, i)
+        const m = boneBindMatrix(meshes[0], i)
         bindCache.set(i, m ? p.setFromMatrixPosition(m4.copy(m)).toArray() : null)
       }
       return bindCache.get(i)
     },
     options: o,
   })
-  return plan
+  return plan.ok ? { ...plan, vertexOffsets, selections: selections.map((s) => ({ mesh: s.mesh, tris: s.tris })) } : plan
 }
 
 // --- applying --------------------------------------------------------------------
@@ -162,13 +234,84 @@ function writeSkin(mesh, verts, idxArr, wArr) {
   sw.needsUpdate = true
 }
 
-// Add the bone chains for `tris` of `mesh`. Returns { ok, entry } or { ok: false, reason }.
-export function applyPartRig(model, mesh, tris, options = {}, { label = 'Part', names = null, record = true, id = null } = {}) {
-  const plan = planForMesh(mesh, tris, options)
+function rigSkeletons(entry) {
+  const result = entry.result
+  return result.skeletons || Array.from(new Set((result.meshes || [result]).map((item) => item.mesh.skeleton)))
+}
+
+function remapIndex(value, start, count, removing, removedBoneParents) {
+  if (removing) {
+    if (value >= start && value < start + count) return removedBoneParents.get(value) ?? start
+    return value >= start + count ? value - count : value
+  }
+  return value >= start ? value + count : value
+}
+
+function remapIndexArray(array, start, count, removing, removedBoneParents) {
+  for (let i = 0; i < array.length; i++) {
+    array[i] = remapIndex(array[i], start, count, removing, removedBoneParents)
+  }
+}
+
+function reindexRigBones(model, skeletons, start, count, removing, excludedEntry) {
+  const skeletonSet = new Set(skeletons)
+  const removedBoneParents = new Map()
+  if (removing) {
+    const skeleton = skeletons[0]
+    const removed = new Set(skeleton.bones.slice(start, start + count))
+    for (const bone of removed) {
+      let parent = bone.parent
+      while (parent && removed.has(parent)) parent = parent.parent
+      const parentIndex = skeleton.bones.indexOf(parent)
+      removedBoneParents.set(skeleton.bones.indexOf(bone), parentIndex >= 0 ? parentIndex : start)
+    }
+  }
+
+  for (const mesh of model.meshes || []) {
+    if (!mesh.skeleton || !skeletonSet.has(mesh.skeleton)) continue
+    const attr = mesh.geometry?.attributes?.skinIndex
+    if (!attr) continue
+    remapIndexArray(attr.array, start, count, removing, removedBoneParents)
+    attr.needsUpdate = true
+  }
+  for (const entry of model.__rigAdds || []) {
+    if (entry === excludedEntry || !entry.result) continue
+    if (!rigSkeletons(entry).some((skeleton) => skeletonSet.has(skeleton))) continue
+    for (const meshResult of entry.result.meshes || [entry.result]) {
+      remapIndexArray(meshResult.oldIdx, start, count, removing, removedBoneParents)
+      remapIndexArray(meshResult.newIdx, start, count, removing, removedBoneParents)
+    }
+    if (removing) {
+      if (entry.result.baseCount >= start + count) entry.result.baseCount -= count
+      if (entry.result.startIndex >= start + count) entry.result.startIndex -= count
+    } else if (entry.result.baseCount >= start) {
+      entry.result.baseCount += count
+      if (entry.result.startIndex >= start) entry.result.startIndex += count
+    }
+  }
+}
+
+function applyActiveRigWeights(model) {
+  const entries = [...(model.__rigAdds || [])].sort((a, b) => a.result.startIndex - b.result.startIndex)
+  for (const entry of entries) {
+    for (const meshResult of entry.result.meshes || [entry.result]) {
+      writeSkin(meshResult.mesh, meshResult.verts, meshResult.newIdx, meshResult.newW)
+    }
+  }
+}
+
+// Add the planned bone chains to one or more compatible skinned meshes.
+export function applyPartRig(model, meshOrMeshes, trisOrSelections, options = {}, { label = 'Part', names = null, record = true, id = null } = {}) {
+  const meshes = Array.isArray(meshOrMeshes) ? meshOrMeshes : [meshOrMeshes]
+  const selections = Array.isArray(meshOrMeshes)
+    ? trisOrSelections
+    : [{ mesh: meshOrMeshes, tris: trisOrSelections }]
+  const generatedBoneNames = (model.__rigAdds || []).flatMap((entry) => entry.boneNames)
+  const plan = planForMeshes(meshes, selections, options, generatedBoneNames)
   if (!plan.ok) return plan
-  const geo = mesh.geometry
-  ensureSkinAttributes(geo)
-  const skeleton = mesh.skeleton
+  for (const mesh of meshes) ensureSkinAttributes(mesh.geometry)
+  const skeleton = meshes[0].skeleton
+  const skeletons = Array.from(new Set(meshes.map((mesh) => mesh.skeleton)))
   const baseCount = skeleton.bones.length
   const boneNames = names && names.length === plan.bones.length ? names : makeNames(plan, label, model)
 
@@ -178,7 +321,7 @@ export function applyPartRig(model, mesh, tris, options = {}, { label = 'Part', 
   const tmp = new THREE.Vector3()
   const newInverses = []
   plan.bones.forEach((b, i) => {
-    const parentM = b.parentLocal >= 0 ? bindWorld[b.parentLocal] : boneBindMatrix(mesh, b.parentBone)
+    const parentM = b.parentLocal >= 0 ? bindWorld[b.parentLocal] : boneBindMatrix(meshes[0], b.parentBone)
     const local = tmp.fromArray(b.world).applyMatrix4(parentM.clone().invert()).clone()
     const bone = new THREE.Bone()
     bone.name = boneNames[i]
@@ -190,29 +333,36 @@ export function applyPartRig(model, mesh, tris, options = {}, { label = 'Part', 
     created[i] = bone
   })
 
-  // skin weights (remember what they were, for undo)
-  const verts = Array.from(plan.weights.keys())
-  const oldIdx = new Uint16Array(verts.length * 4)
-  const oldW = new Float32Array(verts.length * 4)
-  const newIdx = new Uint16Array(verts.length * 4)
-  const newW = new Float32Array(verts.length * 4)
-  const si = geo.attributes.skinIndex
-  const sw = geo.attributes.skinWeight
-  verts.forEach((v, n) => {
-    const e = plan.weights.get(v)
-    for (let k = 0; k < 4; k++) {
-      oldIdx[n * 4 + k] = si.array[v * 4 + k]
-      oldW[n * 4 + k] = sw.array[v * 4 + k]
-      newIdx[n * 4 + k] = e.slots[k] >= 0 ? e.slots[k] : baseCount + (-1 - e.slots[k])
-      newW[n * 4 + k] = e.w[k]
-    }
+  const meshResults = meshes.map((mesh) => {
+    const geo = mesh.geometry
+    const offset = plan.vertexOffsets.get(mesh)
+    const count = geo.attributes.position.count
+    const verts = Array.from(plan.weights.keys()).filter((v) => v >= offset && v < offset + count).map((v) => v - offset)
+    const oldIdx = new Uint32Array(verts.length * 4)
+    const oldW = new Float32Array(verts.length * 4)
+    const newIdx = new Uint32Array(verts.length * 4)
+    const newW = new Float32Array(verts.length * 4)
+    const si = geo.attributes.skinIndex
+    const sw = geo.attributes.skinWeight
+    verts.forEach((v, n) => {
+      const e = plan.weights.get(offset + v)
+      for (let k = 0; k < 4; k++) {
+        oldIdx[n * 4 + k] = si.array[v * 4 + k]
+        oldW[n * 4 + k] = sw.array[v * 4 + k]
+        newIdx[n * 4 + k] = e.slots[k] >= 0 ? e.slots[k] : baseCount + (-1 - e.slots[k])
+        newW[n * 4 + k] = e.w[k]
+      }
+    })
+    return { mesh, verts, oldIdx, oldW, newIdx, newW, baseCount }
   })
-
   const parents = new Map(created.map((b) => [b, b.parent]))
-  skeleton.bones.push(...created)
-  skeleton.boneInverses.push(...newInverses)
-  refreshSkeleton(skeleton)
-  writeSkin(mesh, verts, newIdx, newW)
+  const startIndex = baseCount
+  for (const target of skeletons) {
+    target.bones.push(...created)
+    target.boneInverses.push(...newInverses.map((matrix) => matrix.clone()))
+    refreshSkeleton(target)
+  }
+  for (const r of meshResults) writeSkin(r.mesh, r.verts, r.newIdx, r.newW)
   model.bones.push(...created)
   if (model.__poseRestQuats) for (const b of created) model.__poseRestQuats.set(b, b.quaternion.clone())
 
@@ -221,15 +371,18 @@ export function applyPartRig(model, mesh, tris, options = {}, { label = 'Part', 
   const entry = {
     id: id || `rig_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
     label: safeBoneName(label),
-    meshIndex: model.meshes.indexOf(mesh),
-    meshName: mesh.name || '',
-    tris: toRanges(tris),
-    vertexCount: regionVertexCount(geo),
+    meshIndex: model.meshes.indexOf(meshes[0]),
+    meshName: meshes[0].name || '',
+    meshIndices: meshes.map((mesh) => model.meshes.indexOf(mesh)),
+    meshNames: meshes.map((mesh) => mesh.name || ''),
+    tris: toRanges(selections.find((s) => s.mesh === meshes[0])?.tris || []),
+    trisByMesh: meshes.map((mesh) => toRanges(selections.find((s) => s.mesh === mesh)?.tris || [])),
+    vertexCount: regionVertexCount(meshes[0].geometry),
     options: { ...options },
     boneNames,
     rootBoneNames,
     parentNames: plan.pieces.map((p) => skeleton.bones[p.parentBone].name),
-    result: { mesh, created, parents, newInverses, verts, oldIdx, oldW, newIdx, newW, baseCount },
+    result: { meshes: meshResults, skeletons, created, parents, newInverses, baseCount, startIndex },
   }
   if (!model.__rigAdds) model.__rigAdds = []
   model.__rigAdds.push(entry)
@@ -248,15 +401,21 @@ export function applyPartRig(model, mesh, tris, options = {}, { label = 'Part', 
 function detachEntry(model, entry) {
   const r = entry.result
   if (!r) return
-  const skeleton = r.mesh.skeleton
-  writeSkin(r.mesh, r.verts, r.oldIdx, r.oldW)
+  for (const meshResult of r.meshes || [r]) {
+    writeSkin(meshResult.mesh, meshResult.verts, meshResult.oldIdx, meshResult.oldW)
+  }
   for (const b of r.created) b.removeFromParent()
-  skeleton.bones.length = r.baseCount
-  skeleton.boneInverses.length = r.baseCount
-  refreshSkeleton(skeleton)
+  model.__rigAdds = (model.__rigAdds || []).filter((e) => e !== entry)
+  const startIndex = r.startIndex ?? r.baseCount
+  reindexRigBones(model, rigSkeletons(entry), startIndex, r.created.length, true, entry)
+  for (const skeleton of rigSkeletons(entry)) {
+    skeleton.bones.splice(startIndex, r.created.length)
+    skeleton.boneInverses.splice(startIndex, r.created.length)
+    refreshSkeleton(skeleton)
+  }
   const gone = new Set(r.created)
   model.bones = model.bones.filter((b) => !gone.has(b))
-  model.__rigAdds = (model.__rigAdds || []).filter((e) => e !== entry)
+  applyActiveRigWeights(model)
   if (hooks.onBonesChanged) hooks.onBonesChanged(model)
   render()
 }
@@ -264,20 +423,24 @@ function detachEntry(model, entry) {
 function attachEntry(model, entry) {
   const r = entry.result
   if (!r) return
-  const skeleton = r.mesh.skeleton
+  const startIndex = r.startIndex ?? r.baseCount
+  reindexRigBones(model, rigSkeletons(entry), startIndex, r.created.length, false, entry)
   // each bone goes back under the parent it had
   r.created.forEach((bone) => {
     const parent = r.parents && r.parents.get(bone)
     if (parent) parent.add(bone)
   })
-  skeleton.bones.push(...r.created)
-  skeleton.boneInverses.push(...r.newInverses)
-  refreshSkeleton(skeleton)
-  writeSkin(r.mesh, r.verts, r.newIdx, r.newW)
+  for (const skeleton of rigSkeletons(entry)) {
+    skeleton.bones.splice(startIndex, 0, ...r.created)
+    skeleton.boneInverses.splice(startIndex, 0, ...r.newInverses.map((matrix) => matrix.clone()))
+    refreshSkeleton(skeleton)
+  }
   model.bones.push(...r.created)
   if (model.__poseRestQuats) for (const b of r.created) model.__poseRestQuats.set(b, b.quaternion.clone())
   if (!model.__rigAdds) model.__rigAdds = []
   model.__rigAdds.push(entry)
+  model.__rigAdds.sort((a, b) => a.result.startIndex - b.result.startIndex)
+  applyActiveRigWeights(model)
   if (hooks.onBonesChanged) hooks.onBonesChanged(model)
   render()
 }
@@ -287,12 +450,63 @@ export function removeLastPartRig(model) {
   const list = model.__rigAdds || []
   const entry = list[list.length - 1]
   if (!entry || !entry.result) return false
+  return removePartRig(model, entry.id)
+}
+
+export function removePartRig(model, id) {
+  const entry = (model.__rigAdds || []).find((item) => item.id === id)
+  if (!entry || !entry.result || getPartRigDependents(model, id).length) return false
   detachEntry(model, entry)
   pushSceneHistory(
     () => attachEntry(model, entry),
     () => detachEntry(model, entry),
   )
   return true
+}
+
+export function updatePartRig(model, id, { label, options } = {}) {
+  const entry = (model.__rigAdds || []).find((item) => item.id === id)
+  if (!entry || !entry.result) return { ok: false, reason: 'That bone rig is no longer available.' }
+  const dependents = getPartRigDependents(model, id)
+  if (dependents.length) {
+    return { ok: false, reason: `Remove dependent rigs first: ${dependents.map((item) => item.label).join(', ')}.` }
+  }
+  const meshes = (entry.result.meshes || [entry.result]).map((item) => item.mesh)
+  const ranges = entry.trisByMesh || [entry.tris]
+  const selections = meshes.map((mesh, i) => ({ mesh, tris: fromRanges(ranges[i] || []) }))
+  const nextLabel = label ?? entry.label
+  const nextOptions = options ?? entry.options
+  detachEntry(model, entry)
+  const result = applyPartRig(model, meshes, selections, nextOptions, {
+    label: nextLabel,
+    record: false,
+    id: entry.id,
+  })
+  if (!result.ok) {
+    attachEntry(model, entry)
+    return result
+  }
+  const updated = result.entry
+  pushSceneHistory(
+    () => {
+      detachEntry(model, updated)
+      attachEntry(model, entry)
+    },
+    () => {
+      detachEntry(model, entry)
+      attachEntry(model, updated)
+    },
+  )
+  return { ...result, entry: updated }
+}
+
+export function getPartRigDependents(model, id) {
+  const entry = (model && model.__rigAdds || []).find((item) => item.id === id)
+  if (!entry) return []
+  const names = new Set(entry.boneNames)
+  return getPartRigEntries(model).filter((other) =>
+    other.id !== id && (other.parentNames || []).some((name) => names.has(name)),
+  )
 }
 
 export function getPartRigEntries(model) {
@@ -306,8 +520,12 @@ export function getPartRigData(model) {
     label: e.label,
     meshIndex: e.meshIndex,
     meshName: e.meshName,
+    meshIndices: e.meshIndices,
+    meshNames: e.meshNames,
     tris: e.tris,
+    trisByMesh: e.trisByMesh,
     vertexCount: e.vertexCount,
+    vertexCounts: e.result.meshes.map((item) => regionVertexCount(item.mesh.geometry)),
     options: e.options,
     boneNames: e.boneNames,
   }))
@@ -317,10 +535,22 @@ export function getPartRigData(model) {
 export function restorePartRigs(model, saved) {
   let restored = 0
   for (const s of saved || []) {
-    const mesh = model.meshes[s.meshIndex]
-    if (!mesh || !isRigCapable(mesh) || (s.meshName && mesh.name !== s.meshName)) continue
-    if (s.vertexCount != null && s.vertexCount !== regionVertexCount(mesh.geometry)) continue
-    const res = applyPartRig(model, mesh, fromRanges(s.tris), s.options || {}, { label: s.label, names: s.boneNames, record: false, id: s.id })
+    if (getPartRigEntries(model).some((entry) => entry.id === s.id)) continue
+    const indices = s.meshIndices || [s.meshIndex]
+    const meshes = indices.map((index) => model.meshes[index])
+    if (meshes.some((mesh, i) => !mesh || !isRigCapable(mesh) || ((s.meshNames || [s.meshName])[i] && mesh.name !== (s.meshNames || [s.meshName])[i]))) continue
+    if (!compatibleRigMeshes(meshes)) continue
+    const vertexCounts = indices.length === 1 && s.vertexCount != null
+      ? [s.vertexCount]
+      : (s.vertexCounts || [])
+    if (vertexCounts.some((count, i) => count !== regionVertexCount(meshes[i].geometry))) continue
+    const ranges = s.trisByMesh || [s.tris]
+    const selections = meshes.map((mesh, i) => ({ mesh, tris: fromRanges(ranges[i] || []) }))
+    const options = { ...(s.options || {}) }
+    if (options.parentBoneName && getPartRigEntries(model).some((entry) => entry.boneNames.includes(options.parentBoneName))) {
+      options.allowAddedBoneAttachment = true
+    }
+    const res = applyPartRig(model, meshes, selections, options, { label: s.label, names: s.boneNames, record: false, id: s.id })
     if (res.ok) restored++
   }
   return restored
@@ -392,7 +622,7 @@ export function resizeSelection(mesh, tris, delta) {
 
 // --- viewport feedback ------------------------------------------------------------------
 
-let highlight = null
+const highlights = new Map()
 let preview = null
 
 function noOutline(obj) {
@@ -404,11 +634,19 @@ function noOutline(obj) {
 }
 
 export function setPartRigHighlight(mesh, tris) {
-  if (highlight) {
-    highlight.removeFromParent()
-    highlight.geometry.dispose()
-    highlight.material.dispose()
-    highlight = null
+  const previous = mesh ? highlights.get(mesh) : null
+  if (previous) {
+    previous.removeFromParent()
+    previous.geometry.dispose()
+    previous.material.dispose()
+    highlights.delete(mesh)
+  } else if (!mesh) {
+    for (const object of highlights.values()) {
+      object.removeFromParent()
+      object.geometry.dispose()
+      object.material.dispose()
+    }
+    highlights.clear()
   }
   if (mesh && tris && tris.length && hooks.scene) {
     mesh.updateMatrixWorld(true)
@@ -431,12 +669,13 @@ export function setPartRigHighlight(mesh, tris) {
       color: 0xff2bd6, transparent: true, opacity: 0.5, side: THREE.DoubleSide,
       polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2, depthWrite: false,
     })
-    highlight = new THREE.Mesh(g, mat)
+    const highlight = new THREE.Mesh(g, mat)
     highlight.name = '(part rig highlight)'
     highlight.frustumCulled = false
     highlight.renderOrder = 998
     noOutline(highlight)
     hooks.scene.add(highlight)
+    highlights.set(mesh, highlight)
   }
   render()
 }

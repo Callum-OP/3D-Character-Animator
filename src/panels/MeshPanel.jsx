@@ -43,6 +43,7 @@ import ColorControl from './ColorControl.jsx'
 import MaterialEditor from './MaterialEditor.jsx'
 import RegionEditor from './RegionEditor.jsx'
 import PartRigSection from './PartRigSection.jsx'
+import { isRigCapable } from '../three/partRig.js'
 import DecimateEditor from './DecimateEditor.jsx'
 import TextureReduceEditor from './TextureReduceEditor.jsx'
 import { useRowMenu, RowMenuButton } from './rowMenu.jsx'
@@ -115,6 +116,9 @@ export default function MeshPanel() {
   const selectedClothMeshes = selectedMeshUuids
     .map((uuid) => currentModel?.meshes?.find((mesh) => mesh.uuid === uuid) || getMeshByUuid(uuid))
     .filter(Boolean)
+  const rigMeshUuids = selectedMeshUuids.filter((uuid) =>
+    currentModel?.meshes?.some((mesh) => mesh.uuid === uuid && isRigCapable(mesh)),
+  )
   const isPropPart = !!objectMesh && isObjectMesh(objectMesh)
   const selectedIndex = selectedMeta ? meshes.indexOf(selectedMeta) : -1
   const delta = selectedMesh ? getMeshDelta(selectedMesh.uuid) : null
@@ -591,7 +595,7 @@ export default function MeshPanel() {
         </details>
       )}
 
-      {selectedMeshUuids.length === 1 && selectedMeshUuid && !isPropPart && (
+      {selectedMeshUuid && !isPropPart && (rigMeshUuids.length > 0 || selectedMeshUuids.length === 1) && (
         <details className="joint-controls" style={{ marginTop: 10 }}>
           <summary style={{ cursor: 'pointer' }}>
             <span className="joint-name">Add bones</span>{' '}
@@ -599,6 +603,7 @@ export default function MeshPanel() {
           </summary>
           <PartRigSection
             meshUuid={selectedMeshUuid}
+            meshUuids={rigMeshUuids.length ? rigMeshUuids : [selectedMeshUuid]}
             resolveMesh={(uuid) => currentModel?.meshes?.find((m) => m.uuid === uuid) || null}
           />
         </details>

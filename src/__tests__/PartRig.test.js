@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import * as THREE from 'three'
+import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
 import { useStore } from '../store.js'
-import { initPartRig, planForMesh, applyPartRig, getPartRigData, restorePartRigs, getPartRigEntries, removeLastPartRig, resizeSelection, trisFromClick } from '../three/partRig.js'
+import { initPartRig, planForMesh, applyPartRig, updatePartRig, getPartRigData, restorePartRigs, getPartRigEntries, getPartRigDependents, removeLastPartRig, removePartRig, planForMeshes, resizeSelection, trisFromClick } from '../three/partRig.js'
+import { cloneForExport } from '../three/exportPose.js'
 import { performUndo, performRedo } from '../three/undoPriority.js'
 import { clearUndoHistory } from '../three/undoHistory.js'
 
@@ -154,6 +156,120 @@ describe('adding the bones', () => {
     expect(model.bones).toHaveLength(5)
   })
 
+  it('updates and deletes a rig without invalidating later rigs, and both actions are undoable', () => {
+    const { model, mesh, capeTris } = build()
+    const first = applyPartRig(model, mesh, capeTris, { segments: 3 }, { label: 'Cape' }).entry
+    const second = applyPartRig(model, mesh, capeTris, { segments: 2, parentBoneName: 'spine' }, { label: 'Scarf' }).entry
+    const update = updatePartRig(model, first.id, { label: 'Cape edited', options: { segments: 1, columns: 1 } })
+    expect(update.ok).toBe(true)
+    expect(update.entry.boneNames).toHaveLength(1)
+    performUndo(useStore.getState())
+    expect(getPartRigEntries(model).find((entry) => entry.id === first.id).boneNames).toHaveLength(3)
+    performRedo(useStore.getState())
+    expect(getPartRigEntries(model).find((entry) => entry.id === first.id).boneNames).toHaveLength(1)
+
+    expect(removePartRig(model, first.id)).toBe(true)
+    expect(mesh.skeleton.bones).toHaveLength(3 + second.boneNames.length)
+    expect(Array.from(mesh.geometry.attributes.skinIndex.array).every((index) => index < mesh.skeleton.bones.length)).toBe(true)
+    expect(mesh.geometry.attributes.skinWeight.array.some((weight, i) => weight > 0 && mesh.geometry.attributes.skinIndex.array[i] >= 3)).toBe(true)
+    performUndo(useStore.getState())
+    expect(mesh.skeleton.bones).toHaveLength(3 + 1 + second.boneNames.length)
+    performUndo(useStore.getState())
+    expect(mesh.skeleton.bones).toHaveLength(3 + 3 + second.boneNames.length)
+  })
+
+  it('never removes dependent rigs implicitly and explains the dependency', () => {
+    const { model, mesh, capeTris } = build()
+    const parent = applyPartRig(model, mesh, capeTris, { segments: 2 }, { label: 'Parent' }).entry
+    const child = applyPartRig(model, mesh, capeTris, {
+      segments: 2,
+      parentBoneName: parent.boneNames[0],
+      allowAddedBoneAttachment: true,
+    }, { label: 'Child' }).entry
+    expect(getPartRigDependents(model, parent.id)).toEqual([child])
+    expect(removePartRig(model, parent.id)).toBe(false)
+    expect(getPartRigEntries(model).map((entry) => entry.id)).toEqual([parent.id, child.id])
+    expect(model.skeleton.bones).toHaveLength(7)
+    expect(removePartRig(model, child.id)).toBe(true)
+    expect(removePartRig(model, parent.id)).toBe(true)
+    expect(model.skeleton.bones).toHaveLength(3)
+  })
+
+  it('does not auto-attach to added bones unless explicitly enabled', () => {
+    const { model, mesh, capeTris } = build()
+    const parent = applyPartRig(model, mesh, capeTris, { segments: 2 }, { label: 'Parent' }).entry
+    const automatic = planForMeshes([mesh], [{ mesh, tris: capeTris }], { segments: 2 }, parent.boneNames)
+    expect(automatic.ok).toBe(true)
+    expect(parent.boneNames).not.toContain(mesh.skeleton.bones[automatic.pieces[0].parentBone].name)
+
+    const blocked = planForMeshes([mesh], [{ mesh, tris: capeTris }], {
+      segments: 2,
+      parentBoneName: parent.boneNames[0],
+    }, parent.boneNames)
+    expect(blocked.ok).toBe(false)
+    const allowed = planForMeshes([mesh], [{ mesh, tris: capeTris }], {
+      segments: 2,
+      parentBoneName: parent.boneNames[0],
+      allowAddedBoneAttachment: true,
+    }, parent.boneNames)
+    expect(allowed.ok).toBe(true)
+    expect(mesh.skeleton.bones[allowed.pieces[0].parentBone].name).toBe(parent.boneNames[0])
+
+    expect(updatePartRig(model, parent.id, { options: { segments: 3 } }).ok).toBe(true)
+    expect(removePartRig(model, parent.id)).toBe(true)
+    expect(model.skeleton.bones).toHaveLength(3)
+  })
+
+  it('builds one continuous rig across selected meshes that share a character skeleton', () => {
+    const one = build()
+    const secondMesh = new THREE.SkinnedMesh(one.mesh.geometry.clone(), one.mesh.material)
+    secondMesh.name = 'Cape second half'
+    secondMesh.bind(one.mesh.skeleton, one.mesh.bindMatrix)
+    one.model.root.add(secondMesh)
+    one.model.meshes.push(secondMesh)
+    one.model.skinnedMeshes.push(secondMesh)
+
+    const middle = Math.floor(one.capeTris.length / 2)
+    const selections = [
+      { mesh: one.mesh, tris: one.capeTris.slice(0, middle) },
+      { mesh: secondMesh, tris: one.capeTris.slice(middle) },
+    ]
+    const plan = planForMeshes([one.mesh, secondMesh], selections, { segments: 4, columns: 1, perPiece: false })
+    expect(plan.ok).toBe(true)
+    const result = applyPartRig(one.model, [one.mesh, secondMesh], selections, { segments: 4, columns: 1, perPiece: false }, { label: 'Across' })
+    expect(result.ok).toBe(true)
+    expect(result.entry.meshIndices).toEqual([0, 1])
+    expect(result.entry.boneNames).toHaveLength(4)
+    expect(one.mesh.skeleton.bones).toHaveLength(7)
+    expect(secondMesh.skeleton).toBe(one.mesh.skeleton)
+    expect(Array.from(secondMesh.geometry.attributes.skinIndex.array).some((index) => index >= 3)).toBe(true)
+
+    const saved = JSON.parse(JSON.stringify(getPartRigData(one.model)))
+    const restored = build()
+    const restoredSecond = new THREE.SkinnedMesh(restored.mesh.geometry.clone(), restored.mesh.material)
+    restoredSecond.name = 'Cape second half'
+    restoredSecond.bind(restored.mesh.skeleton, restored.mesh.bindMatrix)
+    restored.model.root.add(restoredSecond)
+    restored.model.meshes.push(restoredSecond)
+    restored.model.skinnedMeshes.push(restoredSecond)
+    expect(restorePartRigs(restored.model, saved)).toBe(1)
+    expect(restored.model.bones.map((bone) => bone.name)).toEqual(one.model.bones.map((bone) => bone.name))
+    expect(Array.from(restoredSecond.geometry.attributes.skinIndex.array)).toEqual(Array.from(secondMesh.geometry.attributes.skinIndex.array))
+  })
+
+  it('includes added bones in the exported glTF skin', async () => {
+    const { model, mesh, capeTris } = build()
+    const { entry } = applyPartRig(model, mesh, capeTris, { segments: 3 }, { label: 'Cape' })
+    const exported = new THREE.Group()
+    exported.add(cloneForExport(model.root))
+    const json = await new Promise((resolve, reject) => {
+      new GLTFExporter().parse(exported, resolve, reject, { binary: false, onlyVisible: true })
+    })
+    const nodeNames = new Set(json.nodes.map((node) => node.name))
+    expect(entry.boneNames.every((name) => nodeNames.has(name))).toBe(true)
+    expect(json.skins[0].joints.some((index) => entry.boneNames.includes(json.nodes[index].name))).toBe(true)
+  })
+
   it('names bones uniquely and safely', () => {
     const { model, mesh, capeTris } = build()
     const a = applyPartRig(model, mesh, capeTris, { segments: 2, columns: 1 }, { label: 'My cape!' })
@@ -171,6 +287,8 @@ describe('adding the bones', () => {
     expect(two.model.bones.map((b) => b.name)).toEqual(one.model.bones.map((b) => b.name))
     expect(Array.from(two.mesh.geometry.attributes.skinWeight.array)).toEqual(Array.from(one.mesh.geometry.attributes.skinWeight.array))
     expect(Array.from(two.mesh.geometry.attributes.skinIndex.array)).toEqual(Array.from(one.mesh.geometry.attributes.skinIndex.array))
+    expect(restorePartRigs(two.model, saved)).toBe(0)
+    expect(two.model.bones).toHaveLength(one.model.bones.length)
   })
 
   it('skips a saved recipe that no longer fits the mesh', () => {
