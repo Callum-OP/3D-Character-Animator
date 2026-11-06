@@ -576,7 +576,7 @@ const END_BONE_RE = /_end(_\d+)*$/i
 // Twist / volume-preservation / roll correctives, sockets and weapon mounts.
 const HELPER_BONE_RE = /(twist|(^|_)vol(ume)?(_|$)|socket|weapon|(^|_)roll(_|$)|(^|_)ik(_|$))/i
 
-function classifyBones(bones) {
+export function classifyBones(bones) {
   const names = bones.map((b, i) => b.name || `Bone ${i + 1}`)
   const rigify = names.some((n) => /^DEF-/.test(n))
   const labels = displayLabels(names)

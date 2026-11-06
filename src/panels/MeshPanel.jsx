@@ -42,6 +42,7 @@ import EditableValue from './EditableValue.jsx'
 import ColorControl from './ColorControl.jsx'
 import MaterialEditor from './MaterialEditor.jsx'
 import RegionEditor from './RegionEditor.jsx'
+import PartRigSection from './PartRigSection.jsx'
 import DecimateEditor from './DecimateEditor.jsx'
 import TextureReduceEditor from './TextureReduceEditor.jsx'
 import { useRowMenu, RowMenuButton } from './rowMenu.jsx'
@@ -570,6 +571,19 @@ export default function MeshPanel() {
             applyModelMaterials()
           }}
         />
+        </details>
+      )}
+
+      {selectedMeshUuids.length === 1 && selectedMeshUuid && !isPropPart && (
+        <details className="joint-controls" style={{ marginTop: 10 }}>
+          <summary style={{ cursor: 'pointer' }}>
+            <span className="joint-name">Add bones</span>{' '}
+            <span className="joint-parent">hair, hoods, capes…</span>
+          </summary>
+          <PartRigSection
+            meshUuid={selectedMeshUuid}
+            resolveMesh={(uuid) => currentModel?.meshes?.find((m) => m.uuid === uuid) || null}
+          />
         </details>
       )}
 

@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
-import { loadModel, disposeObject } from './loadModel.js'
+import { loadModel, disposeObject, classifyBones } from './loadModel.js'
 import {
   installShadowDarkening,
   setShadowDarkness,
@@ -128,6 +128,7 @@ import {
   resetDangle,
   collectDescendantBoneNames,
 } from './dangle.js'
+import { initPartRig, getPartRigData, restorePartRigs } from './partRig.js'
 import { combineMeshes as combineExportMeshes, describeCombine } from './combineMeshes.js'
 import { installFlattenerShader } from './flattenerShader.js'
 import {
@@ -697,6 +698,7 @@ export function initScene(container) {
 
   // --- Dangle bones (gravity/physics on selected bones — hair, accessories) ---
   initDangle({ requestRender: () => requestRender() })
+  initPartRig({ scene: state.scene, requestRender: () => requestRender(), onBonesChanged: refreshRigBones })
 
   // --- Lights (only affect Toon/Standard modes; harmless in Unlit) ---
   const dirLight = new THREE.DirectionalLight(0xffffff, 2.0)
@@ -1720,6 +1722,20 @@ export function clearCopiedCharacterData() {
   characterClipboard = null
 }
 
+// The bone list changed (bones were added to, or taken off, a mesh part): bring the pose system and the
+// panels' bone list up to date.
+function refreshRigBones(model) {
+  model.info = { ...model.info, boneCount: model.bones.length, bones: classifyBones(model.bones) }
+  let owner = null
+  for (const [cid, m] of state.characters) if (m === model) owner = cid
+  if (state.currentModel === model) {
+    setPoseModel(model)
+    useStore.setState({ modelInfo: model.info })
+  } else if (owner) {
+    useStore.setState((s) => (s.characters[owner] ? { characters: { ...s.characters, [owner]: { ...s.characters[owner], modelInfo: model.info } } } : {}))
+  }
+}
+
 function cloneCharacterModel(source) {
   const root = cloneSkeleton(source.root)
   const sourceNodes = []
@@ -1778,6 +1794,7 @@ function cloneCharacterModel(source) {
     skeleton: skinnedMeshes.find((mesh) => mesh.skeleton)?.skeleton || null,
     materials: null,
     info,
+    __rigAdds: (source.__rigAdds || []).map(({ result, ...saved }) => saved), // the copy keeps the added bones (it cannot undo them)
   }
 }
 
@@ -3408,6 +3425,8 @@ export function applySceneData(json) {
     if (c.position) root.position.fromArray(c.position)
     if (c.quaternion) root.quaternion.fromArray(c.quaternion)
     if (c.scale) root.scale.fromArray(c.scale)
+    // Bones added to hair / capes / hoods come back first: the saved pose, dangle chains and IK pins may name them.
+    if (c.partRigs && c.partRigs.length) restorePartRigs(model, c.partRigs)
     if (c.pose) {
       try {
         applyPose(c.pose)
@@ -3597,6 +3616,7 @@ export function getProjectData() {
       importedClipNames: live.importedClipNames,
       activeClipName: live.activeClipName,
       playbackSource: live.playbackSource,
+      partRigs: getPartRigData(model),
       dangleEnabled: live.dangleEnabled,
       dangleChains: live.dangleChains,
       ikEnabled: live.ikEnabled,
