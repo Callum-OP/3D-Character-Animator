@@ -40,7 +40,9 @@ mocap retargeting, allows mesh-level edits for accessories and clothing, and add
   instead of staying fixed in place.
 - **Cloth and secondary motion** — enable cloth simulation on selected meshes to
   drape clothing or accessories against the character body, with live simulation
-  controls and a reset/restore workflow. Dangle-bone physics adds lightweight
+  controls, optional spatially indexed collisions with other visible meshes or
+  with the unmoving faces of the same mesh,
+  and a reset/restore workflow. Dangle-bone physics adds lightweight
   jiggle and secondary motion for hair, accessories, and loose parts.
 - **Ragdoll and physics-based motion** — bake a ragdoll-style animation from a
   posed character or motion clip, then reuse it as a generated clip with the same

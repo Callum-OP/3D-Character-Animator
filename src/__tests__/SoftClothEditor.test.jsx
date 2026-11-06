@@ -53,6 +53,24 @@ describe('Soft cloth editor', () => {
     expect(zonesOf()).toHaveLength(1)
   })
 
+  it('lets a soft cloth zone opt in to collisions with other meshes', () => {
+    render(<SoftClothEditor mesh={mesh} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Add effect' }))
+    const collision = screen.getByLabelText('Collide with other meshes')
+    expect(collision.checked).toBe(false)
+    fireEvent.click(collision)
+    expect(zonesOf()[0].collideWithMeshes).toBe(true)
+  })
+
+  it('lets a soft cloth zone opt in to collision with the rest of its own mesh', () => {
+    render(<SoftClothEditor mesh={mesh} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Add effect' }))
+    const collision = screen.getByLabelText('Collide with this mesh')
+    expect(collision.checked).toBe(false)
+    fireEvent.click(collision)
+    expect(zonesOf()[0].collideWithSelf).toBe(true)
+  })
+
   it('adds a swing effect from a preset', () => {
     render(<SoftClothEditor mesh={mesh} />)
     fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: 'swing' } })

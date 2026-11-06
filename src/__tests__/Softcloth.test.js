@@ -283,10 +283,150 @@ describe('soft cloth: following the pose', () => {
       rig.b0.position.x = Math.sin(f * 0.5) * 1.5
       rig.b0.position.y = Math.cos(f * 0.7) * 0.8
     })
+
     const size = entry.zones.values().next().value.size
     let worst = 0
     for (let s = 0; s < entry.sites.count; s++) worst = Math.max(worst, Math.hypot(entry.siteD[3 * s], entry.siteD[3 * s + 1], entry.siteD[3 * s + 2]))
     expect(worst).toBeLessThanOrEqual(0.05 * size + 1e-4)
+  })
+
+  it('keeps soft cloth outside another mesh when collision is enabled', () => {
+    rig = makeSheet()
+    rig.root.position.y = 0.5
+    rig.mesh.rotation.x = -Math.PI / 2
+    const body = new THREE.Mesh(
+      new THREE.PlaneGeometry(4, 4, 8, 8).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial(),
+    )
+    const bodyIndex = body.geometry.index
+    for (let i = 0; i < bodyIndex.count; i += 3) {
+      const b = bodyIndex.getX(i + 1)
+      bodyIndex.setX(i + 1, bodyIndex.getX(i + 2))
+      bodyIndex.setX(i + 2, b)
+    }
+    bodyIndex.needsUpdate = true
+    body.position.y = -0.01
+    rig.root.add(body)
+    rig.root.updateMatrixWorld(true)
+    const zone = {
+      ...makeSoftZone('soft', { kind: 'all' }),
+      collideWithMeshes: true,
+      lockTop: 0,
+      range: 0.25,
+      gravity: 1,
+      stiffness: 0.1,
+      damping: 0.2,
+    }
+    syncSoftCloth([{
+      meshes: [rig.mesh, body],
+      overrides: { [rig.mesh.uuid]: { softZones: [zone] } },
+    }])
+
+    play(rig, 90, null)
+    const entry = getSoftEntry(rig.mesh)
+    let minY = Infinity
+    for (let i = 0; i < entry.nVerts; i++) {
+      minY = Math.min(minY, worldOf(rig.mesh, rig.mesh.geometry, i).y)
+    }
+    const bodyY = body.getWorldPosition(new THREE.Vector3()).y
+    expect(minY).toBeGreaterThanOrEqual(bodyY + entry.collisionThickness - 0.002)
+    body.geometry.dispose()
+    body.material.dispose()
+  })
+
+  it('caps collider detail and reuses the collider between refreshes', () => {
+    rig = makeSheet()
+    const body = new THREE.Mesh(
+      new THREE.PlaneGeometry(4, 4, 64, 64).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial(),
+    )
+    rig.root.add(body)
+    const zone = { ...makeSoftZone('soft', { kind: 'all' }), collideWithMeshes: true }
+    syncSoftCloth([{
+      meshes: [rig.mesh, body],
+      overrides: { [rig.mesh.uuid]: { softZones: [zone] } },
+    }])
+
+    stepSoftCloth(1 / 60)
+    const entry = getSoftEntry(rig.mesh)
+    const firstCollider = entry.collider
+    expect(firstCollider.T).toBe(4000)
+    stepSoftCloth(1 / 60)
+    expect(entry.collider).toBe(firstCollider)
+    body.geometry.dispose()
+    body.material.dispose()
+  })
+
+  it('builds a self-collider only from faces outside the moving soft-cloth area', () => {
+    rig = makeSheet()
+    const zone = {
+      ...makeSoftZone('soft', { kind: 'tris', tris: [[0, 0]], vertexCount: 3 }),
+      blendOutside: false,
+      collideWithSelf: true,
+    }
+    syncSoftCloth(groupsFor(rig.mesh, [zone]))
+
+    stepSoftCloth(1 / 60)
+    const entry = getSoftEntry(rig.mesh)
+    const runtimeZone = entry.zones.get(zone.id)
+    const totalTriangles = entry.index.count / 3
+    expect(runtimeZone.selfCollider).not.toBeNull()
+    expect(runtimeZone.selfCollider.T).toBeGreaterThan(0)
+    expect(runtimeZone.selfCollider.T).toBeLessThan(totalTriangles)
+
+    const sourcePositions = entry.orig.getAttribute('position')
+    const excluded = new Set()
+    for (let corner = 0; corner < 3; corner++) {
+      const vertex = entry.index.getX(corner)
+      excluded.add(`${sourcePositions.getX(vertex)},${sourcePositions.getY(vertex)},${sourcePositions.getZ(vertex)}`)
+    }
+    const colliderPositions = runtimeZone.selfCollider.tris
+    for (let vertex = 0; vertex < colliderPositions.length / 3; vertex++) {
+      const key = `${colliderPositions[3 * vertex]},${colliderPositions[3 * vertex + 1]},${colliderPositions[3 * vertex + 2]}`
+      expect(excluded.has(key)).toBe(false)
+    }
+  })
+
+  it('keeps a picked cloth area above other faces in the same mesh', () => {
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute(
+      'position',
+      new THREE.Float32BufferAttribute([
+        -0.5, 0.52, -0.5, -0.5, 0.52, 0.5, 0.5, 0.52, 0.5, 0.5, 0.52, -0.5,
+        -0.5, 0.5, -0.5, -0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, -0.5,
+      ], 3),
+    )
+    geometry.setIndex([
+      0, 1, 2, 0, 2, 3,
+      4, 6, 5, 4, 7, 6,
+    ])
+    rig = { root: new THREE.Group(), mesh: null }
+    rig.mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial())
+    rig.root.add(rig.mesh)
+    scene.add(rig.root)
+    const zone = {
+      ...makeSoftZone('soft', { kind: 'tris', tris: [[0, 1]], vertexCount: 6 }),
+      blendOutside: false,
+      collideWithSelf: true,
+      lockTop: 0,
+      range: 1,
+      gravity: 1,
+      stiffness: 0.1,
+      damping: 0.2,
+    }
+    syncSoftCloth(groupsFor(rig.mesh, [zone]))
+    play(rig, 120)
+
+    const entry = getSoftEntry(rig.mesh)
+    const lowerFaceVertices = new Set([4, 5, 6, 7])
+    let minY = Infinity
+    for (let vertex = 0; vertex < entry.nVerts; vertex++) {
+      if (!lowerFaceVertices.has(vertex)) minY = Math.min(minY, worldOf(rig.mesh, rig.mesh.geometry, vertex).y)
+    }
+    expect(entry.collisionThickness).toBeGreaterThan(0)
+    expect(minY).toBeGreaterThanOrEqual(0.5 + entry.collisionThickness - 0.002)
+    geometry.dispose()
+    rig.mesh.material.dispose()
   })
 
   it('the locked top band stays on the body and the free part moves more the further it is from it', () => {

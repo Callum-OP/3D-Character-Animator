@@ -575,6 +575,36 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
                   format={pct}
                   onChange={(v) => update(target.uuid, z.id, { gravity: v })}
                 />
+                {mode === 'soft' && (
+                  <label
+                    className="row"
+                    style={{ margin: '8px 0' }}
+                    title="Keep this cloth outside other visible meshes, such as skin or a shirt. Uses a spatially indexed surface collider while playing, so it adds work only when enabled."
+                  >
+                    <input
+                      type="checkbox"
+                      aria-label="Collide with other meshes"
+                      checked={z.collideWithMeshes === true}
+                      onChange={(e) => update(target.uuid, z.id, { collideWithMeshes: e.target.checked }, true)}
+                    />
+                    <span>Collide with other meshes</span>
+                  </label>
+                )}
+                {mode === 'soft' && (
+                  <label
+                    className="row"
+                    style={{ margin: '8px 0' }}
+                    title="Let this cloth area collide with other parts of the same mesh, excluding the moving area itself. Useful when a hood or sleeve is part of the same mesh as a jacket or shirt."
+                  >
+                    <input
+                      type="checkbox"
+                      aria-label="Collide with this mesh"
+                      checked={z.collideWithSelf === true}
+                      onChange={(e) => update(target.uuid, z.id, { collideWithSelf: e.target.checked }, true)}
+                    />
+                    <span>Collide with this mesh</span>
+                  </label>
+                )}
                 <JoinSettings target={target} zone={z} update={update} />
                 {z.area.kind === 'tris' && (
                   <>

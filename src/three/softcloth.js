@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { BodyCollider, mergeWorldGeometry } from './clothmod.js'
 
 // ---------------------------------------------------------------------------
 // Soft cloth and Swing: a cheap alternative to the full cloth simulation
@@ -118,6 +119,9 @@ export function zoneStructure(zone) {
 const sc = {
   requestRender: () => {},
   entries: new Map(), // mesh -> entry
+  meshes: [],
+  colliderCache: new Map(),
+  frame: 0,
   couplings: [],
   suspended: false,
   overlays: new Map(), // mesh -> overlay
@@ -131,6 +135,8 @@ export function initSoftCloth(refs = {}) {
 export function disposeSoftCloth() {
   for (const mesh of [...sc.entries.keys()]) disposeEntry(mesh)
   sc.couplings = []
+  sc.meshes = []
+  sc.colliderCache.clear()
   for (const mesh of [...sc.overlays.keys()]) setSoftOverlay(mesh, null)
 }
 
@@ -345,6 +351,8 @@ function buildEntry(mesh) {
     unionVerts: new Int32Array(0),
     siteD: null,
     T0: null, // rest WORLD position of every site
+    collider: null,
+    collisionThickness: 0,
   }
   // The bind matrix is fixed (it is the matrix the part was bound with); only bindMatrixInverse follows the
   // mesh around. Moving a displacement from skin space back into the part's own space uses the fixed one.
@@ -748,6 +756,8 @@ function buildZone(entry, cfg) {
     outD: new Float32Array(3 * n), // what this zone added last frame (to hold still when no time passes)
     ready: false,
     comps: [],
+    selfCollider: null,
+    selfColliderFrame: -Infinity,
   }
   if (zr.mode === 'swing') {
     buildComponents(entry, zr)
@@ -1085,12 +1095,53 @@ function resetZone(zr) {
   for (const c of zr.comps) c.ready = false
 }
 
-function stepSoft(entry, zr, dt) {
+function resolveMeshCollision(colliders, thickness, maxDistance, p, v, ix, tx, ty, tz) {
+  for (const collider of colliders || []) {
+    const q = collider.query(p[ix], p[ix + 1], p[ix + 2], 1, maxDistance)
+    if (!q) continue
+    let nx = q.fnx
+    let ny = q.fny
+    let nz = q.fnz
+    if (nx * nx + ny * ny + nz * nz < 1e-8) {
+      nx = q.nx
+      ny = q.ny
+      nz = q.nz
+    }
+    const targetSide = (tx - q.x) * nx + (ty - q.y) * ny + (tz - q.z) * nz
+    if (targetSide < 0) {
+      nx = -nx
+      ny = -ny
+      nz = -nz
+    } else if (Math.abs(targetSide) < 1e-8) {
+      const currentSide = (p[ix] - q.x) * nx + (p[ix + 1] - q.y) * ny + (p[ix + 2] - q.z) * nz
+      if (currentSide < 0) {
+        nx = -nx
+        ny = -ny
+        nz = -nz
+      }
+    }
+    const sd = (p[ix] - q.x) * nx + (p[ix + 1] - q.y) * ny + (p[ix + 2] - q.z) * nz
+    if (sd >= thickness) continue
+    const push = thickness - sd
+    p[ix] += nx * push
+    p[ix + 1] += ny * push
+    p[ix + 2] += nz * push
+    const inward = v[ix] * nx + v[ix + 1] * ny + v[ix + 2] * nz
+    if (inward < 0) {
+      v[ix] -= nx * inward
+      v[ix + 1] -= ny * inward
+      v[ix + 2] -= nz * inward
+    }
+  }
+}
+
+function stepSoft(entry, zr, dt, colliders = [], thickness = 0) {
   const cfg = zr.cfg
   const n = zr.aff.length
   const { k, c } = springParams(cfg)
   const amount = clamp01(cfg.amount ?? 1)
   const range = Math.max(0, cfg.range ?? 0.08) * zr.size
+  const maxCollisionDistance = Math.max(range + thickness, entry.unit * 0.05)
   _g.set(0, -GRAVITY_MS2 * entry.unit * clamp01(cfg.gravity ?? 0.3) * 1.2, 0)
   const { p, v, T, prevT, weight } = zr
   // Bounce: how freely the cloth moves up and down. More = softer, longer vertical springs, less
@@ -1180,7 +1231,28 @@ function stepSoft(entry, zr, dt) {
       }
       off.set(off2)
     }
-    for (let i = 0; i < 3 * n; i++) p[i] = T[i] + off[i]
+  }
+  if (colliders.length) {
+    for (let i = 0; i < n; i++) {
+      const ix = 3 * i
+      p[ix] = T[ix] + off[ix]
+      p[ix + 1] = T[ix + 1] + off[ix + 1]
+      p[ix + 2] = T[ix + 2] + off[ix + 2]
+      resolveMeshCollision(
+        colliders,
+        thickness,
+        maxCollisionDistance,
+        p,
+        v,
+        ix,
+        T[ix],
+        T[ix + 1],
+        T[ix + 2],
+      )
+      off[ix] = p[ix] - T[ix]
+      off[ix + 1] = p[ix + 1] - T[ix + 1]
+      off[ix + 2] = p[ix + 2] - T[ix + 2]
+    }
   }
 
   // what it is attached to has moved it as a whole (zr.ho); the springs work on top of that
@@ -1854,6 +1926,11 @@ function applyCouplings() {
 // Meshes no longer in any group (or with no zones left) are put back to normal.
 export function syncSoftCloth(groups) {
   const keep = new Set()
+  const nextMeshes = [...new Set((groups || []).flatMap(({ meshes }) => meshes || []))]
+  if (nextMeshes.length !== sc.meshes.length || nextMeshes.some((mesh) => !sc.meshes.includes(mesh))) {
+    sc.meshes = nextMeshes
+    sc.colliderCache.clear()
+  }
   let structural = false // anything that changes what is attached to what (a slider drag does not)
   for (const { meshes, overrides } of groups) {
     for (const mesh of meshes || []) {
@@ -1898,7 +1975,10 @@ export function restoreSoftRest() {
 }
 
 export function clearSoftClothForMeshes(meshes) {
-  for (const mesh of meshes || []) disposeEntry(mesh)
+  const removed = new Set(meshes || [])
+  for (const mesh of removed) disposeEntry(mesh)
+  sc.meshes = sc.meshes.filter((mesh) => !removed.has(mesh))
+  sc.colliderCache.clear()
   rebuildAttach()
   rebuildCouplings()
 }
@@ -1957,7 +2037,10 @@ function stepZoneFrame(entry, zr, dt) {
   }
   if (!zr.ready) resetZone(zr)
   if (dt > 0) {
-    stepSoft(entry, zr, dt)
+    const colliders = []
+    if (zr.cfg.collideWithMeshes === true && entry.collider) colliders.push(entry.collider)
+    if (zr.cfg.collideWithSelf === true && zr.selfCollider) colliders.push(zr.selfCollider)
+    stepSoft(entry, zr, dt, colliders, entry.collisionThickness)
   } else {
     // no time passed: keep the last offsets where they are
     for (let i = 0; i < zr.aff.length; i++) {
@@ -2031,6 +2114,7 @@ function attachShift(entry, zr, out) {
 
 export function stepSoftCloth(dt) {
   if (sc.suspended || !sc.entries.size) return
+  sc.frame++
   const clamped = Math.min(Math.max(dt || 0, 0), MAX_DT)
   const active = []
   for (const entry of sc.entries.values()) {
@@ -2038,6 +2122,72 @@ export function stepSoftCloth(dt) {
     prepareFrame(entry)
     entry.siteD.fill(0)
     active.push(entry)
+  }
+  const collidersByRoot = new Map()
+  for (const entry of active) {
+    const zones = [...entry.zones.values()].filter((zr) => zr.mode === 'soft')
+    entry.collisionThickness = entry.unit * 0.008
+    const needsCollider = zones.some((zr) => zr.cfg.collideWithMeshes === true)
+    if (!needsCollider) {
+      entry.collider = null
+      continue
+    }
+    let collider = collidersByRoot.get(entry.mesh)
+    if (collidersByRoot.has(entry.mesh)) {
+      entry.collider = collider
+      continue
+    }
+    let cache = sc.colliderCache.get(entry.mesh)
+    if (!cache) {
+      cache = { collider: null, refreshedAt: -Infinity }
+      sc.colliderCache.set(entry.mesh, cache)
+    }
+    const refresh = !cache.collider || sc.frame - cache.refreshedAt >= 3
+    if (refresh) {
+      const others = sc.meshes.filter((mesh) => {
+        if (!mesh || mesh === entry.mesh || !mesh.isMesh || !mesh.geometry?.getAttribute?.('position')) return false
+        if (topAncestor(mesh) !== entry.root) return false
+        for (let parent = mesh; parent; parent = parent.parent) if (!parent.visible) return false
+        return true
+      })
+      const geometry = mergeWorldGeometry(others, 4000)
+      if (geometry) {
+        cache.collider = new BodyCollider(geometry, entry.collisionThickness)
+        cache.refreshedAt = sc.frame
+        geometry.dispose()
+      } else {
+        cache.collider = null
+      }
+    }
+    collider = cache.collider
+    entry.collisionThickness = entry.unit * 0.008
+    entry.collider = collider
+    collidersByRoot.set(entry.mesh, collider)
+  }
+  for (const entry of active) {
+    for (const zr of entry.zones.values()) {
+      if (zr.mode !== 'soft' || zr.cfg.collideWithSelf !== true) {
+        zr.selfCollider = null
+        continue
+      }
+      if (sc.frame - zr.selfColliderFrame < 3) continue
+      const geometry = mergeWorldGeometry(
+        [entry.mesh],
+        2000,
+        (mesh, face) => {
+          const index = mesh.geometry.index
+          for (let corner = 0; corner < 3; corner++) {
+            const vertex = index ? index.getX(face * 3 + corner) : face * 3 + corner
+            const site = entry.sites.siteOf[vertex]
+            if (zr.core[site] || zr.local[site] >= 0) return false
+          }
+          return true
+        },
+      )
+      zr.selfCollider = geometry ? new BodyCollider(geometry, entry.unit * 0.008) : null
+      zr.selfColliderFrame = sc.frame
+      geometry?.dispose()
+    }
   }
   // Soft cloth first, then swings; within each, the effects that hang from nothing go before the ones
   // that hang from another effect, so those see where it is DRAWN this frame.
