@@ -742,6 +742,7 @@ body {
   gap: 8px;
   font-size: 12px;
   padding: 5px 0;
+  padding-bottom: 0px;
 }
 
 .toggle-row input {

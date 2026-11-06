@@ -3,6 +3,7 @@ import { TEXTURE_LOOK_DEFAULT, presetLook, normalizeMaterialLook } from './three
 import { create } from 'zustand'
 import { setUndoHistoryLimit } from './three/undoHistory.js'
 import { DEFAULT_NIGHT, normalizeNight, DEFAULT_SHADOWS, normalizeShadows, shadowStyleValues, shadowsFromLegacy } from './three/shadowSettings.js'
+import { normalizeVideoFps } from './three/exportSize.js'
 
 // These are app-wide preferences rather than project content. They are kept
 // in their own local-storage record so opening a project cannot overwrite the
@@ -10,7 +11,7 @@ import { DEFAULT_NIGHT, normalizeNight, DEFAULT_SHADOWS, normalizeShadows, shado
 const APP_SETTINGS_FIELDS = [
   'undoLimit', 'cameraIgnoresUndo', 'settingsVersion',
   'exportScale', 'exportImageResolution', 'exportVideoResolution', 'exportAspect',
-  'exportVideoFps', 'exportVideoQuality', 'exportVideoFormat',
+  'exportVideoFps', 'exportVideoQuality', 'exportVideoFormat', 'showTargetFrameRateInPreview',
   'showGrid', 'showGround', 'solidBackground', 'backgroundColor', 'shadows', 'showStats',
   'performanceMode', 'performanceBackgroundObjects', 'performanceLowPoly',
   'performanceResolution', 'performanceEffects', 'autoDecimate', 'importTextureLimit', 'edgeSmoothing', 'qualityPreset',
@@ -475,6 +476,7 @@ export const useStore = create((set) => ({
   exportVideoResolution: '1080p', // 'viewport' or a fixed preset: 720p / 1080p / 1440p / 4k
   exportAspect: 'viewport', // 'viewport' or 16:9 / 9:16 / 1:1 / 4:3 / 21:9 (images + video)
   exportVideoFps: 30, // 24 / 30 / 60
+  showTargetFrameRateInPreview: true,
   exportVideoQuality: 'high', // 'standard' | 'high' | 'max' (sets the bitrate)
   exportVideoFormat: 'mp4', // 'mp4' (falls back to webm if unsupported) | 'webm'
   recording: false, // true while capturing a video
@@ -484,7 +486,8 @@ export const useStore = create((set) => ({
   setExportImageResolution: (exportImageResolution) => set({ exportImageResolution }),
   setExportVideoResolution: (exportVideoResolution) => set({ exportVideoResolution }),
   setExportAspect: (exportAspect) => set({ exportAspect }),
-  setExportVideoFps: (exportVideoFps) => set({ exportVideoFps }),
+  setExportVideoFps: (exportVideoFps) => set({ exportVideoFps: normalizeVideoFps(exportVideoFps) }),
+  setShowTargetFrameRateInPreview: (showTargetFrameRateInPreview) => set({ showTargetFrameRateInPreview: !!showTargetFrameRateInPreview }),
   setExportVideoQuality: (exportVideoQuality) => set({ exportVideoQuality }),
   setExportVideoFormat: (exportVideoFormat) => set({ exportVideoFormat }),
   setRecording: (recording) => set({ recording }),
@@ -1837,6 +1840,7 @@ const APP_SETTINGS_STORAGE_KEY = '3d-animator-app-settings'
 // blob-vs-real) and takes the new realistic defaults for everything else.
 export function migrateAppSettings(saved) {
   const next = { ...saved }
+  if (next.exportVideoFps !== undefined) next.exportVideoFps = normalizeVideoFps(next.exportVideoFps)
   const legacy = ['showShadow', 'shadowMapping', 'shadowSoftness', 'shadowStrength', 'shadowType', 'shadowQuality', 'shadowTint']
   if ((next.settingsVersion || 1) < 3 && next.shadows === undefined) {
     const old = shadowsFromLegacy(next)

@@ -1240,7 +1240,10 @@ function onPointerUp(e) {
   // selection exactly as it is.
   if (m.facePick) {
     const h = pickHitAt(e.clientX, e.clientY)
-    m.facePick(h && (!h.proxied || m.facePickSkinned) ? { mesh: h.object, uuid: h.object.uuid, faceIndex: h.faceIndex } : null)
+    // Skinned parts are skipped unless the caller asked for them (region painting cannot use them; adding bones
+    // can). The proxy shares the part's own triangle order, so faceIndex is the part's own face number.
+    const usable = h && (!h.proxied || m.facePickSkinned)
+    m.facePick(usable ? { mesh: h.object, uuid: h.object.uuid, faceIndex: h.faceIndex, point: h.point, proxied: !!h.proxied } : null)
     return
   }
 

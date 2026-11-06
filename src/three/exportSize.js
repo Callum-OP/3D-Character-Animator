@@ -20,7 +20,14 @@ export const ASPECTS = {
 }
 
 export const VIDEO_FPS = [24, 30, 60]
+export const MIN_VIDEO_FPS = 1
+export const MAX_VIDEO_FPS = 240
 export const VIDEO_QUALITIES = ['standard', 'high', 'max']
+
+export function normalizeVideoFps(value) {
+  const fps = Number(value)
+  return Number.isFinite(fps) && fps >= MIN_VIDEO_FPS && fps <= MAX_VIDEO_FPS ? fps : 30
+}
 
 // Largest side we will ask an encoder to handle. Browsers' hardware encoders
 // generally top out at 4K–8K; images are only limited by the GPU.

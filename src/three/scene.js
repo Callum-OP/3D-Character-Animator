@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
-import { loadModel, disposeObject } from './loadModel.js'
+import { loadModel, disposeObject, classifyBones } from './loadModel.js'
 import {
   installShadowDarkening,
   setShadowDarkness,
@@ -15,7 +15,7 @@ import {
 } from './shadowDarkening.js'
 import { resolveShadowQuality, computeShadowFilter, chooseShadowMapSize, normalizeShadows, normalizeNight, shadowsFromProject } from './shadowSettings.js'
 import { VideoCapture, findVideoConfig, webCodecsAvailable } from './videoCapture.js'
-import { computeOutputSize, videoBitrate, pickVideoFormat, MAX_VIDEO_SIDE } from './exportSize.js'
+import { computeOutputSize, videoBitrate, pickVideoFormat, normalizeVideoFps, MAX_VIDEO_SIDE } from './exportSize.js'
 import { setDecimatorReadyHandler } from './decimate.js'
 import { bakeLookIntoMaterials, lookExportNotes } from './bakeLook.js'
 import { createShadowRefresh, canReuseShadows, cullSignature, planKeyShadow } from './shadowReuse.js'
@@ -139,6 +139,7 @@ import {
   suspendSoftCloth,
   resumeSoftCloth,
 } from './softcloth.js'
+import { initPartRig, getPartRigData, restorePartRigs } from './partRig.js'
 import { combineMeshes as combineExportMeshes, describeCombine } from './combineMeshes.js'
 import { installFlattenerShader } from './flattenerShader.js'
 import {
@@ -348,6 +349,7 @@ const state = {
   recorder: null, // MediaRecorder while capturing a video
   recordingFrameInterval: 0, // limit rendering to the export frame rate while recording
   lastRecordingFrameAt: -Infinity,
+  lastPreviewFrameAt: -Infinity,
   recordedChunks: [],
   videoCapture: null, // WebCodecs MP4 capture in progress (see videoCapture.js)
   recorderStarting: false,
@@ -710,6 +712,7 @@ export function initScene(container) {
 
   // --- Dangle bones (gravity/physics on selected bones — hair, accessories) ---
   initDangle({ requestRender: () => requestRender() })
+  initPartRig({ scene: state.scene, requestRender: () => requestRender(), onBonesChanged: refreshRigBones })
 
   // --- Lights (only affect Toon/Standard modes; harmless in Unlit) ---
   const dirLight = new THREE.DirectionalLight(0xffffff, 2.0)
@@ -1136,12 +1139,20 @@ export function setContinuousRender(on, reason = 'anim') {
       if (!state.continuous) return
       state.animId = requestAnimationFrame(tick)
       const now = performance.now()
+      const store = useStore.getState()
+      const previewFrameInterval =
+        store.previewing && store.showTargetFrameRateInPreview
+          ? 1000 / normalizeVideoFps(store.exportVideoFps)
+          : 0
       if (
         state.recordingFrameInterval &&
         now - state.lastRecordingFrameAt < state.recordingFrameInterval - 2 // half a refresh of slack, or 30 fps on a 60 Hz screen keeps landing on 50 ms
       ) return
       if (state.recordingFrameInterval) state.lastRecordingFrameAt = now
-      else if (state.qualityFrameInterval) {
+      else if (previewFrameInterval) {
+        if (now - state.lastPreviewFrameAt < previewFrameInterval - 2) return
+        state.lastPreviewFrameAt = now
+      } else if (state.qualityFrameInterval) {
         // The Quality preset's frame-rate cap (the animation clock keeps real time: skipped frames just make the next one cover more)
         if (now - state.lastQualityFrameAt < state.qualityFrameInterval - 2) return
         state.lastQualityFrameAt = now
@@ -1727,6 +1738,20 @@ export function clearCopiedCharacterData() {
   characterClipboard = null
 }
 
+// The bone list changed (bones were added to, or taken off, a mesh part): bring the pose system and the
+// panels' bone list up to date.
+function refreshRigBones(model) {
+  model.info = { ...model.info, boneCount: model.bones.length, bones: classifyBones(model.bones) }
+  let owner = null
+  for (const [cid, m] of state.characters) if (m === model) owner = cid
+  if (state.currentModel === model) {
+    setPoseModel(model)
+    useStore.setState({ modelInfo: model.info })
+  } else if (owner) {
+    useStore.setState((s) => (s.characters[owner] ? { characters: { ...s.characters, [owner]: { ...s.characters[owner], modelInfo: model.info } } } : {}))
+  }
+}
+
 function cloneCharacterModel(source) {
   const root = cloneSkeleton(source.root)
   const sourceNodes = []
@@ -1785,6 +1810,7 @@ function cloneCharacterModel(source) {
     skeleton: skinnedMeshes.find((mesh) => mesh.skeleton)?.skeleton || null,
     materials: null,
     info,
+    __rigAdds: (source.__rigAdds || []).map(({ result, ...saved }) => saved), // the copy keeps the added bones (it cannot undo them)
   }
 }
 
@@ -3185,7 +3211,7 @@ export async function startRecording() {
   if (!canWebCodecs && !canRecordVideo()) return null
   state.recorderStarting = true
   try {
-    const fps = [24, 30, 60].includes(s.exportVideoFps) ? s.exportVideoFps : 30
+    const fps = normalizeVideoFps(s.exportVideoFps)
     const size = previewOutputSize('video')
     const fixed = s.exportVideoResolution !== 'viewport' || s.exportAspect !== 'viewport'
     const restore = fixed ? applyOutputSize(size.width, size.height) : () => {}
@@ -3423,6 +3449,8 @@ export function applySceneData(json) {
     if (c.position) root.position.fromArray(c.position)
     if (c.quaternion) root.quaternion.fromArray(c.quaternion)
     if (c.scale) root.scale.fromArray(c.scale)
+    // Bones added to hair / capes / hoods come back first: the saved pose, dangle chains and IK pins may name them.
+    if (c.partRigs && c.partRigs.length) restorePartRigs(model, c.partRigs)
     if (c.pose) {
       try {
         applyPose(c.pose)
@@ -3612,6 +3640,7 @@ export function getProjectData() {
       importedClipNames: live.importedClipNames,
       activeClipName: live.activeClipName,
       playbackSource: live.playbackSource,
+      partRigs: getPartRigData(model),
       dangleEnabled: live.dangleEnabled,
       dangleChains: live.dangleChains,
       ikEnabled: live.ikEnabled,

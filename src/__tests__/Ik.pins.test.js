@@ -230,6 +230,24 @@ describe('IK pins: marker on a moving object', () => {
 })
 
 describe('IK pins: editing, undo and picking', () => {
+  it('only shows a marker visual while that pin is selected', () => {
+    const first = addIkPin('wrist', { characterId: CHAR })
+    const firstEntry = getIkEntry(first.id)
+    expect(firstEntry.visual.visible).toBe(false)
+
+    selectIkPin(first.id)
+    expect(firstEntry.visual.visible).toBe(true)
+
+    selectIkPin(null)
+    expect(firstEntry.visual.visible).toBe(false)
+
+    const second = addIkPin('wrist', { characterId: CHAR })
+    const secondEntry = getIkEntry(second.id)
+    selectIkPin(second.id)
+    expect(firstEntry.visual.visible).toBe(false)
+    expect(secondEntry.visual.visible).toBe(true)
+  })
+
   it('adding, editing and removing a pin are undoable', () => {
     const pin = addIkPin('wrist', { characterId: CHAR })
     expect(useStore.getState().ikPins).toHaveLength(1)

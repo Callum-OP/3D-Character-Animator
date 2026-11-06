@@ -649,16 +649,18 @@ function Viewport() {
         const ikHitId = s.mode === 'object' ? pickIkMarker(ndcX, ndcY) : null
 
         if (ikHitId != null) {
-          s.setSelectedIkPinId(ikHitId)
+          s.setSelectedIkPinId(s.selectedIkPinId === ikHitId ? null : ikHitId)
           return
         }
 
         if (cameraHitId != null) {
+          if (s.selectedIkPinId != null) s.setSelectedIkPinId(null)
           s.setSelectedCameraId(cameraHitId)
           return
         }
 
         if (lightHitId != null) {
+          if (s.selectedIkPinId != null) s.setSelectedIkPinId(null)
           s.setSelectedLightId(lightHitId)
           return
         }
@@ -669,6 +671,7 @@ function Viewport() {
           // resize gizmo attaches to it right away, same as clicking any
           // other object there.
           if (s.mode === 'object') {
+            if (s.selectedIkPinId != null) s.setSelectedIkPinId(null)
             if (e.shiftKey || e.ctrlKey || e.metaKey) s.toggleObjectSelection(hitId, true)
             else s.setSelectedObjectId(hitId)
           }
@@ -681,6 +684,7 @@ function Viewport() {
         // (Plain 'view' mode intentionally falls through to here and does
         // nothing — it's look-only, no picking.)
         if (s.mode === 'object' && hitId != null) {
+          if (s.selectedIkPinId != null) s.setSelectedIkPinId(null)
           if (e.shiftKey || e.ctrlKey || e.metaKey) s.toggleObjectSelection(hitId, true)
           else s.setSelectedObjectId(hitId)
           return

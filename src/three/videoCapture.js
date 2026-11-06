@@ -100,6 +100,7 @@ export class VideoCapture {
     this.mime = def.mime
     this.canvas = canvas
     this.fps = fps
+    this.keyFrameInterval = Math.max(1, Math.round(fps * 2))
     this.FrameClass = FrameClass
     this.maxQueue = maxQueue
     this.manualStart = manualStart
@@ -195,7 +196,7 @@ export class VideoCapture {
     try {
       const timestamp = Math.max(this.lastTimestamp + 1, Math.round(elapsedMs * 1000)) // strictly increasing, in µs
       frame = new this.FrameClass(this.canvas, { timestamp, duration: Math.round(1e6 / this.fps) })
-      this.encoder.encode(frame, { keyFrame: this.captured % (this.fps * 2) === 0 })
+      this.encoder.encode(frame, { keyFrame: this.captured % this.keyFrameInterval === 0 })
       this.lastElapsed = elapsedMs
       this.lastTimestamp = timestamp
       this.captured++
