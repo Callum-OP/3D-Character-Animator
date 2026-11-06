@@ -128,6 +128,17 @@ import {
   resetDangle,
   collectDescendantBoneNames,
 } from './dangle.js'
+import {
+  initSoftCloth,
+  disposeSoftCloth,
+  syncSoftCloth,
+  stepSoftCloth,
+  settleSoftCloth,
+  restoreSoftRest,
+  clearSoftClothForMeshes,
+  suspendSoftCloth,
+  resumeSoftCloth,
+} from './softcloth.js'
 import { initPartRig, getPartRigData, restorePartRigs } from './partRig.js'
 import { combineMeshes as combineExportMeshes, describeCombine } from './combineMeshes.js'
 import { installFlattenerShader } from './flattenerShader.js'
@@ -244,6 +255,7 @@ import {
   pauseObjectAnimation,
   isObjectAnimationPaused,
   scrubObjectAnimation,
+  getAllPropMeshes,
 } from './objects.js'
 import { getPose, applyPose } from './posing.js'
 import { detectFacingYaw } from './bvh.js'
@@ -255,7 +267,7 @@ import { markProjectClean, markProjectCleanAfterLoad } from './projectDirty.js'
 import { resolveTextureLook, normalizeMaterialLook, TEXTURE_LOOK_DEFAULT } from './textureLookOptions.js'
 import { withExportSafeMaterials } from './materialUserData.js'
 import { buildPartsGroup, safeFileStem } from './extractParts.js'
-import { bakeRegionsForExport, fromRanges } from './regions.js'
+import { bakeRegionsForExport, fromRanges, setRegionsRenderHook } from './regions.js'
 import { analyseSurface, outwardDirection, adjustDirection, faceOfObject, averageSurfaceColor, lightColourFrom } from './lightFromPart.js'
 import { getOriginalMaterials } from './surfaceMaterials.js'
 import { pushSceneHistory } from './sceneHistory.js'
@@ -654,6 +666,8 @@ export function initScene(container) {
   })
 
   initFlattener({ scene, requestRender })
+  initSoftCloth({ requestRender })
+  setRegionsRenderHook(requestRender)
 
   // --- IK pins: markers that hold a hand / foot / limb in place while an animation plays ---
   initIk({
@@ -895,6 +909,7 @@ function renderOnce({ cameraOnly = false } = {}) {
   // marker) solve here. A camera-only frame (orbiting) changed no pose, so it skips it.
   if (!cameraOnly && !state.continuous) stepIkPins()
   updateFlattenerGuides() // the chin line, when it is switched on
+  if (!cameraOnly && !state.continuous) settleSoftCloth() // not playing: the clean pose
   followIdleClothPose() // keep enabled-but-not-draping cloth tracking the body/gizmo, not frozen
   updateBoneHelpers() // park bone dots on their (possibly just-moved) bones
   updateMeshEditHelpers() // keep the part-selection box hugging its mesh
@@ -1163,6 +1178,7 @@ export function setContinuousRender(on, reason = 'anim') {
         advanceGlobalClock(animationDelta)
         stepClothLive(animationDelta) // step any LIVE cloth sims, following the current pose
         stepDangleLive(animationDelta) // swing any dangle (hair/accessory) bones under gravity
+        stepSoftCloth(animationDelta) // soft cloth / swing zones on parts (after every pose change above)
         updateCamTransition(animationDelta) // glide any in-progress camera cut
         renderOnce()
       } catch (err) {
@@ -1892,6 +1908,7 @@ function detachCharacterSoft(id) {
   record.animEntry = detachAnimationEntry(id)
   if (!isAnyPlaying()) setContinuousRender(false)
   clearClothForMeshes(model.meshes, { restoreVisible: true })
+  clearSoftClothForMeshes(model.meshes)
   clearDangle(id)
   releaseFollowersOf(model.root)
   const detachedIds = detachObjectsForCharacter(id)
@@ -1980,6 +1997,7 @@ function disposeCharacter(id) {
   clearAnimationModel(id) // only THIS character's mixer/action
   if (!isAnyPlaying()) setContinuousRender(false)
   clearClothForMeshes(model.meshes) // only THIS character's cloth, others keep simulating
+  clearSoftClothForMeshes(model.meshes)
   clearDangle(id) // only THIS character's dangle chains
   clearIk(id) // and its IK markers
   clearFlattener(id) // and its flattener
@@ -2695,6 +2713,7 @@ export async function exportSceneModel(format = 'glb', name = 'scene', poseMode 
   if (!items.length) {
     return { ok: false, message: 'Nothing to export — load a character or add an object first.' }
   }
+  suspendSoftCloth() // a file always gets the clean pose, never a mid-swing one
   try {
     const [{ GLTFExporter }, { cloneForExport }] = await Promise.all([
       import('three/examples/jsm/exporters/GLTFExporter.js'),
@@ -2759,6 +2778,8 @@ export async function exportSceneModel(format = 'glb', name = 'scene', poseMode 
     return { ok: true, message }
   } catch (err) {
     return { ok: false, message: 'Export failed: ' + (err && err.message ? err.message : String(err)) }
+  } finally {
+    resumeSoftCloth()
   }
 }
 
@@ -3018,6 +3039,7 @@ export async function extractPartsToObject(uuids, { removeOriginals = true, reco
       message: "Parts of a rigged character can't be turned into objects (the skeleton bends them). Parts of objects and scenery can.",
     }
   }
+  suspendSoftCloth() // the new object is made from the clean pose
   try {
     const { GLTFExporter } = await import('three/examples/jsm/exporters/GLTFExporter.js')
     const s = useStore.getState()
@@ -3053,6 +3075,8 @@ export async function extractPartsToObject(uuids, { removeOriginals = true, reco
     return { ok: true, message, id: meta.id }
   } catch (err) {
     return { ok: false, message: 'Could not make an object from those parts: ' + (err && err.message ? err.message : String(err)) }
+  } finally {
+    resumeSoftCloth()
   }
 }
 
@@ -4529,8 +4553,23 @@ export function getMeshUuidsForObject(object) {
   return model && model.meshes ? model.meshes.map((mesh) => mesh.uuid) : []
 }
 
+// Make the soft cloth / swing effects match the saved zones of every character and prop.
+// Cheap enough to call on every slider tick (it only rebuilds a zone when its shape changed).
+export function refreshSoftCloth() {
+  const s = useStore.getState()
+  const groups = []
+  for (const [id, model] of state.characters) {
+    const character = id === s.activeCharacterId ? s : s.characters[id]
+    groups.push({ meshes: model.meshes, overrides: character?.meshOverrides || {} })
+  }
+  groups.push({ meshes: getAllPropMeshes(), overrides: s.meshOverrides })
+  syncSoftCloth(groups)
+}
+
 export function applyModelMaterials() {
   const s = useStore.getState()
+  // anything below that copies a part's geometry must see the clean pose, not a mid-swing one
+  restoreSoftRest()
   applyCharacterLightLinks(s)
   const soften = s.softenEnabled ? s.softenAmount : 0
   // Rim colour/direction normally come from the manual picker + key light —
@@ -4582,6 +4621,7 @@ export function applyModelMaterials() {
       s.outlineOpacity,
     )
   }
+  refreshSoftCloth()
   // Cloth proxies live outside the model's own scene graph (see clothmod.js),
   // so applyMaterials' traversal never touches them — just rebuild any
   // active drapes so their proxy material picks up the new style.
@@ -4721,6 +4761,7 @@ export function disposeScene() {
   disposeCameras()
   disposeIk()
   disposeFlattener()
+  disposeSoftCloth()
   disposeLights()
   disposeClothMod()
   disposePosing()

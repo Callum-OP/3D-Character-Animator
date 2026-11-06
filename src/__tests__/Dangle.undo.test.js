@@ -10,6 +10,7 @@ import {
   addDangleChainUndoable,
   removeDangleChainUndoable,
   updateDangleChainUndoable,
+  stepDangleLive,
 } from '../three/dangle.js'
 import { performUndo, performRedo } from '../three/undoPriority.js'
 import { clearUndoHistory } from '../three/undoHistory.js'
@@ -57,6 +58,88 @@ describe('dangle edits are undo steps', () => {
     expect(state().dangleChains).toHaveLength(0)
     performRedo(state())
     expect(state().dangleChains).toHaveLength(1)
+  })
+
+  it('creates a rigged-cloth chain with its own starting settings', () => {
+    addDangleChainUndoable('cape', ['cape1', 'cape2'], 'cloth')
+    expect(state().dangleChains[0]).toMatchObject({
+      type: 'cloth',
+      stiffness: 0.4,
+      gravity: 0.35,
+      damping: 0.55,
+      collideWithBones: false,
+      collideWithMesh: false,
+    })
+    performUndo(state())
+    expect(state().dangleChains).toHaveLength(0)
+    performRedo(state())
+    expect(state().dangleChains[0].type).toBe('cloth')
+  })
+
+  it('mesh collision deflects a bone chain while leaving collision disabled by default', () => {
+    function makeMeshCollisionModel() {
+      const root = new THREE.Group()
+      const hips = new THREE.Bone()
+      hips.name = 'hips'
+      const tail = new THREE.Bone()
+      tail.name = 'tail'
+      tail.position.set(-0.1, 0, 0)
+      const tip = new THREE.Bone()
+      tip.name = 'tip'
+      tip.position.set(0.2, 0.2, 0)
+      hips.add(tail)
+      tail.add(tip)
+      root.add(hips)
+      const barrier = new THREE.Mesh(
+        new THREE.PlaneGeometry(1, 1),
+        new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }),
+      )
+      barrier.rotation.y = -Math.PI / 2
+      root.add(barrier)
+      root.updateMatrixWorld(true)
+      return { root, bones: [hips, tail, tip], meshes: [barrier], tail }
+    }
+
+    const plain = makeMeshCollisionModel()
+    const colliding = makeMeshCollisionModel()
+    setDangleConfig(1, plain, true, [{ id: 'plain', boneNames: ['tail', 'tip'], stiffness: 0.15, gravity: 1, damping: 0.8 }])
+    setDangleConfig(2, colliding, true, [{
+      id: 'mesh',
+      boneNames: ['tail', 'tip'],
+      stiffness: 0.15,
+      gravity: 1,
+      damping: 0.8,
+      collideWithMesh: true,
+    }])
+
+    stepDangleLive(1 / 60)
+
+    expect(plain.tail.quaternion.angleTo(colliding.tail.quaternion)).toBeGreaterThan(0.01)
+  })
+
+  it('other-bone collision deflects a chain when enabled', () => {
+    const plain = makeModel()
+    const colliding = makeModel()
+    const obstacleBase = new THREE.Bone()
+    obstacleBase.name = 'obstacleBase'
+    obstacleBase.position.set(0.01, 0.35, 0)
+    const obstacle = new THREE.Bone()
+    obstacle.name = 'obstacle'
+    obstacle.position.set(0, 0.1, 0)
+    obstacleBase.add(obstacle)
+    colliding.root.add(obstacleBase)
+    colliding.root.updateMatrixWorld(true)
+    colliding.bones.push(obstacleBase, obstacle)
+
+    const chain = { id: 'tail', boneNames: ['tail1', 'tail2'], stiffness: 0.15, gravity: 1, damping: 0.8 }
+    setDangleConfig(1, plain, true, [chain])
+    setDangleConfig(2, colliding, true, [{ ...chain, collideWithBones: true }])
+
+    stepDangleLive(1 / 60)
+
+    const plainTail = plain.bones.find((bone) => bone.name === 'tail1')
+    const collidingTail = colliding.bones.find((bone) => bone.name === 'tail1')
+    expect(plainTail.quaternion.angleTo(collidingTail.quaternion)).toBeGreaterThan(0.01)
   })
 
   it('a slider drag is one step; an edit straight after an undo is not lost', () => {

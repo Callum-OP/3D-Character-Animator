@@ -234,25 +234,51 @@ const _windClock = { t: 0 }
 const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3()
 const _d = new THREE.Vector3(), _e = new THREE.Vector3()
 
-class BodyCollider {
+export class BodyCollider {
   constructor(geometry, pad = 0.02) {
-    const g = geometry.index ? geometry.toNonIndexed() : geometry
-    this.tris = g.getAttribute('position').array
-    this.T = this.tris.length / 9
+    // `tris` is kept by reference: a caller that rewrites these positions in place can call
+    // refit() to re-index the moved surface without reallocating anything.
+    this.tris = geometry.getAttribute('position').array
+    this.index = geometry.index?.array || null
+    this.T = Math.floor((this.index ? this.index.length : this.tris.length / 3) / 3)
     this.pad = pad
+    this.faceNormals = new Float32Array(this.T * 3)
+    this.min = new THREE.Vector3()
+    // Flat spatial index (counting sort): cellStart[c]..cellStart[c + 1] indexes into cellItems, the
+    // faces touching cell c. Typed arrays, grown only if a refit needs more room.
+    this.cellStart = new Int32Array(1)
+    this.cellItems = new Int32Array(1)
+    this._faceCells = new Int32Array(this.T * 6)
+    this.queryMarks = new Uint32Array(this.T)
+    this.queryMark = 0
+    this._build()
+  }
+
+  // Re-read the (moved) positions: new face normals and a new spatial index, with no new arrays
+  // unless the surface grew past what the pool already holds.
+  refit(pad = this.pad) {
+    this.pad = pad
+    this._build()
+  }
+
+  _build() {
+    const pad = this.pad
+    const t = this.tris
+    const index = this.index
 
     // True per-triangle outward normal (from winding order), independent of
     // which side a query point currently sits on. Used by shrinkwrap so it
     // can tell "outside" from "inside" even after a particle has tunnelled
     // through the body, instead of just pointing away-from-closest-point
     // (which flips sign the moment a particle crosses to the wrong side).
-    this.faceNormals = new Float32Array(this.T * 3)
-    const t0 = this.tris
     for (let f = 0; f < this.T; f++) {
-      const o = f * 9
-      _a.set(t0[o], t0[o + 1], t0[o + 2])
-      _b.set(t0[o + 3], t0[o + 4], t0[o + 5])
-      _c.set(t0[o + 6], t0[o + 7], t0[o + 8])
+      const i = 3 * f
+      const a = index ? 3 * index[i] : 3 * i
+      const b = index ? 3 * index[i + 1] : 3 * (i + 1)
+      const c = index ? 3 * index[i + 2] : 3 * (i + 2)
+      _a.set(t[a], t[a + 1], t[a + 2])
+      _b.set(t[b], t[b + 1], t[b + 2])
+      _c.set(t[c], t[c + 1], t[c + 2])
       _d.subVectors(_b, _a)
       _e.subVectors(_c, _a)
       _d.cross(_e)
@@ -263,59 +289,107 @@ class BodyCollider {
       this.faceNormals[f * 3 + 2] = _d.z
     }
 
-    const bb = new THREE.Box3().setFromBufferAttribute(g.getAttribute('position'))
-    this.min = bb.min.clone()
-    const size = bb.getSize(new THREE.Vector3())
-    const diag = size.length() || 1
+    let mnx = Infinity, mny = Infinity, mnz = Infinity, mxx = -Infinity, mxy = -Infinity, mxz = -Infinity
+    for (let i = 0; i + 2 < t.length; i += 3) {
+      const x = t[i], y = t[i + 1], z = t[i + 2]
+      if (x < mnx) mnx = x; if (x > mxx) mxx = x
+      if (y < mny) mny = y; if (y > mxy) mxy = y
+      if (z < mnz) mnz = z; if (z > mxz) mxz = z
+    }
+    if (mnx === Infinity) { mnx = mny = mnz = 0; mxx = mxy = mxz = 0 }
+    this.min.set(mnx, mny, mnz)
+    const sx = mxx - mnx, sy = mxy - mny, sz = mxz - mnz
+    const diag = Math.sqrt(sx * sx + sy * sy + sz * sz) || 1
     this.cell = Math.max(diag / 48, 1e-3)
-    this.nx = Math.max(1, Math.ceil(size.x / this.cell) + 1)
-    this.ny = Math.max(1, Math.ceil(size.y / this.cell) + 1)
-    this.nz = Math.max(1, Math.ceil(size.z / this.cell) + 1)
-    this.grid = new Map()
+    this.nx = Math.max(1, Math.ceil(sx / this.cell) + 1)
+    this.ny = Math.max(1, Math.ceil(sy / this.cell) + 1)
+    this.nz = Math.max(1, Math.ceil(sz / this.cell) + 1)
+    const nCells = this.nx * this.ny * this.nz
+    if (this.cellStart.length < nCells + 1) this.cellStart = new Int32Array(nCells + 1)
+    const start = this.cellStart
+    start.fill(0, 0, nCells + 1)
+    const fc = this._faceCells
 
-    const t = this.tris
+    // Pass 1: each face's range of cells (kept for pass 2), and how many faces each cell gets.
+    let entries = 0
     for (let f = 0; f < this.T; f++) {
-      const o = f * 9
       let lx = Infinity, ly = Infinity, lz = Infinity, hx = -Infinity, hy = -Infinity, hz = -Infinity
       for (let v = 0; v < 3; v++) {
-        const x = t[o + v * 3], y = t[o + v * 3 + 1], z = t[o + v * 3 + 2]
+        const vi = index ? index[3 * f + v] : 3 * f + v
+        const x = t[3 * vi], y = t[3 * vi + 1], z = t[3 * vi + 2]
         if (x < lx) lx = x; if (y < ly) ly = y; if (z < lz) lz = z
         if (x > hx) hx = x; if (y > hy) hy = y; if (z > hz) hz = z
       }
       const ci0 = this._ci(lx - pad), ci1 = this._ci(hx + pad)
       const cj0 = this._cj(ly - pad), cj1 = this._cj(hy + pad)
       const ck0 = this._ck(lz - pad), ck1 = this._ck(hz + pad)
-      for (let ci = ci0; ci <= ci1; ci++)
-        for (let cj = cj0; cj <= cj1; cj++)
-          for (let ck = ck0; ck <= ck1; ck++) {
-            const key = ci + this.nx * (cj + this.ny * ck)
-            let arr = this.grid.get(key); if (!arr) this.grid.set(key, arr = [])
-            arr.push(f)
-          }
+      fc[6 * f] = ci0; fc[6 * f + 1] = ci1; fc[6 * f + 2] = cj0; fc[6 * f + 3] = cj1; fc[6 * f + 4] = ck0; fc[6 * f + 5] = ck1
+      for (let ck = ck0; ck <= ck1; ck++)
+        for (let cj = cj0; cj <= cj1; cj++) {
+          const row = this.nx * (cj + this.ny * ck)
+          for (let ci = ci0; ci <= ci1; ci++) start[row + ci + 1]++
+          entries += ci1 - ci0 + 1
+        }
+    }
+    for (let c = 0; c < nCells; c++) start[c + 1] += start[c]
+    if (this.cellItems.length < entries) this.cellItems = new Int32Array(Math.ceil(entries * 1.25))
+    const items = this.cellItems
+    // Pass 2: fill. `fill` is a moving write head per cell; the prefix sums are restored afterwards.
+    const head = this._head && this._head.length >= nCells ? this._head : (this._head = new Int32Array(nCells))
+    for (let c = 0; c < nCells; c++) head[c] = start[c]
+    for (let f = 0; f < this.T; f++) {
+      const ci0 = fc[6 * f], ci1 = fc[6 * f + 1], cj0 = fc[6 * f + 2], cj1 = fc[6 * f + 3], ck0 = fc[6 * f + 4], ck1 = fc[6 * f + 5]
+      for (let ck = ck0; ck <= ck1; ck++)
+        for (let cj = cj0; cj <= cj1; cj++) {
+          const row = this.nx * (cj + this.ny * ck)
+          for (let ci = ci0; ci <= ci1; ci++) items[head[row + ci]++] = f
+        }
     }
   }
   _ci(x) { return Math.max(0, Math.min(this.nx - 1, Math.floor((x - this.min.x) / this.cell))) }
   _cj(y) { return Math.max(0, Math.min(this.ny - 1, Math.floor((y - this.min.y) / this.cell))) }
   _ck(z) { return Math.max(0, Math.min(this.nz - 1, Math.floor((z - this.min.z) / this.cell))) }
 
-  query(px, py, pz) {
-    const key = this._ci(px) + this.nx * (this._cj(py) + this.ny * this._ck(pz))
-    const arr = this.grid.get(key); if (!arr) return null
+  query(px, py, pz, searchCells = 0, maxDistance = Infinity) {
+    const ci = this._ci(px)
+    const cj = this._cj(py)
+    const ck = this._ck(pz)
     const t = this.tris
-    let best = Infinity, bx = 0, by = 0, bz = 0, bestFace = -1
+    let best = maxDistance * maxDistance, bx = 0, by = 0, bz = 0, bestFace = -1
+    const mark = (this.queryMark + 1) >>> 0 || 1
+    this.queryMark = mark
     _a.set(px, py, pz)
-    for (let n = 0; n < arr.length; n++) {
-      const f = arr[n]
-      const o = f * 9
-      _b.set(t[o], t[o + 1], t[o + 2])
-      _c.set(t[o + 3], t[o + 4], t[o + 5])
-      _d.set(t[o + 6], t[o + 7], t[o + 8])
-      closestOnTri(_a, _b, _c, _d, _e)
-      const dx = px - _e.x, dy = py - _e.y, dz = pz - _e.z
-      const d2 = dx * dx + dy * dy + dz * dz
-      if (d2 < best) { best = d2; bx = _e.x; by = _e.y; bz = _e.z; bestFace = f }
+    for (let dx = -searchCells; dx <= searchCells; dx++) {
+      const x = ci + dx
+      if (x < 0 || x >= this.nx) continue
+      for (let dy = -searchCells; dy <= searchCells; dy++) {
+        const y = cj + dy
+        if (y < 0 || y >= this.ny) continue
+        for (let dz = -searchCells; dz <= searchCells; dz++) {
+          const z = ck + dz
+          if (z < 0 || z >= this.nz) continue
+          const cell = x + this.nx * (y + this.ny * z)
+          const end = this.cellStart[cell + 1]
+          for (let n = this.cellStart[cell]; n < end; n++) {
+            const f = this.cellItems[n]
+            if (this.queryMarks[f] === mark) continue
+            this.queryMarks[f] = mark
+            const i = 3 * f
+            const a = this.index ? 3 * this.index[i] : 3 * i
+            const b = this.index ? 3 * this.index[i + 1] : 3 * (i + 1)
+            const c = this.index ? 3 * this.index[i + 2] : 3 * (i + 2)
+            _b.set(t[a], t[a + 1], t[a + 2])
+            _c.set(t[b], t[b + 1], t[b + 2])
+            _d.set(t[c], t[c + 1], t[c + 2])
+            closestOnTri(_a, _b, _c, _d, _e)
+            const ox = px - _e.x, oy = py - _e.y, oz = pz - _e.z
+            const d2 = ox * ox + oy * oy + oz * oz
+            if (d2 < best) { best = d2; bx = _e.x; by = _e.y; bz = _e.z; bestFace = f }
+          }
+        }
+      }
     }
-    if (best === Infinity) return null
+    if (bestFace < 0) return null
     const dist = Math.sqrt(best)
     let nx, ny, nz
     if (dist > 1e-6) { nx = (px - bx) / dist; ny = (py - by) / dist; nz = (pz - bz) / dist }
@@ -531,7 +605,7 @@ export function clearClothForMeshes(meshes, { restoreVisible = false } = {}) {
 // but is wrong for a skinned mesh — it ignores the skeleton entirely and gives
 // the bind pose, wherever that happens to be relative to the current pose.)
 const _vpos = new THREE.Vector3()
-function worldSpaceGeometry(mesh) {
+function worldSpaceGeometry(mesh, includeAttributes = true) {
   mesh.updateWorldMatrix(true, false)
   if (mesh.isSkinnedMesh) mesh.skeleton.update()
   const src = mesh.geometry
@@ -543,33 +617,94 @@ function worldSpaceGeometry(mesh) {
   }
   const geom = new THREE.BufferGeometry()
   geom.setAttribute('position', new THREE.BufferAttribute(out, 3))
-  if (src.getAttribute('uv')) geom.setAttribute('uv', src.getAttribute('uv').clone())
-  if (src.index) geom.setIndex(src.index.clone())
+  if (includeAttributes && src.getAttribute('uv')) geom.setAttribute('uv', src.getAttribute('uv').clone())
+  if (includeAttributes && src.index) geom.setIndex(src.index.clone())
   return geom
 }
 
-// Merge the world-space geometry of a list of meshes into one BufferGeometry
-// for use as a collider (the character's OTHER parts — not props).
-function mergeWorldGeometry(meshes) {
-  const geoms = []
+// Merge posed world-space mesh triangles into one geometry for collision.
+export function mergeWorldGeometry(meshes, maxTriangles = Infinity, includeTriangle = null) {
+  const sources = []
+  let totalTriangles = 0
   for (const mesh of meshes) {
-    if (!mesh || !mesh.geometry) continue
-    const g = worldSpaceGeometry(mesh)
-    const nonIndexed = g.index ? g.toNonIndexed() : g
-    // Only position is needed for collision.
-    const stripped = new THREE.BufferGeometry()
-    stripped.setAttribute('position', nonIndexed.getAttribute('position'))
-    geoms.push(stripped)
+    if (!mesh || !mesh.geometry?.getAttribute?.('position')) continue
+    const geometry = mesh.geometry
+    const triangleCount = Math.floor((geometry.index ? geometry.index.count : geometry.getAttribute('position').count) / 3)
+    if (!triangleCount) continue
+    let faces = null
+    if (includeTriangle) {
+      faces = []
+      for (let face = 0; face < triangleCount; face++) {
+        if (includeTriangle(mesh, face)) faces.push(face)
+      }
+    }
+    const includedCount = faces ? faces.length : triangleCount
+    if (!includedCount) continue
+    sources.push({ mesh, triangleCount, includedCount, faces, index: geometry.index })
+    totalTriangles += includedCount
   }
-  if (!geoms.length) return null
-  if (geoms.length === 1) return geoms[0]
+  if (!sources.length) return null
+
+  const budget = Math.max(1, Math.floor(maxTriangles))
+  let sampledTotal = 0
+  for (const source of sources) {
+    source.sampleCount = totalTriangles <= budget
+      ? source.includedCount
+      : Math.max(1, Math.floor(budget * source.includedCount / totalTriangles))
+    sampledTotal += source.sampleCount
+  }
+  while (sampledTotal > budget) {
+    const largest = sources.reduce((best, source) =>
+      source.sampleCount > 1 && (!best || source.sampleCount > best.sampleCount) ? source : best, null)
+    if (!largest) break
+    largest.sampleCount--
+    sampledTotal--
+  }
+
+  let vertexCount = 0
+  for (const source of sources) {
+    const { mesh, index, includedCount, faces, sampleCount } = source
+    const vertices = new Map()
+    const triangles = []
+    for (let i = 0; i < sampleCount; i++) {
+      const face = faces
+        ? faces[Math.floor(i * includedCount / sampleCount)]
+        : Math.floor(i * includedCount / sampleCount)
+      for (let corner = 0; corner < 3; corner++) {
+        const vertex = index ? index.getX(face * 3 + corner) : face * 3 + corner
+        let local = vertices.get(vertex)
+        if (local === undefined) {
+          local = vertices.size
+          vertices.set(vertex, local)
+        }
+        triangles.push(local)
+      }
+    }
+    source.vertices = [...vertices.keys()]
+    source.triangles = triangles
+    source.vertexStart = vertexCount
+    vertexCount += source.vertices.length
+  }
+
   const merged = new THREE.BufferGeometry()
-  let total = 0
-  for (const g of geoms) total += g.getAttribute('position').count
-  const pos = new Float32Array(total * 3)
+  const pos = new Float32Array(vertexCount * 3)
+  const indices = new Uint32Array(sampledTotal * 3)
   let o = 0
-  for (const g of geoms) { pos.set(g.getAttribute('position').array, o); o += g.getAttribute('position').array.length }
+  let indexOffset = 0
+  for (const source of sources) {
+    const { mesh, vertices, triangles, vertexStart } = source
+    mesh.updateWorldMatrix(true, false)
+    if (mesh.isSkinnedMesh) mesh.skeleton.update()
+    for (const vertex of vertices) {
+      mesh.getVertexPosition(vertex, _vpos).applyMatrix4(mesh.matrixWorld)
+      pos[o++] = _vpos.x
+      pos[o++] = _vpos.y
+      pos[o++] = _vpos.z
+    }
+    for (const vertex of triangles) indices[indexOffset++] = vertexStart + vertex
+  }
   merged.setAttribute('position', new THREE.BufferAttribute(pos, 3))
+  merged.setIndex(new THREE.BufferAttribute(indices, 1))
   return merged
 }
 

@@ -1259,6 +1259,8 @@ function onPointerUp(e) {
 // props, posed skins via their proxies — see the posed-skin block above).
 // While a handler is set, a plain click reports { mesh, uuid, faceIndex } (or null on empty
 // space) to it instead of selecting parts. Pass null to go back to normal picking.
+// `allowSkinned`: also report faces of parts bent by a skeleton (their posed copy keeps the original
+// triangle order, so the face number is the part's own face).
 export function setFacePickHandler(fn, { allowSkinned = false } = {}) {
   m.facePick = fn || null
   m.facePickSkinned = !!(fn && allowSkinned)

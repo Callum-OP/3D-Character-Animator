@@ -445,6 +445,41 @@ export function growRegion(mesh, seedTri, { mode = 'color', tolerance = 0.25, so
 
 const overlays = new Map() // mesh -> overlay mesh
 
+// The viewport draws on demand, so every change to a highlight has to ask for a new frame, or the old
+// highlight stays on screen until something else (the camera moving) happens to redraw.
+let requestRender = () => {}
+export function setRegionsRenderHook(fn) {
+  requestRender = typeof fn === 'function' ? fn : () => {}
+}
+
+// Flood-fill: the faces connected to `seedTri` (across shared edges) that are not in `barrier`. Faces
+// that are not connected to the seed, however close, are never reached, so filling the inside of an
+// outline on a hood never spills onto a separate piece, or past the outline. `within`, when given,
+// restricts the walk to those faces (used to find one filled area among several).
+export function fillConnected(geometry, seedTri, barrier = null, within = null) {
+  const { offsets, list, length } = getAdjacency(geometry)
+  if (seedTri < 0 || seedTri >= length) return []
+  if (barrier && barrier.has(seedTri)) return []
+  if (within && !within.has(seedTri)) return []
+  const seen = new Uint8Array(length)
+  const out = []
+  const stack = [seedTri]
+  seen[seedTri] = 1
+  while (stack.length) {
+    const t = stack.pop()
+    out.push(t)
+    for (let i = offsets[t], end = offsets[t + 1]; i < end; i++) {
+      const n = list[i]
+      if (seen[n]) continue
+      seen[n] = 1
+      if (barrier && barrier.has(n)) continue
+      if (within && !within.has(n)) continue
+      stack.push(n)
+    }
+  }
+  return out
+}
+
 export function setRegionOverlay(mesh, tris, color = 0xff2bd6) {
   const old = overlays.get(mesh)
   if (old) {
@@ -453,7 +488,10 @@ export function setRegionOverlay(mesh, tris, color = 0xff2bd6) {
     old.material.dispose()
     overlays.delete(mesh)
   }
-  if (!mesh || !tris || !tris.length) return
+  if (!mesh || !tris || !tris.length) {
+    if (old) requestRender() // the highlight went away: draw that
+    return
+  }
   const pos = mesh.geometry.attributes.position
   const index = mesh.geometry.index
   const arr = new Float32Array(tris.length * 9)
@@ -481,6 +519,7 @@ export function setRegionOverlay(mesh, tris, color = 0xff2bd6) {
   overlay.renderOrder = 10
   mesh.add(overlay)
   overlays.set(mesh, overlay)
+  requestRender()
 }
 
 // Highlights must never leak into an exported file: hide them while `fn` runs.

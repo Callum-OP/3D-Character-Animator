@@ -1627,6 +1627,13 @@ export function getAllRootsForExport() {
 // the character — every prop's parts are pickable at once with no separate
 // "active object" step). Images are a single flat plane already fully
 // covered by Object mode, so only real multi-mesh models are listed here.
+// Every part of every prop (flat list) — for effects that run on parts everywhere.
+export function getAllPropMeshes() {
+  const out = []
+  for (const e of o.objects) if (e.kind === 'model' && e.meshes) out.push(...e.meshes)
+  return out
+}
+
 export function getObjectMeshesInfo() {
   return o.objects
     .filter((e) => e.kind === 'model' && e.meshes.length)

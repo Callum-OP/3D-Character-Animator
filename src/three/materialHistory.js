@@ -39,7 +39,10 @@ function restore(entries, characterId = null) {
 }
 
 // Run `mutate` (which edits store.meshOverrides for `uuids`) and record it as an undo step.
-export function recordOverrideEdit(uuids, mutate, characterId = null) {
+// Quick edits of the same parts merge into one step (a slider drag). `discrete: true` is for a
+// one-off action (add, remove, switch on or off): it is always a step of its own, and nothing
+// merges into it afterwards.
+export function recordOverrideEdit(uuids, mutate, characterId = null, { discrete = false } = {}) {
   const list = [...new Set(uuids)]
   const read = () => {
     const overrides = overridesOf(useStore.getState(), characterId)
@@ -52,6 +55,7 @@ export function recordOverrideEdit(uuids, mutate, characterId = null) {
 
   const key = (characterId != null ? characterId + ':' : '') + list.slice().sort().join(',')
   const now = Date.now()
+  if (discrete) last = null
   if (last && last.key === key && last.epoch === getHistoryEpoch() && last.seq === getHistorySequence() && now - last.time < COALESCE_MS) {
     last.after = after
     last.time = now
@@ -59,11 +63,17 @@ export function recordOverrideEdit(uuids, mutate, characterId = null) {
   }
   const rec = { key, before, after, time: now, seq: 0, epoch: getHistoryEpoch() }
   pushSceneHistory(
-    () => restore(rec.before, characterId),
-    () => restore(rec.after, characterId),
+    () => {
+      last = null // an edit straight after an undo must not merge into the step that was just undone
+      restore(rec.before, characterId)
+    },
+    () => {
+      last = null
+      restore(rec.after, characterId)
+    },
   )
   rec.seq = getHistorySequence()
-  last = rec
+  last = discrete ? null : rec
 }
 
 // Switch per-part looks (transparency, ink outline, casts shadows) for one or more parts, as ONE

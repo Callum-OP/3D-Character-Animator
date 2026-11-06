@@ -40,7 +40,9 @@ mocap retargeting, allows mesh-level edits for accessories and clothing, and add
   instead of staying fixed in place.
 - **Cloth and secondary motion** — enable cloth simulation on selected meshes to
   drape clothing or accessories against the character body, with live simulation
-  controls and a reset/restore workflow. Dangle-bone physics adds lightweight
+  controls, optional spatially indexed collisions with other visible meshes or
+  with the unmoving faces of the same mesh,
+  and a reset/restore workflow. Dangle-bone physics adds lightweight
   jiggle and secondary motion for hair, accessories, and loose parts.
 - **Add bones to hair, hoods and capes** — in Mesh mode, pick the faces of a hair strand, hood, cape or scarf on a skinned part (whole piece, brush, same colour or single faces), choose how many bones and chains, and the bones and skin weights are built for you. The top stays attached to the body, the bones show up in Pose mode, and swing physics can be switched on in the same step. Saved with the project and undoable.
 - **Ragdoll and physics-based motion** — bake a ragdoll-style animation from a
