@@ -80,6 +80,8 @@ export default function MeshPanel() {
   const meshGizmoMode = useStore((s) => s.meshGizmoMode)
   const setMeshGizmoMode = useStore((s) => s.setMeshGizmoMode)
   const meshOverrides = useStore((s) => s.meshOverrides)
+  const softClothEnabled = useStore((s) => s.softClothEnabled !== false)
+  const setSoftClothEnabled = useStore((s) => s.setSoftClothEnabled)
   const partRenameRequest = useStore((s) => s.partRenameRequest)
   const setPartRenameRequest = useStore((s) => s.setPartRenameRequest)
   const [renamingUuid, setRenamingUuid] = useState(null)
@@ -180,6 +182,11 @@ export default function MeshPanel() {
   const clothOn = selectedMesh ? isClothEnabled(selectedMesh.uuid) : false
   const clothEditorOn = multi ? selectedClothMeshes.some((mesh) => isClothEnabled(mesh.uuid)) : clothOn
   const softZoneCount = useStore((s) => (selectedMesh ? (s.meshOverrides[selectedMesh.uuid]?.softZones || []).filter((z) => z.enabled !== false).length : 0))
+
+  function onToggleSoftCloth(enabled) {
+    setSoftClothEnabled(enabled)
+    refreshSoftCloth()
+  }
 
   function bumpCloth() {
     setClothVersion((v) => v + 1)
@@ -345,102 +352,114 @@ export default function MeshPanel() {
   }
 
   return (
-    <div className="panel">
+    <div className="panel mesh-panel">
       <h2>Parts</h2>
       <p className="panel-hint">
         Pick a part of the character or an object, then drag the gizmo to move, rotate or resize just that piece.
       </p>
 
-      <div className="seg" title="What the gizmo does when you drag it">
-        {MODES.map((mo) => (
-          <button
-            key={mo.value}
-            className={'seg-btn' + (meshGizmoMode === mo.value ? ' active' : '')}
-            title={mo.title}
-            onClick={() => setMeshGizmoMode(mo.value)}
-          >
-            {mo.label}
-          </button>
-        ))}
-      </div>
-
-      <div className="kf-actions" style={{ marginTop: 8 }}>
-        <button className="btn secondary" onClick={() => performUndo(useStore.getState())} title="Undo the latest edit (Ctrl+Z)">
-          Undo
-        </button>
-        <button className="btn secondary" onClick={() => performRedo(useStore.getState())} title="Redo the latest undone edit (Ctrl+Shift+Z)">
-          Redo
-        </button>
-        <button
-          className="btn secondary"
-          onClick={resetAllMeshes}
-          title="Put every part back where it started"
+      <FxEditor className="mesh-panel-tools">
+        <FxSection
+          step="STEP 1"
+          title="Choose parts"
+          count={meshes.length + objectPartGroups.reduce((total, group) => total + group.parts.length, 0)}
+          label="Parts list and transform tools"
         >
-          Reset all
-        </button>
-      </div>
-
-      <div className="obj-list" style={{ marginTop: 10 }}>
-        {meshes.map((mesh) => renderPartRow(mesh))}
-      </div>
-
-      {objectPartGroups.map((group) => (
-        <div key={group.objectId} className="obj-list" style={{ marginTop: 10 }}>
-          <div className="joint-parent" style={{ marginBottom: 4 }} title={group.objectName}>
-            {group.objectName}
+          <div className="seg" title="What the gizmo does when you drag it">
+            {MODES.map((mo) => (
+              <button
+                key={mo.value}
+                className={'seg-btn' + (meshGizmoMode === mo.value ? ' active' : '')}
+                title={mo.title}
+                onClick={() => setMeshGizmoMode(mo.value)}
+              >
+                {mo.label}
+              </button>
+            ))}
           </div>
-          {group.parts.map((part) => renderPartRow(part))}
-        </div>
-      ))}
-      <p className="obj-row-hint">Right-click a part (or press ⋯) to hide it, reset it, frame it, key it or make it into an object.</p>
-      {extractMsg && <div className="pose-msg">{extractMsg}</div>}
+
+          <FxButtons>
+            <button className="btn secondary" onClick={() => performUndo(useStore.getState())} title="Undo the latest edit (Ctrl+Z)">
+              Undo
+            </button>
+            <button className="btn secondary" onClick={() => performRedo(useStore.getState())} title="Redo the latest undone edit (Ctrl+Shift+Z)">
+              Redo
+            </button>
+            <button className="btn secondary" onClick={resetAllMeshes} title="Put every part back where it started">
+              Reset all
+            </button>
+          </FxButtons>
+
+          <div className="mesh-part-lists">
+            {meshes.length > 0 && (
+              <div className="obj-list">
+                {meshes.map((mesh) => renderPartRow(mesh))}
+              </div>
+            )}
+            {objectPartGroups.map((group) => (
+              <div key={group.objectId} className="obj-list">
+                <div className="joint-parent" title={group.objectName}>
+                  {group.objectName}
+                </div>
+                {group.parts.map((part) => renderPartRow(part))}
+              </div>
+            ))}
+          </div>
+          <FxHelp>Right-click a part or use ⋯ to hide, reset, frame, key, or extract it as an object.</FxHelp>
+          {extractMsg && <div className="pose-msg">{extractMsg}</div>}
+        </FxSection>
+      </FxEditor>
       {rowMenu.element}
 
       {multi && (
-        <div className="joint-controls">
-          <div className="pose-msg">
-            {selectedMeshUuids.length} parts selected — drag the 3D gizmo to move, rotate or
-            resize them together.
-          </div>
-        </div>
+        <FxEditor className="mesh-transform">
+          <FxSection step="SELECTED PARTS" title={`${selectedMeshUuids.length} parts selected`} label="Multi-part transform">
+            <FxHelp>Drag the 3D gizmo to move, rotate, or resize the selected parts together.</FxHelp>
+          </FxSection>
+        </FxEditor>
       )}
 
       {selectedMesh && delta && !multi && (
-        <div className="joint-controls">
-          <div className="joint-header">
-            <span className="joint-name" title={labelOf(selectedMesh.uuid, selectedMesh.name)}>
-              {labelOf(selectedMesh.uuid, selectedMesh.name)}
-            </span>
-            {keyCount > 0 && <span className="kf-tag">{keyCount} keys</span>}
-            <RowMenuButton
-              label="Part options"
-              onOpen={(e) => {
-                const { items, run } = buildMenu(selectedMesh.uuid)
-                rowMenu.openFromButton(e, items, run)
-              }}
+        <FxEditor className="mesh-transform">
+          <FxSection
+            step="SELECTED PART"
+            title={labelOf(selectedMesh.uuid, selectedMesh.name)}
+            count={keyCount || null}
+            countLabel={keyCount ? `${keyCount} keys` : undefined}
+            label="Selected part transform"
+            actions={
+              <RowMenuButton
+                label="Part options"
+                onOpen={(e) => {
+                  const { items, run } = buildMenu(selectedMesh.uuid)
+                  rowMenu.openFromButton(e, items, run)
+                }}
+              />
+            }
+          >
+            <XformRow
+              label="Move"
+              values={delta.offset}
+              format={(v) => v.toFixed(2)}
+              onChange={(offset) => setMeshDelta(selectedMesh.uuid, { offset })}
             />
-          </div>
+            <XformRow
+              label="Rotate"
+              values={delta.rotation}
+              format={(v) => Math.round(v) + '°'}
+              onChange={(rotation) => setMeshDelta(selectedMesh.uuid, { rotation })}
+            />
+            <XformRow
+              label="Resize"
+              values={delta.scale}
+              format={(v) => v.toFixed(2) + '×'}
+              onChange={(scale) => setMeshDelta(selectedMesh.uuid, { scale })}
+            />
+          </FxSection>
+        </FxEditor>
+      )}
 
-          <XformRow
-            label="Move"
-            values={delta.offset}
-            format={(v) => v.toFixed(2)}
-            onChange={(offset) => setMeshDelta(selectedMesh.uuid, { offset })}
-          />
-          <XformRow
-            label="Rotate"
-            values={delta.rotation}
-            format={(v) => Math.round(v) + '°'}
-            onChange={(rotation) => setMeshDelta(selectedMesh.uuid, { rotation })}
-          />
-          <XformRow
-            label="Resize"
-            values={delta.scale}
-            format={(v) => v.toFixed(2) + '×'}
-            onChange={(scale) => setMeshDelta(selectedMesh.uuid, { scale })}
-          />
-
-          {selectedMesh && morphEntries.length > 0 && !isPropPart && (
+      {selectedMesh && morphEntries.length > 0 && !isPropPart && (
             <FxCollapse title="Shape keys" hint={morphEntries.length}>
               <label
                 className="morph-label"
@@ -515,8 +534,6 @@ export default function MeshPanel() {
               })}
             </FxCollapse>
           )}
-        </div>
-      )}
 
       {selectedMeshUuids.length > 0 && (
         <FxCollapse title="Colour (whole part)" hint={multi ? `${selectedMeshUuids.length} parts` : labelOf(selectedMesh?.uuid, selectedMesh?.name)} defaultOpen>
@@ -649,6 +666,8 @@ export default function MeshPanel() {
       {selectedMesh && (
         <FxCollapse title="Mesh Physics" hint={clothOn
                 ? 'full simulation on'
+                : !isPropPart && !softClothEnabled
+                  ? 'soft effects paused'
                 : softZoneCount
                   ? `${softZoneCount} soft effect${softZoneCount === 1 ? '' : 's'}`
                 : multi
@@ -672,6 +691,20 @@ export default function MeshPanel() {
               >
                 Full simulation
               </button>
+            </div>
+          )}
+          {!isPropPart && (
+            <div className="fx-effects fx-toggle soft-cloth-master">
+              <FxCheck
+                checked={softClothEnabled}
+                onChange={onToggleSoftCloth}
+                title="Pause or resume every Soft cloth and Swing effect on this character. Full cloth simulation and prop effects are unaffected."
+              >
+                Enable soft cloth &amp; swing physics
+              </FxCheck>
+              {!softClothEnabled && (
+                <FxHelp>Soft cloth and swing are paused for this character. Your effect settings are kept; full cloth simulation is unaffected.</FxHelp>
+              )}
             </div>
           )}
           {(multi || clothMode === 'soft' || isPropPart) && (

@@ -4566,7 +4566,11 @@ export function refreshSoftCloth() {
   const groups = []
   for (const [id, model] of state.characters) {
     const character = id === s.activeCharacterId ? s : s.characters[id]
-    groups.push({ meshes: model.meshes, overrides: character?.meshOverrides || {} })
+    groups.push({
+      meshes: model.meshes,
+      overrides: character?.meshOverrides || {},
+      enabled: character?.softClothEnabled !== false,
+    })
   }
   groups.push({ meshes: getAllPropMeshes(), overrides: s.meshOverrides })
   syncSoftCloth(groups)

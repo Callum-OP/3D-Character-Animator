@@ -18,10 +18,12 @@ import {
   setDangleEnabledUndoable as setDangleEnabled,
   addDangleChainUndoable as addDangleChain,
   removeDangleChainUndoable as removeDangleChain,
+  groupDangleChainsByRig,
   updateDangleChainUndoable as updateDangleChain,
   setAllDangleCollisionsUndoable as setAllDangleCollisions,
 } from '../three/dangle.js'
-import { collectActiveDangleDescendants, resetActiveDangle, setCameraToBones } from '../three/scene.js'
+import { collectActiveDangleDescendants, getCurrentModel, resetActiveDangle, setCameraToBones } from '../three/scene.js'
+import { getPartRigEntries } from '../three/partRig.js'
 import { performUndo, performRedo } from '../three/undoPriority.js'
 import EditableValue from './EditableValue.jsx'
 import IkPinsSection from './IkPinsSection.jsx'
@@ -136,6 +138,10 @@ export default function BonePanel() {
 
   const dangleEnabled = useStore((s) => s.dangleEnabled)
   const dangleChains = useStore((s) => s.dangleChains)
+  const dangleChainSections = useMemo(
+    () => groupDangleChainsByRig(dangleChains, getPartRigEntries(getCurrentModel())),
+    [dangleChains, modelInfo],
+  )
   const allDangleCollisionsEnabled = dangleChains.length > 0 && dangleChains.every((chain) =>
     chain.collideWithBones === true && chain.collideWithMesh === true && chain.collideWithSelf === true,
   )
@@ -535,7 +541,8 @@ export default function BonePanel() {
               </button>
             }
           >
-            {dangleChains.map((chain) => (
+            {dangleChainSections.map((section) => {
+              const items = section.chains.map((chain) => (
               <FxItem
                 key={chain.id}
                 title={chain.name}
@@ -665,7 +672,15 @@ export default function BonePanel() {
                   />
                 </label>
               </FxItem>
-            ))}
+              ))
+              if (!section.groupId) return items
+              return (
+                <details className="fx-more" key={section.id}>
+                  <summary>{section.name} · {section.chains.length} chain{section.chains.length === 1 ? '' : 's'}</summary>
+                  <div style={{ display: 'grid', gap: 8, marginTop: 8 }}>{items}</div>
+                </details>
+              )
+            })}
           </FxSection>
         )}
 

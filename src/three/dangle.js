@@ -693,7 +693,7 @@ export function setDangleEnabledUndoable(enabled) {
   editDangle(activeId(), (d) => ({ ...d, enabled: !!enabled }), { discrete: true })
 }
 
-export function addDangleChainUndoable(name, boneNames, type = 'dangle') {
+export function addDangleChainUndoable(name, boneNames, type = 'dangle', group = null) {
   const cloth = type === 'cloth'
   editDangle(
     activeId(),
@@ -712,10 +712,62 @@ export function addDangleChainUndoable(name, boneNames, type = 'dangle') {
           collideWithBones: false,
           collideWithMesh: false,
           collideWithSelf: false,
+          ...(group?.id ? { groupId: group.id, groupName: group.name || name } : {}),
         },
       ],
     }),
     { discrete: true },
+  )
+}
+
+export function groupDangleChainsByRig(chains, rigs) {
+  const entries = (rigs || []).map((rig) => ({
+    id: rig.id,
+    name: rig.label || 'Added bones',
+    bones: new Set(rig.boneNames || []),
+  }))
+  const sections = []
+  const grouped = new Map()
+  for (const chain of chains || []) {
+    let rig = entries.find((entry) => entry.id === chain.groupId)
+    if (!rig) {
+      const chainBones = new Set(chain.boneNames || [])
+      let bestOverlap = 0
+      for (const entry of entries) {
+        let overlap = 0
+        for (const name of chainBones) if (entry.bones.has(name)) overlap++
+        if (overlap > bestOverlap) {
+          rig = entry
+          bestOverlap = overlap
+        }
+      }
+    }
+    if (!rig) {
+      rig = entries.find((entry) => chain.name === entry.name || chain.name.startsWith(`${entry.name} `))
+    }
+    if (!rig) {
+      sections.push({ id: chain.id, chains: [chain] })
+      continue
+    }
+    let section = grouped.get(rig.id)
+    if (!section) {
+      section = { id: rig.id, groupId: rig.id, name: rig.name, chains: [] }
+      grouped.set(rig.id, section)
+      sections.push(section)
+    }
+    section.chains.push(chain)
+  }
+  return sections
+}
+
+export function getDangleChainsForRig(chains, rig) {
+  const rigBones = new Set(rig?.boneNames || [])
+  if (!rig?.id) return []
+  return (chains || []).filter((chain) =>
+    chain.groupId === rig.id ||
+    (chain.boneNames || []).some((name) => rigBones.has(name)) ||
+    chain.name === rig.label ||
+    chain.name.startsWith(`${rig.label} `),
   )
 }
 
@@ -727,6 +779,21 @@ export function updateDangleChainUndoable(chainId, patch) {
   editDangle(activeId(), (d) => ({ ...d, chains: d.chains.map((c) => (c.id === chainId ? { ...c, ...patch } : c)) }), {
     key: `${chainId}:${Object.keys(patch).join(',')}`,
   })
+}
+
+export function groupDangleChainsUndoable(chainIds, group) {
+  const ids = new Set(chainIds || [])
+  if (!ids.size || !group?.id) return
+  editDangle(
+    activeId(),
+    (d) => ({
+      ...d,
+      chains: d.chains.map((chain) => ids.has(chain.id)
+        ? { ...chain, groupId: group.id, groupName: group.name || chain.name }
+        : chain),
+    }),
+    { discrete: true },
+  )
 }
 
 export function setAllDangleCollisionsUndoable(enabled) {

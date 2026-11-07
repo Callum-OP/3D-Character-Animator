@@ -1941,7 +1941,7 @@ function applyCouplings() {
 // Public API
 // ---------------------------------------------------------------------------
 
-// Make the running effects match the saved zones. `groups` = [{ meshes, overrides }] for every
+// Make the running effects match the saved zones. `groups` = [{ meshes, overrides, enabled }] for every
 // character and prop (overrides = that map of per-part settings; its `softZones` is what matters).
 // Meshes no longer in any group (or with no zones left) are put back to normal.
 export function syncSoftCloth(groups) {
@@ -1952,9 +1952,11 @@ export function syncSoftCloth(groups) {
     sc.colliderCache.clear()
   }
   let structural = false // anything that changes what is attached to what (a slider drag does not)
-  for (const { meshes, overrides } of groups) {
+  for (const { meshes, overrides, enabled } of groups) {
     for (const mesh of meshes || []) {
-      const zones = ((overrides && overrides[mesh.uuid] && overrides[mesh.uuid].softZones) || []).filter((z) => z && z.enabled !== false)
+      const zones = enabled === false
+        ? []
+        : ((overrides && overrides[mesh.uuid] && overrides[mesh.uuid].softZones) || []).filter((z) => z && z.enabled !== false)
       let entry = sc.entries.get(mesh)
       if (!zones.length) continue
       if (entry && entry.geo !== mesh.geometry) {

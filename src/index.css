@@ -3545,6 +3545,40 @@ body {
   padding: 3px 0;
 }
 
+.mesh-panel-tools {
+  margin-top: 6px;
+}
+.mesh-part-lists {
+  display: grid;
+  gap: 7px;
+  margin-top: 10px;
+}
+.mesh-part-lists .obj-list {
+  margin-top: 0;
+  max-height: 220px;
+  background: rgba(15, 16, 20, 0.28);
+}
+.mesh-part-lists .joint-parent {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--panel-border);
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 650;
+}
+.mesh-transform {
+  margin-top: 8px;
+}
+.mesh-transform .xform-row {
+  padding: 6px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.mesh-transform .xform-value {
+  background: rgba(15, 16, 20, 0.32);
+}
+.soft-cloth-master {
+  margin-top: 8px;
+}
+
 /* a whole tool inside a long panel: one collapsible card with a title and a short hint */
 .fx-card {
   margin-top: 10px;

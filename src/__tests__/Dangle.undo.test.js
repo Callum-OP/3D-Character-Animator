@@ -9,8 +9,10 @@ import {
   setDangleEnabledUndoable,
   setAllDangleCollisionsUndoable,
   addDangleChainUndoable,
+  groupDangleChainsUndoable,
   removeDangleChainUndoable,
   updateDangleChainUndoable,
+  groupDangleChainsByRig,
   stepDangleLive,
 } from '../three/dangle.js'
 import { performUndo, performRedo } from '../three/undoPriority.js'
@@ -47,6 +49,20 @@ beforeEach(() => {
 })
 
 describe('dangle edits are undo steps', () => {
+  it('groups existing untagged chains by the Add Bones rig bones they use', () => {
+    const chains = [
+      { id: 'cape-1', name: 'Cape 1', boneNames: ['Cape_root', 'Cape_1'] },
+      { id: 'tail', name: 'Tail', boneNames: ['tail1', 'tail2'] },
+      { id: 'cape-2', name: 'Cape 2', boneNames: ['Cape_side', 'Cape_tip'] },
+      { id: 'cape-tagged', name: 'Cape 3', groupId: 'rig-cape', groupName: 'Old cape name', boneNames: [] },
+    ]
+    const rigs = [{ id: 'rig-cape', label: 'Cape (edited)', boneNames: ['Cape_root', 'Cape_1', 'Cape_side', 'Cape_tip'] }]
+    expect(groupDangleChainsByRig(chains, rigs)).toEqual([
+      { id: 'rig-cape', groupId: 'rig-cape', name: 'Cape (edited)', chains: [chains[0], chains[2], chains[3]] },
+      { id: 'tail', chains: [chains[1]] },
+    ])
+  })
+
   it('adding and removing a chain', () => {
     addDangleChainUndoable('tail', ['tail1', 'tail2'])
     expect(state().dangleChains).toHaveLength(1)
@@ -75,6 +91,39 @@ describe('dangle edits are undo steps', () => {
     expect(state().dangleChains).toHaveLength(0)
     performRedo(state())
     expect(state().dangleChains[0].type).toBe('cloth')
+  })
+
+  it('keeps Add Bones chains in their source rig group through undo and redo', () => {
+    const group = { id: 'rig_cape', name: 'Cape' }
+    addDangleChainUndoable('Cape 1', ['cape1'], 'dangle', group)
+    addDangleChainUndoable('Cape 2', ['cape2'], 'dangle', group)
+    expect(state().dangleChains.map((chain) => [chain.groupId, chain.groupName])).toEqual([
+      ['rig_cape', 'Cape'],
+      ['rig_cape', 'Cape'],
+    ])
+    performUndo(state())
+    performUndo(state())
+    expect(state().dangleChains).toHaveLength(0)
+    performRedo(state())
+    performRedo(state())
+    expect(state().dangleChains.map((chain) => chain.groupId)).toEqual(['rig_cape', 'rig_cape'])
+  })
+
+  it('associates pre-existing rig chains with the rig when it is edited', () => {
+    addDangleChainUndoable('Cape 1', ['Cape_1', 'Cape_2'])
+    addDangleChainUndoable('Tail', ['tail1', 'tail2'])
+    const rigBones = new Set(['Cape_1', 'Cape_2'])
+    const chainIds = state().dangleChains
+      .filter((chain) => chain.boneNames.some((name) => rigBones.has(name)))
+      .map((chain) => chain.id)
+    groupDangleChainsUndoable(chainIds, { id: 'rig-cape', name: 'Renamed cape' })
+    const sections = groupDangleChainsByRig(state().dangleChains, [{ id: 'rig-cape', label: 'Renamed cape', boneNames: ['NewCape_1'] }])
+    expect(sections[0]).toMatchObject({ groupId: 'rig-cape', name: 'Renamed cape', chains: [{ name: 'Cape 1' }] })
+    expect(sections).toHaveLength(2)
+    performUndo(state())
+    expect(state().dangleChains[0].groupId).toBeUndefined()
+    performRedo(state())
+    expect(state().dangleChains[0].groupId).toBe('rig-cape')
   })
 
   it('mesh collision deflects a bone chain while leaving collision disabled by default', () => {

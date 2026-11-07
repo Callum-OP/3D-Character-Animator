@@ -91,10 +91,13 @@ function play(rig, frames, move, dt = 1 / 60) {
 }
 
 let rig
+let otherRig
 beforeEach(() => {
   disposeSoftCloth()
   if (rig) scene.remove(rig.root)
+  if (otherRig) scene.remove(otherRig.root)
   rig = null
+  otherRig = null
 })
 
 describe('soft zones: building and cleaning up', () => {
@@ -121,6 +124,32 @@ describe('soft zones: building and cleaning up', () => {
     expect(isSoftClothMesh(rig.mesh)).toBe(false)
     syncSoftCloth(groupsFor(rig.mesh, null))
     expect(isSoftClothMesh(rig.mesh)).toBe(false)
+  })
+
+  it('the character-wide switch pauses all its zones and restores the original geometry', () => {
+    rig = makeSheet()
+    otherRig = makeSheet()
+    const zone = makeSoftZone('soft', { kind: 'all' }, 'jacket')
+    const original = rig.mesh.geometry
+    const otherOriginal = otherRig.mesh.geometry
+    syncSoftCloth([
+      { ...groupsFor(rig.mesh, [zone])[0], enabled: true },
+      { ...groupsFor(otherRig.mesh, [zone])[0] },
+    ])
+    expect(isSoftClothMesh(rig.mesh)).toBe(true)
+    syncSoftCloth([
+      { ...groupsFor(rig.mesh, [zone])[0], enabled: false },
+      { ...groupsFor(otherRig.mesh, [zone])[0] },
+    ])
+    expect(isSoftClothMesh(rig.mesh)).toBe(false)
+    expect(rig.mesh.geometry).toBe(original)
+    expect(isSoftClothMesh(otherRig.mesh)).toBe(true)
+    expect(otherRig.mesh.geometry).not.toBe(otherOriginal)
+    syncSoftCloth([
+      { ...groupsFor(rig.mesh, [zone])[0], enabled: true },
+      { ...groupsFor(otherRig.mesh, [zone])[0] },
+    ])
+    expect(isSoftClothMesh(rig.mesh)).toBe(true)
   })
 
   it('a part whose geometry is replaced by something else is rebuilt, not broken', () => {

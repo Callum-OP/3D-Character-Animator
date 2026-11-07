@@ -4,7 +4,7 @@ import * as THREE from 'three'
 import { useStore } from '../store.js'
 import { getCurrentModel } from '../three/scene.js'
 import { setFacePickHandler } from '../three/meshedit.js'
-import { addDangleChainUndoable, collectDescendantBoneNames } from '../three/dangle.js'
+import { addDangleChainUndoable, collectDescendantBoneNames, getDangleChainsForRig, groupDangleChainsUndoable } from '../three/dangle.js'
 import {
   isRigCapable,
   planForMeshes,
@@ -168,7 +168,12 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
     const { entry } = res
     if (addPhysics) {
       entry.rootBoneNames.forEach((root, i) => {
-        addDangleChainUndoable(entry.rootBoneNames.length > 1 ? `${entry.label} ${i + 1}` : entry.label, collectDescendantBoneNames(model, root, 64))
+        addDangleChainUndoable(
+          entry.rootBoneNames.length > 1 ? `${entry.label} ${i + 1}` : entry.label,
+          collectDescendantBoneNames(model, root, 64),
+          'dangle',
+          { id: entry.id, name: entry.label },
+        )
       })
     }
     setTrisByMesh({})
@@ -192,8 +197,11 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
   }
 
   function onUpdate() {
+    const chainsToGroup = getDangleChainsForRig(useStore.getState().dangleChains, editingEntry)
+      .map((chain) => chain.id)
     const result = updatePartRig(model, editingId, { label, options: opts })
     if (!result.ok) return setMessage(result.reason)
+    groupDangleChainsUndoable(chainsToGroup, { id: result.entry.id, name: result.entry.label })
     setEditingId(null)
     setTrisByMesh({})
     setVersion((v) => v + 1)
@@ -211,7 +219,12 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
 
   function onPhysics(entry) {
     entry.rootBoneNames.forEach((root, i) => {
-      addDangleChainUndoable(entry.rootBoneNames.length > 1 ? `${entry.label} ${i + 1}` : entry.label, collectDescendantBoneNames(model, root, 64))
+      addDangleChainUndoable(
+        entry.rootBoneNames.length > 1 ? `${entry.label} ${i + 1}` : entry.label,
+        collectDescendantBoneNames(model, root, 64),
+        'dangle',
+        { id: entry.id, name: entry.label },
+      )
     })
     setMessage('Swing physics added. Tune it in Pose mode under Dangle Physics.')
   }

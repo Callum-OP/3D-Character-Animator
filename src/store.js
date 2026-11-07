@@ -89,6 +89,7 @@ const CHARACTER_FIELDS = [
   'animData',
   'insertTime',
   'poseClipboard',
+  'softClothEnabled',
   'dangleEnabled',
   'dangleChains',
   'ikEnabled',
@@ -143,6 +144,7 @@ function defaultCharacterFields(modelInfo) {
     animData: { tracks: {}, root: [], meshes: {}, cameras: {}, cuts: [], morphs: {}, lights: {} },
     insertTime: 0,
     poseClipboard: null,
+    softClothEnabled: true,
     dangleEnabled: true,
     dangleChains: [],
     ikEnabled: true,
@@ -829,6 +831,8 @@ export const useStore = create((set) => ({
   // dangle.js works out the parent/child structure from the live skeleton.
   dangleEnabled: true,
   dangleChains: [],
+  softClothEnabled: true,
+  setSoftClothEnabled: (softClothEnabled) => set({ softClothEnabled: !!softClothEnabled }),
 
   setDangleEnabled: (dangleEnabled) => set({ dangleEnabled }),
 
