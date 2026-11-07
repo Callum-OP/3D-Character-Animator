@@ -3651,3 +3651,80 @@ body {
   border: 0;
   background: none;
 }
+
+/* ================= Export panel: sub-sections, main actions, settings ================= */
+/* Export's four groups are accordions inside the Export accordion — a shade darker so they read as nested. */
+.acc-body .acc {
+  background: var(--panel-bg);
+  margin-bottom: 8px;
+}
+
+.acc-body .acc:last-child {
+  margin-bottom: 0;
+}
+
+.acc-body .acc .acc-head {
+  padding: 8px 10px;
+}
+
+.acc-body .acc .acc-title {
+  font-size: 12.5px;
+}
+
+.acc-body .acc .acc-body {
+  padding: 8px 10px 10px;
+}
+
+/* A section's main actions: bigger than the compact .kf-actions buttons. The orange .btn is the
+   section's one main action; .btn.secondary is everything else. */
+.export-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.export-actions:first-child {
+  margin-top: 0;
+}
+
+.export-actions .btn {
+  padding: 10px 8px;
+  font-size: 13px;
+}
+
+.export-settings {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--panel-border);
+}
+
+.export-settings-title {
+  margin-bottom: 2px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.export-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.export-row-label {
+  flex: 0 0 72px;
+}
+
+.export-row select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.export-row .seg {
+  flex: 0 0 auto;
+}

@@ -141,6 +141,7 @@ import {
 } from './softcloth.js'
 import { initPartRig, getPartRigData, restorePartRigs } from './partRig.js'
 import { combineMeshes as combineExportMeshes, describeCombine } from './combineMeshes.js'
+import { STATIC_FORMATS, bakeStaticMeshes, writeStaticModel } from './exportStatic.js'
 import { installFlattenerShader } from './flattenerShader.js'
 import { advanceWind, setWindConfig } from './wind.js'
 import {
@@ -2700,7 +2701,8 @@ function downloadBlob(blob, filename) {
 }
 
 // Export every visible character and prop combined into a single .glb/.gltf
-// file, each one baked at its current saved position/rotation/scale. Props
+// file (or, for the geometry-only formats .obj / .stl / .ply, one static mesh file — see
+// exportStatic.js), each one baked at its current saved position/rotation/scale. Props
 // riding a bone (attachObjectToBone) are flattened onto that world transform
 // too, so the exported file is a plain static layout — a "photo" of the
 // scene's arrangement, not a rig or an animation (use "Export animation
@@ -2713,7 +2715,8 @@ function downloadBlob(blob, filename) {
 // .fbx is specifically needed.
 // poseMode: 'current' (default) exports the pose on screen; 'rest' exports every
 // character in its un-posed rest pose (on the export copy only — the live
-// character is never touched). See exportPose.js.
+// character is never touched). See exportPose.js. The static formats have no skeleton
+// to bake, so for them 'baked' means 'current'.
 export async function exportSceneModel(format = 'glb', name = 'scene', poseMode = 'current', { bakeLook = false, combineMeshes: combineOption = false } = {}) {
   const items = getAllRootsForExport()
   if (!items.length) {
@@ -2721,14 +2724,15 @@ export async function exportSceneModel(format = 'glb', name = 'scene', poseMode 
   }
   suspendSoftCloth() // a file always gets the clean pose, never a mid-swing one
   try {
-    const [{ GLTFExporter }, { cloneForExport }] = await Promise.all([
-      import('three/examples/jsm/exporters/GLTFExporter.js'),
+    const staticInfo = STATIC_FORMATS[format] || null
+    const [gltfModule, { cloneForExport }] = await Promise.all([
+      staticInfo ? null : import('three/examples/jsm/exporters/GLTFExporter.js'),
       import('./exportPose.js'),
     ])
     // "Include Material look in export": the Look > Material settings baked into the files' real materials.
     const look = useStore.getState().materialLook
     const lookApplies = resolveTextureLook(look, 'character') !== null || resolveTextureLook(look, 'object') !== null
-    const bake = bakeLook && lookApplies ? { look, cache: new Map(), stats: { baked: 0, failed: 0 } } : null
+    const bake = bakeLook && lookApplies && !staticInfo ? { look, cache: new Map(), stats: { baked: 0, failed: 0 } } : null
 
     // Fresh, transform-less parent: every child below gets its WORLD matrix
     // baked into its local transform, so nesting (e.g. a prop parented under
@@ -2740,18 +2744,33 @@ export async function exportSceneModel(format = 'glb', name = 'scene', poseMode 
       // Preserves SkinnedMesh <-> skeleton/bone bindings, keeps the model's
       // original inverse-bind data, and (poseMode 'rest') un-poses the copy.
       const model = [...state.characters.values()].find((c) => c.root === root)
-      const dup = cloneForExport(root, { pose: poseMode, restQuats: model?.__poseRestQuats || null })
+      const clonePose = staticInfo ? (poseMode === 'rest' ? 'rest' : 'current') : poseMode
+      const dup = cloneForExport(root, { pose: clonePose, restQuats: model?.__poseRestQuats || null })
       dup.name = objName || dup.name
       root.matrixWorld.decompose(dup.position, dup.quaternion, dup.scale)
-      useExportMaterials(root, dup, model, bake)
+      if (!staticInfo) useExportMaterials(root, dup, model, bake) // static files carry no materials
       exportGroup.add(dup)
+    }
+
+    if (staticInfo) {
+      // Geometry-only formats: bake every mesh to its posed world-space shape, then write it.
+      const { group, meshes } = bakeStaticMeshes(exportGroup, { merge: combineOption })
+      if (!meshes) return { ok: false, message: 'Nothing to export — there are no visible meshes.' }
+      downloadBlob(await writeStaticModel(format, group), `${name}_${timestamp()}.${staticInfo.ext}`)
+      const n = items.length
+      return {
+        ok: true,
+        message:
+          `Exported ${n} object${n === 1 ? '' : 's'} as .${staticInfo.ext} — geometry only (no skeleton, animation or materials).` +
+          (combineOption && meshes > 1 ? ` Merged ${meshes} meshes into one.` : ''),
+      }
     }
     // "Combine meshes": the copy being exported gets its meshes merged (the live scene is never touched)
     const combineReport = combineOption ? combineExportMeshes(exportGroup) : null
     const textureReport = checkExportTextures(exportGroup)
 
     const binary = format !== 'gltf'
-    const exporter = new GLTFExporter()
+    const exporter = new gltfModule.GLTFExporter()
     // The app's live shader state lives on material.userData and would otherwise be
     // written into the file (bloating it and breaking re-import) — hide it while exporting.
     const result = await withExportSafeMaterials(exportGroup, () => new Promise((resolve, reject) => {

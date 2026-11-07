@@ -4,13 +4,28 @@ import { useState } from 'react'
 // panel(s) so the sidebar reads as a short list of categories instead of a
 // long wall of always-open panels. Open/closed state persists per-section
 // for the session (not saved), defaultOpen controls the first render.
-export default function Accordion({ id, icon, title, subtitle, defaultOpen = false, children, badge }) {
-  const [open, setOpen] = useState(defaultOpen)
+//
+// Sections that sit inside a panel which itself unmounts when closed (e.g. the sub-sections of
+// Export) pass `remember`, so their open/closed choice survives the panel closing and reopening.
+const remembered = new Map()
+
+// For tests: start every remembered section from its default again.
+export function forgetAccordionStates() {
+  remembered.clear()
+}
+
+export default function Accordion({ id, icon, title, subtitle, defaultOpen = false, children, badge, remember = false }) {
+  const [open, setOpen] = useState(() => (remember && remembered.has(id) ? remembered.get(id) : defaultOpen))
+  function toggle() {
+    const next = !open
+    setOpen(next)
+    if (remember) remembered.set(id, next)
+  }
   return (
     <section className={'acc' + (open ? ' open' : '')}>
       <button
         className="acc-head"
-        onClick={() => setOpen((o) => !o)}
+        onClick={toggle}
         aria-expanded={open}
         aria-controls={`acc-body-${id}`}
       >

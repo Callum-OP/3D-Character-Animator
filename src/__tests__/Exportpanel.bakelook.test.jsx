@@ -26,12 +26,14 @@ vi.mock('../three/exportShot.js', () => ({
 }))
 
 import ExportPanel from '../panels/ExportPanel.jsx'
+import { forgetAccordionStates } from '../panels/Accordion.jsx'
 import { capturePNG, captureAnimationPNGs, exportSceneModel } from '../three/scene.js'
 import { useStore } from '../store.js'
 
 let originalClipboard
 afterEach(() => {
   cleanup()
+  forgetAccordionStates()
   vi.clearAllMocks()
   if (originalClipboard === undefined) delete navigator.clipboard
   else Object.defineProperty(navigator, 'clipboard', { configurable: true, value: originalClipboard })
@@ -40,6 +42,12 @@ afterEach(() => {
   useStore.getState().setExportVideoFps(30)
   useStore.getState().setShowTargetFrameRateInPreview(true)
 })
+
+// Only Export video starts open; open another group by its title.
+function openSection(title) {
+  const head = screen.getByRole('button', { name: new RegExp(title) })
+  if (head.getAttribute('aria-expanded') !== 'true') fireEvent.click(head)
+}
 
 function enableImageClipboard() {
   originalClipboard = navigator.clipboard
@@ -56,6 +64,7 @@ function enableImageClipboard() {
 describe('Export panel — Include Material look in export', () => {
   it('is off by default and passes the choice to the scene export', async () => {
     render(<ExportPanel />)
+    openSection('Export 3D model')
     const box = screen.getByLabelText('Include Material look in export')
     expect(box.checked).toBe(false)
     fireEvent.click(screen.getByText('Save as .glb'))
@@ -73,6 +82,7 @@ describe('Export panel — copy images', () => {
   it('copies a PNG without downloading it', async () => {
     const write = enableImageClipboard()
     render(<ExportPanel />)
+    openSection('Export image')
     fireEvent.click(screen.getByRole('button', { name: 'Copy image' }))
 
     await waitFor(() => expect(write).toHaveBeenCalledTimes(1))
@@ -89,6 +99,7 @@ describe('Export panel — copy images', () => {
     try {
       render(<ExportPanel />)
       fireEvent.change(screen.getByLabelText('Custom FPS'), { target: { value: '24' } })
+      openSection('Export image')
       fireEvent.click(screen.getByRole('button', { name: 'Save all as images (zip)' }))
 
       await waitFor(() => expect(click).toHaveBeenCalledTimes(1))
@@ -163,6 +174,7 @@ describe('Export panel — preview frame rate', () => {
 describe('Export panel — Combine meshes into one', () => {
   it('is off by default and passes the choice to the scene export', async () => {
     render(<ExportPanel />)
+    openSection('Export 3D model')
     const box = screen.getByLabelText('Combine meshes into one')
     expect(box.checked).toBe(false)
     fireEvent.click(screen.getByText('Save as .glb'))
@@ -173,5 +185,103 @@ describe('Export panel — Combine meshes into one', () => {
     fireEvent.click(screen.getByText('Save as .glb'))
     await waitFor(() => expect(exportSceneModel).toHaveBeenCalledTimes(2))
     expect(exportSceneModel.mock.calls[1][3]).toEqual({ bakeLook: false, combineMeshes: true })
+  })
+})
+
+describe('Export panel — layout', () => {
+  const TITLES = ['Export video', 'Export image', 'Export mocap', 'Export 3D model']
+  const heads = () => TITLES.map((t) => screen.getByRole('button', { name: new RegExp(t) }))
+
+  it('has the four groups in priority order, with only Export video open', () => {
+    render(<ExportPanel />)
+    const all = heads()
+    expect(all.map((h) => h.getAttribute('aria-expanded'))).toEqual(['true', 'false', 'false', 'false'])
+    for (let i = 1; i < all.length; i++) {
+      expect(all[i - 1].compareDocumentPosition(all[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    }
+    // preview + record are the first things in the open group
+    expect(screen.getByRole('button', { name: '▶ Preview video' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Record video' })).toBeTruthy()
+    // the others' controls are not on the page until opened
+    expect(screen.queryByRole('button', { name: 'Save image (PNG)' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Export mocap file (bvh)' })).toBeNull()
+    expect(screen.queryByText('Save as .glb')).toBeNull()
+  })
+
+  it('gives every group exactly one orange main action, and keeps the rest grey', () => {
+    render(<ExportPanel />)
+    TITLES.slice(1).forEach(openSection)
+    const sections = document.querySelectorAll('.acc')
+    expect(sections).toHaveLength(4)
+    const main = [...sections].map((s) => [...s.querySelectorAll('button.btn:not(.secondary)')].map((b) => b.textContent))
+    expect(main).toEqual([['Record video'], ['Save image (PNG)'], ['Export mocap file (bvh)'], ['Save as .glb']])
+  })
+
+  it('keeps each group open or closed as you left it when the panel is reopened', () => {
+    const first = render(<ExportPanel />)
+    openSection('Export 3D model')
+    fireEvent.click(screen.getByRole('button', { name: /Export video/ })) // close the default one
+    first.unmount()
+    render(<ExportPanel />)
+    expect(heads().map((h) => h.getAttribute('aria-expanded'))).toEqual(['false', 'false', 'false', 'true'])
+  })
+
+  it('shows a result next to the button that made it', async () => {
+    render(<ExportPanel />)
+    openSection('Export 3D model')
+    fireEvent.click(screen.getByText('Save as .glb'))
+    await waitFor(() => expect(screen.getByText('Exported.')).toBeTruthy())
+    const section = screen.getByText('Exported.').closest('.acc')
+    expect(section.textContent).toContain('Export 3D model')
+  })
+})
+
+describe('Export panel — 3D model formats', () => {
+  const format = () => screen.getByLabelText('3D model format')
+
+  it('defaults to GLB, listing rigged formats before static ones', () => {
+    render(<ExportPanel />)
+    openSection('Export 3D model')
+    expect(format().value).toBe('glb')
+    expect([...format().querySelectorAll('option')].map((o) => o.value)).toEqual(['glb', 'gltf', 'obj', 'stl', 'ply'])
+    expect([...format().querySelectorAll('optgroup')].map((g) => g.label)).toEqual(['Rigged, with materials', 'Static mesh (geometry only)'])
+  })
+
+  it('exports the chosen format, relabels the button and sends the right options', async () => {
+    render(<ExportPanel />)
+    openSection('Export 3D model')
+    fireEvent.change(format(), { target: { value: 'obj' } })
+    fireEvent.click(screen.getByText('Save as .obj'))
+    await waitFor(() => expect(exportSceneModel).toHaveBeenCalledTimes(1))
+    // static formats: current pose, no material baking
+    expect(exportSceneModel.mock.calls[0]).toEqual(['obj', 'render', 'current', { bakeLook: false, combineMeshes: false }])
+  })
+
+  it('static formats offer current/rest pose only and hide the material-look option', async () => {
+    render(<ExportPanel />)
+    openSection('Export 3D model')
+    expect([...screen.getByLabelText('Pose').querySelectorAll('option')].map((o) => o.value)).toEqual(['baked', 'current', 'rest'])
+    expect(screen.queryByLabelText('Include Material look in export')).toBeTruthy()
+
+    fireEvent.change(format(), { target: { value: 'stl' } })
+    expect([...screen.getByLabelText('Pose').querySelectorAll('option')].map((o) => o.value)).toEqual(['current', 'rest'])
+    expect(screen.queryByLabelText('Include Material look in export')).toBeNull()
+    expect(screen.getByLabelText('Combine meshes into one')).toBeTruthy() // still applies
+
+    fireEvent.change(screen.getByLabelText('Pose'), { target: { value: 'rest' } })
+    fireEvent.click(screen.getByLabelText('Combine meshes into one'))
+    fireEvent.click(screen.getByText('Save as .stl'))
+    await waitFor(() => expect(exportSceneModel).toHaveBeenCalledTimes(1))
+    expect(exportSceneModel.mock.calls[0]).toEqual(['stl', 'render', 'rest', { bakeLook: false, combineMeshes: true }])
+  })
+
+  it('keeps the rigged pose choice when switching formats back and forth', () => {
+    render(<ExportPanel />)
+    openSection('Export 3D model')
+    fireEvent.change(screen.getByLabelText('Pose'), { target: { value: 'rest' } })
+    fireEvent.change(format(), { target: { value: 'ply' } })
+    fireEvent.change(format(), { target: { value: 'gltf' } })
+    expect(screen.getByLabelText('Pose').value).toBe('rest')
+    expect(screen.getByText('Save as .gltf')).toBeTruthy()
   })
 })

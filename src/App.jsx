@@ -174,7 +174,7 @@ function AppInner() {
           />
         </Accordion>
 
-        <Accordion id="export" icon="⬇️" title="Export" subtitle="Render images and animation clips">
+        <Accordion id="export" icon="⬇️" title="Export" subtitle="Video, images, mocap and 3D models">
           <ExportPanel />
         </Accordion>
       </aside>
