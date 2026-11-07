@@ -1,3 +1,4 @@
+import { FxCollapse } from './FxCards.jsx'
 import { useState } from 'react'
 import { useStore } from '../store.js'
 import { applyModelMaterials } from '../three/scene.js'
@@ -102,11 +103,7 @@ export default function MaterialEditor({ selectedMeshUuids, primaryUuid, resolve
   const title = choice === 'all' ? `All ${slots.length} materials` : info.name
 
   return (
-    <details className="joint-controls" style={{ marginTop: 10 }}>
-      <summary style={{ cursor: 'pointer' }}>
-        <span className="joint-name">Change material type</span>{' '}
-        <span className="joint-parent">{selectedMeshUuids.length > 1 ? `${selectedMeshUuids.length} parts · ` : ''}{title}</span>
-      </summary>
+    <FxCollapse title="Change material type" hint={`${selectedMeshUuids.length > 1 ? `${selectedMeshUuids.length} parts · ` : ''}${title}`}>
       <div style={{ marginTop: 8 }}>
 
       {multiSlot && (
@@ -269,6 +266,6 @@ export default function MaterialEditor({ selectedMeshUuids, primaryUuid, resolve
         </button>
       </div>
       </div>
-    </details>
+    </FxCollapse>
   )
 }

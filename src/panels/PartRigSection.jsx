@@ -1,3 +1,4 @@
+import { FxEditor, FxIntro, FxSection, FxItem, FxItemActions, FxField, FxCheck, FxHelp, FxButtons, FxFooter, FxPicking } from './FxCards.jsx'
 import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { useStore } from '../store.js'
@@ -217,169 +218,136 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
 
   const modeHint = MODES.find((m) => m.id === mode)?.hint
 
+  const partCount = selections.filter((selection) => selection.tris.length).length
+  const sliderRow = (label, title, min, max, value, onChange, shown, step) => (
+    <label className="slider-row" title={title}>
+      <span className="slider-label">{label}</span>
+      <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} />
+      <span className="slider-value">{shown}</span>
+    </label>
+  )
+
   return (
-    <div style={{ marginTop: 6 }}>
-      <div className="radio-hint">
+    <FxEditor>
+      <FxIntro eyebrow="RIGGING" title="Add bones to hair, hoods and capes" note="The bones show up in Pose mode · Ctrl+Z undoes">
         Pick faces on one or more parts. With multiple parts selected, one shared chain extends across them by default.
-      </div>
+      </FxIntro>
 
-      <div className="kf-actions" style={{ marginTop: 6, flexWrap: 'wrap' }}>
-        {PRESETS.map((p) => (
-          <button key={p.id} className={`btn ${presetId === p.id ? '' : 'secondary'}`} title={p.hint} onClick={() => choosePreset(p.id)}>
-            {p.label}
-          </button>
-        ))}
-      </div>
-      <div className="radio-hint">{PRESETS.find((p) => p.id === presetId)?.hint}</div>
-
-      <div className="kf-actions" style={{ marginTop: 8 }}>
-        <button className={`btn ${picking ? '' : 'secondary'}`} onClick={() => { setPicking((v) => !v); setMessage('') }}>
-          {picking ? 'Picking: click the part…' : '1. Pick faces'}
-        </button>
-        <button className="btn secondary" disabled={!trisByMesh[mesh.uuid]?.length} onClick={() => setTrisByMesh((current) => ({ ...current, [mesh.uuid]: resizeSelection(mesh, current[mesh.uuid] || [], 1) }))} title="Add one ring of faces around the primary part's selection">Grow</button>
-        <button className="btn secondary" disabled={!trisByMesh[mesh.uuid]?.length} onClick={() => setTrisByMesh((current) => ({ ...current, [mesh.uuid]: resizeSelection(mesh, current[mesh.uuid] || [], -1) }))} title="Take one ring of faces off the primary part's selection">Shrink</button>
-        <button className="btn secondary" disabled={!tris.length} onClick={() => setTrisByMesh({})}>Clear</button>
-      </div>
-
-      {picking && (
-        <>
-          <label className="slider-row" title={modeHint}>
-            <span className="slider-label">Select</span>
-            <select className="select" value={mode} onChange={(e) => setMode(e.target.value)} aria-label="How a click picks faces">
-              {MODES.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
-            </select>
-            <span />
-          </label>
-          <div className="radio-hint">{modeHint}</div>
-          {mode === 'brush' && (
-            <label className="slider-row" title="Brush size as a share of the character's height">
-              <span className="slider-label">Brush</span>
-              <input type="range" min="1" max="40" value={brushPct} onChange={(e) => setBrushPct(Number(e.target.value))} />
-              <span className="slider-value">{brushPct}%</span>
-            </label>
-          )}
-          {mode === 'color' && (
-            <label className="slider-row" title="How far a colour may drift from the one you clicked">
-              <span className="slider-label">Tolerance</span>
-              <input type="range" min="0" max="1" step="0.01" value={tolerance} onChange={(e) => setTolerance(Number(e.target.value))} />
-              <span className="slider-value">{Math.round(tolerance * 100)}%</span>
-            </label>
-          )}
-          <label className="morph-label" style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }}>
-            <input type="checkbox" checked={erase} onChange={(e) => setErase(e.target.checked)} />
-            Remove from selection instead
-          </label>
-        </>
+      {visibleEntries.length > 0 && (
+        <FxSection step="ADDED" title="Bones added to these parts" count={visibleEntries.length} countLabel={`${visibleEntries.length} rigs`} label="Added bone rigs">
+          {visibleEntries.map((e) => {
+            const partTotal = (e.meshIndices || [e.meshIndex]).length
+            return (
+              <FxItem key={e.id} title={e.label} pills={[`${e.boneNames.length} bones`, `${partTotal} part${partTotal === 1 ? '' : 's'}`]}>
+                <FxItemActions>
+                  <button className="btn secondary" onClick={() => onPhysics(e)} title="Add swing physics for this chain">Physics</button>
+                  <button className="btn secondary" onClick={() => onEdit(e)} title="Change this rig's name, bone count, and settings">Edit</button>
+                  <button className="btn secondary" onClick={() => onDelete(e)} title="Delete these bones">Delete</button>
+                </FxItemActions>
+              </FxItem>
+            )
+          })}
+        </FxSection>
       )}
-      {message && <div className="radio-hint" style={{ marginTop: 4 }}>{message}</div>}
+
+      <FxSection step={editingId ? 'EDIT' : 'STEP 1'} title={editingId ? 'Adjust the selected rig' : 'Pick the faces'} label="Pick faces">
+        {!editingId && (
+          <>
+            <FxButtons>
+              {PRESETS.map((p) => (
+                <button key={p.id} className={`btn ${presetId === p.id ? '' : 'secondary'}`} title={p.hint} onClick={() => choosePreset(p.id)}>
+                  {p.label}
+                </button>
+              ))}
+            </FxButtons>
+            <FxHelp>{PRESETS.find((p) => p.id === presetId)?.hint}</FxHelp>
+          </>
+        )}
+
+        <FxButtons>
+          <button className={`btn ${picking ? '' : 'secondary'}`} onClick={() => { setPicking((v) => !v); setMessage('') }}>
+            {picking ? 'Picking: click the part…' : 'Pick faces'}
+          </button>
+          <button className="btn secondary" disabled={!trisByMesh[mesh.uuid]?.length} onClick={() => setTrisByMesh((current) => ({ ...current, [mesh.uuid]: resizeSelection(mesh, current[mesh.uuid] || [], 1) }))} title="Add one ring of faces around the primary part's selection">Grow</button>
+          <button className="btn secondary" disabled={!trisByMesh[mesh.uuid]?.length} onClick={() => setTrisByMesh((current) => ({ ...current, [mesh.uuid]: resizeSelection(mesh, current[mesh.uuid] || [], -1) }))} title="Take one ring of faces off the primary part's selection">Shrink</button>
+          <button className="btn secondary" disabled={!tris.length} onClick={() => setTrisByMesh({})}>Clear</button>
+        </FxButtons>
+
+        {picking && (
+          <FxPicking>
+            <FxHelp>{modeHint}</FxHelp>
+            <FxField label="Select" title={modeHint}>
+              <select value={mode} onChange={(e) => setMode(e.target.value)} aria-label="How a click picks faces">
+                {MODES.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+              </select>
+            </FxField>
+            {mode === 'brush' && sliderRow('Brush', "Brush size as a share of the character's height", 1, 40, brushPct, setBrushPct, `${brushPct}%`, 1)}
+            {mode === 'color' && sliderRow('Tolerance', 'How far a colour may drift from the one you clicked', 0, 1, tolerance, setTolerance, `${Math.round(tolerance * 100)}%`, 0.01)}
+            <FxCheck checked={erase} onChange={setErase}>Remove from selection instead</FxCheck>
+          </FxPicking>
+        )}
+        {message && <FxHelp>{message}</FxHelp>}
+
+        <FxHelp>
+          {tris.length
+            ? `${tris.length} face${tris.length === 1 ? '' : 's'} selected across ${partCount} part${partCount === 1 ? '' : 's'} (pink).` +
+              (summary && !summary.error ? ` ${summary.bones} bone${summary.bones === 1 ? '' : 's'} on ${summary.pieces} chain group${summary.pieces === 1 ? '' : 's'}, hanging from “${summary.parent}” (blue).` : '') +
+              (summary && summary.error ? ` ${summary.error}` : '')
+            : 'Nothing picked yet. Press Pick faces, then click the part in the viewport.'}
+        </FxHelp>
+      </FxSection>
 
       {tris.length > 0 && (
-        <>
-          <div className="radio-hint" style={{ marginTop: 6 }}>
-            {tris.length} face{tris.length === 1 ? '' : 's'} selected across {selections.filter((selection) => selection.tris.length).length} part{selections.filter((selection) => selection.tris.length).length === 1 ? '' : 's'} (pink).
-            {summary && !summary.error && ` ${summary.bones} bone${summary.bones === 1 ? '' : 's'} on ${summary.pieces} chain group${summary.pieces === 1 ? '' : 's'}, hanging from “${summary.parent}” (blue).`}
-            {summary && summary.error && ` ${summary.error}`}
-          </div>
-
-          <label className="slider-row" title="Used to name the new bones">
-            <span className="slider-label">Name</span>
-            <input className="select" value={label} onChange={(e) => setLabel(e.target.value)} aria-label="Name for the new bones" />
-            <span />
-          </label>
-          <label className="slider-row" title="Bones in each chain: more bones bend smoother">
-            <span className="slider-label">Bones</span>
-            <input type="range" min="1" max="12" value={opts.segments} onChange={(e) => patch({ segments: Number(e.target.value) })} />
-            <span className="slider-value">{opts.segments}</span>
-          </label>
-          <label className="slider-row" title="Chains side by side: a cape needs several, a strand needs one">
-            <span className="slider-label">Chains</span>
-            <input type="range" min="1" max="8" value={opts.columns} onChange={(e) => patch({ columns: Number(e.target.value) })} />
-            <span className="slider-value">{opts.columns}</span>
-          </label>
-          <label className="slider-row" title="How much of the top keeps the body's own movement, so it stays attached">
-            <span className="slider-label">Top stays</span>
-            <input type="range" min="0" max="60" value={Math.round(opts.stick * 100)} onChange={(e) => patch({ stick: Number(e.target.value) / 100 })} />
-            <span className="slider-value">{Math.round(opts.stick * 100)}%</span>
-          </label>
-          <label className="slider-row" title="How much the new bones affect the selected surface; lower values blend more of the original skinning back in">
-            <span className="slider-label">Bone influence</span>
-            <input type="range" min="0" max="100" value={Math.round(opts.influence * 100)} onChange={(e) => patch({ influence: Number(e.target.value) / 100 })} />
-            <span className="slider-value">{Math.round(opts.influence * 100)}%</span>
-          </label>
-          <label className="morph-label" style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }} title="Also rig disconnected mesh layers close to the picked surface, such as the inside of a jacket.">
-            <input type="checkbox" checked={opts.includeNearbySurfaces} onChange={(e) => patch({ includeNearbySurfaces: e.target.checked })} />
+        <FxSection step={editingId ? 'EDIT' : 'STEP 2'} title="Shape the chain" label="Chain settings">
+          <FxField label="Name" title="Used to name the new bones">
+            <input type="text" value={label} onChange={(e) => setLabel(e.target.value)} aria-label="Name for the new bones" />
+          </FxField>
+          {sliderRow('Bones', 'Bones in each chain: more bones bend smoother', 1, 12, opts.segments, (v) => patch({ segments: v }), opts.segments, 1)}
+          {sliderRow('Chains', 'Chains side by side: a cape needs several, a strand needs one', 1, 8, opts.columns, (v) => patch({ columns: v }), opts.columns, 1)}
+          {sliderRow('Top stays', 'How much of the top keeps the body\'s own movement, so it stays attached', 0, 60, Math.round(opts.stick * 100), (v) => patch({ stick: v / 100 }), `${Math.round(opts.stick * 100)}%`, 1)}
+          {sliderRow('Bone influence', 'How much the new bones affect the selected surface; lower values blend more of the original skinning back in', 0, 100, Math.round(opts.influence * 100), (v) => patch({ influence: v / 100 }), `${Math.round(opts.influence * 100)}%`, 1)}
+          <FxCheck checked={opts.includeNearbySurfaces} onChange={(v) => patch({ includeNearbySurfaces: v })} title="Also rig disconnected mesh layers close to the picked surface, such as the inside of a jacket.">
             Include nearby surfaces
-          </label>
-          {opts.includeNearbySurfaces && (
-            <label className="slider-row" title="Maximum distance to the picked surface, as a share of the selected mesh bounds">
-              <span className="slider-label">Surface range</span>
-              <input type="range" min="0.5" max="10" step="0.5" value={Math.round(opts.nearbySurfaceDistance * 1000) / 10} onChange={(e) => patch({ nearbySurfaceDistance: Number(e.target.value) / 100 })} />
-              <span className="slider-value">{Math.round(opts.nearbySurfaceDistance * 1000) / 10}%</span>
-            </label>
-          )}
-          <label className="slider-row" title="Which way the chain runs">
-            <span className="slider-label">Direction</span>
-            <select className="select" value={opts.direction} onChange={(e) => patch({ direction: e.target.value })} aria-label="Chain direction">
+          </FxCheck>
+          {opts.includeNearbySurfaces &&
+            sliderRow('Surface range', 'Maximum distance to the picked surface, as a share of the selected mesh bounds', 0.5, 10, Math.round(opts.nearbySurfaceDistance * 1000) / 10, (v) => patch({ nearbySurfaceDistance: v / 100 }), `${Math.round(opts.nearbySurfaceDistance * 1000) / 10}%`, 0.5)}
+          <FxField label="Direction" title="Which way the chain runs">
+            <select value={opts.direction} onChange={(e) => patch({ direction: e.target.value })} aria-label="Chain direction">
               <option value="shape">Follow the shape</option>
               <option value="down">Hangs down</option>
             </select>
-            <span />
-          </label>
-          <label className="slider-row" title="The bone the chain hangs from">
-            <span className="slider-label">Hangs from</span>
-            <select className="select" value={opts.parentBoneName || ''} onChange={(e) => patch({ parentBoneName: e.target.value || null })} aria-label="Bone to attach to">
+          </FxField>
+          <FxField label="Hangs from" title="The bone the chain hangs from">
+            <select value={opts.parentBoneName || ''} onChange={(e) => patch({ parentBoneName: e.target.value || null })} aria-label="Bone to attach to">
               <option value="">Automatic</option>
               {boneChoices.map((b) => <option key={b.name} value={b.name}>{b.label}</option>)}
             </select>
-            <span />
-          </label>
-          <label className="morph-label" style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }} title="By default, new rigs attach to the character's original skeleton. Enable this to intentionally attach one added rig to another.">
-            <input
-              type="checkbox"
-              checked={!!opts.allowAddedBoneAttachment}
-              onChange={(e) => patch({
-                allowAddedBoneAttachment: e.target.checked,
-                ...(!e.target.checked && generatedBoneNames.has(opts.parentBoneName) ? { parentBoneName: null } : {}),
-              })}
-            />
+          </FxField>
+          <FxCheck
+            checked={!!opts.allowAddedBoneAttachment}
+            onChange={(v) => patch({
+              allowAddedBoneAttachment: v,
+              ...(!v && generatedBoneNames.has(opts.parentBoneName) ? { parentBoneName: null } : {}),
+            })}
+            title="By default, new rigs attach to the character's original skeleton. Enable this to intentionally attach one added rig to another."
+          >
             Allow attachment to added bones
-          </label>
-          <label className="morph-label" style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }} title="If the chain starts at the wrong end, swap it">
-            <input type="checkbox" checked={opts.flip} disabled={opts.direction === 'down'} onChange={(e) => patch({ flip: e.target.checked })} />
+          </FxCheck>
+          <FxCheck checked={opts.flip} disabled={opts.direction === 'down'} onChange={(v) => patch({ flip: v })} title="If the chain starts at the wrong end, swap it">
             Start from the other end
-          </label>
-          <label className="morph-label" style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }} title="Several separate pieces (hair cards) each get their own chain instead of sharing one chain across the selection">
-            <input type="checkbox" checked={opts.perPiece} onChange={(e) => patch({ perPiece: e.target.checked })} />
+          </FxCheck>
+          <FxCheck checked={opts.perPiece} onChange={(v) => patch({ perPiece: v })} title="Several separate pieces (hair cards) each get their own chain instead of sharing one chain across the selection">
             Each separate piece gets its own chain
-          </label>
-          <label className="morph-label" style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }}>
-            <input type="checkbox" checked={addPhysics} onChange={(e) => setAddPhysics(e.target.checked)} />
-            Turn on swing physics for the new bones
-          </label>
-          <div className="kf-actions" style={{ marginTop: 6 }}>
-            <button className="btn" onClick={editingId ? onUpdate : onAdd} disabled={!summary || !!summary.error}>
-              {editingId ? 'Update bones' : '2. Add bones'}
+          </FxCheck>
+          <FxCheck checked={addPhysics} onChange={setAddPhysics}>Turn on swing physics for the new bones</FxCheck>
+          <FxFooter>
+            <button className="btn secondary" onClick={editingId ? onUpdate : onAdd} disabled={!summary || !!summary.error}>
+              {editingId ? 'Update bones' : 'Add bones'}
             </button>
             {editingId && <button className="btn secondary" onClick={() => { setEditingId(null); setTrisByMesh({}) }}>Cancel</button>}
-          </div>
-        </>
+          </FxFooter>
+        </FxSection>
       )}
-
-      {visibleEntries.length > 0 && (
-        <div className="obj-list" style={{ marginTop: 10 }}>
-          {visibleEntries.map((e) => (
-            <div key={e.id} className="obj-row">
-              <div className="obj-row-main">
-                <span className="obj-name">{e.label}</span>
-                <span className="joint-parent"> {e.boneNames.length} bones · {(e.meshIndices || [e.meshIndex]).length} part{(e.meshIndices || [e.meshIndex]).length === 1 ? '' : 's'}</span>
-              </div>
-              <button className="btn secondary" onClick={() => onPhysics(e)} title="Add swing physics for this chain">Physics</button>
-              <button className="btn secondary" onClick={() => onEdit(e)} title="Change this rig's name, bone count, and settings">Edit</button>
-              <button className="btn secondary" onClick={() => onDelete(e)} title="Delete these bones">Delete</button>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
+    </FxEditor>
   )
 }

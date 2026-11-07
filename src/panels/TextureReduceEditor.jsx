@@ -1,3 +1,4 @@
+import { FxCollapse } from './FxCards.jsx'
 import { useStore } from '../store.js'
 import { applyModelMaterials } from '../three/scene.js'
 import { recordOverrideEdit } from '../three/materialHistory.js'
@@ -40,11 +41,7 @@ export default function TextureReduceEditor({ selectedMeshUuids, primaryUuid, re
   }
 
   return (
-    <details className="joint-controls" style={{ marginTop: 10 }}>
-      <summary style={{ cursor: 'pointer' }}>
-        <span className="joint-name">Reduce texture size</span>{' '}
-        <span className="joint-parent">{current ? `${current} px or smaller` : 'smaller textures, smaller files'}</span>
-      </summary>
+    <FxCollapse title="Reduce texture size" hint={current ? `${current} px or smaller` : 'smaller textures, smaller files'}>
       <div style={{ marginTop: 8 }}>
         <label className="slider-row" title="The biggest a texture of this part may be, in pixels on its longest side. Textures that are already smaller are left alone.">
           <span className="slider-label">Largest texture</span>
@@ -81,6 +78,6 @@ export default function TextureReduceEditor({ selectedMeshUuids, primaryUuid, re
           The saved / exported model uses the smaller textures. Compressed textures can't be resized and are left as they are.
         </div>
       </div>
-    </details>
+    </FxCollapse>
   )
 }

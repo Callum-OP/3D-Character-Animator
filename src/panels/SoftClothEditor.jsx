@@ -456,47 +456,47 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
   }
 
   return (
-    <div className="soft-cloth-editor">
-      <header className="soft-cloth-intro">
-        <div className="soft-cloth-eyebrow">CLOTH &amp; MOTION</div>
+    <div className="fx-editor">
+      <header className="fx-intro">
+        <div className="fx-eyebrow">CLOTH &amp; MOTION</div>
         <h3>Add a little movement to clothing</h3>
         <p>
           Add a soft spring to fabric, or make a separate piece swing. Select several meshes first to make one
           effect span parts such as a jacket and its sleeves.
         </p>
-        <div className="soft-cloth-intro-note">Runs during playback · paused or scrubbed frames show the clean pose</div>
+        <div className="fx-intro-note">Runs during playback · paused or scrubbed frames show the clean pose</div>
       </header>
 
       {clothOn && (
-        <div className="soft-cloth-alert">
+        <div className="fx-alert">
           The full cloth simulation is on for a selected part. Turn it off before adding soft cloth or swing.
         </div>
       )}
 
       {zoneEntries.length > 0 && (
-        <section className="soft-cloth-effects" aria-label="Cloth effects">
-          <div className="soft-cloth-section-heading">
+        <section className="fx-effects" aria-label="Cloth effects">
+          <div className="fx-section-heading">
             <div>
-              <div className="soft-cloth-step">STEP 1</div>
+              <div className="fx-step">STEP 1</div>
               <h4>Effects on these parts</h4>
             </div>
-            <span className="soft-cloth-count" aria-label={`${zoneEntries.length} effects`}>{zoneEntries.length}</span>
+            <span className="fx-count" aria-label={`${zoneEntries.length} effects`}>{zoneEntries.length}</span>
           </div>
           {zoneEntries.map(({ target, zone: z, key }) => {
             const mode = z.mode
             return (
-              <details key={key} className={`soft-cloth-zone${z.enabled === false ? ' is-disabled' : ''}`}>
-                <summary className="soft-cloth-zone-summary">
-                  <span className={`soft-cloth-zone-title${mode === 'swing' ? ' is-swing' : ''}`}>
+              <details key={key} className={`fx-zone${z.enabled === false ? ' is-disabled' : ''}`}>
+                <summary className="fx-zone-summary">
+                  <span className={`fx-zone-title${mode === 'swing' ? ' is-swing' : ''}`}>
                     {targets.length > 1 ? `${target.name || 'Part'} · ` : ''}{z.name} · {z.area.kind === 'tris' ? 'area' : 'whole part'}
                   </span>
                   <span>{SOFT_MODES[mode]}</span>
-                  {z.area.kind === 'tris' && <span className="soft-cloth-zone-area">Picked faces</span>}
-                  {z.area.kind !== 'tris' && <span className="soft-cloth-zone-area">Whole part</span>}
-                  {z.couplingMode === 'seams' && <span className="soft-cloth-zone-area">Seam-connected</span>}
-                  {z.couplingMode === 'rigid' && <span className="soft-cloth-zone-area">Shared sway</span>}
+                  {z.area.kind === 'tris' && <span className="fx-zone-area">Picked faces</span>}
+                  {z.area.kind !== 'tris' && <span className="fx-zone-area">Whole part</span>}
+                  {z.couplingMode === 'seams' && <span className="fx-zone-area">Seam-connected</span>}
+                  {z.couplingMode === 'rigid' && <span className="fx-zone-area">Shared sway</span>}
                 </summary>
-                <div className="soft-cloth-zone-actions">
+                <div className="fx-zone-actions">
                   <label className="row">
                     <input type="checkbox" checked={z.enabled !== false} onChange={(e) => update(target.uuid, z.id, { enabled: e.target.checked }, true)} />
                     <span>On</span>
@@ -522,7 +522,7 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
                   </span>
                 </div>
 
-                <div className="soft-cloth-fields">
+                <div className="fx-fields">
                 <label className="field">
                   <span>Name</span>
                   <input type="text" value={z.name} onChange={(e) => update(target.uuid, z.id, { name: e.target.value })} />
@@ -754,10 +754,10 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
         </section>
       )}
 
-      <section className="soft-cloth-add">
-        <div className="soft-cloth-section-heading">
+      <section className="fx-add">
+        <div className="fx-section-heading">
           <div>
-            <div className="soft-cloth-step">{editingZone ? 'EDIT' : 'STEP 2'}</div>
+            <div className="fx-step">{editingZone ? 'EDIT' : 'STEP 2'}</div>
             <h4>{editingZone ? 'Adjust the selected area' : 'Add an effect'}</h4>
           </div>
         </div>
@@ -815,7 +815,7 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
           </label>
         )}
         {!editingZone && targets.length > 1 && (
-          <p className="soft-cloth-help">
+          <p className="fx-help">
             Add the same effect to all selected parts to keep their motion connected. Seam matching works best when
             their edges already touch; shared motion is useful for overlapping panels.
           </p>
@@ -836,8 +836,8 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
         )}
 
         {(editingZone || areaKind === 'picked') && (
-          <div className="soft-cloth-picking">
-            <div className="soft-cloth-help">
+          <div className="fx-picking">
+            <div className="fx-help">
               {editingZone
                 ? `${pendingCount} face${pendingCount === 1 ? '' : 's'} selected (shown in pink). Click to adjust the area, then save or cancel.`
                 : pendingCount
@@ -863,7 +863,7 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
               </label>
             )}
             {tool === 'fill' && (
-              <div className="soft-cloth-help">
+              <div className="fx-help">
                 Outline the area first with &quot;Pick faces&quot; (with &quot;Each click adds to the area&quot; on, click a ring or a line of
                 faces around it, using a small size or &quot;Just that face&quot;), switch to Fill, then click inside it: every connected face up to the outline is selected. Separate pieces are never
                 reached, so filling a hood does not pick up the jacket. Click inside a fill again to take it away.
@@ -901,7 +901,7 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
         )}
         {message && <div className="radio-hint">{message}</div>}
 
-        <div className="soft-cloth-footer">
+        <div className="fx-footer">
           {editingZone ? (
             <>
               <button className="btn secondary" disabled={pendingCount === 0} onClick={saveEditedArea}>

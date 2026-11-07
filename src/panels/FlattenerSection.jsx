@@ -9,6 +9,7 @@ import {
   setFlattenerEnabled,
 } from '../three/flattener.js'
 import EditableValue from './EditableValue.jsx'
+import { FxCollapse, FxEditor, FxIntro, FxSection, FxItem, FxItemActions, FxCheck, FxHelp, FxButtons, FxEmpty } from './FxCards.jsx'
 
 function Slider({ label, hint, value, min, max, step, onChange, format }) {
   return (
@@ -40,81 +41,46 @@ export default function FlattenerSection() {
   const pct = (v) => `${Math.round(v * 100)}%`
 
   return (
-    <>
-      <h2 style={{ marginTop: 18 }}>Flattener</h2>
-      <p className="panel-hint">
+    <FxCollapse title="Flattener" hint={flatteners.length ? `${flatteners.length} flattener${flatteners.length === 1 ? '' : 's'}` : 'flatten a head toward camera'}>
+    <FxEditor style={{ marginTop: 0 }} aria-label="Flattener">
+      <FxIntro eyebrow="FLATTENER" title="Flatten a head toward the camera" note="Follows the bone · works from any camera">
         Flattens a head toward the camera for the flat, 2D anime look. The model stays fully 3D; from the camera everything above
         the chin line is squashed flat and lit like a flat plane (no cheek or nose shading), fading out below the line so the neck
-        and hair blend in. It follows the bone and works from any camera. Add it to the head bone, then adjust the chin line
-        (switch on "Show chin line" to see it). It is most visible with a toon / anime Lighting style and the head turned a little.
-      </p>
+        and hair blend in. Add it to the head bone, then adjust the chin line (switch on &quot;Show chin line&quot; to see it). It is
+        most visible with a toon / anime Lighting style and the head turned a little.
+      </FxIntro>
 
-      <label className="row" style={{ marginBottom: 6 }}>
-        <input
-          type="checkbox"
-          checked={flattenerEnabled}
-          onChange={(e) => setFlattenerEnabled(activeCharacterId, e.target.checked)}
-        />
-        <span>Enable flattener</span>
-      </label>
-      <label className="row" style={{ marginBottom: 10 }}>
-        <input type="checkbox" checked={showGuide} onChange={(e) => setShowGuide(e.target.checked)} />
-        <span>Show chin line</span>
-      </label>
-
-      <div className="row" style={{ flexWrap: 'wrap', gap: 6 }}>
-        <button
-          className="btn secondary"
-          disabled={!headBone || full}
-          onClick={() => addFlattener(headBone)}
-          title={headBone ? `Flatten everything above the chin, on "${headBone}"` : 'No head bone was recognised — select a bone and use the other button'}
-        >
-          Add to head
-        </button>
-        <button
-          className="btn secondary"
-          disabled={!selectedBoneName || full}
-          onClick={() => addFlattener(selectedBoneName)}
-          title="Add a flattener on the selected bone"
-        >
-          Add to selected bone
-        </button>
+      <div className="fx-effects fx-toggle">
+        <FxCheck checked={flattenerEnabled} onChange={(v) => setFlattenerEnabled(activeCharacterId, v)}>
+          Enable flattener
+        </FxCheck>
+        <FxCheck checked={showGuide} onChange={setShowGuide}>
+          Show chin line
+        </FxCheck>
       </div>
 
-      {flatteners.length === 0 ? (
-        <div className="empty" style={{ marginTop: 10 }}>
-          No flattener yet.
-        </div>
-      ) : (
-        <div style={{ marginTop: 10 }}>
+      {flatteners.length > 0 && (
+        <FxSection step="STEP 1" title="Flatteners on this character" count={flatteners.length} countLabel={`${flatteners.length} flatteners`} label="Flatteners">
           {flatteners.map((f) => (
-            <details
-              className="dangle-chain"
-              key={f.id}
-              style={{ marginBottom: 10, paddingBottom: 8, borderBottom: '1px solid var(--border, #333)' }}
-            >
-              <summary className="dangle-chain-summary" style={{ opacity: f.enabled ? 1 : 0.55 }}>
-                {f.name} ({pct(f.strength)} flat)
-              </summary>
-
-              <div className="row" style={{ justifyContent: 'space-between', marginTop: 8, gap: 6 }}>
-                <label className="row">
-                  <input type="checkbox" checked={f.enabled} onChange={(e) => updateFlattener(f.id, { enabled: e.target.checked })} />
-                  <span>On</span>
-                </label>
-                <span style={{ display: 'inline-flex', gap: 6 }}>
-                  <button
-                    className="btn secondary"
-                    onClick={() => refitFlattener(f.id)}
-                    title="Work the head's centre, size and chin line out again from the mesh (do this after changing the character or its pose a lot)"
-                  >
-                    Auto-fit
-                  </button>
-                  <button className="btn secondary" onClick={() => removeFlattener(f.id)} title="Remove this flattener" aria-label="Remove this flattener">
-                    ×
-                  </button>
-                </span>
-              </div>
+            <FxItem key={f.id} title={f.name} disabled={!f.enabled} pills={[`${pct(f.strength)} flat`]}>
+              <FxItemActions
+                left={
+                  <FxCheck checked={f.enabled} onChange={(v) => updateFlattener(f.id, { enabled: v })}>
+                    On
+                  </FxCheck>
+                }
+              >
+                <button
+                  className="btn secondary"
+                  onClick={() => refitFlattener(f.id)}
+                  title="Work the head's centre, size and chin line out again from the mesh (do this after changing the character or its pose a lot)"
+                >
+                  Auto-fit
+                </button>
+                <button className="btn secondary" onClick={() => removeFlattener(f.id)} title="Remove this flattener" aria-label="Remove this flattener">
+                  ×
+                </button>
+              </FxItemActions>
 
               <Slider
                 label="Strength"
@@ -186,10 +152,36 @@ export default function FlattenerSection() {
                 format={pct}
                 onChange={(v) => updateFlattener(f.id, { thickness: v })}
               />
-            </details>
+            </FxItem>
           ))}
-        </div>
+        </FxSection>
       )}
-    </>
+
+      <FxSection step={flatteners.length > 0 ? 'STEP 2' : 'STEP 1'} title="Add a flattener" label="Add a flattener">
+        <FxHelp>
+          {headBone ? 'Usually it goes on the head bone. Use the selected bone for anything else that should flatten.' : 'No head bone was recognised: select a bone and use "Add to selected bone".'}
+        </FxHelp>
+        <FxButtons>
+          <button
+            className="btn secondary"
+            disabled={!headBone || full}
+            onClick={() => addFlattener(headBone)}
+            title={headBone ? `Flatten everything above the chin, on "${headBone}"` : 'No head bone was recognised — select a bone and use the other button'}
+          >
+            Add to head
+          </button>
+          <button
+            className="btn secondary"
+            disabled={!selectedBoneName || full}
+            onClick={() => addFlattener(selectedBoneName)}
+            title="Add a flattener on the selected bone"
+          >
+            Add to selected bone
+          </button>
+        </FxButtons>
+        {flatteners.length === 0 && <FxEmpty>No flattener yet.</FxEmpty>}
+      </FxSection>
+    </FxEditor>
+    </FxCollapse>
   )
 }

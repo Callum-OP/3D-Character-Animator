@@ -1,3 +1,4 @@
+import { FxCollapse } from './FxCards.jsx'
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store.js'
 import { applyModelMaterials } from '../three/scene.js'
@@ -70,11 +71,7 @@ export default function DecimateEditor({ selectedMeshUuids, primaryUuid, resolve
   const parts = selectedMeshUuids.length
 
   return (
-    <details className="joint-controls" style={{ marginTop: 10 }}>
-      <summary style={{ cursor: 'pointer' }}>
-        <span className="joint-name">Reduce detail</span>{' '}
-        <span className="joint-parent">{reduced ? `${kept}% of the triangles kept` : 'fewer triangles, smaller files'}</span>
-      </summary>
+    <FxCollapse title="Reduce detail" hint={reduced ? `${kept}% of the triangles kept` : 'fewer triangles, smaller files'}>
       <div style={{ marginTop: 8 }}>
         <label className="slider-row" title="Share of the triangles to keep. 100% leaves the part as it was loaded.">
           <span className="slider-label">Detail kept</span>
@@ -125,6 +122,6 @@ export default function DecimateEditor({ selectedMeshUuids, primaryUuid, resolve
           The saved / exported model uses the reduced version. Paint regions don't apply to a reduced part.
         </div>
       </div>
-    </details>
+    </FxCollapse>
   )
 }

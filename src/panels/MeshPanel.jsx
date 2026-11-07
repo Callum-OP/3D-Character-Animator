@@ -1,3 +1,4 @@
+import { FxCollapse, FxCheck, FxEditor, FxIntro, FxSection, FxField, FxHelp, FxButtons } from './FxCards.jsx'
 import { useEffect, useMemo, useState } from 'react'
 import { useStore } from '../store.js'
 import {
@@ -440,11 +441,7 @@ export default function MeshPanel() {
           />
 
           {selectedMesh && morphEntries.length > 0 && !isPropPart && (
-            <details className="joint-controls" style={{ marginTop: 8 }}>
-              <summary style={{ cursor: 'pointer' }}>
-                <span className="joint-name">Shape keys</span>{' '}
-                <span className="joint-parent">{morphEntries.length}</span>
-              </summary>
+            <FxCollapse title="Shape keys" hint={morphEntries.length}>
               <label
                 className="morph-label"
                 style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}
@@ -516,113 +513,74 @@ export default function MeshPanel() {
                   </div>
                 )
               })}
-            </details>
+            </FxCollapse>
           )}
         </div>
       )}
 
       {selectedMeshUuids.length > 0 && (
-        <div className="joint-controls" style={{ marginTop: 10 }}>
-          <div className="joint-header">
-            <span className="joint-name">Colour (whole part)</span>
-            <span className="joint-parent">
-              {multi ? `${selectedMeshUuids.length} parts` : labelOf(selectedMesh?.uuid, selectedMesh?.name)}
-            </span>
-          </div>
+        <FxCollapse title="Colour (whole part)" hint={multi ? `${selectedMeshUuids.length} parts` : labelOf(selectedMesh?.uuid, selectedMesh?.name)} defaultOpen>
           <ColorControl
             color={colorOverride?.color || null}
             solid={!!colorOverride?.solid}
             onChange={applyColor}
             onClear={() => applyColor({ color: null })}
           />
-        </div>
+        </FxCollapse>
       )}
 
       {selectedMeshUuids.length > 0 && (
-        <div className="joint-controls" style={{ marginTop: 10 }}>
-          <div className="joint-header">
-            <span className="joint-name">Part settings</span>
-            <span className="joint-parent">{multi ? `${selectedMeshUuids.length} parts` : labelOf(selectedMesh?.uuid, selectedMesh?.name)}</span>
-          </div>
+        <FxCollapse title="Part settings" hint={multi ? `${selectedMeshUuids.length} parts` : labelOf(selectedMesh?.uuid, selectedMesh?.name)} defaultOpen>
+          <div className="fx-subhead">Look</div>
           {selectedMeshUuids.some((u) => meshHasAlpha(u)) && (
-            <label className="slider-row" title="Off = this part is drawn solid, so see-through textures stop showing what is behind them">
-              <input
-                type="checkbox"
-                checked={meshOverrides[selectedMeshUuid]?.alpha !== false}
-                onChange={(e) => setPartLook(selectedMeshUuids.filter((u) => meshHasAlpha(u)), { alpha: e.target.checked })}
-              />
+            <FxCheck
+              checked={meshOverrides[selectedMeshUuid]?.alpha !== false}
+              onChange={(v) => setPartLook(selectedMeshUuids.filter((u) => meshHasAlpha(u)), { alpha: v })}
+              title="Off = this part is drawn solid, so see-through textures stop showing what is behind them"
+            >
               Transparency
-            </label>
+            </FxCheck>
           )}
-          <label className="slider-row" title="Draw the ink outline around this part">
-            <input
-              type="checkbox"
-              checked={meshOverrides[selectedMeshUuid]?.outline !== false}
-              onChange={(e) => setPartLook(selectedMeshUuids, { outline: e.target.checked })}
-            />
+          <FxCheck checked={meshOverrides[selectedMeshUuid]?.outline !== false} onChange={(v) => setPartLook(selectedMeshUuids, { outline: v })} title="Draw the ink outline around this part">
             Ink outline
-          </label>
-          <label className="slider-row" title="Off = this part throws no shadow">
-            <input
-              type="checkbox"
-              checked={meshOverrides[selectedMeshUuid]?.castShadow !== false}
-              onChange={(e) => setPartLook(selectedMeshUuids, { castShadow: e.target.checked })}
-            />
-            Casts shadows
-          </label>
-          <label className="slider-row" title="Off = shadows from other objects never fall on this part">
-            <input
-              type="checkbox"
-              checked={!meshOverrides[selectedMeshUuid]?.shadowImmune}
-              onChange={(e) => setPartLook(selectedMeshUuids, { shadowImmune: !e.target.checked })}
-            />
-            Receives shadows
-          </label>
-          <label className="slider-row" title="On = the edge highlight from the Lighting tab's rim light never touches this part">
-            <input
-              type="checkbox"
-              checked={!!meshOverrides[selectedMeshUuid]?.rimImmune}
-              onChange={(e) => setPartLook(selectedMeshUuids, { rimImmune: e.target.checked })}
-            />
-            Ignore rim lighting
-          </label>
-          <label className="slider-row" title="Off = this part stays in daylight when Night mode is on">
-            <input
-              type="checkbox"
-              checked={!meshOverrides[selectedMeshUuid]?.nightImmune}
-              onChange={(e) => setPartLook(selectedMeshUuids, { nightImmune: !e.target.checked })}
-            />
-            Darkens at night
-          </label>
+          </FxCheck>
           {flatteners.length > 0 && (
-            <label className="slider-row" title="Off = the flattener leaves this part 3D (keep ear tips, hair strands or glasses round)">
-              <input
-                type="checkbox"
-                checked={meshOverrides[selectedMeshUuid]?.flatten !== false}
-                onChange={(e) => setPartLook(selectedMeshUuids, { flatten: e.target.checked })}
-              />
+            <FxCheck
+              checked={meshOverrides[selectedMeshUuid]?.flatten !== false}
+              onChange={(v) => setPartLook(selectedMeshUuids, { flatten: v })}
+              title="Off = the flattener leaves this part 3D (keep ear tips, hair strands or glasses round)"
+            >
               Flattened (flattener)
-            </label>
+            </FxCheck>
           )}
           {flatteners.length > 0 && meshOverrides[selectedMeshUuid]?.flatten !== false && (
-            <label className="slider-row" title="Off = the shape is flattened but the part keeps its own lighting. Try this on hair if it shows dark patches.">
-              <input
-                type="checkbox"
-                checked={meshOverrides[selectedMeshUuid]?.flatShade !== false}
-                onChange={(e) => setPartLook(selectedMeshUuids, { flatShade: e.target.checked })}
-              />
+            <FxCheck
+              checked={meshOverrides[selectedMeshUuid]?.flatShade !== false}
+              onChange={(v) => setPartLook(selectedMeshUuids, { flatShade: v })}
+              title="Off = the shape is flattened but the part keeps its own lighting. Try this on hair if it shows dark patches."
+            >
               Flatten its lighting too
-            </label>
+            </FxCheck>
           )}
-        </div>
+
+          <div className="fx-subhead">Light &amp; shadow</div>
+          <FxCheck checked={meshOverrides[selectedMeshUuid]?.castShadow !== false} onChange={(v) => setPartLook(selectedMeshUuids, { castShadow: v })} title="Off = this part throws no shadow">
+            Casts shadows
+          </FxCheck>
+          <FxCheck checked={!meshOverrides[selectedMeshUuid]?.shadowImmune} onChange={(v) => setPartLook(selectedMeshUuids, { shadowImmune: !v })} title="Off = shadows from other objects never fall on this part">
+            Receives shadows
+          </FxCheck>
+          <FxCheck checked={!!meshOverrides[selectedMeshUuid]?.rimImmune} onChange={(v) => setPartLook(selectedMeshUuids, { rimImmune: v })} title="On = the edge highlight from the Lighting tab's rim light never touches this part">
+            Ignore rim lighting
+          </FxCheck>
+          <FxCheck checked={!meshOverrides[selectedMeshUuid]?.nightImmune} onChange={(v) => setPartLook(selectedMeshUuids, { nightImmune: !v })} title="Off = this part stays in daylight when Night mode is on">
+            Darkens at night
+          </FxCheck>
+        </FxCollapse>
       )}
 
       {selectedMeshUuids.length > 0 && (
-        <details className="joint-controls" style={{ marginTop: 10 }}>
-          <summary style={{ cursor: 'pointer' }}>
-            <span className="joint-name">Turn into a light</span>{' '}
-            <span className="joint-parent">glowing parts, headlights…</span>
-          </summary>
+        <FxCollapse title="Turn into a light" hint="glowing parts, headlights…">
         <LightFromPart
           uuids={selectedMeshUuids}
           label={selectedMeshUuids.length > 1 ? `Turn ${selectedMeshUuids.length} parts into lights` : 'Turn into a light'}
@@ -642,34 +600,26 @@ export default function MeshPanel() {
             applyModelMaterials()
           }}
         />
-        </details>
+        </FxCollapse>
       )}
 
       {selectedMeshUuid && !isPropPart && (rigMeshUuids.length > 0 || selectedMeshUuids.length === 1) && (
-        <details className="joint-controls" style={{ marginTop: 10 }}>
-          <summary style={{ cursor: 'pointer' }}>
-            <span className="joint-name">Add bones</span>{' '}
-            <span className="joint-parent">hair, hoods, capes…</span>
-          </summary>
+        <FxCollapse title="Add bones" hint="hair, hoods, capes…">
           <PartRigSection
             meshUuid={selectedMeshUuid}
             meshUuids={rigMeshUuids.length ? rigMeshUuids : [selectedMeshUuid]}
             resolveMesh={(uuid) => currentModel?.meshes?.find((m) => m.uuid === uuid) || null}
           />
-        </details>
+        </FxCollapse>
       )}
 
       {selectedMeshUuids.length === 1 && selectedMeshUuid && (
-        <details className="joint-controls" style={{ marginTop: 10 }}>
-          <summary style={{ cursor: 'pointer' }}>
-            <span className="joint-name">Paint regions</span>{' '}
-            <span className="joint-parent">headlights, windows, trim…</span>
-          </summary>
+        <FxCollapse title="Paint regions" hint="headlights, windows, trim…">
           <RegionEditor
             meshUuid={selectedMeshUuid}
             resolveMesh={(uuid) => currentModel?.meshes?.find((m) => m.uuid === uuid) || getMeshByUuid(uuid)}
           />
-        </details>
+        </FxCollapse>
       )}
 
       {selectedMeshUuids.length > 0 && selectedMeshUuid && (
@@ -697,21 +647,15 @@ export default function MeshPanel() {
       )}
 
       {selectedMesh && (
-        <details className="joint-controls" style={{ marginTop: 10 }}>
-          <summary style={{ cursor: 'pointer' }}>
-            <span className="joint-name">Mesh Physics</span>{' '}
-            <span className="joint-parent">
-              {clothOn
+        <FxCollapse title="Mesh Physics" hint={clothOn
                 ? 'full simulation on'
                 : softZoneCount
                   ? `${softZoneCount} soft effect${softZoneCount === 1 ? '' : 's'}`
                 : multi
                   ? `soft motion across ${selectedClothMeshes.length} parts`
-                  : 'soft motion, or drape a cape…'}
-            </span>
-          </summary>
+                  : 'soft motion, or drape a cape…'}>
           {!multi && !isPropPart && (
-            <div className="row" style={{ gap: 6, margin: '6px 0' }} role="group" aria-label="Cloth type">
+            <div className="fx-buttons" role="group" aria-label="Cloth type">
               <button
                 className={`btn ${clothMode === 'soft' ? '' : 'secondary'}`}
                 aria-pressed={clothMode === 'soft'}
@@ -734,121 +678,110 @@ export default function MeshPanel() {
             <SoftClothEditor mesh={selectedMesh} meshes={selectedClothMeshes} clothOn={clothEditorOn} />
           )}
           {clothMode === 'full' && !isPropPart && !multi && (
-            <>
-          <label
-            className="morph-label"
-            style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}
-            title="Drape this mesh (a cape, skirt, sash…) against the rest of the character using its current pose. Re-pose, then toggle off/on to redrape against the new pose."
-          >
-            <input type="checkbox" checked={clothOn} onChange={(e) => onToggleCloth(e.target.checked)} />
-            Enable cloth simulation
-          </label>
+            <FxEditor>
+              <FxIntro eyebrow="FULL SIMULATION" title="Drape cloth over the body" note="Heavier than soft cloth · re-pose, then switch off and on to redrape">
+                Drape this mesh (a cape, skirt, sash…) against the rest of the character using its current pose.
+              </FxIntro>
 
-          {clothOn && (
-            <>
-              <label className="field">
-                <span>Fabric</span>
-                <select value={fabricPreset} onChange={(e) => onFabricPreset(e.target.value)}>
-                  {Object.keys(FABRIC_PRESETS).map((name) => (
-                    <option key={name} value={name}>
-                      {name[0].toUpperCase() + name.slice(1)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label
-                className="morph-label"
-                style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, marginBottom: 4 }}
-                title="Pull the cloth tight against the body instead of hanging loose — good for t-shirts, gloves, anything skin-tight rather than a cape or skirt."
-              >
-                <input
-                  type="checkbox"
-                  checked={clothOn ? isClothShrinkwrap(selectedMesh.uuid) : shrinkwrap}
-                  onChange={(e) => onShrinkwrap(e.target.checked)}
-                />
-                Shrinkwrap to body
-              </label>
-
-              <div className="kf-actions" style={{ marginTop: 4 }}>
-                <button
-                  className="btn"
-                  onClick={() => {
-                    setClothPlaying(!isClothPlaying())
-                    bumpCloth()
-                  }}
+              <div className="fx-effects fx-toggle">
+                <FxCheck
+                  checked={clothOn}
+                  onChange={onToggleCloth}
+                  title="Drape this mesh (a cape, skirt, sash…) against the rest of the character using its current pose. Re-pose, then toggle off/on to redrape against the new pose."
                 >
-                  {isClothPlaying() ? '❚❚ Pause' : '▶ Drape'}
-                </button>
-                <button className="btn secondary" onClick={() => stepClothOnce()}>
-                  ⤼ Step
-                </button>
-                <button
-                  className="btn secondary"
-                  onClick={() => {
-                    resetCloth(selectedMesh.uuid)
-                    bumpCloth()
-                  }}
-                >
-                  ↺ Reset
-                </button>
+                  Enable cloth simulation
+                </FxCheck>
               </div>
 
-              <div className="pose-hint" style={{ marginTop: 6 }}>
-                Pins hold cloth to the body (e.g. a collar or waistband) and
-                move with it once saved — starts pinned along the top edge;
-                use the brush to add/remove pins, then save the group.
-              </div>
-              <div className="kf-actions" style={{ marginTop: 4 }}>
-                <button
-                  className={'btn secondary' + (pinTool === 'add' ? ' active' : '')}
-                  onClick={() => onPinTool('add')}
-                >
-                  📌 Pin
-                </button>
-                <button
-                  className={'btn secondary' + (pinTool === 'del' ? ' active' : '')}
-                  onClick={() => onPinTool('del')}
-                >
-                  ✂ Unpin
-                </button>
-                <button
-                  className="btn secondary"
-                  onClick={() => {
-                    saveVertexGroup(selectedMesh.uuid)
-                    setPinToolState(null)
-                    bumpCloth()
-                  }}
-                >
-                  💾 Save Vertex Group
-                </button>
-              </div>
-              <label className="slider-row">
-                <span className="slider-label">Brush size</span>
-                <input
-                  type="range"
-                  min={1}
-                  max={12}
-                  step={1}
-                  value={brushSize}
-                  onChange={(e) => onBrushSize(Number(e.target.value))}
-                />
-                <span>{brushSize}</span>
-              </label>
-              <button
-                className="btn secondary"
-                onClick={() => {
-                  clearPins(selectedMesh.uuid)
-                  bumpCloth()
-                }}
-              >
-                Clear all pins
-              </button>
-            </>
+              {clothOn && (
+                <>
+                  <FxSection step="STEP 1" title="Fabric and drape" label="Fabric and drape">
+                    <FxField label="Fabric">
+                      <select value={fabricPreset} onChange={(e) => onFabricPreset(e.target.value)}>
+                        {Object.keys(FABRIC_PRESETS).map((name) => (
+                          <option key={name} value={name}>
+                            {name[0].toUpperCase() + name.slice(1)}
+                          </option>
+                        ))}
+                      </select>
+                    </FxField>
+                    <FxCheck
+                      checked={clothOn ? isClothShrinkwrap(selectedMesh.uuid) : shrinkwrap}
+                      onChange={onShrinkwrap}
+                      title="Pull the cloth tight against the body instead of hanging loose — good for t-shirts, gloves, anything skin-tight rather than a cape or skirt."
+                    >
+                      Shrinkwrap to body
+                    </FxCheck>
+                    <FxButtons>
+                      <button
+                        className="btn secondary"
+                        onClick={() => {
+                          setClothPlaying(!isClothPlaying())
+                          bumpCloth()
+                        }}
+                      >
+                        {isClothPlaying() ? '❚❚ Pause' : '▶ Drape'}
+                      </button>
+                      <button className="btn secondary" onClick={() => stepClothOnce()}>
+                        ⤼ Step
+                      </button>
+                      <button
+                        className="btn secondary"
+                        onClick={() => {
+                          resetCloth(selectedMesh.uuid)
+                          bumpCloth()
+                        }}
+                      >
+                        ↺ Reset
+                      </button>
+                    </FxButtons>
+                  </FxSection>
+
+                  <FxSection step="STEP 2" title="Pins" label="Pins">
+                    <FxHelp>
+                      Pins hold cloth to the body (e.g. a collar or waistband) and move with it once saved — starts pinned along
+                      the top edge; use the brush to add/remove pins, then save the group.
+                    </FxHelp>
+                    <FxButtons>
+                      <button className={'btn secondary' + (pinTool === 'add' ? ' active' : '')} onClick={() => onPinTool('add')}>
+                        📌 Pin
+                      </button>
+                      <button className={'btn secondary' + (pinTool === 'del' ? ' active' : '')} onClick={() => onPinTool('del')}>
+                        ✂ Unpin
+                      </button>
+                      <button
+                        className="btn secondary"
+                        onClick={() => {
+                          saveVertexGroup(selectedMesh.uuid)
+                          setPinToolState(null)
+                          bumpCloth()
+                        }}
+                      >
+                        💾 Save Vertex Group
+                      </button>
+                    </FxButtons>
+                    <label className="slider-row">
+                      <span className="slider-label">Brush size</span>
+                      <input type="range" min={1} max={12} step={1} value={brushSize} onChange={(e) => onBrushSize(Number(e.target.value))} />
+                      <span className="slider-value">{brushSize}</span>
+                    </label>
+                    <FxButtons>
+                      <button
+                        className="btn secondary"
+                        onClick={() => {
+                          clearPins(selectedMesh.uuid)
+                          bumpCloth()
+                        }}
+                      >
+                        Clear all pins
+                      </button>
+                    </FxButtons>
+                  </FxSection>
+                </>
+              )}
+            </FxEditor>
           )}
-            </>
-          )}
-        </details>
+        </FxCollapse>
       )}
 
       <div className="pose-hint">

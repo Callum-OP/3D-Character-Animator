@@ -3146,13 +3146,13 @@ body {
 }
 
 /* Soft cloth: give the multi-step setup a clearer rhythm without changing its controls. */
-.soft-cloth-editor {
+.fx-editor {
   display: grid;
   gap: 10px;
   margin-top: 8px;
 }
 
-.soft-cloth-intro {
+.fx-intro {
   padding: 12px;
   border: 1px solid rgba(255, 90, 60, 0.22);
   border-radius: 9px;
@@ -3161,29 +3161,29 @@ body {
     linear-gradient(135deg, rgba(255, 90, 60, 0.07), rgba(38, 39, 46, 0.96) 58%);
 }
 
-.soft-cloth-eyebrow,
-.soft-cloth-step {
+.fx-eyebrow,
+.fx-step {
   color: #ff927d;
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.12em;
 }
 
-.soft-cloth-intro h3 {
+.fx-intro h3 {
   margin: 4px 0 5px;
   color: var(--text);
   font-size: 15px;
   font-weight: 650;
 }
 
-.soft-cloth-intro p {
+.fx-intro p {
   margin: 0;
   color: #b7b8c0;
   font-size: 11px;
   line-height: 1.5;
 }
 
-.soft-cloth-intro-note {
+.fx-intro-note {
   display: inline-flex;
   margin-top: 9px;
   padding: 4px 7px;
@@ -3194,7 +3194,7 @@ body {
   font-size: 10px;
 }
 
-.soft-cloth-alert {
+.fx-alert {
   padding: 9px 10px;
   border: 1px solid rgba(224, 160, 48, 0.34);
   border-radius: 7px;
@@ -3204,8 +3204,8 @@ body {
   line-height: 1.45;
 }
 
-.soft-cloth-effects,
-.soft-cloth-add {
+.fx-effects,
+.fx-add {
   min-width: 0;
   padding: 11px;
   border: 1px solid var(--panel-border);
@@ -3213,7 +3213,7 @@ body {
   background: linear-gradient(145deg, rgba(39, 40, 47, 0.95), rgba(30, 31, 36, 0.96));
 }
 
-.soft-cloth-section-heading {
+.fx-section-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -3221,19 +3221,19 @@ body {
   margin-bottom: 9px;
 }
 
-.soft-cloth-section-heading h4 {
+.fx-section-heading h4 {
   margin: 2px 0 0;
   color: var(--text);
   font-size: 12px;
   font-weight: 650;
 }
 
-.soft-cloth-step {
+.fx-step {
   color: var(--text-dim);
   font-size: 8px;
 }
 
-.soft-cloth-count {
+.fx-count {
   display: grid;
   width: 23px;
   height: 23px;
@@ -3247,7 +3247,7 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-.soft-cloth-zone {
+.fx-zone {
   margin-top: 7px;
   padding: 0 9px 9px;
   border: 1px solid rgba(255, 255, 255, 0.07);
@@ -3255,16 +3255,16 @@ body {
   background: rgba(15, 16, 20, 0.24);
 }
 
-.soft-cloth-zone[open] {
+.fx-zone[open] {
   border-color: rgba(255, 90, 60, 0.24);
   background: rgba(15, 16, 20, 0.36);
 }
 
-.soft-cloth-zone.is-disabled {
+.fx-zone.is-disabled {
   opacity: 0.65;
 }
 
-.soft-cloth-zone-summary {
+.fx-zone-summary {
   display: flex;
   min-height: 38px;
   align-items: center;
@@ -3275,11 +3275,11 @@ body {
   font-size: 11px;
 }
 
-.soft-cloth-zone-summary::marker {
+.fx-zone-summary::marker {
   color: var(--text-dim);
 }
 
-.soft-cloth-zone-title {
+.fx-zone-title {
   display: inline-block;
   min-width: 0;
   padding: 3px 7px;
@@ -3290,12 +3290,12 @@ body {
   overflow-wrap: anywhere;
 }
 
-.soft-cloth-zone-title.is-swing {
+.fx-zone-title.is-swing {
   background: rgba(93, 157, 224, 0.14);
   color: #9dc8f4;
 }
 
-.soft-cloth-zone-area {
+.fx-zone-area {
   padding: 2px 6px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.06);
@@ -3305,7 +3305,7 @@ body {
   white-space: nowrap;
 }
 
-.soft-cloth-zone-actions {
+.fx-zone-actions {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -3316,48 +3316,48 @@ body {
   border-bottom: 1px solid rgba(255, 255, 255, 0.07);
 }
 
-.soft-cloth-zone-actions > span {
+.fx-zone-actions > span {
   display: inline-flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 5px;
 }
 
-.soft-cloth-zone-actions .btn {
+.fx-zone-actions .btn {
   width: auto;
   min-height: 27px;
   padding: 5px 8px;
   font-size: 10px;
 }
 
-.soft-cloth-fields {
+.fx-fields {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 0 10px;
   min-width: 0;
 }
 
-.soft-cloth-fields > * {
+.fx-fields > * {
   min-width: 0;
 }
 
-.soft-cloth-fields > .radio-hint {
+.fx-fields > .radio-hint {
   grid-column: 1;
 }
 
-.soft-cloth-editor .field {
+.fx-editor .field {
   margin-top: 8px;
 }
 
-.soft-cloth-editor .field > span {
+.fx-editor .field > span {
   display: block;
   margin-bottom: 4px;
   color: var(--text-dim);
   font-size: 10px;
 }
 
-.soft-cloth-editor .field select,
-.soft-cloth-editor .field input[type='text'] {
+.fx-editor .field select,
+.fx-editor .field input[type='text'] {
   width: 100%;
   min-height: 32px;
   padding: 6px 8px;
@@ -3369,23 +3369,23 @@ body {
   font-size: 11px;
 }
 
-.soft-cloth-editor .field select:focus-visible,
-.soft-cloth-editor .field input[type='text']:focus-visible {
+.fx-editor .field select:focus-visible,
+.fx-editor .field input[type='text']:focus-visible {
   outline: 1px solid var(--accent);
   outline-offset: 1px;
 }
 
-.soft-cloth-editor .slider-row {
+.fx-editor .slider-row {
   grid-template-columns: minmax(74px, 0.75fr) minmax(40px, 1fr) 40px;
   column-gap: 7px;
   padding: 5px 0;
 }
 
-.soft-cloth-editor .slider-label {
+.fx-editor .slider-label {
   font-size: 10px;
 }
 
-.soft-cloth-picking {
+.fx-picking {
   margin-top: 10px;
   padding: 9px;
   border: 1px solid rgba(43, 214, 255, 0.2);
@@ -3393,31 +3393,31 @@ body {
   background: rgba(43, 214, 255, 0.045);
 }
 
-.soft-cloth-help {
+.fx-help {
   margin: 3px 0 7px;
   color: var(--text-dim);
   font-size: 10px;
   line-height: 1.5;
 }
 
-.soft-cloth-footer {
+.fx-footer {
   display: flex;
   gap: 7px;
   margin-top: 12px;
 }
 
-.soft-cloth-footer .btn {
+.fx-footer .btn {
   min-height: 34px;
   font-size: 11px;
 }
 
-.soft-cloth-footer .btn:disabled {
+.fx-footer .btn:disabled {
   opacity: 0.42;
   cursor: not-allowed;
   box-shadow: none;
 }
 
-.soft-cloth-footer .btn.secondary {
+.fx-footer .btn.secondary {
   width: auto;
 }
 
@@ -3442,4 +3442,178 @@ body {
 .material-look-adjust > summary {
   cursor: pointer;
   margin-bottom: 6px;
+}
+
+/* Shared card layout (FxCards.jsx). The .fx-* rules above began as Soft cloth's; these add what the other sections need. */
+.fx-editor {
+  /* keep a long list of cards from running into the panel edge */
+  min-width: 0;
+}
+.fx-section-heading > .btn {
+  margin-left: auto;
+  width: auto;
+}
+.fx-section-heading .fx-count {
+  flex: none;
+}
+.fx-check {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 7px 0;
+  color: var(--text);
+  font-size: 11px;
+  cursor: pointer;
+}
+.fx-check input {
+  flex: none;
+}
+.fx-check.is-disabled,
+.fx-check:has(input:disabled) {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.fx-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.fx-buttons .btn {
+  width: auto;
+  min-height: 30px;
+  padding: 5px 10px;
+  font-size: 10.5px;
+}
+.fx-empty {
+  margin-top: 4px;
+  padding: 11px 10px;
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  border-radius: 7px;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: center;
+}
+.fx-footer .btn:not(.secondary) {
+  width: auto;
+}
+.fx-zone .slider-row {
+  grid-template-columns: minmax(74px, 0.75fr) minmax(40px, 1fr) 44px;
+  column-gap: 7px;
+  padding: 5px 0;
+}
+.fx-zone .slider-label {
+  font-size: 10px;
+}
+.fx-zone .field {
+  display: block;
+  margin-top: 8px;
+}
+.fx-zone .field > span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+.fx-zone .field select,
+.fx-zone .field input[type='text'] {
+  width: 100%;
+  min-height: 30px;
+  padding: 5px 8px;
+  border: 1px solid #3b3d46;
+  border-radius: 6px;
+  background: #202127;
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+}
+.fx-list {
+  margin: 6px 0 0;
+  padding-left: 16px;
+  color: var(--text-dim);
+  font-size: 10px;
+  line-height: 1.55;
+}
+.fx-more {
+  margin-top: 8px;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.fx-more > summary {
+  cursor: pointer;
+  padding: 3px 0;
+}
+
+/* a whole tool inside a long panel: one collapsible card with a title and a short hint */
+.fx-card {
+  margin-top: 10px;
+  border: 1px solid var(--panel-border);
+  border-radius: 9px;
+  background: linear-gradient(145deg, rgba(39, 40, 47, 0.95), rgba(30, 31, 36, 0.96));
+}
+.fx-card[open] {
+  border-color: rgba(255, 90, 60, 0.22);
+}
+.fx-card-summary {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding: 0 11px;
+  cursor: pointer;
+  list-style: revert;
+}
+.fx-card-summary::marker {
+  color: var(--text-dim);
+}
+.fx-card-title {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+}
+.fx-card-hint {
+  min-width: 0;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-dim);
+  font-size: 9.5px;
+  font-weight: 500;
+}
+.fx-card-body {
+  padding: 0 11px 11px;
+}
+.fx-card-body > :first-child {
+  margin-top: 2px;
+}
+.fx-card-body .fx-editor {
+  margin-top: 0;
+}
+.fx-toggle {
+  padding: 4px 11px;
+}
+.fx-toggle .fx-check {
+  margin: 6px 0;
+}
+.fx-subhead {
+  margin: 10px 0 2px;
+  color: var(--text-dim);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.fx-subhead:first-child {
+  margin-top: 2px;
+}
+/* a card inside a card (a light maker inside a region's look, say) loses its own frame */
+.fx-effects .fx-editor {
+  margin-top: 6px;
+}
+.fx-effects .fx-effects {
+  padding: 0;
+  border: 0;
+  background: none;
 }

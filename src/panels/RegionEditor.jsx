@@ -1,3 +1,4 @@
+import { FxEditor, FxIntro, FxSection, FxField, FxHelp, FxButtons, FxFooter, FxPicking } from './FxCards.jsx'
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store.js'
 import { applyModelMaterials } from '../three/scene.js'
@@ -234,55 +235,13 @@ export default function RegionEditor({ meshUuid, resolveMesh }) {
   const look = (selected && selected.look) || {}
 
   return (
-    <div style={{ marginTop: 8 }}>
-      <div className="kf-actions">
-        <button
-          className={`btn ${picking ? '' : 'secondary'}`}
-          onClick={() => setPicking((p) => !p)}
-          disabled={regions.length >= MAX_REGIONS && !picking}
-          title="Then click a face of the selected part in the viewport"
-        >
-          {picking ? 'Click the model… (stop)' : '🎯 Pick on model'}
-        </button>
-      </div>
-      {regions.length === 0 && !picking && !seed && (
-        <div className="radio-hint" style={{ marginTop: 6 }}>
-          Pick a headlight, window or stripe on the model to change just that part&apos;s colour, glow and shine.
-        </div>
-      )}
-      {regions.length >= MAX_REGIONS && <div className="radio-hint">Up to {MAX_REGIONS} regions per part.</div>}
-      {message && <div className="radio-hint" style={{ marginTop: 4 }}>{message}</div>}
-
-      {seed && pending && (
-        <div style={{ marginTop: 8, padding: 8, borderRadius: 6, background: 'rgba(255,43,214,0.10)' }}>
-          <label className="slider-row" title={GROW_MODES.find((g) => g.id === mode)?.hint}>
-            <span className="slider-label">Select</span>
-            <select className="select" aria-label="How far to grow the selection" value={mode} onChange={(e) => setMode(e.target.value)}>
-              {GROW_MODES.map((g) => (
-                <option key={g.id} value={g.id} title={g.hint}>
-                  {g.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <div className="radio-hint">{GROW_MODES.find((g) => g.id === mode)?.hint}</div>
-          {(mode === 'color' || mode === 'everywhere') && (
-            <label className="slider-row" title="How far a colour may drift from the one you clicked and still be included">
-              <span className="slider-label">Colour tolerance</span>
-              <input type="range" min={0} max={1} step={0.01} value={tolerance} onChange={(e) => setTolerance(Number(e.target.value))} />
-              <span style={{ minWidth: 34, textAlign: 'right' }}>{tolerance.toFixed(2)}</span>
-            </label>
-          )}
-          <div className="radio-hint">{pending.length} face{pending.length === 1 ? '' : 's'} selected (shown in pink)</div>
-          <div className="kf-actions" style={{ marginTop: 4 }}>
-            <button className="btn" onClick={addRegion} disabled={!pending.length}>Make this a region</button>
-            <button className="btn secondary" onClick={() => { setSeed(null); setPending(null) }}>Clear</button>
-          </div>
-        </div>
-      )}
+    <FxEditor>
+      <FxIntro eyebrow="REGIONS" title="Change just one area of a part" note="Saved with the project · baked into real materials on export">
+        Pick a headlight, window or stripe on the model to change just that area&apos;s colour, glow and shine.
+      </FxIntro>
 
       {regions.length > 0 && (
-        <>
+        <FxSection step="STEP 1" title="Regions on this part" count={regions.length} countLabel={`${regions.length} regions`} label="Regions">
           <div className="obj-list" style={{ marginTop: 10 }}>
             {regions.map((r) => (
               <div
@@ -340,15 +299,55 @@ export default function RegionEditor({ meshUuid, resolveMesh }) {
           </div>
           <p className="obj-row-hint">Click a region to edit it. Right-click (or ⋯) for rename, looks, highlight and more.</p>
           {rowMenu.element}
-        </>
+        </FxSection>
       )}
 
+      <FxSection step={regions.length > 0 ? 'STEP 2' : 'STEP 1'} title="Pick a new region" label="Pick a region">
+        <FxButtons>
+          <button
+            className={`btn ${picking ? '' : 'secondary'}`}
+            onClick={() => setPicking((p) => !p)}
+            disabled={regions.length >= MAX_REGIONS && !picking}
+            title="Then click a face of the selected part in the viewport"
+          >
+            {picking ? 'Click the model… (stop)' : '🎯 Pick on model'}
+          </button>
+        </FxButtons>
+        {regions.length >= MAX_REGIONS && <FxHelp>Up to {MAX_REGIONS} regions per part.</FxHelp>}
+        {message && <FxHelp>{message}</FxHelp>}
+
+        {seed && pending && (
+          <FxPicking>
+            <FxField label="Select" title={GROW_MODES.find((g) => g.id === mode)?.hint}>
+              <select aria-label="How far to grow the selection" value={mode} onChange={(e) => setMode(e.target.value)}>
+                {GROW_MODES.map((g) => (
+                  <option key={g.id} value={g.id} title={g.hint}>
+                    {g.label}
+                  </option>
+                ))}
+              </select>
+            </FxField>
+            <FxHelp>{GROW_MODES.find((g) => g.id === mode)?.hint}</FxHelp>
+            {(mode === 'color' || mode === 'everywhere') && (
+              <label className="slider-row" title="How far a colour may drift from the one you clicked and still be included">
+                <span className="slider-label">Colour tolerance</span>
+                <input type="range" min={0} max={1} step={0.01} value={tolerance} onChange={(e) => setTolerance(Number(e.target.value))} />
+                <span className="slider-value">{tolerance.toFixed(2)}</span>
+              </label>
+            )}
+            <FxHelp>{pending.length} face{pending.length === 1 ? '' : 's'} selected (shown in pink)</FxHelp>
+            <FxFooter>
+              <button className="btn secondary" onClick={addRegion} disabled={!pending.length}>Make this a region</button>
+              <button className="btn secondary" onClick={() => { setSeed(null); setPending(null) }}>Clear</button>
+            </FxFooter>
+          </FxPicking>
+        )}
+      </FxSection>
+
       {selected && (
-        <div style={{ marginTop: 8 }}>
-          <label className="slider-row" title="A ready-made look for this region">
-            <span className="slider-label">Look</span>
+        <FxSection step="EDIT" title="Look of this region" label="Region settings">
+          <FxField label="Look" title="A ready-made look for this region">
             <select
-              className="select"
               aria-label="Region look"
               value=""
               onChange={(e) => {
@@ -366,9 +365,9 @@ export default function RegionEditor({ meshUuid, resolveMesh }) {
               ))}
               <option value="__original">Original (as the model was)</option>
             </select>
-          </label>
+          </FxField>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+          <FxButtons>
             {COLOUR_MODES.map(([id, label]) => (
               <button
                 key={id}
@@ -381,7 +380,7 @@ export default function RegionEditor({ meshUuid, resolveMesh }) {
             {look.mode && (
               <input type="color" className="color-control-swatch" aria-label="Region colour" value={look.color || '#ffffff'} onChange={(e) => patchLook({ color: e.target.value })} />
             )}
-          </div>
+          </FxButtons>
 
           <label className="slider-row" title="Makes the region give off its own light, so it stays bright in the dark">
             <span className="slider-label">Glow</span>
@@ -396,8 +395,8 @@ export default function RegionEditor({ meshUuid, resolveMesh }) {
             />
           </label>
 
-          <details style={{ marginTop: 6 }}>
-            <summary style={{ cursor: 'pointer' }}>Shine (roughness, metalness)</summary>
+          <details className="fx-more">
+            <summary>Shine (roughness, metalness)</summary>
             {[['roughness', 'Roughness'], ['metalness', 'Metalness']].map(([key, label]) => (
               <label key={key} className="slider-row" title={`${label} (Studio / Realistic styles)`}>
                 <span className="slider-label">{label}</span>
@@ -409,8 +408,8 @@ export default function RegionEditor({ meshUuid, resolveMesh }) {
             <div className="radio-hint">Roughness and metalness show in Studio / Realistic styles; colour and glow show in every style.</div>
           </details>
 
-          <details style={{ marginTop: 6 }} open={lightOpen} onToggle={(e) => setLightOpen(e.currentTarget.open)}>
-            <summary style={{ cursor: 'pointer' }}>Turn into a light</summary>
+          <details className="fx-more" open={lightOpen} onToggle={(e) => setLightOpen(e.currentTarget.open)}>
+            <summary>Turn into a light</summary>
             <LightFromPart
               key={selected.id}
               uuids={[meshUuid]}
@@ -422,8 +421,8 @@ export default function RegionEditor({ meshUuid, resolveMesh }) {
               }}
             />
           </details>
-        </div>
+        </FxSection>
       )}
-    </div>
+    </FxEditor>
   )
 }

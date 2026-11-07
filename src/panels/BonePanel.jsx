@@ -1,3 +1,4 @@
+import { FxCollapse, FxEditor, FxIntro, FxSection, FxItem, FxItemActions, FxField, FxCheck, FxHelp, FxButtons, FxEmpty } from './FxCards.jsx'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store.js'
 import {
@@ -247,6 +248,7 @@ export default function BonePanel() {
           : 'Click a dot on the character, then drag the coloured ring to bend that joint.'}
       </p>
 
+      <FxCollapse title="Pose controls" hint={boneViewMode === 'parts' ? 'body parts' : 'joint controls'} defaultOpen>
       <div className="seg" style={{ marginTop: 4, marginBottom: 14 }} title="Bones: pick and bend individual joints. Body Parts: click a whole limb and move it — the joints needed adjust automatically.">
         <button
           className={'seg-btn' + (boneViewMode === 'bones' ? ' active' : '')}
@@ -431,6 +433,9 @@ export default function BonePanel() {
         </div>
       )}
 
+      </FxCollapse>
+
+      <FxCollapse title="Bones" hint={`${visibleBones.length} joints`} defaultOpen>
       <input
         className="bone-filter"
         type="text"
@@ -493,192 +498,199 @@ export default function BonePanel() {
           {selectedBoneNames.length} joints selected — drag the gizmo to rotate or move them together
         </div>
       )}
+      </FxCollapse>
 
-      <h2 style={{ marginTop: 18 }}>Bone Physics</h2>
-      <p className="panel-hint">
-        Select a bone above, then add a chain. Dangle suits hair, ties and accessories; rigged cloth suits
-        bone-weighted capes, sleeves and loose clothing. Each chain can optionally collide with the model or other bones.
-      </p>
+      <FxCollapse title="Bone physics" hint={dangleChains.length ? `${dangleChains.length} chain${dangleChains.length === 1 ? '' : 's'}` : 'swing and drape'}>
+      <FxEditor style={{ marginTop: 0 }} aria-label="Bone physics">
+        <FxIntro eyebrow="BONE PHYSICS" title="Make bones swing and drape" note="Runs during playback · paused or scrubbed frames show the clean pose">
+          Select a bone above, then add a chain. Dangle suits hair, ties and accessories; rigged cloth suits bone-weighted
+          capes, sleeves and loose clothing. Each chain can optionally collide with the model or other bones.
+        </FxIntro>
 
-      <label className="row" style={{ marginBottom: 10 }}>
-        <input type="checkbox" checked={dangleEnabled} onChange={(e) => setDangleEnabled(e.target.checked)} />
-        <span>Enable bone physics</span>
-      </label>
-
-      <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
-        <button
-          className="btn secondary"
-          onClick={() => onAddDangleChain('dangle')}
-          disabled={!selectedBoneNames.length && !selectedBoneName}
-          title="Add the selected bone(s) and their children as a swinging dangle chain"
-        >
-          Add selected as dangle
-        </button>
-        <button
-          className="btn secondary"
-          onClick={() => onAddDangleChain('cloth')}
-          disabled={!selectedBoneNames.length && !selectedBoneName}
-          title="Add the selected bone(s) and their children as a softer rigged-cloth chain"
-        >
-          Add selected as rigged cloth
-        </button>
-      </div>
-
-      {dangleSelectionPreview.length > 0 && (
-        <details className="dangle-bone-list" style={{ marginTop: 6 }}>
-          <summary>
-            Preview: {dangleSelectionPreview.length} selected bone{dangleSelectionPreview.length === 1 ? '' : 's'}
-          </summary>
-          <ul>
-            {dangleSelectionPreview.map((line, i) => (
-              <li key={i}>{line}</li>
-            ))}
-          </ul>
-        </details>
-      )}
-
-      {dangleChains.length === 0 ? (
-        <div className="empty" style={{ marginTop: 10 }}>
-          No bone physics chains yet — select a bone above and add one.
+        <div className="fx-effects fx-toggle">
+          <FxCheck checked={dangleEnabled} onChange={setDangleEnabled} title="Switch every bone physics chain on or off">
+            Enable bone physics
+          </FxCheck>
         </div>
-      ) : (
-        <div style={{ marginTop: 10 }}>
-          {dangleChains.map((chain) => (
-            <details className="dangle-chain" key={chain.id} style={{ marginBottom: 10, paddingBottom: 8, borderBottom: '1px solid var(--border, #333)' }}>
-              <summary className="dangle-chain-summary">
-                {chain.name} · {chain.type === 'cloth' ? 'Rigged cloth' : 'Dangle'} ({chain.boneNames.length} bone{chain.boneNames.length === 1 ? '' : 's'})
-              </summary>
 
-              <label className="row" style={{ marginTop: 8 }}>
-                <span>Physics type</span>
-                <select
-                  aria-label={`${chain.name} physics type`}
-                  value={chain.type === 'cloth' ? 'cloth' : 'dangle'}
-                  onChange={(e) => {
-                    const type = e.target.value
-                    updateDangleChain(chain.id, {
-                      type,
-                      stiffness: type === 'cloth' ? 0.4 : 0.15,
-                      gravity: type === 'cloth' ? 0.35 : 1,
-                      damping: type === 'cloth' ? 0.55 : 0.8,
-                    })
-                  }}
-                >
-                  <option value="dangle">Dangle</option>
-                  <option value="cloth">Rigged cloth</option>
-                </select>
-              </label>
+        {dangleChains.length > 0 && (
+          <FxSection step="STEP 1" title="Chains on this character" count={dangleChains.length} countLabel={`${dangleChains.length} chains`} label="Bone physics chains">
+            {dangleChains.map((chain) => (
+              <FxItem
+                key={chain.id}
+                title={chain.name}
+                tone={chain.type === 'cloth' ? 'swing' : undefined}
+                pills={[chain.type === 'cloth' ? 'Rigged cloth' : 'Dangle', `${chain.boneNames.length} bone${chain.boneNames.length === 1 ? '' : 's'}`]}
+              >
+                <FxItemActions>
+                  <button className="btn secondary" onClick={() => resetActiveDangle(chain.id)} title="Snap this chain back onto the current pose">
+                    Reset
+                  </button>
+                  <button className="btn secondary" onClick={() => removeDangleChain(chain.id)} title="Remove this chain" aria-label="Remove this chain">
+                    ×
+                  </button>
+                </FxItemActions>
 
-              <div className="row" style={{ justifyContent: 'flex-end', marginTop: 8 }}>
-                <button className="btn secondary" onClick={() => resetActiveDangle(chain.id)} title="Snap this chain back onto the current pose">
-                  Reset
-                </button>
-                <button className="btn secondary" onClick={() => removeDangleChain(chain.id)} title="Remove this dangle chain">
-                  Remove
-                </button>
-              </div>
+                <FxField label="Physics type">
+                  <select
+                    aria-label={`${chain.name} physics type`}
+                    value={chain.type === 'cloth' ? 'cloth' : 'dangle'}
+                    onChange={(e) => {
+                      const type = e.target.value
+                      updateDangleChain(chain.id, {
+                        type,
+                        stiffness: type === 'cloth' ? 0.4 : 0.15,
+                        gravity: type === 'cloth' ? 0.35 : 1,
+                        damping: type === 'cloth' ? 0.55 : 0.8,
+                      })
+                    }}
+                  >
+                    <option value="dangle">Dangle</option>
+                    <option value="cloth">Rigged cloth</option>
+                  </select>
+                </FxField>
 
-              <details className="dangle-bone-list">
-                <summary>{chain.boneNames.length} bone{chain.boneNames.length === 1 ? '' : 's'} — view list</summary>
-                <ul>
-                  {chain.boneNames.map((n) => (
-                    <li key={n}>{n}</li>
-                  ))}
-                </ul>
-              </details>
+                <details className="fx-more">
+                  <summary>{chain.boneNames.length} bone{chain.boneNames.length === 1 ? '' : 's'} — view list</summary>
+                  <ul className="fx-list">
+                    {chain.boneNames.map((n) => (
+                      <li key={n}>{n}</li>
+                    ))}
+                  </ul>
+                </details>
 
-              <label className="row" title="Keep this chain's bone tips away from nearby skeleton bones.">
-                <input
-                  type="checkbox"
+                <FxCheck
                   checked={chain.collideWithBones === true}
-                  onChange={(e) => updateDangleChain(chain.id, { collideWithBones: e.target.checked })}
-                />
-                <span>Collide with other bones</span>
-              </label>
-              <label className="row" title="Use visible model meshes as a lightweight barrier for this chain.">
-                <input
-                  type="checkbox"
+                  onChange={(v) => updateDangleChain(chain.id, { collideWithBones: v })}
+                  title="Keep this chain's bone tips away from nearby skeleton bones."
+                >
+                  Collide with other bones
+                </FxCheck>
+                <FxCheck
                   checked={chain.collideWithMesh === true}
-                  onChange={(e) => updateDangleChain(chain.id, { collideWithMesh: e.target.checked })}
-                />
-                <span>Collide with other meshes</span>
-              </label>
-              <label className="row" title="Use the lightweight collision proxy for mesh faces mainly weighted to dangle bones.">
-                <input
-                  type="checkbox"
+                  onChange={(v) => updateDangleChain(chain.id, { collideWithMesh: v })}
+                  title="Use visible model meshes as a lightweight barrier for this chain."
+                >
+                  Collide with other meshes
+                </FxCheck>
+                <FxCheck
                   checked={chain.collideWithSelf === true}
-                  onChange={(e) => updateDangleChain(chain.id, { collideWithSelf: e.target.checked })}
-                />
-                <span>Collide with self</span>
-              </label>
+                  onChange={(v) => updateDangleChain(chain.id, { collideWithSelf: v })}
+                  title="Use the lightweight collision proxy for mesh faces mainly weighted to dangle bones."
+                >
+                  Collide with self
+                </FxCheck>
 
-              <label className="slider-row">
-                <span className="slider-label" title="How strongly it springs back to the animated pose. Low = loose and floppy, high = barely moves.">
-                  Stiffness
-                </span>
-                <input
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  value={chain.stiffness}
-                  onChange={(e) => updateDangleChain(chain.id, { stiffness: Number(e.target.value) })}
-                />
-                <EditableValue
-                  value={chain.stiffness}
-                  min={0}
-                  max={1}
-                  onChange={(v) => updateDangleChain(chain.id, { stiffness: v })}
-                  format={(v) => v.toFixed(2)}
-                  label="Stiffness"
-                />
-              </label>
+                <label className="slider-row">
+                  <span className="slider-label" title="How strongly it springs back to the animated pose. Low = loose and floppy, high = barely moves.">
+                    Stiffness
+                  </span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={chain.stiffness}
+                    onChange={(e) => updateDangleChain(chain.id, { stiffness: Number(e.target.value) })}
+                  />
+                  <EditableValue
+                    value={chain.stiffness}
+                    min={0}
+                    max={1}
+                    onChange={(v) => updateDangleChain(chain.id, { stiffness: v })}
+                    format={(v) => v.toFixed(2)}
+                    label="Stiffness"
+                  />
+                </label>
 
-              <label className="slider-row">
-                <span className="slider-label" title="How strongly gravity pulls it down">Gravity</span>
-                <input
-                  type="range"
-                  min={0}
-                  max={3}
-                  step={0.05}
-                  value={chain.gravity}
-                  onChange={(e) => updateDangleChain(chain.id, { gravity: Number(e.target.value) })}
-                />
-                <EditableValue
-                  value={chain.gravity}
-                  min={0}
-                  max={3}
-                  onChange={(v) => updateDangleChain(chain.id, { gravity: v })}
-                  format={(v) => v.toFixed(2)}
-                  label="Gravity"
-                />
-              </label>
+                <label className="slider-row">
+                  <span className="slider-label" title="How strongly gravity pulls it down">Gravity</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={3}
+                    step={0.05}
+                    value={chain.gravity}
+                    onChange={(e) => updateDangleChain(chain.id, { gravity: Number(e.target.value) })}
+                  />
+                  <EditableValue
+                    value={chain.gravity}
+                    min={0}
+                    max={3}
+                    onChange={(v) => updateDangleChain(chain.id, { gravity: v })}
+                    format={(v) => v.toFixed(2)}
+                    label="Gravity"
+                  />
+                </label>
 
-              <label className="slider-row">
-                <span className="slider-label" title="How long it keeps swinging before settling. Low = stops fast, high = keeps swaying.">
-                  Damping
-                </span>
-                <input
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  value={chain.damping}
-                  onChange={(e) => updateDangleChain(chain.id, { damping: Number(e.target.value) })}
-                />
-                <EditableValue
-                  value={chain.damping}
-                  min={0}
-                  max={1}
-                  onChange={(v) => updateDangleChain(chain.id, { damping: v })}
-                  format={(v) => v.toFixed(2)}
-                  label="Damping"
-                />
-              </label>
+                <label className="slider-row">
+                  <span className="slider-label" title="How long it keeps swinging before settling. Low = stops fast, high = keeps swaying.">
+                    Damping
+                  </span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={chain.damping}
+                    onChange={(e) => updateDangleChain(chain.id, { damping: Number(e.target.value) })}
+                  />
+                  <EditableValue
+                    value={chain.damping}
+                    min={0}
+                    max={1}
+                    onChange={(v) => updateDangleChain(chain.id, { damping: v })}
+                    format={(v) => v.toFixed(2)}
+                    label="Damping"
+                  />
+                </label>
+              </FxItem>
+            ))}
+          </FxSection>
+        )}
+
+        <FxSection step={dangleChains.length > 0 ? 'STEP 2' : 'STEP 1'} title="Add a chain" label="Add a bone physics chain">
+          <FxHelp>
+            {selectedBoneNames.length || selectedBoneName
+              ? `${selectedBoneNames.length || 1} bone${(selectedBoneNames.length || 1) === 1 ? '' : 's'} selected. Their child bones join the chain.`
+              : 'Select one or more bones in the list above (or click their dots), then add them as a chain.'}
+          </FxHelp>
+          <FxButtons>
+            <button
+              className="btn secondary"
+              onClick={() => onAddDangleChain('dangle')}
+              disabled={!selectedBoneNames.length && !selectedBoneName}
+              title="Add the selected bone(s) and their children as a swinging dangle chain"
+            >
+              Add selected as dangle
+            </button>
+            <button
+              className="btn secondary"
+              onClick={() => onAddDangleChain('cloth')}
+              disabled={!selectedBoneNames.length && !selectedBoneName}
+              title="Add the selected bone(s) and their children as a softer rigged-cloth chain"
+            >
+              Add selected as rigged cloth
+            </button>
+          </FxButtons>
+
+          {dangleSelectionPreview.length > 0 && (
+            <details className="fx-more">
+              <summary>
+                Preview: {dangleSelectionPreview.length} selected bone{dangleSelectionPreview.length === 1 ? '' : 's'}
+              </summary>
+              <ul className="fx-list">
+                {dangleSelectionPreview.map((line, i) => (
+                  <li key={i}>{line}</li>
+                ))}
+              </ul>
             </details>
-          ))}
-        </div>
-      )}
+          )}
+
+          {dangleChains.length === 0 && <FxEmpty>No bone physics chains yet — select a bone above and add one.</FxEmpty>}
+        </FxSection>
+      </FxEditor>
+      </FxCollapse>
 
       <IkPinsSection />
 
