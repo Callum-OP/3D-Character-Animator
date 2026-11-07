@@ -248,3 +248,13 @@ electron/                # Electron desktop shell
 build/                   # packaging resources (app icon, Store tile images)
 scripts/                 # itch.io packaging, Electron dev runner, Store bundling
 ```
+
+## Future Work
+
+### New Packager
+Changing the packager for the app? 
+Originally Tauri had been used briefly but encountered issues with some of the keyboard controls and features not being accessible such as zoom and scroll and was unable to find an alternative way to get them working so Electron was used instead. While Electron works at keeping the app exactly how it should look and work on the web it increases the size of the app and increases memory usage, with this being a low memory app decreasing memory usage is important. Recently other previously Electron applications like Discord have been able to rebuild their client in Rust decreasing memory usage and file size. If something similar could be done for this app or an alternative low memory packager be found then it would be worth doing in the future especially if memory begins to increase as more features are added.
+
+### Auto Rigger
+Implementing an Auto Rigger directly into the app? 
+This had been attempted in previous projects before but found not as much success, would need to see how to make a good accurate auto rig feature that works on most models and can be implemented cleanly into this app. Could even try expanding it further to include not just the body but face as well. It might not be possible to make a perfect auto rigger so alternatively allow users to directly test and adjust the rig and weights within the app so they can get it perfect.
