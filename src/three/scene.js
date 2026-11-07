@@ -1325,6 +1325,8 @@ export async function loadModelFile(file, { addNew = false } = {}) {
     // Only the first character establishes the initial viewport. Adding or
     // replacing another character must leave the user's current view alone.
     setActiveCharacter(id, parsed, { frame: shouldFrameInitialCharacter, isNewLoad: true })
+    const activeCharacter = useStore.getState()
+    setFlattenerConfig(id, parsed, activeCharacter.flattenerEnabled, activeCharacter.flatteners)
     if (isAddition) recordCharacterAdded(id, previousCharacterState)
 
     requestRender()
