@@ -493,12 +493,30 @@ export function partTargets(uuid, state = useStore.getState()) {
   return sel.length > 1 && sel.includes(uuid) ? [...sel] : [uuid]
 }
 
-// Transparency / ink outline / casts shadows of one or more parts — shared by the parts list
-// menu and the viewport right-click menu in Mesh mode.
+// Per-part Look. A part's own shading on top of the scene's style: Full follows the Look panel, Soft gives
+// gentler shadows in the Cartoon style, Flat ignores the lighting altogether.
+export const PART_SHADING_OPTIONS = [
+  { value: 'full', label: 'Match scene' },
+  { value: 'soft', label: 'Soft shadows' },
+  { value: 'flat', label: 'Flat colour' },
+]
+
+// The look / light-and-shadow switches of one or more parts — the part counterpart of objectSettingItems, shared
+// by the parts list menu (partMenu) and the viewport right-click menu in Mesh mode, so both show the same
+// entries in the same state and do the same thing.
 export function partSettingItems(uuids, state = useStore.getState()) {
   const ov = state.meshOverrides[uuids[0]] || {}
   const alphaParts = uuids.filter((u) => meshHasAlpha(u))
-  return [
+  const shading = ov.shading || 'full'
+
+  const look = [
+    {
+      label: 'Look',
+      value: PART_SHADING_OPTIONS.find((o) => o.value === shading)?.label,
+      hint: "How this part is shaded — 'Match scene' follows the Look panel, Flat ignores the lighting for this part only",
+      children: PART_SHADING_OPTIONS.map((o) => ({ id: 'shade:' + o.value, label: o.label, checked: shading === o.value })),
+    },
+    { id: 'outline', label: 'Ink outline', checked: ov.outline !== false, hint: 'Draw the ink outline around this part (needs outlines on in the Lighting tab)' },
     ...(alphaParts.length
       ? [{
           id: 'alpha',
@@ -507,8 +525,6 @@ export function partSettingItems(uuids, state = useStore.getState()) {
           hint: 'Off = this part is drawn solid. Switch off a part whose see-through texture shows things behind it that should be hidden; leave on for glass, hair, lashes.',
         }]
       : []),
-    { id: 'outline', label: 'Ink outline', checked: ov.outline !== false, hint: 'Draw the ink outline around this part (needs outlines on in the Lighting tab)' },
-    { id: 'cast', label: 'Casts shadows', checked: ov.castShadow !== false, hint: 'Off = this part throws no shadow, even if its object does' },
     // Only meaningful once the character has a flattener.
     ...(state.flatteners && state.flatteners.length
       ? [
@@ -519,11 +535,38 @@ export function partSettingItems(uuids, state = useStore.getState()) {
         ]
       : []),
   ]
+
+  const shadow = [
+    { id: 'cast', label: 'Casts shadows', checked: ov.castShadow !== false, hint: 'Off = this part throws no shadow, even if its object does' },
+    {
+      id: 'receive',
+      label: 'Receives shadows',
+      checked: !ov.shadowImmune,
+      hint: 'Off = shadows from other objects never fall on this part (Night mode still applies)',
+    },
+    {
+      id: 'rim',
+      label: 'Ignore rim lighting',
+      checked: !!ov.rimImmune,
+      hint: "On = the edge highlight from the Lighting tab's rim light never touches this part",
+    },
+    {
+      id: 'night',
+      label: 'Darkens at night',
+      checked: !ov.nightImmune,
+      hint: state.night?.enabled ? 'Off = this part stays in daylight when Night mode is on' : 'Only matters while Night mode is on',
+    },
+  ]
+  return { look, shadow }
 }
 
-// Returns true when `id` was one of the three switches above.
+// Runs one of the switches above on every part. Returns true when `id` was one of them.
 export function runPartSetting(id, uuids, state = useStore.getState()) {
   const ov = state.meshOverrides[uuids[0]] || {}
+  if (id.startsWith('shade:')) {
+    setPartLook(uuids, { shading: id.slice(6) })
+    return true
+  }
   if (id === 'alpha') {
     const alphaParts = uuids.filter((u) => meshHasAlpha(u))
     if (alphaParts.length) setPartLook(alphaParts, { alpha: ov.alpha === false })
@@ -537,6 +580,18 @@ export function runPartSetting(id, uuids, state = useStore.getState()) {
     setPartLook(uuids, { castShadow: ov.castShadow === false })
     return true
   }
+  if (id === 'receive') {
+    setPartLook(uuids, { shadowImmune: !ov.shadowImmune })
+    return true
+  }
+  if (id === 'rim') {
+    setPartLook(uuids, { rimImmune: !ov.rimImmune })
+    return true
+  }
+  if (id === 'night') {
+    setPartLook(uuids, { nightImmune: !ov.nightImmune })
+    return true
+  }
   if (id === 'flatten') {
     setPartLook(uuids, { flatten: ov.flatten === false })
     return true
@@ -548,21 +603,26 @@ export function runPartSetting(id, uuids, state = useStore.getState()) {
   return false
 }
 
-// ctx: { isCharacterPart(uuid), keyPart(uuid), extract(uuids, removeOriginals), extracting }
+// ctx: { nameOf(uuid), startRename(uuid), isCharacterPart(uuid), keyPart(uuid), extract(uuids, removeOriginals), extracting }
 export function partMenu(uuids, ctx, state = useStore.getState()) {
   const multi = uuids.length > 1
   const first = uuids[0]
   const hidden = state.meshOverrides[first]?.visible === false
   const canKey = !multi && ctx.isCharacterPart?.(first)
 
-  const look = partSettingItems(uuids, state)
+  const { look, shadow } = partSettingItems(uuids, state)
 
+  // Laid out like an object's menu: name, rename / hide, then Look, then Light & shadow.
   const items = [
     { header: multi ? plural(uuids.length, 'part') + ' selected' : ctx.nameOf?.(first) || 'Part' },
+    ...(!multi ? [{ id: 'rename', label: 'Rename', shortcut: 'Dbl-click' }] : []),
     { id: 'visibility', label: hidden ? 'Show' : 'Hide', shortcut: 'H' },
     { separator: true },
     ...look,
-    ...(multi ? [{ id: 'only', label: 'Select only this part' }] : []),
+    { separator: true },
+    { header: 'Light & shadow' },
+    ...shadow,
+    ...(multi ? [{ separator: true }, { id: 'only', label: 'Select only this part' }] : []),
     { separator: true },
     { id: 'reset', label: multi ? `Reset ${uuids.length} parts` : 'Reset part', hint: 'Put the part back where it started' },
     ...(!multi ? [{ id: 'frame', label: 'Frame in viewport', shortcut: 'F' }] : []),
@@ -575,6 +635,7 @@ export function partMenu(uuids, ctx, state = useStore.getState()) {
 
   function run(id) {
     const st = useStore.getState()
+    if (id === 'rename') return ctx.startRename?.(first)
     if (id === 'visibility') {
       if (multi) setMeshesVisibleByUuids(uuids, hidden)
       else setMeshVisibleByUuid(first, hidden)

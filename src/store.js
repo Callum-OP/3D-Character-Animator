@@ -1,3 +1,4 @@
+import { cleanPartName } from './three/partNames.js'
 import { mergeLook } from './three/surfaceMaterials.js'
 import { TEXTURE_LOOK_DEFAULT, presetLook, normalizeMaterialLook } from './three/textureLookOptions.js'
 import { create } from 'zustand'
@@ -780,7 +781,7 @@ export const useStore = create((set) => ({
       return { meshOverrides: write(s.meshOverrides) }
     }),
 
-  // Per-part look switches in one go: { alpha?: bool, outline?: bool, castShadow?: bool }.
+  // Per-part look switches in one go: { alpha?, outline?, castShadow?, shadowImmune?, rimImmune?, nightImmune?, name? }.
   // castShadow only ever stores `false` (the default is "casts"), so a cleared flag leaves the
   // override entry as it was before. A character that isn't the active one keeps its overrides in
   // the roster, so the write goes there.
@@ -793,6 +794,16 @@ export const useStore = create((set) => ({
           if (merged.castShadow !== false) delete merged.castShadow
           if (merged.flatten !== false) delete merged.flatten
           if (merged.flatShade !== false) delete merged.flatShade
+          // Light & shadow switches that only ever store `true` (the default is "off").
+          if (!merged.shadowImmune) delete merged.shadowImmune
+          if (!merged.rimImmune) delete merged.rimImmune
+          if (!merged.nightImmune) delete merged.nightImmune
+          // A renamed part: an empty name goes back to the one the model came with.
+          if ('name' in merged) {
+            const clean = cleanPartName(merged.name)
+            if (clean) merged.name = clean
+            else delete merged.name
+          }
           next[uuid] = merged
         }
         return next
@@ -963,6 +974,9 @@ export const useStore = create((set) => ({
 
   // ---- Mesh editing (Mesh mode) ----
   selectedMeshUuid: null, // "primary" part — last one picked; drives the panel's single-part controls
+  // A part the 3D view's right-click menu asked to rename: the Parts panel turns that row into a text box.
+  partRenameRequest: null,
+  setPartRenameRequest: (uuid) => set({ partRenameRequest: uuid }),
   selectedMeshUuids: [], // full multi-selection (group gizmo); always includes selectedMeshUuid when non-empty
   meshGizmoMode: 'translate', // 'translate' | 'rotate' | 'scale'
   // When on, dragging a shape key also drives same-named shape keys on other

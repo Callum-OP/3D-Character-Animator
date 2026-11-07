@@ -1,3 +1,4 @@
+import { partDisplayName } from '../three/partNames.js'
 import { useStore } from '../store.js'
 import EditableValue from './EditableValue.jsx'
 import { setMeshVisibleByUuid } from '../three/scene.js'
@@ -745,8 +746,8 @@ export default function MaterialPanel() {
               const shading = ov.shading || 'full'
               return (
                 <div key={m.uuid} className={'mesh-row' + (visible ? '' : ' mesh-hidden')}>
-                  <span className="mesh-name" title={m.name}>
-                    {m.name}
+                  <span className="mesh-name" title={partDisplayName(ov, m.name)}>
+                    {partDisplayName(ov, m.name)}
                   </span>
                   <label className="mesh-cell" title="Show / hide this part">
                     <input

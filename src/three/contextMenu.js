@@ -138,12 +138,15 @@ function canMerge(ids, state) {
 function getPartMenuItems(target, state, paste) {
   const count = target.uuids.length
   const hidden = state.meshOverrides[target.uuids[0]]?.visible === false
+  // The same Look / Light & shadow switches the Parts list's menu has (and objects get as "Look & shadow").
+  const { look, shadow } = partSettingItems(target.uuids, state)
   return [
     { id: 'copy', label: 'Copy', shortcut: 'Ctrl+C', hint: "Copy this part's move / rotate / resize" },
     paste,
+    ...(count === 1 ? [{ id: 'rename', label: 'Rename' }] : []),
     { id: 'visibility', label: hidden ? 'Show' : 'Hide', shortcut: 'H' },
     { separator: true },
-    ...partSettingItems(target.uuids, state),
+    { label: 'Look & shadow', children: [...look, { separator: true }, ...shadow] },
     { separator: true },
     { id: 'reset', label: count > 1 ? `Reset ${count} parts` : 'Reset part', hint: 'Put the part back where it started' },
     ...(count === 1 ? [{ id: 'frame', label: 'Frame in viewport', shortcut: 'F' }] : []),
@@ -156,6 +159,11 @@ function getPartMenuItems(target, state, paste) {
 function runPartAction(actionId, target, state) {
   const uuids = target.uuids
   if (runPartSetting(actionId, uuids, state)) return { setting: true }
+  if (actionId === 'rename') {
+    // The Parts panel turns that part's row into a text box.
+    state.setPartRenameRequest(uuids[0])
+    return { rename: true }
+  }
   if (actionId === 'visibility') {
     const visible = state.meshOverrides[uuids[0]]?.visible === false
     if (uuids.length > 1) setMeshesVisibleByUuids(uuids, visible)

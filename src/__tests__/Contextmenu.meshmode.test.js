@@ -49,9 +49,47 @@ describe('right-click in Mesh mode', () => {
     expect(useStore.getState().selectedMeshUuids).toEqual(['a', 'b'])
   })
 
-  it('offers copy, paste, hide, the part look switches, reset, frame and the make-an-object options', () => {
+  it('offers copy, paste, rename, hide, a Look & shadow submenu, reset, frame and the make-an-object options', () => {
     const items = getContextMenuItems({ kind: 'meshes', uuids: ['a'] })
-    expect(labels(items)).toEqual(['Copy', 'Paste', 'Hide', 'Ink outline', 'Casts shadows', 'Reset part', 'Frame in viewport', 'Extract to object', 'Copy to object'])
+    expect(labels(items)).toEqual(['Copy', 'Paste', 'Rename', 'Hide', 'Look & shadow', 'Reset part', 'Frame in viewport', 'Extract to object', 'Copy to object'])
+  })
+
+  it('puts the same switches an object has under Look & shadow', () => {
+    const items = getContextMenuItems({ kind: 'meshes', uuids: ['a'] })
+    const sub = items.find((i) => i.label === 'Look & shadow').children
+    expect(labels(sub)).toEqual(['Look', 'Ink outline', 'Casts shadows', 'Receives shadows', 'Ignore rim lighting', 'Darkens at night'])
+    const look = sub.find((i) => i.label === 'Look')
+    expect(look.children.map((c) => c.label)).toEqual(['Match scene', 'Soft shadows', 'Flat colour'])
+    expect(look.children.find((c) => c.checked).id).toBe('shade:full')
+  })
+
+  it('Rename is for one part at a time, and asks the Parts panel to start renaming it', () => {
+    expect(labels(getContextMenuItems({ kind: 'meshes', uuids: ['a', 'b'] }))).not.toContain('Rename')
+    runContextMenuAction('rename', { kind: 'meshes', uuids: ['a'] })
+    expect(useStore.getState().partRenameRequest).toBe('a')
+  })
+
+  it('the shading, receive-shadow, rim and night switches change just those parts, and undo', async () => {
+    const { performUndo } = await import('../three/undoPriority.js')
+    const both = { kind: 'meshes', uuids: ['a', 'b'] }
+    runContextMenuAction('shade:flat', both)
+    expect(useStore.getState().meshOverrides.b.shading).toBe('flat')
+    runContextMenuAction('receive', { kind: 'meshes', uuids: ['a'] })
+    runContextMenuAction('rim', { kind: 'meshes', uuids: ['a'] })
+    runContextMenuAction('night', { kind: 'meshes', uuids: ['a'] })
+    const a = useStore.getState().meshOverrides.a
+    expect([a.shadowImmune, a.rimImmune, a.nightImmune]).toEqual([true, true, true])
+    expect(useStore.getState().meshOverrides.b.shadowImmune).toBeUndefined()
+    const sub = getContextMenuItems({ kind: 'meshes', uuids: ['a'] }).find((i) => i.label === 'Look & shadow').children
+    expect(sub.find((i) => i.label === 'Receives shadows').checked).toBe(false)
+    expect(sub.find((i) => i.label === 'Ignore rim lighting').checked).toBe(true)
+    runContextMenuAction('receive', { kind: 'meshes', uuids: ['a'] }) // switching it back leaves no stored flag
+    expect(useStore.getState().meshOverrides.a.shadowImmune).toBeUndefined()
+    // quick edits to the same part are one undo step (as when dragging a slider), so one undo puts them all back
+    performUndo(useStore.getState())
+    const back = useStore.getState().meshOverrides.a
+    expect([back.shadowImmune, back.rimImmune, back.nightImmune]).toEqual([undefined, undefined, undefined])
+    expect(back.shading).toBe('flat')
   })
 
   it('the part switches (ink outline, casts shadows) change just that part, and undo', async () => {

@@ -84,3 +84,10 @@ export function setPartLook(uuids, patch, characterId = null) {
   recordOverrideEdit(list, () => useStore.getState().setMeshesLook(list, patch, characterId), characterId)
   applyModelMaterials()
 }
+
+// Rename a part (empty = back to the model's own name) as ONE undo step. The name is kept with the part's
+// other per-part settings, so it saves with the project and is kept when the character is copied.
+export function renamePart(uuid, name, characterId = null) {
+  if (uuid == null) return
+  recordOverrideEdit([uuid], () => useStore.getState().setMeshesLook([uuid], { name }, characterId), characterId)
+}

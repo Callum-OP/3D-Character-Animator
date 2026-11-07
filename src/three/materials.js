@@ -503,9 +503,10 @@ export function syncMeshMaterialFlags(meshes) {
   if (!meshes) return
   for (const mesh of meshes) {
     if (!mesh) continue
-    const immune = !!(mesh.userData && mesh.userData.nightImmune)
-    const shadowImmune = !!(mesh.userData && mesh.userData.shadowImmune)
-    const rimImmune = !!(mesh.userData && mesh.userData.rimImmune)
+    // The object's switch OR this part's own (see the Parts menu's Light & shadow section).
+    const immune = !!(mesh.userData && (mesh.userData.nightImmune || mesh.userData.partNightImmune))
+    const shadowImmune = !!(mesh.userData && (mesh.userData.shadowImmune || mesh.userData.partShadowImmune))
+    const rimImmune = !!(mesh.userData && (mesh.userData.rimImmune || mesh.userData.partRimImmune))
     const arr = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
     for (const m of arr) {
       if (!m) continue
@@ -578,6 +579,10 @@ export function applyMaterials(model, opts) {
     mesh.userData.flatOff = !!(ov && ov.flatten === false) // a part the flattener leaves 3D
     mesh.userData.flatShade = ov && ov.flatShade === false ? 0 : 1 // a part flattened in shape but keeping its own lighting
     mesh.userData.partNoCast = !!(ov && ov.castShadow === false)
+    // Per-part Light & shadow switches (added to the object's own, like casts-shadows above).
+    mesh.userData.partShadowImmune = !!(ov && ov.shadowImmune)
+    mesh.userData.partRimImmune = !!(ov && ov.rimImmune)
+    mesh.userData.partNightImmune = !!(ov && ov.nightImmune)
     mesh.castShadow = !mesh.userData.partNoCast && !mesh.userData.objectNoCast
 
     // Transparency: this mesh's own switch, else the default.

@@ -46,13 +46,14 @@ import PartRigSection from './PartRigSection.jsx'
 import { isRigCapable } from '../three/partRig.js'
 import DecimateEditor from './DecimateEditor.jsx'
 import TextureReduceEditor from './TextureReduceEditor.jsx'
-import { useRowMenu, RowMenuButton } from './rowMenu.jsx'
+import { useRowMenu, RowMenuButton, RowName } from './rowMenu.jsx'
 import { partMenu, partTargets } from './rowMenus.js'
 import LightFromPart from './LightFromPart.jsx'
 import { withGlowRegion } from '../three/glowRegions.js'
 import { meshHasAlpha, refreshSoftCloth } from '../three/scene.js'
 import SoftClothEditor from './SoftClothEditor.jsx'
-import { recordOverrideEdit, setPartLook } from '../three/materialHistory.js'
+import { recordOverrideEdit, setPartLook, renamePart } from '../three/materialHistory.js'
+import { partDisplayName } from '../three/partNames.js'
 
 // Side-panel section for Mesh mode: pick a part of the character (eyes, hair,
 // clothing…) and move, rotate, resize or recolour it. Click a part in the
@@ -78,6 +79,9 @@ export default function MeshPanel() {
   const meshGizmoMode = useStore((s) => s.meshGizmoMode)
   const setMeshGizmoMode = useStore((s) => s.setMeshGizmoMode)
   const meshOverrides = useStore((s) => s.meshOverrides)
+  const partRenameRequest = useStore((s) => s.partRenameRequest)
+  const setPartRenameRequest = useStore((s) => s.setPartRenameRequest)
+  const [renamingUuid, setRenamingUuid] = useState(null)
   const flatteners = useStore((s) => s.flatteners)
   const linkedShapeKeys = useStore((s) => s.linkedShapeKeys)
   const setLinkedShapeKeys = useStore((s) => s.setLinkedShapeKeys)
@@ -150,7 +154,18 @@ export default function MeshPanel() {
   // Row click in the lists below: plain click selects just that part (or, if
   // it's the only one selected, deselects it); Shift/Ctrl/Cmd-click adds or
   // removes it from the selection — the same behaviour as the Objects panel.
+  // A part's name: the one it was given here, else the one it came with in the model file.
+  const labelOf = (uuid, loaded) => partDisplayName(meshOverrides[uuid], loaded)
+
+  // "Rename" in the 3D view's right-click menu: turn that part's row into a text box.
+  useEffect(() => {
+    if (partRenameRequest == null) return
+    setRenamingUuid(partRenameRequest)
+    setPartRenameRequest(null)
+  }, [partRenameRequest])
+
   function onRowClick(e, uuid) {
+    if (e.detail > 1) return // the second click of a double-click (rename) should not toggle the selection again
     const additive = e.shiftKey || e.ctrlKey || e.metaKey
     if (additive) toggleMeshSelection(uuid, true)
     else if (selectedMeshUuids.length <= 1) setSelectedMeshUuid(uuid === selectedMeshUuid ? null : uuid)
@@ -224,7 +239,8 @@ export default function MeshPanel() {
   function buildMenu(uuid) {
     if (!selectedMeshUuids.includes(uuid)) setSelectedMeshUuid(uuid)
     return partMenu(partTargets(uuid), {
-      nameOf: (u) => meshes.find((m) => m.uuid === u)?.name || objectPartGroups.flatMap((g) => g.parts).find((x) => x.uuid === u)?.name,
+      nameOf: (u) => labelOf(u, meshes.find((m) => m.uuid === u)?.name || objectPartGroups.flatMap((g) => g.parts).find((x) => x.uuid === u)?.name),
+      startRename: setRenamingUuid,
       isCharacterPart: (u) => meshes.some((m) => m.uuid === u),
       keyPart: onKeyPart,
       extract: onExtract,
@@ -239,7 +255,7 @@ export default function MeshPanel() {
       <div
         key={part.uuid}
         className={'obj-row' + (selectedMeshUuids.includes(part.uuid) ? ' selected' : '') + (multi && part.uuid === selectedMeshUuid ? ' obj-row-primary' : '')}
-        title={part.name}
+        title={labelOf(part.uuid, part.name)}
         onClick={(e) => onRowClick(e, part.uuid)}
         onContextMenu={(e) => {
           const { items, run } = buildMenu(part.uuid)
@@ -247,9 +263,19 @@ export default function MeshPanel() {
         }}
       >
         <div className="obj-row-main">
-          <span className="obj-name" style={hidden ? { opacity: 0.45 } : undefined}>
-            {part.name}
-          </span>
+          <RowName
+            editing={renamingUuid === part.uuid}
+            value={labelOf(part.uuid, part.name)}
+            style={hidden ? { opacity: 0.45 } : undefined}
+            onCommit={(name) => {
+              renamePart(part.uuid, name)
+              setRenamingUuid(null)
+            }}
+            onCancel={() => setRenamingUuid(null)}
+            onDoubleClick={() => setRenamingUuid(part.uuid)}
+          >
+            {labelOf(part.uuid, part.name)}
+          </RowName>
           <button
             className="obj-eye"
             title={hidden ? 'Show this part' : 'Hide this part'}
@@ -381,8 +407,8 @@ export default function MeshPanel() {
       {selectedMesh && delta && !multi && (
         <div className="joint-controls">
           <div className="joint-header">
-            <span className="joint-name" title={selectedMesh.name}>
-              {selectedMesh.name}
+            <span className="joint-name" title={labelOf(selectedMesh.uuid, selectedMesh.name)}>
+              {labelOf(selectedMesh.uuid, selectedMesh.name)}
             </span>
             {keyCount > 0 && <span className="kf-tag">{keyCount} keys</span>}
             <RowMenuButton
@@ -483,7 +509,7 @@ export default function MeshPanel() {
                           }
                         }
                       }}
-                      title={`Save all shape key values on “${selectedMesh.name}” at the current insert time (Key position in Animate also saves them for the whole character)`}
+                      title={`Save all shape key values on “${labelOf(selectedMesh.uuid, selectedMesh.name)}” at the current insert time (Key position in Animate also saves them for the whole character)`}
                     >
                       Key
                     </button>
@@ -500,7 +526,7 @@ export default function MeshPanel() {
           <div className="joint-header">
             <span className="joint-name">Colour (whole part)</span>
             <span className="joint-parent">
-              {multi ? `${selectedMeshUuids.length} parts` : selectedMesh?.name}
+              {multi ? `${selectedMeshUuids.length} parts` : labelOf(selectedMesh?.uuid, selectedMesh?.name)}
             </span>
           </div>
           <ColorControl
@@ -516,7 +542,7 @@ export default function MeshPanel() {
         <div className="joint-controls" style={{ marginTop: 10 }}>
           <div className="joint-header">
             <span className="joint-name">Part settings</span>
-            <span className="joint-parent">{multi ? `${selectedMeshUuids.length} parts` : selectedMesh?.name}</span>
+            <span className="joint-parent">{multi ? `${selectedMeshUuids.length} parts` : labelOf(selectedMesh?.uuid, selectedMesh?.name)}</span>
           </div>
           {selectedMeshUuids.some((u) => meshHasAlpha(u)) && (
             <label className="slider-row" title="Off = this part is drawn solid, so see-through textures stop showing what is behind them">
@@ -543,6 +569,30 @@ export default function MeshPanel() {
               onChange={(e) => setPartLook(selectedMeshUuids, { castShadow: e.target.checked })}
             />
             Casts shadows
+          </label>
+          <label className="slider-row" title="Off = shadows from other objects never fall on this part">
+            <input
+              type="checkbox"
+              checked={!meshOverrides[selectedMeshUuid]?.shadowImmune}
+              onChange={(e) => setPartLook(selectedMeshUuids, { shadowImmune: !e.target.checked })}
+            />
+            Receives shadows
+          </label>
+          <label className="slider-row" title="On = the edge highlight from the Lighting tab's rim light never touches this part">
+            <input
+              type="checkbox"
+              checked={!!meshOverrides[selectedMeshUuid]?.rimImmune}
+              onChange={(e) => setPartLook(selectedMeshUuids, { rimImmune: e.target.checked })}
+            />
+            Ignore rim lighting
+          </label>
+          <label className="slider-row" title="Off = this part stays in daylight when Night mode is on">
+            <input
+              type="checkbox"
+              checked={!meshOverrides[selectedMeshUuid]?.nightImmune}
+              onChange={(e) => setPartLook(selectedMeshUuids, { nightImmune: !e.target.checked })}
+            />
+            Darkens at night
           </label>
           {flatteners.length > 0 && (
             <label className="slider-row" title="Off = the flattener leaves this part 3D (keep ear tips, hair strands or glasses round)">
