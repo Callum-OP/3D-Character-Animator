@@ -378,7 +378,7 @@ export default function MeshPanel() {
             ))}
           </div>
 
-          <FxButtons>
+          <FxButtons wide>
             <button className="btn secondary" onClick={() => performUndo(useStore.getState())} title="Undo the latest edit (Ctrl+Z)">
               Undo
             </button>
@@ -745,7 +745,7 @@ export default function MeshPanel() {
                     >
                       Shrinkwrap to body
                     </FxCheck>
-                    <FxButtons>
+                    <FxButtons wide>
                       <button
                         className="btn secondary"
                         onClick={() => {
@@ -775,15 +775,22 @@ export default function MeshPanel() {
                       Pins hold cloth to the body (e.g. a collar or waistband) and move with it once saved — starts pinned along
                       the top edge; use the brush to add/remove pins, then save the group.
                     </FxHelp>
-                    <FxButtons>
+                    <FxButtons wide>
                       <button className={'btn secondary' + (pinTool === 'add' ? ' active' : '')} onClick={() => onPinTool('add')}>
                         📌 Pin
                       </button>
                       <button className={'btn secondary' + (pinTool === 'del' ? ' active' : '')} onClick={() => onPinTool('del')}>
                         ✂ Unpin
                       </button>
+                    </FxButtons>
+                    <label className="slider-row">
+                      <span className="slider-label">Brush size</span>
+                      <input type="range" min={1} max={12} step={1} value={brushSize} onChange={(e) => onBrushSize(Number(e.target.value))} />
+                      <span className="slider-value">{brushSize}</span>
+                    </label>
+                    <FxButtons wide>
                       <button
-                        className="btn secondary"
+                        className="btn secondary fx-btn-main"
                         onClick={() => {
                           saveVertexGroup(selectedMesh.uuid)
                           setPinToolState(null)
@@ -792,21 +799,15 @@ export default function MeshPanel() {
                       >
                         💾 Save Vertex Group
                       </button>
-                    </FxButtons>
-                    <label className="slider-row">
-                      <span className="slider-label">Brush size</span>
-                      <input type="range" min={1} max={12} step={1} value={brushSize} onChange={(e) => onBrushSize(Number(e.target.value))} />
-                      <span className="slider-value">{brushSize}</span>
-                    </label>
-                    <FxButtons>
                       <button
                         className="btn secondary"
+                        title="Remove every pin from this part"
                         onClick={() => {
                           clearPins(selectedMesh.uuid)
                           bumpCloth()
                         }}
                       >
-                        Clear all pins
+                        Clear pins
                       </button>
                     </FxButtons>
                   </FxSection>

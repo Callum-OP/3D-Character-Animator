@@ -303,7 +303,7 @@ export default function RegionEditor({ meshUuid, resolveMesh }) {
       )}
 
       <FxSection step={regions.length > 0 ? 'STEP 2' : 'STEP 1'} title="Pick a new region" label="Pick a region">
-        <FxButtons>
+        <FxButtons wide>
           <button
             className={`btn ${picking ? '' : 'secondary'}`}
             onClick={() => setPicking((p) => !p)}

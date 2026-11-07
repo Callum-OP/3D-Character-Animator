@@ -3728,3 +3728,29 @@ body {
 .export-row .seg {
   flex: 0 0 auto;
 }
+
+/* FxButtons layouts: `wide` (even row, .fx-btn-main takes double) and `columns` (even grid). */
+.fx-buttons.is-wide {
+  flex-wrap: nowrap;
+}
+.fx-buttons.is-wide .btn {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.fx-buttons.is-wide .btn.fx-btn-main {
+  flex: 2 1 0;
+}
+.fx-buttons.is-wide + .fx-buttons.is-wide {
+  margin-top: 6px;
+}
+.fx-buttons.is-grid {
+  display: grid;
+  gap: 6px;
+}
+.fx-buttons.is-grid .btn {
+  width: 100%;
+  min-width: 0;
+}
+.fx-footer .btn.fx-btn-main {
+  flex: 1 1 auto;
+}

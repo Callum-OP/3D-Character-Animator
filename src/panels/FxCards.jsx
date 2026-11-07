@@ -84,9 +84,18 @@ export function FxFooter({ children }) {
   return <div className="fx-footer">{children}</div>
 }
 
-// A group of buttons that sits under a form.
-export function FxButtons({ children }) {
-  return <div className="fx-buttons">{children}</div>
+// A group of buttons that sits under a form. By default they are small pills that wrap.
+//   wide     one even row of equal-width buttons; a button with className "fx-btn-main" gets twice the room
+//            (use it for the main action next to its partner, e.g. Pick faces + Clear)
+//   columns  an even grid with that many columns (use it for a set of choices, e.g. presets)
+// Two `wide` rows in a row sit close together, so a pair of rows reads as one tool.
+export function FxButtons({ children, wide = false, columns }) {
+  const cls = `fx-buttons${wide ? ' is-wide' : ''}${columns ? ' is-grid' : ''}`
+  return (
+    <div className={cls} style={columns ? { gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` } : undefined}>
+      {children}
+    </div>
+  )
 }
 
 export function FxCheck({ checked, onChange, children, title, disabled, ariaLabel }) {

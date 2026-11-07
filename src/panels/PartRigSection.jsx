@@ -266,7 +266,7 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
       <FxSection step={editingId ? 'EDIT' : 'STEP 1'} title={editingId ? 'Adjust the selected rig' : 'Pick the faces'} label="Pick faces">
         {!editingId && (
           <>
-            <FxButtons>
+            <FxButtons columns={2}>
               {PRESETS.map((p) => (
                 <button key={p.id} className={`btn ${presetId === p.id ? '' : 'secondary'}`} title={p.hint} onClick={() => choosePreset(p.id)}>
                   {p.label}
@@ -277,13 +277,15 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
           </>
         )}
 
-        <FxButtons>
-          <button className={`btn ${picking ? '' : 'secondary'}`} onClick={() => { setPicking((v) => !v); setMessage('') }}>
+        <FxButtons wide>
+          <button className={`btn fx-btn-main ${picking ? '' : 'secondary'}`} onClick={() => { setPicking((v) => !v); setMessage('') }}>
             {picking ? 'Picking: click the part…' : 'Pick faces'}
           </button>
+          <button className="btn secondary" disabled={!tris.length} onClick={() => setTrisByMesh({})} title="Forget every picked face">Clear</button>
+        </FxButtons>
+        <FxButtons wide>
           <button className="btn secondary" disabled={!trisByMesh[mesh.uuid]?.length} onClick={() => setTrisByMesh((current) => ({ ...current, [mesh.uuid]: resizeSelection(mesh, current[mesh.uuid] || [], 1) }))} title="Add one ring of faces around the primary part's selection">Grow</button>
           <button className="btn secondary" disabled={!trisByMesh[mesh.uuid]?.length} onClick={() => setTrisByMesh((current) => ({ ...current, [mesh.uuid]: resizeSelection(mesh, current[mesh.uuid] || [], -1) }))} title="Take one ring of faces off the primary part's selection">Shrink</button>
-          <button className="btn secondary" disabled={!tris.length} onClick={() => setTrisByMesh({})}>Clear</button>
         </FxButtons>
 
         {picking && (
@@ -354,7 +356,7 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
           </FxCheck>
           <FxCheck checked={addPhysics} onChange={setAddPhysics}>Turn on swing physics for the new bones</FxCheck>
           <FxFooter>
-            <button className="btn secondary" onClick={editingId ? onUpdate : onAdd} disabled={!summary || !!summary.error}>
+            <button className="btn fx-btn-main" onClick={editingId ? onUpdate : onAdd} disabled={!summary || !!summary.error}>
               {editingId ? 'Update bones' : 'Add bones'}
             </button>
             {editingId && <button className="btn secondary" onClick={() => { setEditingId(null); setTrisByMesh({}) }}>Cancel</button>}

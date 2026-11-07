@@ -10,7 +10,7 @@ vi.mock('../three/scene.js', async (importOriginal) => {
 import BonePanel from '../panels/BonePanel.jsx'
 import IkPinsSection from '../panels/IkPinsSection.jsx'
 import FlattenerSection from '../panels/FlattenerSection.jsx'
-import { FxCollapse, FxItem, FxSection, FxCheck } from '../panels/FxCards.jsx'
+import { FxCollapse, FxItem, FxSection, FxCheck, FxButtons } from '../panels/FxCards.jsx'
 import { useStore } from '../store.js'
 
 const st = () => useStore.getState()
@@ -124,5 +124,35 @@ describe('Pose area sections use the card layout', () => {
     expect(screen.getByLabelText('Flattener')).toBeTruthy()
     expect(screen.getByLabelText('Add a flattener')).toBeTruthy()
     expect(screen.getByText('No flattener yet.')).toBeTruthy()
+  })
+})
+
+describe('FxButtons layouts', () => {
+  const rows = (props) => {
+    const { container } = render(
+      <FxButtons {...props}>
+        <button className="btn fx-btn-main">Pick faces</button>
+        <button className="btn secondary">Clear</button>
+      </FxButtons>,
+    )
+    return container.firstChild
+  }
+
+  it('stays a wrapping row of pills by default', () => {
+    const row = rows({})
+    expect(row.className).toBe('fx-buttons')
+    expect(row.style.gridTemplateColumns).toBe('')
+  })
+
+  it('wide makes one even row, and keeps the main button marker for the double-width slot', () => {
+    const row = rows({ wide: true })
+    expect(row.className).toBe('fx-buttons is-wide')
+    expect(row.querySelector('.fx-btn-main').textContent).toBe('Pick faces')
+  })
+
+  it('columns makes an even grid with that many columns', () => {
+    const row = rows({ columns: 2 })
+    expect(row.className).toBe('fx-buttons is-grid')
+    expect(row.style.gridTemplateColumns).toBe('repeat(2, minmax(0, 1fr))')
   })
 })
