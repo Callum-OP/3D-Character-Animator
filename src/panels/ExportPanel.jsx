@@ -12,6 +12,7 @@ import {
 import { exportAnimationBVH } from '../three/animation.js'
 import { pickVideoFormat, videoBitrate, VIDEO_FPS, MIN_VIDEO_FPS, MAX_VIDEO_FPS, normalizeVideoFps } from '../three/exportSize.js'
 import { webCodecsAvailable } from '../three/videoCapture.js'
+import { createZip } from '../three/zipStore.js'
 import { runExportShot, resolveShotView, canRecordVideo, hideGizmosForShot } from '../three/exportShot.js'
 
 // Side-panel section: get your work out of the app — transparent PNG, a video of
@@ -46,15 +47,6 @@ const QUALITIES = [
   ['high', 'High'],
   ['max', 'Maximum'],
 ]
-
-async function imageBlobAsDataUrl(blob) {
-  const bytes = new Uint8Array(await blob.arrayBuffer())
-  let binary = ''
-  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000))
-  }
-  return `data:${blob.type || 'image/png'};base64,${btoa(binary)}`
-}
 
 export default function ExportPanel() {
   const modelInfo = useStore((s) => s.modelInfo)
@@ -133,68 +125,40 @@ export default function ExportPanel() {
     }
   }
 
-  async function onCopyAnimation() {
+  // Every animation frame as a numbered PNG in one zip, in order — for programs
+  // (Clip Studio Paint, etc.) that take an image sequence but can't paste several images.
+  async function onSaveAllImages() {
     if (busy) return
-    const write = clipboardWriter()
-    if (!write) return
     const duration = getAllTimelineDuration({ stopAtFirstClipEnd })
     if (!(duration > 0)) {
-      setMsg('Nothing to copy — make or select an animation first.')
+      setMsg('Nothing to save — make or select an animation first.')
       return
     }
     const frameCount = Math.ceil(duration * videoFps) + 1
-    let resolveHTML
-    let rejectHTML
-    let resolveFirstFrame
-    let rejectFirstFrame
-    const htmlPromise = new Promise((resolve, reject) => {
-      resolveHTML = resolve
-      rejectHTML = reject
-    })
-    const firstFramePromise = new Promise((resolve, reject) => {
-      resolveFirstFrame = resolve
-      rejectFirstFrame = reject
-    })
-    htmlPromise.catch(() => {})
-    firstFramePromise.catch(() => {})
-    let writeResult
-    let clipboardError = null
+    const digits = Math.max(5, String(frameCount).length)
+    const prefix = name.replace(/[^A-Za-z0-9._-]+/g, '_') || 'frame'
+    const zip = createZip()
+    const progressInterval = Math.max(1, Math.floor(frameCount / 100))
     setCopying(true)
     setMsg(`Preparing ${frameCount} animation frames at ${videoFps} fps…`)
     let restoreGizmos = () => {}
     try {
       restoreGizmos = hideGizmosForShot()
-      const item = new ClipboardItem({
-        'text/html': htmlPromise,
-        'image/png': firstFramePromise,
-      })
-      writeResult = write([item]).then(
-        () => ({ error: null }),
-        (error) => {
-          clipboardError = error
-          return { error }
-        },
-      )
-      const progressInterval = Math.max(1, Math.floor(frameCount / 100))
-      const frameHTML = []
       const result = await captureAnimationPNGs(videoFps, exportScale, async (blob, frame, total) => {
-        if (clipboardError) throw clipboardError
-        if (frame === 0) resolveFirstFrame(blob)
-        const dataUrl = await imageBlobAsDataUrl(blob)
-        frameHTML.push(`<div><img src="${dataUrl}" alt="Animation frame ${frame + 1}"></div>`)
+        await zip.add(`${prefix}_${String(frame + 1).padStart(digits, '0')}.png`, blob)
         if ((frame + 1) % progressInterval === 0 || frame + 1 === total) {
-          setMsg(`Copying animation frames… ${frame + 1} of ${total}`)
+          setMsg(`Saving animation frames… ${frame + 1} of ${total}`)
         }
       })
-      resolveHTML(new Blob([`<!doctype html><html><body>${frameHTML.join('')}</body></html>`], { type: 'text/html' }))
-      const { error } = await writeResult
-      if (error) throw error
-      setMsg(`Copied ${result.count} frames at ${videoFps} fps. Paste into a rich-text app to insert the images in order; image-only apps may use the first frame.`)
+      const url = URL.createObjectURL(zip.finish())
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${prefix}_frames.zip`
+      a.click()
+      setTimeout(() => URL.revokeObjectURL(url), 60000)
+      setMsg(`Saved ${result.count} images at ${videoFps} fps as ${prefix}_frames.zip, numbered in order.`)
     } catch (error) {
-      rejectHTML(error)
-      rejectFirstFrame(error)
-      if (writeResult) await writeResult
-      setMsg(`Could not copy animation frames: ${error?.message || String(error)}`)
+      setMsg(`Could not save animation frames: ${error?.message || String(error)}`)
     } finally {
       restoreGizmos()
       setCopying(false)
@@ -333,11 +297,11 @@ export default function ExportPanel() {
         </button>
         <button
           className="btn secondary"
-          onClick={onCopyAnimation}
+          onClick={onSaveAllImages}
           disabled={busy}
-          title={`Copy every animation frame as a separate PNG at ${videoFps} fps`}
+          title={`Save every animation frame as a numbered PNG in one zip, at ${videoFps} fps`}
         >
-          Copy all as images
+          Save all as images (zip)
         </button>
       </div>
 

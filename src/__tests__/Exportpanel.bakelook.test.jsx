@@ -80,23 +80,38 @@ describe('Export panel — copy images', () => {
     expect(write.mock.calls[0][0][0].data['image/png']).toBeInstanceOf(Blob)
   })
 
-  it('copies ordered animation frames as one rich clipboard item at the configured FPS', async () => {
-    const write = enableImageClipboard()
-    render(<ExportPanel />)
-    fireEvent.change(screen.getByLabelText('Custom FPS'), { target: { value: '24' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Copy all as images' }))
+  it('saves every animation frame as a numbered PNG in one zip, in order', async () => {
+    let zipBlob = null
+    let fileName = null
+    URL.createObjectURL = vi.fn((blob) => { zipBlob = blob; return 'blob:zip' })
+    URL.revokeObjectURL = vi.fn()
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function () { fileName = this.download })
+    try {
+      render(<ExportPanel />)
+      fireEvent.change(screen.getByLabelText('Custom FPS'), { target: { value: '24' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Save all as images (zip)' }))
 
-    await waitFor(() => expect(write).toHaveBeenCalledTimes(1))
-    expect(captureAnimationPNGs).toHaveBeenCalledWith(24, 2, expect.any(Function))
-    expect(write.mock.calls[0][0]).toHaveLength(1)
-    const item = write.mock.calls[0][0][0]
-    expect(item.data['image/png']).toBeInstanceOf(Promise)
-    await expect(item.data['image/png']).resolves.toBeInstanceOf(Blob)
-    const html = await item.data['text/html']
-    expect(html).toBeInstanceOf(Blob)
-    const contents = await html.text()
-    expect(contents.indexOf('Animation frame 1')).toBeLessThan(contents.indexOf('Animation frame 2'))
-    expect(contents).toContain('Animation frame 25')
+      await waitFor(() => expect(click).toHaveBeenCalledTimes(1))
+      expect(captureAnimationPNGs).toHaveBeenCalledWith(24, 2, expect.any(Function))
+      expect(fileName).toBe('render_frames.zip')
+      const bytes = Buffer.from(await zipBlob.arrayBuffer())
+      // central directory: entry count, then names in frame order
+      const eocd = bytes.length - 22
+      expect(bytes.readUInt32LE(eocd)).toBe(0x06054b50)
+      expect(bytes.readUInt16LE(eocd + 10)).toBe(25)
+      const names = []
+      for (let at = bytes.readUInt32LE(eocd + 16), i = 0; i < 25; i++) {
+        const len = bytes.readUInt16LE(at + 28)
+        names.push(bytes.subarray(at + 46, at + 46 + len).toString())
+        at += 46 + len
+      }
+      expect(names[0]).toBe('render_00001.png')
+      expect(names[24]).toBe('render_00025.png')
+      expect([...names].sort()).toEqual(names)
+      await waitFor(() => expect(screen.getByText(/Saved 25 images/)).toBeTruthy())
+    } finally {
+      click.mockRestore()
+    }
   })
 
 })
