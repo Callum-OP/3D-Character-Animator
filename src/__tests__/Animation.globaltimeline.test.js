@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import { useStore } from '../store.js'
 import { initObjects } from '../three/objects.js'
 import { initAnimation, setAnimationModel } from '../three/animation.js'
+import { clearDangle, setDangleConfig, stepDangleLive } from '../three/dangle.js'
 import {
   __seedCharacterForTest,
   clearProjectScene,
@@ -19,8 +20,12 @@ function makeCharacter(id, clipName, dur, speed) {
   const hips = new THREE.Bone()
   hips.name = 'Hips'
   root.add(hips)
+  const dangle = new THREE.Bone()
+  dangle.name = 'Dangle'
+  dangle.position.x = 0.2
+  hips.add(dangle)
   const mesh = new THREE.SkinnedMesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial())
-  const skeleton = new THREE.Skeleton([hips])
+  const skeleton = new THREE.Skeleton([hips, dangle])
   mesh.bind(skeleton)
   root.add(mesh)
   const clip = new THREE.AnimationClip(clipName, dur, [
@@ -28,7 +33,7 @@ function makeCharacter(id, clipName, dur, speed) {
   ])
   const parsed = {
     root,
-    bones: [hips],
+    bones: [hips, dangle],
     skinnedMeshes: [mesh],
     meshes: [],
     skeleton,
@@ -117,5 +122,19 @@ describe('all-animation timeline', () => {
     scrubAllTimeline(2)
     stopAllCharacters()
     expect(useStore.getState().globalTime).toBe(0)
+  })
+
+  it('Stop all resets dangle simulation after restoring each character pose', () => {
+    const chain = [{ id: 'test-chain', boneNames: ['Dangle'], stiffness: 0, gravity: 3, damping: 0 }]
+    setDangleConfig('c2', c2, true, chain)
+    for (let frame = 0; frame < 60; frame++) {
+      c2.root.updateMatrixWorld(true)
+      stepDangleLive(1 / 60)
+    }
+    expect(c2.bones[1].quaternion.angleTo(new THREE.Quaternion())).toBeGreaterThan(0.02)
+
+    stopAllCharacters()
+    expect(c2.bones[1].quaternion.angleTo(new THREE.Quaternion())).toBeLessThan(1e-5)
+    clearDangle('c2')
   })
 })

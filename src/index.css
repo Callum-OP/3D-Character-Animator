@@ -765,6 +765,27 @@ body {
   font-size: 12px;
 }
 
+.character-tools-collisions {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--panel-border);
+}
+
+.character-tools-collision-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.character-tools-collision-row > span {
+  display: grid;
+  gap: 2px;
+}
+
 .wind-hint {
   margin-top: 3px;
   color: var(--text-dim);

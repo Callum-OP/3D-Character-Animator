@@ -125,7 +125,7 @@ import {
   setDangleConfig,
   stepDangleLive,
   clearDangle,
-  resetDangle,
+  resetDanglePose,
   collectDescendantBoneNames,
 } from './dangle.js'
 import {
@@ -1630,6 +1630,7 @@ export function stopAllCharacters() {
     if (!state.characters.has(id)) continue
     setActiveAnimationCharacter(id)
     stop()
+    resetDanglePose(id)
   }
   setActiveAnimationCharacter(uiActiveId)
   globalClock = false

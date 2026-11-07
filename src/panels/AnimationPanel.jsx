@@ -32,6 +32,7 @@ import {
   isClipKeysAdopted,
 } from '../three/animation.js'
 import { runWithoutHistoryCapture } from '../three/undoHistory.js'
+import { recordOverrideEdit } from '../three/materialHistory.js'
 import {
   listRecentClips,
   removeRecentClip,
@@ -44,6 +45,7 @@ import {
 import { getBoneQuaternion, getPosedBones, applyPose, setPosingEnabled } from '../three/posing.js'
 import {
   getCurrentModel,
+  refreshSoftCloth,
   getGroundY,
   scrubTimeline,
   playAllCharacters,
@@ -57,6 +59,7 @@ import {
   keyObjectAttachmentById,
   removeObjectAttachmentKeyById,
 } from '../three/scene.js'
+import { setAllDangleCollisionsUndoable } from '../three/dangle.js'
 import * as THREE from 'three'
 import { simulateRagdollClip } from '../three/ragdoll.js'
 import {
@@ -861,6 +864,8 @@ export default function AnimationPanel() {
   const windDirection = useStore((s) => s.windDirection)
   const windStrength = useStore((s) => s.windStrength)
   const windFluctuation = useStore((s) => s.windFluctuation)
+  const dangleChains = useStore((s) => s.dangleChains)
+  const meshOverrides = useStore((s) => s.meshOverrides)
 
   const playback = useStore((s) => s.playback)
   const source = useStore((s) => s.playbackSource)
@@ -900,6 +905,39 @@ export default function AnimationPanel() {
   const globalDuration = characterOrder.length > 0 || hasObjectAnimation ? getAllTimelineDuration() : 0
 
   const st = useStore.getState // for imperative setters inside handlers
+  const model = getCurrentModel()
+  const meshPhysicsZones = (model?.meshes || [])
+    .flatMap((mesh) => meshOverrides[mesh.uuid]?.softZones || [])
+    .filter((zone) => zone.mode === 'soft')
+  const allDangleCollisionsEnabled = dangleChains.length > 0 && dangleChains.every((chain) =>
+    chain.collideWithBones === true && chain.collideWithMesh === true && chain.collideWithSelf === true,
+  )
+  const allMeshPhysicsCollisionsEnabled = meshPhysicsZones.length > 0 && meshPhysicsZones.every((zone) =>
+    zone.collideWithMeshes === true && (zone.mode !== 'soft' || zone.collideWithSelf === true),
+  )
+
+  function setAllMeshPhysicsCollisions(enabled) {
+    const currentModel = getCurrentModel()
+    if (!currentModel) return
+    const updates = {}
+    for (const mesh of currentModel.meshes || []) {
+      const zones = st().meshOverrides[mesh.uuid]?.softZones || []
+      if (zones.some((zone) => zone.mode === 'soft')) {
+        updates[mesh.uuid] = zones.map((zone) => zone.mode === 'soft'
+          ? { ...zone, collideWithMeshes: enabled, collideWithSelf: enabled }
+          : zone)
+      }
+    }
+    const uuids = Object.keys(updates)
+    if (!uuids.length) return
+    recordOverrideEdit(
+      uuids,
+      () => uuids.forEach((uuid) => st().setMeshSoftZones(uuid, updates[uuid])),
+      activeCharacterId,
+      { discrete: true },
+    )
+    refreshSoftCloth()
+  }
   const bvhRef = useRef(null)
   const clipFileRef = useRef(null)
   const [bvhMsg, setBvhMsg] = useState(null)
@@ -1930,75 +1968,6 @@ export default function AnimationPanel() {
         Play a clip as-is, edit its poses, or start a new animation. Character movement is a separate track on the same playhead.
       </p>
 
-      <div className="wind-controls">
-        <div className="wind-heading">
-          <div>
-            <strong>Wind simulation</strong>
-            <div className="wind-hint">Gusts and side-to-side sway affect enabled pose and cloth physics while animating.</div>
-          </div>
-          <button
-            type="button"
-            className={'btn secondary' + (windEnabled ? ' active' : '')}
-            aria-pressed={windEnabled}
-            onClick={() => st().setWindEnabled(!windEnabled)}
-          >
-            {windEnabled ? 'On' : 'Off'}
-          </button>
-        </div>
-        {windEnabled && (
-          <div className="wind-fields">
-            <label className="slider-row">
-              <span className="slider-label">Strength</span>
-              <input
-                type="range"
-                min={0}
-                max={100}
-                step={1}
-                value={windStrength ?? 5}
-                onChange={(e) => st().setWindStrength(Number(e.target.value))}
-                aria-label="Wind strength"
-              />
-              <output className="slider-value">{(windStrength ?? 5).toFixed(0)} m/s²</output>
-            </label>
-            <label className="slider-row">
-              <span className="slider-label">Fluctuation</span>
-              <input
-                type="range"
-                min={0}
-                max={100}
-                step={1}
-                value={(windFluctuation ?? 1) * 100}
-                onChange={(e) => st().setWindFluctuation(Number(e.target.value) / 100)}
-                aria-label="Wind fluctuation"
-              />
-              <output className="slider-value">{Math.round((windFluctuation ?? 1) * 100)}%</output>
-            </label>
-            {['X', 'Y', 'Z'].map((axis, i) => (
-              <label className="slider-row" key={axis}>
-                <span className="slider-label">Direction {axis}</span>
-                <input
-                  type="range"
-                  min={-1}
-                  max={1}
-                  step={0.1}
-                  value={windDirection?.[i] ?? (i === 0 ? 1 : 0)}
-                  onChange={(e) => {
-                    const next = [...(windDirection || [1, 0, 0])]
-                    next[i] = Number(e.target.value)
-                    st().setWindDirection(next)
-                  }}
-                  aria-label={`Wind direction ${axis}`}
-                />
-                <output className="slider-value">
-                  {(windDirection?.[i] ?? (i === 0 ? 1 : 0)).toFixed(1)}
-                </output>
-              </label>
-            ))}
-            <div className="wind-hint">Direction is normalized automatically (world X/Y/Z).</div>
-          </div>
-        )}
-      </div>
-
       <div className="seg">
         <button
           className={'seg-btn' + (source === 'clip' ? ' active' : '')}
@@ -2319,6 +2288,106 @@ export default function AnimationPanel() {
         <details className="anim-disclosure" style={{ marginTop: 8 }}>
           <summary>More character tools</summary>
           <div className="anim-disclosure-content">
+            <section className="wind-controls" aria-label="Character tools">
+              <div className="wind-heading">
+                <div>
+                  <strong>Wind simulation</strong>
+                  <div className="wind-hint">Gusts and side-to-side sway affect enabled pose and cloth physics while animating.</div>
+                </div>
+                <button
+                  type="button"
+                  className={'btn secondary' + (windEnabled ? ' active' : '')}
+                  aria-pressed={windEnabled}
+                  onClick={() => st().setWindEnabled(!windEnabled)}
+                >
+                  {windEnabled ? 'On' : 'Off'}
+                </button>
+              </div>
+              {windEnabled && (
+                <div className="wind-fields">
+                  <label className="slider-row">
+                    <span className="slider-label">Strength</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      step={1}
+                      value={windStrength ?? 5}
+                      onChange={(e) => st().setWindStrength(Number(e.target.value))}
+                      aria-label="Wind strength"
+                    />
+                    <output className="slider-value">{(windStrength ?? 5).toFixed(0)} m/s²</output>
+                  </label>
+                  <label className="slider-row">
+                    <span className="slider-label">Fluctuation</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      step={1}
+                      value={(windFluctuation ?? 1) * 100}
+                      onChange={(e) => st().setWindFluctuation(Number(e.target.value) / 100)}
+                      aria-label="Wind fluctuation"
+                    />
+                    <output className="slider-value">{Math.round((windFluctuation ?? 1) * 100)}%</output>
+                  </label>
+                  {['X', 'Y', 'Z'].map((axis, i) => (
+                    <label className="slider-row" key={axis}>
+                      <span className="slider-label">Direction {axis}</span>
+                      <input
+                        type="range"
+                        min={-1}
+                        max={1}
+                        step={0.1}
+                        value={windDirection?.[i] ?? (i === 0 ? 1 : 0)}
+                        onChange={(e) => {
+                          const next = [...(windDirection || [1, 0, 0])]
+                          next[i] = Number(e.target.value)
+                          st().setWindDirection(next)
+                        }}
+                        aria-label={`Wind direction ${axis}`}
+                      />
+                      <output className="slider-value">
+                        {(windDirection?.[i] ?? (i === 0 ? 1 : 0)).toFixed(1)}
+                      </output>
+                    </label>
+                  ))}
+                  <div className="wind-hint">Direction is normalized automatically (world X/Y/Z).</div>
+                </div>
+              )}
+              <div className="character-tools-collisions">
+                <div className="character-tools-collision-row">
+                  <span>
+                    <strong>Pose dangle chains</strong>
+                    <span className="wind-hint">Bone and mesh contacts for all chains on this character.</span>
+                  </span>
+                  <button
+                    type="button"
+                    className="btn secondary"
+                    aria-pressed={allDangleCollisionsEnabled}
+                    disabled={!dangleChains.length}
+                    onClick={() => setAllDangleCollisionsUndoable(!allDangleCollisionsEnabled)}
+                  >
+                    {allDangleCollisionsEnabled ? 'Disable all' : 'Enable all'}
+                  </button>
+                </div>
+                <div className="character-tools-collision-row">
+                  <span>
+                    <strong>Mesh physics</strong>
+                    <span className="wind-hint">Other-mesh and self collision for all soft-cloth zones.</span>
+                  </span>
+                  <button
+                    type="button"
+                    className="btn secondary"
+                    aria-pressed={allMeshPhysicsCollisionsEnabled}
+                    disabled={!meshPhysicsZones.length}
+                    onClick={() => setAllMeshPhysicsCollisions(!allMeshPhysicsCollisionsEnabled)}
+                  >
+                    {allMeshPhysicsCollisionsEnabled ? 'Disable all' : 'Enable all'}
+                  </button>
+                </div>
+              </div>
+            </section>
             {source === 'clip' && activeClipName && (
               <>
                 <button className="btn secondary" style={{ marginTop: 6 }} onClick={onApplyFrameAsPose} title="Freeze the current frame as an editable pose">

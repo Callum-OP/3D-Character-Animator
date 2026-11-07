@@ -224,6 +224,22 @@ export function resetDangle(id, chainId) {
   }
 }
 
+// Restore the chain's authored pose and discard any live physics offset.
+// Used after stopping playback, when the animation mixer has returned the rig
+// to its non-simulated pose.
+export function resetDanglePose(id) {
+  const rt = runtimes.get(id)
+  if (!rt) return
+  for (const chain of rt.chains.values()) {
+    for (const node of chain.order) {
+      node.bone.quaternion.copy(node.restLocalQuat)
+      node.bone.updateMatrix()
+    }
+  }
+  rt.model.root?.updateMatrixWorld(true)
+  resetDangle(id)
+}
+
 export function clearDangle(id) {
   const rt = runtimes.get(id)
   if (rt) for (const col of Object.values(rt.cols || {})) col.proxy?.dispose()
@@ -243,7 +259,7 @@ const _physDir = new THREE.Vector3()
 const _qSwing = new THREE.Quaternion()
 const _finalWQ = new THREE.Quaternion()
 const _localQ = new THREE.Quaternion()
-const _mid = new THREE.Vector3()
+const _segmentPoint = new THREE.Vector3()
 const _decPos = new THREE.Vector3()
 const _decScale = new THREE.Vector3()
 const _identity = new THREE.Matrix4()
@@ -348,8 +364,8 @@ function meshColliderFor(rt, mode, maxTriangles) {
   return col.proxy.update(rt.frame)
 }
 
-// Keep the particle out of the surface, whichever way the contact comes (a tip and the middle of
-// its bone are both tested, so a long bone cannot cut through a corner). Only the velocity INTO
+// Keep the particle out of the surface, whichever way the contact comes (several points along
+// its bone are tested, so a long bone cannot cut through a corner). Only the velocity INTO
 // the surface is removed, so a strand slides along the body instead of sticking to it.
 function contact(node, nx, ny, nz, push, leverage) {
   const move = push * leverage
@@ -372,38 +388,50 @@ function contact(node, nx, ny, nz, push, leverage) {
 
 function pushOutOfSurface(collider, node, point, radius, cells, leverage) {
   const q = collider.query(point.x, point.y, point.z, cells, radius * 4)
-  if (!q) return
-  let nx = q.fnx
-  let ny = q.fny
-  let nz = q.fnz
+  if (!q) return false
+  let nx = q.snx
+  let ny = q.sny
+  let nz = q.snz
   if (nx * nx + ny * ny + nz * nz < 1e-8) {
-    nx = q.nx
-    ny = q.ny
-    nz = q.nz
+    nx = q.fnx
+    ny = q.fny
+    nz = q.fnz
   }
   if (collider.orientation) {
-    if (collider.orientation < 0) {
+    const side = nx * q.fnx * collider.orientation + ny * q.fny * collider.orientation + nz * q.fnz * collider.orientation
+    if (q.dist < 1e-6) {
+      nx = q.fnx * collider.orientation
+      ny = q.fny * collider.orientation
+      nz = q.fnz * collider.orientation
+    } else if (side < 0) {
       nx = -nx
       ny = -ny
       nz = -nz
     }
-  } else if ((_targetTip.x - q.x) * nx + (_targetTip.y - q.y) * ny + (_targetTip.z - q.z) * nz < 0) {
-    // No trustworthy winding (flat or open surface): stay on the side the animated pose is on.
-    nx = -nx
-    ny = -ny
-    nz = -nz
+  } else {
+    if ((_targetTip.x - q.x) * nx + (_targetTip.y - q.y) * ny + (_targetTip.z - q.z) * nz < 0) {
+      // No trustworthy winding (flat or open surface): stay on the side the animated pose is on.
+      nx = -nx
+      ny = -ny
+      nz = -nz
+    }
   }
   const signed = (point.x - q.x) * nx + (point.y - q.y) * ny + (point.z - q.z) * nz
-  if (signed >= radius) return
+  if (signed >= radius) return false
   contact(node, nx, ny, nz, radius - signed, leverage)
+  return true
 }
 
 function collideWithSurface(collider, node, radius) {
   const cells = Math.min(3, Math.max(1, Math.ceil((radius * 2) / collider.cell)))
-  pushOutOfSurface(collider, node, node.physPos, radius, cells, 1)
-  // The middle of the bone: moving it by d takes 2d at the tip, because the pivot is fixed.
-  _mid.copy(_pivot).add(node.physPos).multiplyScalar(0.5)
-  pushOutOfSurface(collider, node, _mid, radius, cells, 2)
+  let collided = pushOutOfSurface(collider, node, node.physPos, radius, cells, 1)
+  // Sample along the bone so a long segment cannot slip through between its
+  // tip and pivot. A correction near the pivot needs more tip leverage.
+  _segmentPoint.copy(_pivot).lerp(node.physPos, 2 / 3)
+  collided = pushOutOfSurface(collider, node, _segmentPoint, radius, cells, 1.5) || collided
+  _segmentPoint.copy(_pivot).lerp(node.physPos, 1 / 3)
+  collided = pushOutOfSurface(collider, node, _segmentPoint, radius, cells, 3) || collided
+  return collided
 }
 
 // Every bone as a segment (its parent -> itself), read once per frame instead of once per bone per
@@ -448,14 +476,18 @@ function prepareBoneSegments(rt) {
 }
 
 function collideWithOtherBones(seg, chain, node, radius) {
+  let collided = false
   const radiusSq = radius * radius
   const pos = seg.pos
   const skip = chain.skip
-  const px = node.physPos.x
-  const py = node.physPos.y
-  const pz = node.physPos.z
+  let px = node.physPos.x
+  let py = node.physPos.y
+  let pz = node.physPos.z
   for (let i = 0; i < seg.count; i++) {
     if (skip[i]) continue
+    px = node.physPos.x
+    py = node.physPos.y
+    pz = node.physPos.z
     const a = 3 * seg.parentIndex[i]
     const b = 3 * i
     const abx = pos[b] - pos[a]
@@ -473,6 +505,7 @@ function collideWithOtherBones(seg, chain, node, radius) {
     let dz = node.physPos.z - cz
     const distSq = dx * dx + dy * dy + dz * dz
     if (distSq >= radiusSq) continue
+    collided = true
     if (distSq < 1e-10) {
       dx = _dir.x
       dy = _dir.y
@@ -483,10 +516,27 @@ function collideWithOtherBones(seg, chain, node, radius) {
         dz = 0
       }
     }
-    const scale = radius / Math.sqrt(dx * dx + dy * dy + dz * dz)
-    node.physPos.set(cx + dx * scale, cy + dy * scale, cz + dz * scale)
-    node.physPrev.copy(node.physPos)
+    const distance = Math.sqrt(dx * dx + dy * dy + dz * dz)
+    contact(node, dx / distance, dy / distance, dz / distance, radius - distance, 1)
   }
+  return collided
+}
+
+// Keep collision corrections on the bone's fixed-length sphere. Moving the
+// previous position by the same amount preserves the Verlet velocity.
+function projectTipLength(node) {
+  _dir.copy(node.physPos).sub(_pivot)
+  if (_dir.lengthSq() < 1e-10) return
+  _dir.setLength(node.tipLength)
+  const dx = _pivot.x + _dir.x - node.physPos.x
+  const dy = _pivot.y + _dir.y - node.physPos.y
+  const dz = _pivot.z + _dir.z - node.physPos.z
+  node.physPos.x += dx
+  node.physPos.y += dy
+  node.physPos.z += dz
+  node.physPrev.x += dx
+  node.physPrev.y += dy
+  node.physPrev.z += dz
 }
 
 // Advance every enabled character's dangle chains by `dt` seconds. Call once
@@ -566,9 +616,16 @@ export function stepDangleLive(dt) {
             node.physPos.copy(_targetTip)
           }
           const collisionRadius = node.tipLength * 0.12
-          if (collideWithMesh && collider) collideWithSurface(collider, node, collisionRadius)
-          if (collideWithSelf && selfCollider) collideWithSurface(selfCollider, node, collisionRadius)
-          if (collideWithBones && chain.skip) collideWithOtherBones(rt.seg, chain, node, collisionRadius)
+          // Collision and fixed bone length are competing constraints. Alternate
+          // them a bounded number of times so projection cannot undo the push-out.
+          for (let pass = 0; pass < 2; pass++) {
+            let collided = false
+            if (collideWithMesh && collider) collided = collideWithSurface(collider, node, collisionRadius) || collided
+            if (collideWithSelf && selfCollider) collided = collideWithSurface(selfCollider, node, collisionRadius) || collided
+            if (collideWithBones && chain.skip) collided = collideWithOtherBones(rt.seg, chain, node, collisionRadius) || collided
+            if (!collided) break
+            projectTipLength(node)
+          }
           _dir.copy(node.physPos).sub(_pivot)
           if (_dir.lengthSq() > 1e-10) {
             _dir.setLength(node.tipLength)

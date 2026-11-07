@@ -248,6 +248,7 @@ export class BodyCollider {
     this.T = Math.floor((this.index ? this.index.length : this.tris.length / 3) / 3)
     this.pad = pad
     this.faceNormals = new Float32Array(this.T * 3)
+    this.vertexNormals = new Float32Array(this.tris.length)
     this.min = new THREE.Vector3()
     // Flat spatial index (counting sort): cellStart[c]..cellStart[c + 1] indexes into cellItems, the
     // faces touching cell c. Typed arrays, grown only if a refit needs more room.
@@ -270,6 +271,8 @@ export class BodyCollider {
     const pad = this.pad
     const t = this.tris
     const index = this.index
+    const vertexNormals = this.vertexNormals
+    vertexNormals.fill(0)
 
     // True per-triangle outward normal (from winding order), independent of
     // which side a query point currently sits on. Used by shrinkwrap so it
@@ -288,10 +291,29 @@ export class BodyCollider {
       _e.subVectors(_c, _a)
       _d.cross(_e)
       const len = _d.length()
-      if (len > 1e-9) _d.multiplyScalar(1 / len)
-      this.faceNormals[f * 3] = _d.x
-      this.faceNormals[f * 3 + 1] = _d.y
-      this.faceNormals[f * 3 + 2] = _d.z
+      const nx = len > 1e-9 ? _d.x / len : 0
+      const ny = len > 1e-9 ? _d.y / len : 0
+      const nz = len > 1e-9 ? _d.z / len : 0
+      this.faceNormals[f * 3] = nx
+      this.faceNormals[f * 3 + 1] = ny
+      this.faceNormals[f * 3 + 2] = nz
+      vertexNormals[a] += _d.x
+      vertexNormals[a + 1] += _d.y
+      vertexNormals[a + 2] += _d.z
+      vertexNormals[b] += _d.x
+      vertexNormals[b + 1] += _d.y
+      vertexNormals[b + 2] += _d.z
+      vertexNormals[c] += _d.x
+      vertexNormals[c + 1] += _d.y
+      vertexNormals[c + 2] += _d.z
+    }
+    for (let i = 0; i + 2 < vertexNormals.length; i += 3) {
+      const length = Math.hypot(vertexNormals[i], vertexNormals[i + 1], vertexNormals[i + 2])
+      if (length > 1e-9) {
+        vertexNormals[i] /= length
+        vertexNormals[i + 1] /= length
+        vertexNormals[i + 2] /= length
+      }
     }
 
     let mnx = Infinity, mny = Infinity, mnz = Infinity, mxx = -Infinity, mxy = -Infinity, mxz = -Infinity
@@ -360,6 +382,7 @@ export class BodyCollider {
     const cj = this._cj(py)
     const ck = this._ck(pz)
     const t = this.tris
+    const vertexNormals = this.vertexNormals
     let best = maxDistance * maxDistance, bx = 0, by = 0, bz = 0, bestFace = -1
     const mark = (this.queryMark + 1) >>> 0 || 1
     this.queryMark = mark
@@ -403,7 +426,40 @@ export class BodyCollider {
     // currently on — a tunnelled-through particle still gets the correct
     // "outside" direction here, unlike nx/ny/nz above.
     const fnx = this.faceNormals[bestFace * 3], fny = this.faceNormals[bestFace * 3 + 1], fnz = this.faceNormals[bestFace * 3 + 2]
-    return { dist, x: bx, y: by, z: bz, nx, ny, nz, fnx, fny, fnz }
+    const faceStart = 3 * bestFace
+    const ia = this.index ? this.index[faceStart] : faceStart
+    const ib = this.index ? this.index[faceStart + 1] : faceStart + 1
+    const ic = this.index ? this.index[faceStart + 2] : faceStart + 2
+    const a = 3 * ia, b = 3 * ib, c = 3 * ic
+    const abx = t[b] - t[a], aby = t[b + 1] - t[a + 1], abz = t[b + 2] - t[a + 2]
+    const acx = t[c] - t[a], acy = t[c + 1] - t[a + 1], acz = t[c + 2] - t[a + 2]
+    const apx = bx - t[a], apy = by - t[a + 1], apz = bz - t[a + 2]
+    const d00 = abx * abx + aby * aby + abz * abz
+    const d01 = abx * acx + aby * acy + abz * acz
+    const d11 = acx * acx + acy * acy + acz * acz
+    const d20 = apx * abx + apy * aby + apz * abz
+    const d21 = apx * acx + apy * acy + apz * acz
+    const denom = d00 * d11 - d01 * d01
+    let wa = 1, wb = 0, wc = 0
+    if (Math.abs(denom) > 1e-12) {
+      wb = (d11 * d20 - d01 * d21) / denom
+      wc = (d00 * d21 - d01 * d20) / denom
+      wa = 1 - wb - wc
+    }
+    let snx = vertexNormals[a] * wa + vertexNormals[b] * wb + vertexNormals[c] * wc
+    let sny = vertexNormals[a + 1] * wa + vertexNormals[b + 1] * wb + vertexNormals[c + 1] * wc
+    let snz = vertexNormals[a + 2] * wa + vertexNormals[b + 2] * wb + vertexNormals[c + 2] * wc
+    const smoothLength = Math.hypot(snx, sny, snz)
+    if (smoothLength > 1e-8) {
+      snx /= smoothLength
+      sny /= smoothLength
+      snz /= smoothLength
+    } else {
+      snx = fnx
+      sny = fny
+      snz = fnz
+    }
+    return { dist, x: bx, y: by, z: bz, nx, ny, nz, fnx, fny, fnz, snx, sny, snz }
   }
 }
 

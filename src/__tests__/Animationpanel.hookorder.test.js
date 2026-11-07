@@ -27,6 +27,26 @@ import App from '../App.jsx'
 import { useStore } from '../store.js'
 
 describe('AnimationPanel stays mounted across modelInfo going to null', () => {
+  it('keeps wind and collision controls inside More character tools', () => {
+    useStore.setState({
+      modelInfo: { name: 'TestChar', bones: [{ name: 'Hips', deform: true, depth: 0 }], meshCount: 1, boneCount: 1, clipNames: ['Walk'] },
+      mode: 'bone',
+      sceneObjects: [{ id: 1, name: 'TestChar', isCharacter: true, characterId: 1, visible: true }],
+      activeCharacterId: 1,
+      selectedObjectId: 1,
+      dangleChains: [],
+    })
+    render(React.createElement(App))
+    fireEvent.click(screen.getByText('Animate'))
+
+    const tools = screen.getByLabelText('Character tools')
+    expect(tools.closest('details').open).toBe(false)
+    fireEvent.click(screen.getByText('More character tools'))
+    expect(screen.getByText('Wind simulation')).toBeTruthy()
+    expect(screen.getAllByRole('button', { name: 'Enable all' })).toHaveLength(2)
+    expect(tools.closest('details').open).toBe(true)
+  })
+
   it('does not crash the app when New Project is selected with the Animate panel open', async () => {
     useStore.setState({
       modelInfo: { name: 'TestChar', bones: [{ name: 'Hips', deform: true, depth: 0 }], meshCount: 1, boneCount: 1, clipNames: ['Walk'] },

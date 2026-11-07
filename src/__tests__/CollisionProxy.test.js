@@ -149,6 +149,18 @@ describe('windingOrientation', () => {
 })
 
 describe('BodyCollider.refit', () => {
+  it('returns a smooth contact normal across the collider surface', () => {
+    const collider = new BodyCollider(new THREE.SphereGeometry(0.5, 12, 8), 0)
+    const point = new THREE.Vector3(0.5, 0.18, 0.04)
+    const q = collider.query(point.x, point.y, point.z, 3, 1)
+    const radial = point.normalize()
+    const smoothAlignment = q.snx * radial.x + q.sny * radial.y + q.snz * radial.z
+    const faceAlignment = q.fnx * radial.x + q.fny * radial.y + q.fnz * radial.z
+
+    expect(smoothAlignment).toBeGreaterThan(faceAlignment)
+    expect(Math.hypot(q.snx, q.sny, q.snz)).toBeCloseTo(1, 5)
+  })
+
   it('gives the same answers as a collider built fresh on the moved surface', () => {
     const g = new THREE.SphereGeometry(0.5, 24, 16)
     const collider = new BodyCollider(g, 0.01)

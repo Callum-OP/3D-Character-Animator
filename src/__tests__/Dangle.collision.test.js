@@ -99,6 +99,27 @@ describe('dangle mesh collision (uses the cached collision surface, not raycasts
     expect(worst).toBeGreaterThan(0.3 - 0.04)
   })
 
+  it('keeps contact stable instead of producing single-frame swings', () => {
+    const rig = makeRig()
+    const body = sphere(0.3, 0.1, 0.8, 0)
+    rig.meshes = [body]
+    rig.root.add(body)
+    setDangleConfig(1, rig, true, config(rig, { collideWithMesh: true }))
+    let largestStep = 0
+    const previous = rig.chain.map((bone) => bone.quaternion.clone())
+    for (let frame = 0; frame < 90; frame++) {
+      rig.root.updateMatrixWorld(true)
+      stepDangleLive(1 / 60)
+      if (frame >= 30) {
+        for (let i = 0; i < rig.chain.length; i++) {
+          largestStep = Math.max(largestStep, rig.chain[i].quaternion.angleTo(previous[i]))
+        }
+      }
+      for (let i = 0; i < rig.chain.length; i++) previous[i].copy(rig.chain[i].quaternion)
+    }
+    expect(largestStep).toBeLessThan(0.3)
+  })
+
   it('does not collide a chain with the mesh it is itself skinned to', () => {
     const build = (collide) => {
       clearDangle(1)
