@@ -123,6 +123,45 @@ describe('dangle mesh collision (uses the cached collision surface, not raycasts
     for (let i = 0; i < off.length; i++) expect(on[i]).toBeCloseTo(off[i], 9)
   })
 
+  it('can collide against the non-dangling area of the same mesh', () => {
+    const build = (collideWithSelf) => {
+      clearDangle(1)
+      const rig = makeRig()
+      const body = new THREE.SphereGeometry(0.3, 16, 12).translate(0.1, 0.8, 0)
+      const cloth = new THREE.SphereGeometry(0.05, 8, 6).translate(3, 3, 3)
+      const positions = []
+      const indices = []
+      const skinIndices = []
+      const skinWeights = []
+      for (const [source, boneIndex] of [[body, 0], [cloth, 3]]) {
+        const offset = positions.length / 3
+        const position = source.getAttribute('position')
+        for (let vertex = 0; vertex < position.count; vertex++) {
+          positions.push(position.getX(vertex), position.getY(vertex), position.getZ(vertex))
+          skinIndices.push(boneIndex, 0, 0, 0)
+          skinWeights.push(1, 0, 0, 0)
+        }
+        for (const index of source.index.array) indices.push(index + offset)
+      }
+      const geometry = new THREE.BufferGeometry()
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+      geometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(skinIndices, 4))
+      geometry.setAttribute('skinWeight', new THREE.Float32BufferAttribute(skinWeights, 4))
+      geometry.setIndex(indices)
+      const mesh = new THREE.SkinnedMesh(geometry, new THREE.MeshBasicMaterial())
+      rig.root.add(mesh)
+      rig.root.updateMatrixWorld(true)
+      mesh.bind(new THREE.Skeleton(rig.bones))
+      rig.meshes = [mesh]
+      setDangleConfig(1, rig, true, config(rig, { collideWithSelf }))
+      run(rig, 60)
+      return rig.chain.map((bone) => bone.quaternion.toArray()).flat()
+    }
+    const without = build(false)
+    const withSelf = build(true)
+    expect(withSelf.some((value, i) => Math.abs(value - without[i]) > 1e-4)).toBe(true)
+  })
+
   it('does not collide a chain with a rigid mesh parented under one of its bones', () => {
     const build = (collide) => {
       clearDangle(1)
@@ -272,7 +311,7 @@ describe('dangle collision performance', () => {
     expect(geometry.index.count / 3).toBeGreaterThan(50000)
 
     setDangleConfig(1, { root, bones, meshes: [mesh] }, true, [
-      { id: 'a', name: 'cape', boneNames: cape, type: 'cloth', collideWithMesh: true, collideWithBones: true },
+      { id: 'a', name: 'cape', boneNames: cape, type: 'cloth', collideWithMesh: true, collideWithBones: true, collideWithSelf: true },
     ])
     for (let f = 0; f < 5; f++) {
       root.updateMatrixWorld(true)

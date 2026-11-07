@@ -10,7 +10,7 @@ import { clearUndoHistory } from '../three/undoHistory.js'
 // A synthetic character: hips > spine > head, a torso strip skinned to the spine, and a cape (a 6x6 grid hanging from
 // y = 1.5 to y = 0.5) that is a separate piece skinned to the spine.
 const N = 6
-function build({ split = false } = {}) {
+function build({ split = false, innerLayer = false } = {}) {
   const hips = new THREE.Bone(); hips.name = 'hips'
   const spine = new THREE.Bone(); spine.name = 'spine'; spine.position.set(0, 1, 0)
   const head = new THREE.Bone(); head.name = 'head'; head.position.set(0, 0.5, 0)
@@ -30,6 +30,14 @@ function build({ split = false } = {}) {
     const a = g[r * N + c], b = g[r * N + c + 1], d = g[(r + 1) * N + c], e = g[(r + 1) * N + c + 1]
     idx.push(a, d, b, b, d, e)
   }
+  let inner = []
+  if (innerLayer) {
+    for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) inner.push(addV(-0.5 + c / (N - 1), 1.5 - r / (N - 1), -0.12))
+    for (let r = 0; r < N - 1; r++) for (let c = 0; c < N - 1; c++) {
+      const a = inner[r * N + c], b = inner[r * N + c + 1], d = inner[(r + 1) * N + c], e = inner[(r + 1) * N + c + 1]
+      idx.push(a, d, b, b, d, e)
+    }
+  }
   if (split) addV(-0.5, 1.5, -0.1, [0.6, 0.4, 0, 0], [1, 2, 0, 0]) // a loose duplicate of the top-left cape vertex (a UV seam)
   const geo = new THREE.BufferGeometry()
   geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
@@ -45,7 +53,7 @@ function build({ split = false } = {}) {
   const model = { root, meshes: [mesh], bones: [hips, spine, head], skinnedMeshes: [mesh], skeleton: mesh.skeleton, __poseRestQuats: new Map() }
   const capeTris = []
   for (let t = 2; t < idx.length / 3; t++) capeTris.push(t)
-  return { model, mesh, capeTris, hips, spine, head }
+  return { model, mesh, capeTris, hips, spine, head, inner }
 }
 
 function posed(mesh) {
@@ -100,6 +108,29 @@ describe('part rig plan', () => {
     const plan = planForMesh(mesh, capeTris, { segments: 3, columns: 2, direction: 'down' })
     const loose = mesh.geometry.attributes.position.count - 1
     expect(plan.weights.get(loose)).toEqual(plan.weights.get(4))
+  })
+
+  it('can extend a surface selection to a nearby disconnected inner layer', () => {
+    const { mesh, capeTris, inner } = build({ innerLayer: true })
+    const selected = capeTris.slice(0, 2)
+    const without = planForMesh(mesh, selected, { segments: 3, columns: 1 })
+    const withNearby = planForMesh(mesh, selected, {
+      segments: 3,
+      columns: 1,
+      includeNearbySurfaces: true,
+      nearbySurfaceDistance: 0.03,
+    })
+    expect(without.weights.has(inner[0])).toBe(false)
+    expect(inner.some((vertex) => withNearby.weights.has(vertex))).toBe(true)
+  })
+
+  it('can blend added-bone skinning back to the original weights', () => {
+    const { mesh, capeTris } = build()
+    const plan = planForMesh(mesh, capeTris, { segments: 3, columns: 1, influence: 0 })
+    expect(plan.ok).toBe(true)
+    for (const [, entry] of plan.weights) {
+      expect(entry.slots.every((slot, i) => entry.w[i] === 0 || slot >= 0)).toBe(true)
+    }
   })
 })
 

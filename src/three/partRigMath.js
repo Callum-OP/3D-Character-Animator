@@ -31,6 +31,9 @@ export const DEFAULT_OPTIONS = {
   direction: 'shape', // 'shape' = follow the piece away from where it attaches, 'down' = hang by height
   flip: false, // swap which end is the root (direction 'shape' only)
   stick: 0.15, // 0..0.6 — how much of the top keeps its original skinning
+  influence: 1, // 0..1 — how strongly the new bones replace the original skinning
+  includeNearbySurfaces: false,
+  nearbySurfaceDistance: 0.02, // fraction of the mesh bounds, for disconnected inner/outer layers
   perPiece: true,
   parentBone: null, // bone index to hang from; null = work it out from the existing skinning
 }
@@ -45,6 +48,9 @@ export function normaliseOptions(opts = {}) {
   o.segments = clamp(Math.round(o.segments) || 1, 1, LIMITS.maxSegments)
   o.columns = clamp(Math.round(o.columns) || 1, 1, LIMITS.maxColumns)
   o.stick = clamp(Number.isFinite(o.stick) ? o.stick : 0.15, 0, 0.6)
+  o.influence = clamp(Number.isFinite(o.influence) ? o.influence : 1, 0, 1)
+  o.nearbySurfaceDistance = clamp(Number.isFinite(o.nearbySurfaceDistance) ? o.nearbySurfaceDistance : 0.02, 0, 0.1)
+  o.includeNearbySurfaces = !!o.includeNearbySurfaces
   o.direction = o.direction === 'down' ? 'down' : 'shape'
   o.flip = !!o.flip
   o.perPiece = o.perPiece !== false
@@ -59,8 +65,11 @@ export function planPartRig({ positions, index, tris, skinIndex, skinWeight, bon
   const nVerts = positions.length / 3
   const triVert = (t, k) => (index ? index[t * 3 + k] : t * 3 + k)
   const nTris = Math.floor((index ? index.length : nVerts) / 3)
-  const picked = Array.from(new Set(tris)).filter((t) => t >= 0 && t < nTris)
+  let picked = Array.from(new Set(tris)).filter((t) => t >= 0 && t < nTris)
   if (!picked.length) return { ok: false, reason: 'No faces selected.' }
+  if (o.includeNearbySurfaces && o.nearbySurfaceDistance > 0) {
+    picked = includeNearbyFaces(positions, index, picked, nVerts, nTris, o.nearbySurfaceDistance)
+  }
 
   // --- weld: vertices at the same place share one id -----------------------
   const weldOf = new Int32Array(nVerts)
@@ -252,6 +261,7 @@ export function planPartRig({ positions, index, tris, skinIndex, skinWeight, bon
     for (let i = 0; i < n; i++) {
       if (o.stick <= 0) mix[i] = 1
       else mix[i] = smooth(clamp((Number.isFinite(pin[i]) ? pin[i] / pinMax : 1) / o.stick, 0, 1))
+      mix[i] *= o.influence
     }
 
     // lateral coordinate for several chains side by side
@@ -345,6 +355,72 @@ export function planPartRig({ positions, index, tris, skinIndex, skinWeight, bon
 
   if (!bones.length) return { ok: false, reason: 'Nothing to rig.' }
   return { ok: true, bones, weights, pieces: pieceInfo, options: o }
+}
+
+function includeNearbyFaces(positions, index, picked, nVerts, nTris, distanceFraction) {
+  let minX = Infinity, minY = Infinity, minZ = Infinity
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity
+  for (let v = 0; v < nVerts; v++) {
+    const x = positions[v * 3], y = positions[v * 3 + 1], z = positions[v * 3 + 2]
+    minX = Math.min(minX, x); minY = Math.min(minY, y); minZ = Math.min(minZ, z)
+    maxX = Math.max(maxX, x); maxY = Math.max(maxY, y); maxZ = Math.max(maxZ, z)
+  }
+  const radius = Math.max(maxX - minX, maxY - minY, maxZ - minZ) * distanceFraction
+  if (!(radius > 0)) return picked
+
+  const cellKey = (x, y, z) => `${x},${y},${z}`
+  const cell = (v) => [
+    Math.floor(positions[v * 3] / radius),
+    Math.floor(positions[v * 3 + 1] / radius),
+    Math.floor(positions[v * 3 + 2] / radius),
+  ]
+  const nearby = new Map()
+  const selectedVertices = new Set()
+  for (const tri of picked) {
+    for (let corner = 0; corner < 3; corner++) {
+      const v = index ? index[tri * 3 + corner] : tri * 3 + corner
+      selectedVertices.add(v)
+    }
+  }
+  for (const v of selectedVertices) {
+    const [x, y, z] = cell(v)
+    const key = cellKey(x, y, z)
+    if (!nearby.has(key)) nearby.set(key, [])
+    nearby.get(key).push(v)
+  }
+
+  const closeToSelection = new Uint8Array(nVerts)
+  const radiusSq = radius * radius
+  for (let v = 0; v < nVerts; v++) {
+    const [cx, cy, cz] = cell(v)
+    for (let x = cx - 1; x <= cx + 1 && !closeToSelection[v]; x++) {
+      for (let y = cy - 1; y <= cy + 1 && !closeToSelection[v]; y++) {
+        for (let z = cz - 1; z <= cz + 1 && !closeToSelection[v]; z++) {
+          for (const other of nearby.get(cellKey(x, y, z)) || []) {
+            const dx = positions[v * 3] - positions[other * 3]
+            const dy = positions[v * 3 + 1] - positions[other * 3 + 1]
+            const dz = positions[v * 3 + 2] - positions[other * 3 + 2]
+            if (dx * dx + dy * dy + dz * dz <= radiusSq) {
+              closeToSelection[v] = 1
+              break
+            }
+          }
+        }
+      }
+    }
+  }
+
+  const expanded = new Set(picked)
+  for (let tri = 0; tri < nTris; tri++) {
+    if (expanded.has(tri)) continue
+    let closeCorners = 0
+    for (let corner = 0; corner < 3; corner++) {
+      const v = index ? index[tri * 3 + corner] : tri * 3 + corner
+      closeCorners += closeToSelection[v]
+    }
+    if (closeCorners >= 2) expanded.add(tri)
+  }
+  return Array.from(expanded)
 }
 
 function mergeEntries(e) {

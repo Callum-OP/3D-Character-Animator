@@ -601,7 +601,15 @@ export default function BonePanel() {
                   checked={chain.collideWithMesh === true}
                   onChange={(e) => updateDangleChain(chain.id, { collideWithMesh: e.target.checked })}
                 />
-                <span>Collide with visible model mesh</span>
+                <span>Collide with other meshes</span>
+              </label>
+              <label className="row" title="Use the lightweight collision proxy for mesh faces mainly weighted to dangle bones.">
+                <input
+                  type="checkbox"
+                  checked={chain.collideWithSelf === true}
+                  onChange={(e) => updateDangleChain(chain.id, { collideWithSelf: e.target.checked })}
+                />
+                <span>Collide with self</span>
               </label>
 
               <label className="slider-row">

@@ -50,7 +50,7 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
   const [message, setMessage] = useState('')
   const [presetId, setPresetId] = useState('hair')
   const [label, setLabel] = useState('Hair')
-  const [opts, setOpts] = useState({ ...PRESETS[0].o, flip: false, perPiece: true, parentBoneName: null, allowAddedBoneAttachment: false })
+  const [opts, setOpts] = useState({ ...PRESETS[0].o, flip: false, perPiece: true, parentBoneName: null, allowAddedBoneAttachment: false, influence: 1, includeNearbySurfaces: false, nearbySurfaceDistance: 0.02 })
   const [addPhysics, setAddPhysics] = useState(true)
   const [summary, setSummary] = useState(null)
   const [version, setVersion] = useState(0)
@@ -184,7 +184,7 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
     setEditingId(entry.id)
     setLabel(entry.label)
     const usesAddedParent = (entry.parentNames || []).some((name) => generatedBoneNames.has(name))
-    setOpts({ ...PRESETS[0].o, ...entry.options, allowAddedBoneAttachment: entry.options.allowAddedBoneAttachment || usesAddedParent })
+    setOpts({ ...PRESETS[0].o, influence: 1, includeNearbySurfaces: false, nearbySurfaceDistance: 0.02, ...entry.options, allowAddedBoneAttachment: entry.options.allowAddedBoneAttachment || usesAddedParent })
     setTrisByMesh(Object.fromEntries(targetMeshes.map((item, i) => [item.uuid, fromRanges(savedRanges[i] || [])])))
     setPicking(false)
     setMessage(`Editing ${entry.label}. Change the settings, then update the bones.`)
@@ -301,6 +301,22 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
             <input type="range" min="0" max="60" value={Math.round(opts.stick * 100)} onChange={(e) => patch({ stick: Number(e.target.value) / 100 })} />
             <span className="slider-value">{Math.round(opts.stick * 100)}%</span>
           </label>
+          <label className="slider-row" title="How much the new bones affect the selected surface; lower values blend more of the original skinning back in">
+            <span className="slider-label">Bone influence</span>
+            <input type="range" min="0" max="100" value={Math.round(opts.influence * 100)} onChange={(e) => patch({ influence: Number(e.target.value) / 100 })} />
+            <span className="slider-value">{Math.round(opts.influence * 100)}%</span>
+          </label>
+          <label className="morph-label" style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }} title="Also rig disconnected mesh layers close to the picked surface, such as the inside of a jacket.">
+            <input type="checkbox" checked={opts.includeNearbySurfaces} onChange={(e) => patch({ includeNearbySurfaces: e.target.checked })} />
+            Include nearby surfaces
+          </label>
+          {opts.includeNearbySurfaces && (
+            <label className="slider-row" title="Maximum distance to the picked surface, as a share of the selected mesh bounds">
+              <span className="slider-label">Surface range</span>
+              <input type="range" min="0.5" max="10" step="0.5" value={Math.round(opts.nearbySurfaceDistance * 1000) / 10} onChange={(e) => patch({ nearbySurfaceDistance: Number(e.target.value) / 100 })} />
+              <span className="slider-value">{Math.round(opts.nearbySurfaceDistance * 1000) / 10}%</span>
+            </label>
+          )}
           <label className="slider-row" title="Which way the chain runs">
             <span className="slider-label">Direction</span>
             <select className="select" value={opts.direction} onChange={(e) => patch({ direction: e.target.value })} aria-label="Chain direction">

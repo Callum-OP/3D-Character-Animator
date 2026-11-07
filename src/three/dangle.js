@@ -69,7 +69,7 @@ function defaultsForType(type) {
 
 // Build (or rebuild) the physics runtime for one character from its saved/
 // edited chain configs. `chains` is the store's plain-data array:
-// [{ id, name, boneNames, type, stiffness, gravity, damping, collideWithBones, collideWithMesh }]. Safe to call
+// [{ id, name, boneNames, type, stiffness, gravity, damping, collideWithBones, collideWithMesh, collideWithSelf }]. Safe to call
 // repeatedly (e.g. every store update) — it only rebuilds a chain when its
 // bone list actually changed, and preserves in-flight particle motion for
 // chains that didn't change so tweaking a slider mid-swing doesn't pop the pose.
@@ -128,6 +128,7 @@ function paramsFrom(cfg) {
     damping: THREE.MathUtils.clamp(cfg.damping ?? d.damping, 0, 1),
     collideWithBones: cfg.collideWithBones === true,
     collideWithMesh: cfg.collideWithMesh === true,
+    collideWithSelf: cfg.collideWithSelf === true,
   }
 }
 
@@ -224,7 +225,8 @@ export function resetDangle(id, chainId) {
 }
 
 export function clearDangle(id) {
-  runtimes.get(id)?.col?.proxy?.dispose()
+  const rt = runtimes.get(id)
+  if (rt) for (const col of Object.values(rt.cols || {})) col.proxy?.dispose()
   runtimes.delete(id)
 }
 
@@ -257,8 +259,8 @@ const ALL_OWN = 1 // a whole mesh that hangs off a dangling bone
 // every bone then does a few cheap nearest-triangle lookups against it.
 //
 // The push-out goes along the surface's outward normal: the triangle winding when it can be trusted
-// (a normal body), otherwise the side the animated pose is on. Faces that are driven by the dangling bones themselves (the hair or
-// cape that is being simulated) are left out, otherwise a strand would collide with its own mesh.
+// (a normal body), otherwise the side the animated pose is on. Faces driven by the dangling bones
+// are kept out of the same-mesh proxy to avoid a strand colliding with itself.
 // ---------------------------------------------------------------------------
 
 const COLLIDER_TRIANGLES = 2500
@@ -310,19 +312,20 @@ function ownVertexFlags(mesh, boneSet) {
   return null
 }
 
-function meshColliderFor(rt) {
-  let col = rt.col
-  if (!col) col = rt.col = { proxy: null, key: '', version: -1, checkedAt: -Infinity, own: new Map() }
+function meshColliderFor(rt, mode, maxTriangles) {
+  if (!rt.cols) rt.cols = {}
+  let col = rt.cols[mode]
+  if (!col) col = rt.cols[mode] = { proxy: null, key: '', version: -1, checkedAt: -Infinity, own: new Map() }
   if (!col.proxy || col.version !== rt.version || rt.frame - col.checkedAt >= COLLIDER_RECHECK_FRAMES) {
     col.checkedAt = rt.frame
     const meshes = (rt.model.meshes || []).filter((mesh) => mesh.isMesh && visibleInHierarchy(mesh))
-    const key = meshes.map((mesh) => mesh.uuid).join(',')
+    const key = `${mode}:${maxTriangles}:${meshes.map((mesh) => mesh.uuid).join(',')}`
     if (!col.proxy || col.version !== rt.version || col.key !== key) {
       col.proxy?.dispose()
       col.own.clear()
       const boneSet = danglingBoneSet(rt)
       col.proxy = new CollisionProxy(meshes, {
-        maxTriangles: COLLIDER_TRIANGLES,
+        maxTriangles,
         pad: 0,
         includeTriangle: (mesh, face) => {
           let flags = col.own.get(mesh)
@@ -330,12 +333,12 @@ function meshColliderFor(rt) {
             flags = ownVertexFlags(mesh, boneSet)
             col.own.set(mesh, flags)
           }
-          if (!flags) return true
+          if (!flags) return mode === 'other'
           if (flags === ALL_OWN) return false
           const index = mesh.geometry.index
           let owned = 0
           for (let c = 0; c < 3; c++) owned += flags[index ? index.getX(face * 3 + c) : face * 3 + c]
-          return owned < 2
+          return mode === 'self' ? owned < 2 : false
         },
       })
       col.key = key
@@ -501,16 +504,21 @@ export function stepDangleLive(dt) {
     rt.frame = (rt.frame || 0) + 1
     let needsMeshCollision = false
     let needsBoneCollision = false
+    let needsSelfCollision = false
     for (const chain of rt.chains.values()) {
       if (chain.params.collideWithMesh) needsMeshCollision = true
       if (chain.params.collideWithBones) needsBoneCollision = true
+      if (chain.params.collideWithSelf) needsSelfCollision = true
     }
     let collider = null
-    if (needsMeshCollision || needsBoneCollision) rt.model.root?.updateMatrixWorld(true)
-    if (needsMeshCollision) collider = meshColliderFor(rt)
+    let selfCollider = null
+    if (needsMeshCollision || needsBoneCollision || needsSelfCollision) rt.model.root?.updateMatrixWorld(true)
+    const proxyBudget = needsMeshCollision && needsSelfCollision ? Math.floor(COLLIDER_TRIANGLES / 2) : COLLIDER_TRIANGLES
+    if (needsMeshCollision) collider = meshColliderFor(rt, 'other', proxyBudget)
+    if (needsSelfCollision) selfCollider = meshColliderFor(rt, 'self', proxyBudget)
     if (needsBoneCollision) prepareBoneSegments(rt)
     for (const chain of rt.chains.values()) {
-      const { stiffness, gravity, damping, collideWithBones, collideWithMesh } = chain.params
+      const { stiffness, gravity, damping, collideWithBones, collideWithMesh, collideWithSelf } = chain.params
       // Exponential damping keeps the response consistent at different frame rates.
       const velocityKeep = Math.exp(-damping * 6 * subDt)
       const springFactor = 1 - Math.exp(-stiffness * 40 * subDt)
@@ -559,6 +567,7 @@ export function stepDangleLive(dt) {
           }
           const collisionRadius = node.tipLength * 0.12
           if (collideWithMesh && collider) collideWithSurface(collider, node, collisionRadius)
+          if (collideWithSelf && selfCollider) collideWithSurface(selfCollider, node, collisionRadius)
           if (collideWithBones && chain.skip) collideWithOtherBones(rt.seg, chain, node, collisionRadius)
           _dir.copy(node.physPos).sub(_pivot)
           if (_dir.lengthSq() > 1e-10) {
@@ -702,6 +711,7 @@ export function addDangleChainUndoable(name, boneNames, type = 'dangle') {
           damping: cloth ? 0.55 : 0.8,
           collideWithBones: false,
           collideWithMesh: false,
+          collideWithSelf: false,
         },
       ],
     }),
