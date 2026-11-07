@@ -19,6 +19,7 @@ import {
   addDangleChainUndoable as addDangleChain,
   removeDangleChainUndoable as removeDangleChain,
   updateDangleChainUndoable as updateDangleChain,
+  setAllDangleCollisionsUndoable as setAllDangleCollisions,
 } from '../three/dangle.js'
 import { collectActiveDangleDescendants, resetActiveDangle, setCameraToBones } from '../three/scene.js'
 import { performUndo, performRedo } from '../three/undoPriority.js'
@@ -135,6 +136,9 @@ export default function BonePanel() {
 
   const dangleEnabled = useStore((s) => s.dangleEnabled)
   const dangleChains = useStore((s) => s.dangleChains)
+  const allDangleCollisionsEnabled = dangleChains.length > 0 && dangleChains.every((chain) =>
+    chain.collideWithBones === true && chain.collideWithMesh === true && chain.collideWithSelf === true,
+  )
 
   const fileInputRef = useRef(null)
   const [poseMsg, setPoseMsg] = useState(null)
@@ -514,7 +518,23 @@ export default function BonePanel() {
         </div>
 
         {dangleChains.length > 0 && (
-          <FxSection step="STEP 1" title="Chains on this character" count={dangleChains.length} countLabel={`${dangleChains.length} chains`} label="Bone physics chains">
+          <FxSection
+            step="STEP 1"
+            title="Chains on this character"
+            count={dangleChains.length}
+            countLabel={`${dangleChains.length} chains`}
+            label="Bone physics chains"
+            actions={
+              <button
+                className="btn secondary"
+                aria-pressed={allDangleCollisionsEnabled}
+                onClick={() => setAllDangleCollisions(!allDangleCollisionsEnabled)}
+                title="Toggle all three collision settings on every chain"
+              >
+                {allDangleCollisionsEnabled ? 'Disable all collisions' : 'Enable all collisions'}
+              </button>
+            }
+          >
             {dangleChains.map((chain) => (
               <FxItem
                 key={chain.id}

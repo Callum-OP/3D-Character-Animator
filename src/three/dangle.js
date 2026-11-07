@@ -728,3 +728,20 @@ export function updateDangleChainUndoable(chainId, patch) {
     key: `${chainId}:${Object.keys(patch).join(',')}`,
   })
 }
+
+export function setAllDangleCollisionsUndoable(enabled) {
+  const collide = !!enabled
+  editDangle(
+    activeId(),
+    (d) => ({
+      ...d,
+      chains: d.chains.map((chain) => ({
+        ...chain,
+        collideWithBones: collide,
+        collideWithMesh: collide,
+        collideWithSelf: collide,
+      })),
+    }),
+    { discrete: true },
+  )
+}

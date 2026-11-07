@@ -7,6 +7,7 @@ import {
   clearDangle,
   editDangle,
   setDangleEnabledUndoable,
+  setAllDangleCollisionsUndoable,
   addDangleChainUndoable,
   removeDangleChainUndoable,
   updateDangleChainUndoable,
@@ -179,6 +180,36 @@ describe('dangle edits are undo steps', () => {
     setDangleEnabledUndoable(false) // already off: nothing recorded
     performUndo(state())
     expect(state().dangleEnabled).toBe(true)
+  })
+
+  it('toggles all three collision settings on every chain as one undo step', () => {
+    addDangleChainUndoable('tail', ['tail1', 'tail2'])
+    addDangleChainUndoable('hair', ['tail1'])
+    updateDangleChainUndoable(state().dangleChains[0].id, { collideWithMesh: true })
+
+    setAllDangleCollisionsUndoable(true)
+    expect(state().dangleChains).toEqual([
+      expect.objectContaining({ collideWithBones: true, collideWithMesh: true, collideWithSelf: true }),
+      expect.objectContaining({ collideWithBones: true, collideWithMesh: true, collideWithSelf: true }),
+    ])
+    performUndo(state())
+    expect(state().dangleChains[0]).toMatchObject({
+      collideWithBones: false,
+      collideWithMesh: true,
+      collideWithSelf: false,
+    })
+    expect(state().dangleChains[1]).toMatchObject({
+      collideWithBones: false,
+      collideWithMesh: false,
+      collideWithSelf: false,
+    })
+
+    setAllDangleCollisionsUndoable(true)
+    performUndo(state())
+    setAllDangleCollisionsUndoable(false)
+    expect(state().dangleChains.every((chain) =>
+      chain.collideWithBones === false && chain.collideWithMesh === false && chain.collideWithSelf === false,
+    )).toBe(true)
   })
 
   it('a character that is not the active one is edited and undone in its own settings', () => {
