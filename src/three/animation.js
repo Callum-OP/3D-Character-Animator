@@ -1377,6 +1377,35 @@ export function hasActiveAction() {
   return !!a.action
 }
 
+export function getAnimationPlaybackSnapshot() {
+  return {
+    activeId,
+    entries: new Map(
+      [...perChar].map(([id, entry]) => [
+        id,
+        { hasAction: !!entry.action, time: entry.action?.time || 0, paused: entry.action?.paused !== false },
+      ]),
+    ),
+  }
+}
+
+export function restoreAnimationPlaybackSnapshot(snapshot) {
+  if (!snapshot) return
+  for (const [id, entry] of perChar) {
+    activeId = id
+    const saved = snapshot.entries.get(id)
+    if (!saved?.hasAction) {
+      if (entry.action) stop()
+      continue
+    }
+    if (!entry.action) continue
+    scrub(saved.time)
+    if (saved.paused) pause()
+    else play()
+  }
+  activeId = snapshot.activeId
+}
+
 export function pause() {
   if (!a.action) return
   a.action.paused = true

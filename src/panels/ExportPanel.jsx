@@ -2,6 +2,9 @@ import { useState } from 'react'
 import { useStore } from '../store.js'
 import {
   exportPNG,
+  capturePNG,
+  captureAnimationPNGs,
+  getAllTimelineDuration,
   previewOutputSize,
   exportSceneModel,
   enterFullscreen,
@@ -44,6 +47,15 @@ const QUALITIES = [
   ['max', 'Maximum'],
 ]
 
+async function imageBlobAsDataUrl(blob) {
+  const bytes = new Uint8Array(await blob.arrayBuffer())
+  let binary = ''
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000))
+  }
+  return `data:${blob.type || 'image/png'};base64,${btoa(binary)}`
+}
+
 export default function ExportPanel() {
   const modelInfo = useStore((s) => s.modelInfo)
   const exportScale = useStore((s) => s.exportScale)
@@ -67,6 +79,7 @@ export default function ExportPanel() {
   const st = useStore.getState
   const [msg, setMsg] = useState(null)
   const [exportingModel, setExportingModel] = useState(false)
+  const [copying, setCopying] = useState(false)
   const [videoFpsDraft, setVideoFpsDraft] = useState(String(videoFps))
   // 'baked' = pose becomes the file's bind pose (best for Blender); 'current' = skinned pose
   // using the model's original bind data; 'rest' = un-posed. See exportPose.js.
@@ -79,7 +92,7 @@ export default function ExportPanel() {
   const name = modelInfo?.name || 'render'
   const canRecord = canRecordVideo()
   const shotView = resolveShotView({ sceneCameras, viewCameraId, animData, playbackSource })
-  const busy = recording || previewing
+  const busy = recording || previewing || copying
 
   function onPNG() {
     const restoreGizmos = hideGizmosForShot()
@@ -90,6 +103,102 @@ export default function ExportPanel() {
       return
     }
     setMsg(`Saved a ${size.width}×${size.height} PNG${size.clamped ? ' (reduced to what your GPU supports)' : ''}.`)
+  }
+
+  function clipboardWriter() {
+    if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
+      setMsg('Clipboard image copying is not supported in this browser.')
+      return null
+    }
+    return navigator.clipboard.write.bind(navigator.clipboard)
+  }
+
+  async function onCopyImage() {
+    if (busy) return
+    const write = clipboardWriter()
+    if (!write) return
+    setCopying(true)
+    setMsg('Copying image…')
+    let restoreGizmos = () => {}
+    try {
+      restoreGizmos = hideGizmosForShot()
+      const blob = await capturePNG(exportScale)
+      await write([new ClipboardItem({ 'image/png': blob })])
+      setMsg(`Copied a ${imageSize.width}×${imageSize.height} PNG to the clipboard.`)
+    } catch (error) {
+      setMsg(`Could not copy the image: ${error?.message || String(error)}`)
+    } finally {
+      restoreGizmos()
+      setCopying(false)
+    }
+  }
+
+  async function onCopyAnimation() {
+    if (busy) return
+    const write = clipboardWriter()
+    if (!write) return
+    const duration = getAllTimelineDuration({ stopAtFirstClipEnd })
+    if (!(duration > 0)) {
+      setMsg('Nothing to copy — make or select an animation first.')
+      return
+    }
+    const frameCount = Math.ceil(duration * videoFps) + 1
+    let resolveHTML
+    let rejectHTML
+    let resolveFirstFrame
+    let rejectFirstFrame
+    const htmlPromise = new Promise((resolve, reject) => {
+      resolveHTML = resolve
+      rejectHTML = reject
+    })
+    const firstFramePromise = new Promise((resolve, reject) => {
+      resolveFirstFrame = resolve
+      rejectFirstFrame = reject
+    })
+    htmlPromise.catch(() => {})
+    firstFramePromise.catch(() => {})
+    let writeResult
+    let clipboardError = null
+    setCopying(true)
+    setMsg(`Preparing ${frameCount} animation frames at ${videoFps} fps…`)
+    let restoreGizmos = () => {}
+    try {
+      restoreGizmos = hideGizmosForShot()
+      const item = new ClipboardItem({
+        'text/html': htmlPromise,
+        'image/png': firstFramePromise,
+      })
+      writeResult = write([item]).then(
+        () => ({ error: null }),
+        (error) => {
+          clipboardError = error
+          return { error }
+        },
+      )
+      const progressInterval = Math.max(1, Math.floor(frameCount / 100))
+      const frameHTML = []
+      const result = await captureAnimationPNGs(videoFps, exportScale, async (blob, frame, total) => {
+        if (clipboardError) throw clipboardError
+        if (frame === 0) resolveFirstFrame(blob)
+        const dataUrl = await imageBlobAsDataUrl(blob)
+        frameHTML.push(`<div><img src="${dataUrl}" alt="Animation frame ${frame + 1}"></div>`)
+        if ((frame + 1) % progressInterval === 0 || frame + 1 === total) {
+          setMsg(`Copying animation frames… ${frame + 1} of ${total}`)
+        }
+      })
+      resolveHTML(new Blob([`<!doctype html><html><body>${frameHTML.join('')}</body></html>`], { type: 'text/html' }))
+      const { error } = await writeResult
+      if (error) throw error
+      setMsg(`Copied ${result.count} frames at ${videoFps} fps. Paste into a rich-text app to insert the images in order; image-only apps may use the first frame.`)
+    } catch (error) {
+      rejectHTML(error)
+      rejectFirstFrame(error)
+      if (writeResult) await writeResult
+      setMsg(`Could not copy animation frames: ${error?.message || String(error)}`)
+    } finally {
+      restoreGizmos()
+      setCopying(false)
+    }
   }
 
   // Live captions for the chosen sizes. Recomputed each render, so they follow
@@ -175,6 +284,7 @@ export default function ExportPanel() {
         <select
           value={aspect}
           onChange={(e) => st().setExportAspect(e.target.value)}
+          disabled={busy}
           title="Aspect ratio of saved images and videos. Wider or taller than the viewport shows more or less of the scene to the sides."
         >
           {ASPECT_OPTIONS.map(([value, label]) => (
@@ -188,6 +298,7 @@ export default function ExportPanel() {
         <select
           value={imageResolution}
           onChange={(e) => st().setExportImageResolution(e.target.value)}
+          disabled={busy}
         >
           {IMAGE_RESOLUTIONS.map(([value, label]) => (
             <option key={value} value={value}>{label}</option>
@@ -200,6 +311,7 @@ export default function ExportPanel() {
                 key={s}
                 className={'seg-btn' + (exportScale === s ? ' active' : '')}
                 onClick={() => setExportScale(s)}
+                disabled={busy}
               >
                 {s}×
               </button>
@@ -212,9 +324,22 @@ export default function ExportPanel() {
         </div>
       </div>
 
-      <button className="btn" style={{ marginTop: 8 }} onClick={onPNG}>
-        Save image (PNG)
-      </button>
+      <div className="kf-actions" style={{ marginTop: 8 }}>
+        <button className="btn" onClick={onPNG} disabled={busy}>
+          Save image (PNG)
+        </button>
+        <button className="btn secondary" onClick={onCopyImage} disabled={busy}>
+          Copy image
+        </button>
+        <button
+          className="btn secondary"
+          onClick={onCopyAnimation}
+          disabled={busy}
+          title={`Copy every animation frame as a separate PNG at ${videoFps} fps`}
+        >
+          Copy all as images
+        </button>
+      </div>
 
       <div className="kf-actions" style={{ marginTop: 6 }}>
         <button
@@ -363,14 +488,14 @@ export default function ExportPanel() {
           <button
             className="btn secondary"
             onClick={() => onExportScene('glb')}
-            disabled={exportingModel}
+            disabled={exportingModel || busy}
           >
             {exportingModel ? 'Exporting…' : 'Save as .glb'}
           </button>
           <button
             className="btn secondary"
             onClick={() => onExportScene('gltf')}
-            disabled={exportingModel}
+            disabled={exportingModel || busy}
           >
             {exportingModel ? 'Exporting…' : 'Save as .gltf'}
           </button>

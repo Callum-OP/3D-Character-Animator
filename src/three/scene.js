@@ -167,6 +167,8 @@ import {
   getClipEditKeys,
   getClipDuration,
   getCharacterClipDuration,
+  getAnimationPlaybackSnapshot,
+  restoreAnimationPlaybackSnapshot,
   rebakeClipFromKeys,
   updateRootMotionTrack,
   play,
@@ -255,6 +257,7 @@ import {
   startObjectAnimation,
   pauseObjectAnimation,
   isObjectAnimationPaused,
+  resumeObjectAnimation,
   scrubObjectAnimation,
   getAllPropMeshes,
 } from './objects.js'
@@ -3138,7 +3141,7 @@ function applyOutputSize(width, height) {
 // in the chosen aspect (clamped to what the GPU supports). Transparent
 // background is preserved (alpha), so it drops into 2D art. Returns the pixel
 // size actually written, or null if nothing could be exported.
-export function exportPNG(scale = 2, name = 'render') {
+function preparePNGOutput(scale) {
   if (!state.renderer || !state.container || state.outputOverride) return null
   const s = useStore.getState()
   const w = state.container.clientWidth || 1
@@ -3164,14 +3167,95 @@ export function exportPNG(scale = 2, name = 'render') {
       requestRender()
     }
   }
+  return { restore, clamped: !!size?.clamped }
+}
+
+export function exportPNG(scale = 2, name = 'render') {
+  const output = preparePNGOutput(scale)
+  if (!output) return null
   renderOnce()
-  const out = { width: state.renderer.domElement.width, height: state.renderer.domElement.height, clamped: !!size?.clamped }
+  const out = { width: state.renderer.domElement.width, height: state.renderer.domElement.height, clamped: output.clamped }
   state.renderer.domElement.toBlob((blob) => {
     if (blob) downloadBlob(blob, `${name}_${timestamp()}.png`)
-    restore()
+    output.restore()
     requestRender()
   }, 'image/png')
   return out
+}
+
+// Render the current scene to a PNG without downloading it. The output-size
+// settings match exportPNG so a copied image is the same as a saved image.
+export async function capturePNG(scale = 2) {
+  const output = preparePNGOutput(scale)
+  if (!output) throw new Error('The image cannot be captured right now.')
+  try {
+    renderOnce()
+    const blob = await new Promise((resolve, reject) => {
+      state.renderer.domElement.toBlob((value) => {
+        if (value) resolve(value)
+        else reject(new Error('The browser could not create a PNG image.'))
+      }, 'image/png')
+    })
+    return blob
+  } finally {
+    output.restore()
+    requestRender()
+  }
+}
+
+// Sample the scene on the export FPS grid and return each frame as a PNG in
+// order. The original playhead, pose, and playback state are restored even if
+// rendering or the caller's clipboard write fails.
+export async function captureAnimationPNGs(fps, scale = 2, onFrame = () => {}) {
+  if (!Number.isFinite(fps) || fps <= 0) throw new Error('Choose a valid frame rate.')
+  const before = useStore.getState()
+  const duration = getAllTimelineDuration({ stopAtFirstClipEnd: before.stopAtFirstClipEnd })
+  if (!(duration > 0)) throw new Error('Nothing to copy — make or select an animation first.')
+
+  const animationSnapshot = getAnimationPlaybackSnapshot()
+  const objectSnapshot = {
+    started: before.objectAnimPlaying || isObjectAnimationPaused(),
+    playing: before.objectAnimPlaying,
+    time: before.objectAnimTime,
+  }
+  const clockSnapshot = { active: globalClock, duration: globalClockDuration, loop: globalClockLoop }
+  const frameCount = Math.ceil(duration * fps) + 1
+  const restoreTime = before.playback === 'stopped'
+    ? 0
+    : clockSnapshot.active ? before.globalTime : before.currentTime
+
+  try {
+    for (let frame = 0; frame < frameCount; frame++) {
+      scrubAllTimeline(Math.min(frame / fps, duration))
+      const blob = await capturePNG(scale)
+      await onFrame(blob, frame, frameCount)
+    }
+    return { count: frameCount, duration }
+  } finally {
+    scrubAllTimeline(restoreTime)
+    restoreAnimationPlaybackSnapshot(animationSnapshot)
+    if (objectSnapshot.started) {
+      scrubObjectAnimation(objectSnapshot.time)
+      if (objectSnapshot.playing) resumeObjectAnimation()
+      else pauseObjectAnimation()
+    } else {
+      stopObjectAnimation()
+    }
+    globalClock = clockSnapshot.active
+    globalClockDuration = clockSnapshot.duration
+    globalClockLoop = clockSnapshot.loop
+    if (clockSnapshot.active) {
+      startGlobalClock(false, { duration: clockSnapshot.duration, loop: clockSnapshot.loop })
+    }
+    useStore.setState({
+      playback: before.playback,
+      currentTime: before.currentTime,
+      globalTime: before.globalTime,
+      objectAnimPlaying: before.objectAnimPlaying,
+      objectAnimTime: before.objectAnimTime,
+    })
+    requestRender()
+  }
 }
 
 // True if the browser can record the canvas to a video.
