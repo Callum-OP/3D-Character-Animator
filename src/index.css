@@ -14,6 +14,10 @@
   box-sizing: border-box;
 }
 
+input[type='checkbox'] {
+  accent-color: var(--accent);
+}
+
 html,
 body,
 #root {
@@ -743,10 +747,6 @@ body {
   font-size: 12px;
   padding: 5px 0;
   padding-bottom: 0px;
-}
-
-.toggle-row input {
-  accent-color: var(--accent);
 }
 
 .wind-controls {
