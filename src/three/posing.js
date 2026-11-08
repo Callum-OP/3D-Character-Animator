@@ -1064,9 +1064,49 @@ function resolveLocalsFromWorld(newWorldMap, restWorld) {
   return changes
 }
 
+// Rest positions of every bone in the character's own frame (relative to the model root), used to tell the
+// bones that sit on the centre line (spine, neck, head...) from side bones that simply have no partner.
+function rootRelativeRestPositions() {
+  const saved = new Map(p.bones.map((b) => [b, b.quaternion.clone()]))
+  for (const b of p.bones) {
+    const q = p.restQuats.get(b)
+    if (q) b.quaternion.copy(q)
+  }
+  p.model.root.updateWorldMatrix(true, true)
+  const rootInv = new THREE.Matrix4().copy(p.model.root.matrixWorld).invert()
+  const out = new Map()
+  const v = new THREE.Vector3()
+  for (const b of p.bones) out.set(b, v.setFromMatrixPosition(b.matrixWorld).applyMatrix4(rootInv).clone())
+  for (const [b, q] of saved) b.quaternion.copy(q)
+  p.model.root.updateWorldMatrix(true, true)
+  return out
+}
+
+// Bones with no left/right partner that sit on the character's centre line. A pair's own midpoint gives the
+// centre line; with no pairs it is x = 0.
+function centreLineBones(skip) {
+  const positions = rootRelativeRestPositions()
+  const mids = []
+  const seen = new Set()
+  for (const bone of p.bones) {
+    if (seen.has(bone)) continue
+    const other = p.boneMap.get(mirrorBoneName(bone.name) || '')
+    if (!other || other === bone) continue
+    seen.add(bone)
+    seen.add(other)
+    mids.push((positions.get(bone).x + positions.get(other).x) / 2)
+  }
+  mids.sort((a, b) => a - b)
+  const centre = mids.length ? mids[Math.floor(mids.length / 2)] : 0
+  let extent = 0
+  for (const v of positions.values()) extent = Math.max(extent, Math.abs(v.x - centre), Math.abs(v.y), Math.abs(v.z))
+  const tol = Math.max(extent * 0.03, 1e-4)
+  return p.bones.filter((b) => !skip.has(b) && Math.abs(positions.get(b).x - centre) <= tol)
+}
+
 // Flip the left/right pose as one undoable batch. Only bones with a verified
-// opposite-side counterpart are changed; centre bones are intentionally left
-// alone. Mirroring happens in world space (see mirrorQuatAcrossX) so it's
+// opposite-side counterpart and the centre-line bones (each its own mirror) are
+// changed. Mirroring happens in world space (see mirrorQuatAcrossX) so it's
 // correct regardless of each bone's own local axis conventions — this is
 // what fixes limbs coming out bent the wrong way (e.g. an arm pointing
 // forward ending up pointing backward after mirroring).
@@ -1087,13 +1127,16 @@ export function mirrorPose() {
     processed.add(src)
     pairs.push([bone, src])
   }
+  // Centre-line bones (spine, neck, head) have no partner: each is its own mirror, so a head turned to the
+  // left ends up turned to the right.
+  for (const bone of centreLineBones(processed)) pairs.push([bone, bone])
 
   // Each affected bone's new world rotation is self-contained (its own rest
   // + its counterpart's rest/current), so it doesn't matter that a bone and
   // its parent might both be mirrored — no ordering dependency here.
   const newWorldMap = new Map()
   for (const [a, b] of pairs) {
-    for (const [target, source] of [[a, b], [b, a]]) {
+    for (const [target, source] of a === b ? [[a, a]] : [[a, b], [b, a]]) {
       const restW = restWorld.get(target)
       const restSrcW = restWorld.get(source)
       const curSrcW = currentWorld.get(source)

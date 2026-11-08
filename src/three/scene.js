@@ -16,7 +16,7 @@ import {
 import { resolveShadowQuality, computeShadowFilter, chooseShadowMapSize, normalizeShadows, normalizeNight, shadowsFromProject } from './shadowSettings.js'
 import { VideoCapture, findVideoConfig, webCodecsAvailable } from './videoCapture.js'
 import { computeOutputSize, videoBitrate, pickVideoFormat, normalizeVideoFps, MAX_VIDEO_SIDE } from './exportSize.js'
-import { setDecimatorReadyHandler } from './decimate.js'
+import { setDecimatorReadyHandler, isDecimated } from './decimate.js'
 import { bakeLookIntoMaterials, lookExportNotes } from './bakeLook.js'
 import { createShadowRefresh, canReuseShadows, cullSignature, planKeyShadow } from './shadowReuse.js'
 import { trimMemory } from './memoryTrim.js'
@@ -127,6 +127,7 @@ import {
   clearDangle,
   resetDanglePose,
   collectDescendantBoneNames,
+  rebuildRigChainsUndoable,
 } from './dangle.js'
 import {
   initSoftCloth,
@@ -135,11 +136,13 @@ import {
   stepSoftCloth,
   settleSoftCloth,
   restoreSoftRest,
+  resetSoftCloth,
   clearSoftClothForMeshes,
   suspendSoftCloth,
   resumeSoftCloth,
 } from './softcloth.js'
-import { initPartRig, getPartRigData, restorePartRigs } from './partRig.js'
+import { initPartRig, getPartRigData, restorePartRigs, getPartRigEntries, invalidatePartRigGeometry } from './partRig.js'
+import { initMeshSymmetry, getSymmetryData, restoreSymmetry, mirrorMeshes } from './meshSymmetry.js'
 import { combineMeshes as combineExportMeshes, describeCombine } from './combineMeshes.js'
 import { STATIC_FORMATS, bakeStaticMeshes, writeStaticModel } from './exportStatic.js'
 import { installFlattenerShader } from './flattenerShader.js'
@@ -601,6 +604,12 @@ export function initScene(container) {
       resumeMeshEdit()
     },
     onTime: (t) => useStore.getState().setCurrentTime(t),
+    // A looping clip went back to its first frame: hair, cloth and anything else swinging must not carry
+    // the last frame's motion into it (upside down at the end = flung upwards at the start).
+    onLoop: (id) => {
+      resetDanglePose(id)
+      for (const mesh of state.characters.get(id)?.meshes || []) resetSoftCloth(mesh)
+    },
     onEnded: () => useStore.getState().setPlayback('paused'),
     // Camera cuts: glide the view to the cut camera (by name); a null cut
     // means "before the first cut" → glide back to the pre-play view. A cut
@@ -718,6 +727,22 @@ export function initScene(container) {
   // --- Dangle bones (gravity/physics on selected bones — hair, accessories) ---
   initDangle({ requestRender: () => requestRender() })
   initPartRig({ scene: state.scene, requestRender: () => requestRender(), onBonesChanged: refreshRigBones })
+  initMeshSymmetry({
+    requestRender: () => requestRender(),
+    // read the clean pose, not a mid-swing one
+    beforeEdit: () => restoreSoftRest(),
+    // soft cloth keeps its own copy of the rest positions: rebuild it from the edited geometry
+    afterEdit: (meshes) => {
+      for (const mesh of meshes) invalidatePartRigGeometry(mesh.geometry)
+      clearSoftClothForMeshes(meshes)
+      refreshSoftCloth()
+    },
+    blockReason: (mesh) => {
+      if (isDecimated(mesh)) return 'Turn off Reduce detail on this part first, then mirror it.'
+      if (isClothEnabled(mesh.uuid)) return 'Turn off Cloth physics on this part first, then mirror it.'
+      return null
+    },
+  })
 
   // --- Lights (only affect Toon/Standard modes; harmless in Unlit) ---
   const dirLight = new THREE.DirectionalLight(0xffffff, 2.0)
@@ -1387,6 +1412,16 @@ export function resetActiveDangle(chainId) {
   if (!state.activeCharacterId) return
   resetDangle(state.activeCharacterId, chainId)
   requestRender()
+}
+
+// "Reset dangle poses": rebuild the active character's Add bones dangle chains from their rigs (default
+// settings, current bones), then snap them onto the pose. Returns how many rigs were rebuilt.
+export function resetDangleChainsToRigs() {
+  if (!state.activeCharacterId || !state.currentModel) return 0
+  const model = state.currentModel
+  const count = rebuildRigChainsUndoable(getPartRigEntries(model), (root) => collectDescendantBoneNames(model, root, 64))
+  if (count) resetActiveDangle()
+  return count
 }
 
 // Bone name + every bone hanging off it in the ACTIVE character's skeleton —
@@ -3540,6 +3575,7 @@ export function getSceneData() {
       position: root.position.toArray(),
       quaternion: root.quaternion.toArray(),
       scale: root.scale.toArray(),
+      meshSymmetry: getSymmetryData(state.currentModel),
       partRigs: getPartRigData(state.currentModel),
       pose: getPose(),
       meshEdits: getMeshEditsData(),
@@ -3561,6 +3597,8 @@ export function applySceneData(json) {
     if (c.quaternion) root.quaternion.fromArray(c.quaternion)
     if (c.scale) root.scale.fromArray(c.scale)
     // Bones added to hair / capes / hoods come back first: the saved pose, dangle chains and IK pins may name them.
+    // Mirrored / symmetrised parts come back first, so bones added afterwards were planned on the right surface.
+    if (c.meshSymmetry && c.meshSymmetry.length) restoreSymmetry(model, c.meshSymmetry)
     if (c.partRigs && c.partRigs.length) restorePartRigs(model, c.partRigs)
     if (c.pose) {
       try {
@@ -3751,6 +3789,7 @@ export function getProjectData() {
       importedClipNames: live.importedClipNames,
       activeClipName: live.activeClipName,
       playbackSource: live.playbackSource,
+      meshSymmetry: getSymmetryData(model),
       partRigs: getPartRigData(model),
       dangleEnabled: live.dangleEnabled,
       dangleChains: live.dangleChains,
@@ -3869,6 +3908,7 @@ export async function applyProjectData(record) {
       model.root.quaternion.fromArray(c.transform.quaternion)
       model.root.scale.fromArray(c.transform.scale)
     }
+    if (c.meshSymmetry?.length) restoreSymmetry(model, c.meshSymmetry)
     if (c.partRigs?.length) restorePartRigs(model, c.partRigs)
     if (c.pose) {
       try {
@@ -4941,6 +4981,14 @@ export function disposeScene() {
 }
 
 // Expose current model reference for panels that need live objects later.
+// Viewport buttons (Mesh mode): mirror, or symmetrise from `side`, the selected parts of the active character.
+export function mirrorSelectedMeshes(kind, side = 'left') {
+  const model = state.currentModel
+  const uuids = new Set(useStore.getState().selectedMeshUuids || [])
+  const meshes = (model?.meshes || []).filter((m) => uuids.has(m.uuid))
+  return mirrorMeshes(model, meshes, kind, side)
+}
+
 export function getCurrentModel() {
   return state.currentModel
 }

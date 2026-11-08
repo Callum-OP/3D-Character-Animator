@@ -871,6 +871,57 @@ export function getDangleChainsForRig(chains, rig, allRigs = []) {
   })
 }
 
+// Recreate one default dangle chain for each rig that already has dangle
+// chains. Hand-made chains are left untouched; the replacements follow the
+// rig's current descendants rather than any possibly stale saved bone list.
+export function rebuildRigChainsUndoable(rigs, descend) {
+  const entries = (rigs || []).filter((rig) => rig?.id)
+  if (!entries.length || typeof descend !== 'function') return 0
+
+  const before = readDangle(activeId())
+  const replacements = new Map()
+  let count = 0
+  for (const rig of entries) {
+    const owned = getDangleChainsForRig(before.chains, rig, entries)
+    if (!owned.length) continue
+
+    const boneNames = [...new Set((rig.rootBoneNames || []).flatMap((root) => descend(root) || []))]
+    if (!boneNames.length) continue
+    const id = `dangle_${Date.now()}_${Math.floor(Math.random() * 1000)}`
+    replacements.set(owned[0].id, {
+      id,
+      name: rig.label || 'Added bones',
+      boneNames,
+      type: 'dangle',
+      stiffness: 0.15,
+      gravity: 1,
+      damping: 0.8,
+      collideWithBones: false,
+      collideWithMesh: false,
+      collideWithSelf: false,
+      groupId: rig.id,
+      groupName: rig.label || 'Added bones',
+    })
+    for (const chain of owned.slice(1)) replacements.set(chain.id, null)
+    count++
+  }
+  if (!replacements.size) return 0
+
+  editDangle(
+    activeId(),
+    (d) => ({
+      ...d,
+      chains: d.chains.flatMap((chain) => {
+        if (!replacements.has(chain.id)) return [chain]
+        const replacement = replacements.get(chain.id)
+        return replacement ? [replacement] : []
+      }),
+    }),
+    { discrete: true },
+  )
+  return count
+}
+
 // After an Add bones rig is renamed or rebuilt: put its chains in a group of their own under the new name,
 // point them at the rebuilt bones (the bone names come from the rig name) and rename "Old 1" to "New 1".
 export function regroupRigChainsUndoable(chainIds, group, oldRig, newRig, descend) {

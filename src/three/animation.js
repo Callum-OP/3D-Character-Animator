@@ -124,6 +124,10 @@ export function setAnimationModel(model, id) {
   disposeEntry(id) // in case this id already had one (e.g. reloading in place)
   const entry = newEntry(model)
   entry.mixer = new THREE.AnimationMixer(model.root)
+  entry.pendingLoops = 0
+  entry.mixer.addEventListener('loop', (event) => {
+    entry.pendingLoops += Math.abs(event.loopDelta)
+  })
   entry.restQuats = new Map()
   entry.restPos = new Map()
   for (const b of model.bones || []) {
@@ -222,6 +226,10 @@ export function updateAnimation(delta) {
         sampleCuts(t)
         globalRefs.onTime(t)
       }
+    }
+    while (entry.pendingLoops > 0) {
+      entry.pendingLoops--
+      globalRefs.onLoop?.(id)
     }
   }
   activeId = uiActiveId

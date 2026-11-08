@@ -33,6 +33,7 @@ import {
   syncActiveDangleConfig,
   setOrbitSuspended,
   getObjectScreenPosition,
+  mirrorSelectedMeshes,
 } from './scene.js'
 import RadialScale from '../panels/RadialScale.jsx'
 import { getSelectedUniformScale, setSelectedUniformScale, commitUniformScale, snapshotObject } from './objects.js'
@@ -217,6 +218,17 @@ function Viewport() {
   const emptyModelInputRef = useRef(null)
   const [dragOver, setDragOver] = useState(false)
   const [symmetriseOpen, setSymmetriseOpen] = useState(false)
+  const [meshSymOpen, setMeshSymOpen] = useState(false)
+  const [meshSymMsg, setMeshSymMsg] = useState('')
+  const runMeshSym = (kind, side) => {
+    setMeshSymOpen(false)
+    setMeshSymMsg(mirrorSelectedMeshes(kind, side))
+  }
+  useEffect(() => {
+    if (!meshSymMsg) return undefined
+    const t = setTimeout(() => setMeshSymMsg(''), 6000)
+    return () => clearTimeout(t)
+  }, [meshSymMsg])
 
   // Create the scene once on mount, tear it down on unmount.
   useEffect(() => {
@@ -940,6 +952,32 @@ function Viewport() {
               <button onClick={() => { symmetrisePose('average'); setSymmetriseOpen(false) }}>Meet in middle</button>
             </div>
           )}
+        </div>
+      )}
+
+      {hasCharacter && mode === 'mesh' && selectedMeshUuid && (
+        <div className="pose-toolbar" aria-label="Whole mesh actions">
+          <button
+            className="pose-toolbar-btn"
+            title="Flip the selected part to the other side, keeping its skin weights on the opposite-side bones"
+            onClick={() => runMeshSym('mirror')}
+          >
+            Mirror
+          </button>
+          <button
+            className="pose-toolbar-btn"
+            title="Make the other side of the selected part match one side"
+            onClick={() => setMeshSymOpen((open) => !open)}
+          >
+            Symmetrise
+          </button>
+          {meshSymOpen && (
+            <div className="symmetrise-menu" role="menu" aria-label="Symmetrise mesh options">
+              <button onClick={() => runMeshSym('symmetrise', 'left')}>Copy from left</button>
+              <button onClick={() => runMeshSym('symmetrise', 'right')}>Copy from right</button>
+            </div>
+          )}
+          {meshSymMsg && <div className="pose-toolbar-note" role="status">{meshSymMsg}</div>}
         </div>
       )}
 

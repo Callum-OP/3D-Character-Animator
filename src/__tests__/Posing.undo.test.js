@@ -130,15 +130,17 @@ describe('bone posing: undo/redo and rest-relative editing', () => {
     expect(getBoneEulerDelta('Spine').y).toBeCloseTo(30, 0)
   })
 
-  it('mirrorPose reflects only verified left/right pairs across the centre plane', () => {
+  it('mirrorPose reflects left/right pairs and the centre-line bones across the centre plane', () => {
     setBoneEulerDelta('LeftArm', { x: 0, y: 25, z: 0 })
     setBoneEulerDelta('RightArm', { x: 0, y: -5, z: 0 })
-    setBoneEulerDelta('Spine', { x: 0, y: 15, z: 0 })
+    setBoneEulerDelta('Spine', { x: 20, y: 15, z: 0 })
     mirrorPose()
 
     expect(getBoneEulerDelta('LeftArm').y).toBeCloseTo(5, 0)
     expect(getBoneEulerDelta('RightArm').y).toBeCloseTo(-25, 0)
-    expect(getBoneEulerDelta('Spine').y).toBeCloseTo(15, 0)
+    // a twisted spine turns the other way; bending forward is unchanged
+    expect(getBoneEulerDelta('Spine').y).toBeCloseTo(-15, 0)
+    expect(getBoneEulerDelta('Spine').x).toBeCloseTo(20, 0)
   })
 
   it('pairs exporter side names even when numeric suffixes differ', () => {

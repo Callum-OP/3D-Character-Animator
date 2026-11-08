@@ -55,6 +55,11 @@ export function uniqueRigLabel(model, label, excludeId = null) {
 
 const bindPositionCache = new WeakMap() // geometry -> { matrix: string, positions }
 
+// A part's positions were rewritten (mirror / symmetrise): forget the copy planning keeps.
+export function invalidatePartRigGeometry(geo) {
+  bindPositionCache.delete(geo)
+}
+
 function bindSpacePositions(mesh) {
   const geo = mesh.geometry
   const key = mesh.bindMatrix.elements.join(',')

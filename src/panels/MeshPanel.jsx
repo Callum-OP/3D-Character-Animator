@@ -44,6 +44,7 @@ import ColorControl from './ColorControl.jsx'
 import MaterialEditor from './MaterialEditor.jsx'
 import RegionEditor from './RegionEditor.jsx'
 import PartRigSection from './PartRigSection.jsx'
+import SymmetrySection from './SymmetrySection.jsx'
 import { isRigCapable } from '../three/partRig.js'
 import DecimateEditor from './DecimateEditor.jsx'
 import TextureReduceEditor from './TextureReduceEditor.jsx'
@@ -617,6 +618,17 @@ export default function MeshPanel() {
             applyModelMaterials()
           }}
         />
+        </FxCollapse>
+      )}
+
+      {selectedMeshUuids.length === 1 && selectedMeshUuid && !isPropPart && (
+        <FxCollapse title="Mirror & symmetrise" hint="match one side to the other">
+          <SymmetrySection
+            meshUuid={selectedMeshUuid}
+            resolveMesh={(uuid) => currentModel?.meshes?.find((m) => m.uuid === uuid) || null}
+            partsList={(currentModel?.meshes || []).filter((m) => m.uuid !== selectedMeshUuid)}
+            labelFor={(m) => labelOf(m.uuid, m.name)}
+          />
         </FxCollapse>
       )}
 

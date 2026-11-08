@@ -384,6 +384,22 @@ body {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
 }
 
+.pose-toolbar-note {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: max-content;
+  max-width: 280px;
+  padding: 7px 10px;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: rgba(16, 17, 20, 0.88);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.35;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
 .pose-toolbar-btn:hover {
   border-color: var(--accent);
   background: rgba(31, 45, 70, 0.92);
