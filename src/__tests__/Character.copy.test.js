@@ -5,9 +5,10 @@ import { initObjects } from '../three/objects.js'
 import { initPosing } from '../three/posing.js'
 import { initMeshEdit } from '../three/meshedit.js'
 import { initAnimation } from '../three/animation.js'
-import { initDangle } from '../three/dangle.js'
-import { __seedCharacterForTest } from '../three/scene.js'
+import { collectDescendantBoneNames, getDangleChainsForRig, initDangle, regroupRigChainsUndoable, removeDangleChainUndoable } from '../three/dangle.js'
+import { __seedCharacterForTest, getCurrentModel, setActiveCharacter } from '../three/scene.js'
 import { copyCurrentEdit, pasteCurrentEdit } from '../three/editClipboard.js'
+import { applyPartRig, getPartRigData, getPartRigEntries, initPartRig, removePartRig, restorePartRigs, updatePartRig } from '../three/partRig.js'
 import { performUndo, performRedo } from '../three/undoPriority.js'
 import { clearUndoHistory } from '../three/undoHistory.js'
 
@@ -54,6 +55,7 @@ beforeEach(() => {
   initMeshEdit({ scene, camera, renderer, controls, requestRender })
   initAnimation({ requestRender, setContinuousRender: () => {} })
   initDangle({ requestRender })
+  initPartRig({ requestRender })
   clearUndoHistory()
   useStore.setState({
     characters: {},
@@ -113,5 +115,90 @@ describe('character clipboard', () => {
     performRedo(useStore.getState())
     expect(useStore.getState().characterOrder).toHaveLength(2)
     expect(useStore.getState().activeCharacterId).toBe(pasted.result.id)
+  })
+
+  it('copies added-bone rigs with independent edit and remove data', () => {
+    const original = makeCharacter('Rigged Actor')
+    original.skeleton = original.meshes[0].skeleton
+    original.__poseRestQuats = new Map(original.bones.map((bone) => [bone, bone.quaternion.clone()]))
+    __seedCharacterForTest('rigged-actor', original, scene)
+    const rigged = applyPartRig(
+      original,
+      original.meshes[0],
+      Array.from({ length: original.meshes[0].geometry.index.count / 3 }, (_, i) => i),
+      { segments: 2 },
+      { label: 'Cape' },
+    )
+    expect(rigged.ok).toBe(true)
+    useStore.setState({
+      mode: 'object',
+      selectedObjectId: 'rigged-actor',
+      dangleEnabled: true,
+      dangleChains: [{
+        id: 'cape-physics',
+        name: 'Cape',
+        boneNames: rigged.entry.boneNames,
+        type: 'dangle',
+        groupId: rigged.entry.id,
+      }],
+    })
+
+    expect(copyCurrentEdit()).toBe('character')
+    const pasted = pasteCurrentEdit()
+    const duplicate = getCurrentModel()
+    const duplicateRig = getPartRigEntries(duplicate)[0]
+    expect(duplicateRig.result).toBeDefined()
+    expect(duplicateRig.result.meshes[0].mesh).toBe(duplicate.meshes[0])
+    expect(duplicateRig.result.meshes[0].mesh).not.toBe(original.meshes[0])
+    expect(duplicate.__poseRestQuats.has(duplicate.bones[0])).toBe(true)
+    expect(duplicate.__poseRestQuats.has(original.bones[0])).toBe(false)
+    expect(useStore.getState().dangleChains).toEqual([expect.objectContaining({ groupId: rigged.entry.id })])
+    setActiveCharacter('rigged-actor')
+    setActiveCharacter(pasted.result.id)
+
+    const before = {
+      id: duplicateRig.id,
+      label: duplicateRig.label,
+      boneNames: duplicateRig.boneNames,
+      rootBoneNames: duplicateRig.rootBoneNames,
+    }
+    const chainIds = getDangleChainsForRig(useStore.getState().dangleChains, duplicateRig, getPartRigEntries(duplicate))
+      .map((chain) => chain.id)
+    const updated = updatePartRig(duplicate, duplicateRig.id, { options: { ...duplicateRig.options, segments: 1 } })
+    expect(updated.ok).toBe(true)
+    regroupRigChainsUndoable(
+      chainIds,
+      { id: updated.entry.id, name: updated.entry.label },
+      before,
+      updated.entry,
+      (root) => collectDescendantBoneNames(duplicate, root, 64),
+    )
+    expect(getPartRigEntries(duplicate)[0].boneNames).toHaveLength(1)
+    expect(rigged.entry.boneNames).toHaveLength(2)
+    expect(duplicate.__poseRestQuats.has(getPartRigEntries(duplicate)[0].result.created[0])).toBe(true)
+    expect(useStore.getState().dangleChains[0].boneNames).toEqual(updated.entry.boneNames)
+    expect(useStore.getState().characters['rigged-actor'].dangleChains[0].boneNames).toEqual(rigged.entry.boneNames)
+    const savedRigs = JSON.parse(JSON.stringify(getPartRigData(duplicate)))
+    const reloaded = makeCharacter('Rigged Actor Copy')
+    reloaded.skeleton = reloaded.meshes[0].skeleton
+    expect(restorePartRigs(reloaded, savedRigs)).toBe(1)
+    expect(getPartRigEntries(reloaded)[0].boneNames).toEqual(updated.entry.boneNames)
+    const updatedChainIds = getDangleChainsForRig(useStore.getState().dangleChains, updated.entry, getPartRigEntries(duplicate))
+      .map((chain) => chain.id)
+    updatedChainIds.forEach((id) => removeDangleChainUndoable(id))
+    expect(useStore.getState().dangleChains).toHaveLength(0)
+    expect(removePartRig(duplicate, duplicateRig.id)).toBe(true)
+    expect(getPartRigEntries(duplicate)).toHaveLength(0)
+    expect(original.skeleton.bones).toHaveLength(3)
+    expect(duplicate.skeleton.bones).toHaveLength(1)
+    expect(duplicate.skeleton.boneInverses.every((inverse) => inverse?.elements?.length === 16)).toBe(true)
+    setActiveCharacter('rigged-actor')
+    setActiveCharacter(pasted.result.id)
+
+    performUndo(useStore.getState())
+    expect(getPartRigEntries(duplicate)).toHaveLength(1)
+    performUndo(useStore.getState())
+    expect(useStore.getState().dangleChains).toHaveLength(1)
+    expect(pasted.result.id).toBe(useStore.getState().activeCharacterId)
   })
 })

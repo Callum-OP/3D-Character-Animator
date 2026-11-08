@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from 'react'
 import EditableValue from './EditableValue.jsx'
 import { getCurrentModel, requestRender } from '../three/scene.js'
 import { useStore } from '../store.js'
+import { collectShapeKeys, readShapeKey, writeShapeKey } from './ShapeKeyPickerUtils.js'
 
 // A compact way to set a character's shape keys from the Animate panel, instead of
 // a wall of sliders: pick one shape key from a drop-down, and it appears as a
@@ -14,28 +15,6 @@ import { useStore } from '../store.js'
 
 const FILTER_FROM = 12 // show the filter box once there are this many shape keys
 const FINE_RANGE = 0.1 // the fine slider nudges the value by up to ±this much
-
-// Every shape key on the character, by unique name: { name, targets: [{ mesh, idx }] }.
-export function collectShapeKeys(meshes) {
-  const byName = new Map()
-  for (const mesh of meshes || []) {
-    const dict = mesh.morphTargetDictionary
-    if (!dict || !mesh.morphTargetInfluences) continue
-    for (const [name, idx] of Object.entries(dict)) {
-      if (!byName.has(name)) byName.set(name, { name, targets: [] })
-      byName.get(name).targets.push({ mesh, idx })
-    }
-  }
-  return [...byName.values()]
-}
-
-export const readShapeKey = (key) => key.targets[0].mesh.morphTargetInfluences[key.targets[0].idx] ?? 0
-
-export function writeShapeKey(key, value) {
-  const v = Math.min(1, Math.max(0, value))
-  for (const { mesh, idx } of key.targets) mesh.morphTargetInfluences[idx] = v
-  return v
-}
 
 const clamp01 = (v) => Math.min(1, Math.max(0, v))
 

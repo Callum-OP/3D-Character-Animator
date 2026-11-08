@@ -4,7 +4,7 @@ import * as THREE from 'three'
 import { useStore } from '../store.js'
 import { getCurrentModel } from '../three/scene.js'
 import { setFacePickHandler } from '../three/meshedit.js'
-import { addDangleChainUndoable, collectDescendantBoneNames, getDangleChainsForRig, regroupRigChainsUndoable } from '../three/dangle.js'
+import { addDangleChainUndoable, collectDescendantBoneNames, getDangleChainsForRig, regroupRigChainsUndoable, removeDangleChainUndoable } from '../three/dangle.js'
 import {
   isRigCapable,
   planForMeshes,
@@ -219,6 +219,9 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
   function onDelete(entry) {
     const dependents = getPartRigDependents(model, entry.id)
     if (dependents.length) return setMessage(`Cannot delete ${entry.label}: ${dependents.map((item) => item.label).join(', ')} ${dependents.length === 1 ? 'is' : 'are'} attached to its bones. Delete those rigs first.`)
+    if (!entry.result) return setMessage('That bone rig is no longer available.')
+    const rigChains = getDangleChainsForRig(useStore.getState().dangleChains, entry, entries)
+    rigChains.forEach((chain) => removeDangleChainUndoable(chain.id))
     if (!removePartRig(model, entry.id)) return setMessage('That bone rig is no longer available.')
     if (editingId === entry.id) setEditingId(null)
     setVersion((v) => v + 1)

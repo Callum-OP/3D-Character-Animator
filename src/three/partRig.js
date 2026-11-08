@@ -555,18 +555,28 @@ export function getPartRigData(model) {
 }
 
 // Replay saved recipes onto a freshly loaded model. Entries that no longer fit the mesh are skipped.
-export function restorePartRigs(model, saved) {
+export function restorePartRigs(model, saved, { onSkip } = {}) {
   let restored = 0
   for (const s of saved || []) {
     if (getPartRigEntries(model).some((entry) => entry.id === s.id)) continue
     const indices = s.meshIndices || [s.meshIndex]
     const meshes = indices.map((index) => model.meshes[index])
-    if (meshes.some((mesh, i) => !mesh || !isRigCapable(mesh) || ((s.meshNames || [s.meshName])[i] && mesh.name !== (s.meshNames || [s.meshName])[i]))) continue
-    if (!compatibleRigMeshes(meshes)) continue
+    const skip = (reason) => onSkip?.({ id: s.id, label: s.label || 'Added bones', reason })
+    if (meshes.some((mesh, i) => !mesh || !isRigCapable(mesh) || ((s.meshNames || [s.meshName])[i] && mesh.name !== (s.meshNames || [s.meshName])[i]))) {
+      skip('the saved mesh is missing or changed')
+      continue
+    }
+    if (!compatibleRigMeshes(meshes)) {
+      skip('the saved meshes no longer share a compatible skeleton')
+      continue
+    }
     const vertexCounts = indices.length === 1 && s.vertexCount != null
       ? [s.vertexCount]
       : (s.vertexCounts || [])
-    if (vertexCounts.some((count, i) => count !== regionVertexCount(meshes[i].geometry))) continue
+    if (vertexCounts.some((count, i) => count !== regionVertexCount(meshes[i].geometry))) {
+      skip('the mesh topology changed')
+      continue
+    }
     const ranges = s.trisByMesh || [s.tris]
     const selections = meshes.map((mesh, i) => ({ mesh, tris: fromRanges(ranges[i] || []) }))
     const options = { ...(s.options || {}) }
@@ -575,6 +585,7 @@ export function restorePartRigs(model, saved) {
     }
     const res = applyPartRig(model, meshes, selections, options, { label: s.label, names: s.boneNames, record: false, id: s.id })
     if (res.ok) restored++
+    else skip(res.reason)
   }
   return restored
 }

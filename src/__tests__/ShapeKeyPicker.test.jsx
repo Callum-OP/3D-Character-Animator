@@ -9,7 +9,8 @@ vi.mock('../three/scene.js', () => ({
   requestRender: (...a) => requestRender(...a),
 }))
 
-import ShapeKeyPicker, { collectShapeKeys, readShapeKey, writeShapeKey } from '../panels/ShapeKeyPicker.jsx'
+import ShapeKeyPicker from '../panels/ShapeKeyPicker.jsx'
+import { collectShapeKeys, readShapeKey, writeShapeKey } from '../panels/ShapeKeyPickerUtils.js'
 
 function makeMesh(names) {
   return {

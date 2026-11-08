@@ -349,7 +349,9 @@ describe('adding the bones', () => {
     const saved = getPartRigData(one.model)
     saved[0].vertexCount += 3
     const two = build()
-    expect(restorePartRigs(two.model, saved)).toBe(0)
+    const skipped = []
+    expect(restorePartRigs(two.model, saved, { onSkip: (entry) => skipped.push(entry) })).toBe(0)
+    expect(skipped).toEqual([expect.objectContaining({ label: 'Cape', reason: 'the mesh topology changed' })])
     expect(two.model.bones).toHaveLength(3)
   })
 

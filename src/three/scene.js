@@ -1804,6 +1804,24 @@ function cloneCharacterModel(source) {
   source.root.traverse((node) => sourceNodes.push(node))
   root.traverse((node) => clonedNodes.push(node))
   const nodeMap = new Map(sourceNodes.map((node, index) => [node, clonedNodes[index]]))
+  // SkeletonUtils.clone gives every skinned mesh its OWN Skeleton, and three's Skeleton.clone() even hands
+  // that copy the SAME boneInverses array as the source. Both break added bones: the rig code expects every
+  // mesh of a character to share one skeleton (as a loaded model does), so bones added to / removed from the
+  // copy would reach only some meshes (stretched, exploding meshes) and, through the shared array, the
+  // original too. Rebuild one independent skeleton per source skeleton and bind every mesh that used it.
+  const rebuiltSkeletons = new Map()
+  sourceNodes.forEach((node, index) => {
+    const copy = clonedNodes[index]
+    if (!node.isSkinnedMesh || !copy || !copy.isSkinnedMesh || !node.skeleton) return
+    let skeleton = rebuiltSkeletons.get(node.skeleton)
+    if (!skeleton) {
+      const bones = node.skeleton.bones.map((bone) => nodeMap.get(bone))
+      if (bones.some((bone) => !bone)) return
+      skeleton = new THREE.Skeleton(bones, node.skeleton.boneInverses.map((matrix) => matrix.clone()))
+      rebuiltSkeletons.set(node.skeleton, skeleton)
+    }
+    copy.bind(skeleton, node.bindMatrix.clone())
+  })
   // What merely rides on the character (a light's or camera's mount, a prop attached to a bone)
   // is not part of it: the clone would carry unregistered phantom copies of them.
   sourceNodes.forEach((node, index) => {
@@ -1846,6 +1864,49 @@ function cloneCharacterModel(source) {
     uuid: mesh.uuid,
   }))
   const info = { ...source.info, meshes: infoMeshes }
+  const poseRestQuats = source.__poseRestQuats
+    ? new Map([...source.__poseRestQuats]
+      .map(([bone, quaternion]) => [nodeMap.get(bone), quaternion.clone()])
+      .filter(([bone]) => bone))
+    : undefined
+  const skeletonMap = new Map((source.skinnedMeshes || [])
+    .map((mesh) => [mesh.skeleton, nodeMap.get(mesh)?.skeleton])
+    .filter(([, skeleton]) => skeleton))
+  const cloneRigEntry = (entry) => {
+    const { result, ...saved } = entry
+    if (!result) return saved
+
+    const meshResults = (result.meshes || [result]).map((meshResult) => {
+      const mesh = nodeMap.get(meshResult.mesh)
+      if (!mesh) return null
+      return {
+        ...meshResult,
+        mesh,
+        verts: meshResult.verts.slice(),
+        oldIdx: meshResult.oldIdx.slice(),
+        oldW: meshResult.oldW.slice(),
+        newIdx: meshResult.newIdx.slice(),
+        newW: meshResult.newW.slice(),
+      }
+    })
+    const created = result.created.map((bone) => nodeMap.get(bone))
+    const skeletons = (result.skeletons || []).map((skeleton) => skeletonMap.get(skeleton))
+    if (meshResults.some((item) => !item) || created.some((bone) => !bone) || skeletons.some((skeleton) => !skeleton)) {
+      return saved
+    }
+
+    return {
+      ...saved,
+      result: {
+        ...result,
+        meshes: meshResults,
+        created,
+        parents: new Map([...result.parents].map(([bone, parent]) => [nodeMap.get(bone), nodeMap.get(parent)])),
+        skeletons,
+        newInverses: result.newInverses.map((matrix) => matrix.clone()),
+      },
+    }
+  }
   return {
     ...source,
     root,
@@ -1855,7 +1916,8 @@ function cloneCharacterModel(source) {
     skeleton: skinnedMeshes.find((mesh) => mesh.skeleton)?.skeleton || null,
     materials: null,
     info,
-    __rigAdds: (source.__rigAdds || []).map(({ result, ...saved }) => saved), // the copy keeps the added bones (it cannot undo them)
+    __poseRestQuats: poseRestQuats,
+    __rigAdds: (source.__rigAdds || []).map(cloneRigEntry),
   }
 }
 
@@ -3599,7 +3661,11 @@ export function applySceneData(json) {
     // Bones added to hair / capes / hoods come back first: the saved pose, dangle chains and IK pins may name them.
     // Mirrored / symmetrised parts come back first, so bones added afterwards were planned on the right surface.
     if (c.meshSymmetry && c.meshSymmetry.length) restoreSymmetry(model, c.meshSymmetry)
-    if (c.partRigs && c.partRigs.length) restorePartRigs(model, c.partRigs)
+    if (c.partRigs && c.partRigs.length) {
+      const skipped = []
+      restorePartRigs(model, c.partRigs, { onSkip: (entry) => skipped.push(entry) })
+      if (skipped.length) useStore.getState().setLoadNotice(formatPartRigRestoreNotice(skipped))
+    }
     if (c.pose) {
       try {
         applyPose(c.pose)
@@ -3633,6 +3699,12 @@ export function applySceneData(json) {
   }
   if (json.viewportCamera) applyViewportCameraData(json.viewportCamera)
   requestRender()
+}
+
+function formatPartRigRestoreNotice(skipped) {
+  const items = skipped.slice(0, 3).map(({ label, reason }) => `${label} (${reason})`)
+  const more = skipped.length > items.length ? ` and ${skipped.length - items.length} more` : ''
+  return `Could not restore added-bone rigs: ${items.join(', ')}${more}.`
 }
 
 // ---------------------------------------------------------------------------
@@ -3893,6 +3965,7 @@ export async function applyProjectData(record) {
   }
 
   let activeIdToRestore = null
+  const skippedPartRigs = []
   for (let i = 0; i < characterRecords.length; i++) {
     const c = characterRecords[i]
     if (!c.blob) continue
@@ -3909,7 +3982,11 @@ export async function applyProjectData(record) {
       model.root.scale.fromArray(c.transform.scale)
     }
     if (c.meshSymmetry?.length) restoreSymmetry(model, c.meshSymmetry)
-    if (c.partRigs?.length) restorePartRigs(model, c.partRigs)
+    if (c.partRigs?.length) {
+      restorePartRigs(model, c.partRigs, {
+        onSkip: (entry) => skippedPartRigs.push({ ...entry, characterName: c.name || model.info.name }),
+      })
+    }
     if (c.pose) {
       try {
         applyPose(c.pose)
@@ -3953,6 +4030,13 @@ export async function applyProjectData(record) {
     setDangleConfig(id, model, c.dangleEnabled ?? true, c.dangleChains || [])
     pendingIk.push({ id, model, enabled: c.ikEnabled ?? true, saved: c.ikPins || [] })
     if (c.isActive || (record.format === 'project-v1' && i === 0)) activeIdToRestore = id
+  }
+  if (skippedPartRigs.length) {
+    const byRig = skippedPartRigs.map((entry) => ({
+      ...entry,
+      label: `${entry.characterName}: ${entry.label}`,
+    }))
+    useStore.getState().setLoadNotice(formatPartRigRestoreNotice(byRig))
   }
   if (activeIdToRestore) setActiveCharacter(activeIdToRestore)
 
