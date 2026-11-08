@@ -129,6 +129,11 @@ function paramsFrom(cfg) {
     collideWithBones: cfg.collideWithBones === true,
     collideWithMesh: cfg.collideWithMesh === true,
     collideWithSelf: cfg.collideWithSelf === true,
+    // Extra feel settings (same ideas as the mesh swing zones). The defaults reproduce the old behaviour.
+    bounce: THREE.MathUtils.clamp(cfg.bounce ?? 1, 0, 2.5), // up/down looseness
+    reaction: THREE.MathUtils.clamp(cfg.reaction ?? 0, 0, 1), // how much body movement is NOT carried along
+    swingLimit: THREE.MathUtils.clamp(cfg.swingLimit ?? 180, 5, 180), // furthest swing, in degrees
+    holdTop: THREE.MathUtils.clamp(cfg.holdTop ?? 0, 0, 0.8), // share of the chain (from the top) kept rigid
   }
 }
 
@@ -174,6 +179,14 @@ function buildChain(model, cfg) {
     for (const c of n.children) queue.push(c)
   }
   if (!order.length) return null
+
+  // How deep each bone sits in its chain (0 = the top), for the "rigid top" setting.
+  let maxDepth = 0
+  for (const node of order) {
+    node.depth = node.parentNode ? node.parentNode.depth + 1 : 0
+    if (node.depth > maxDepth) maxDepth = node.depth
+  }
+  for (const node of order) node.depthFrac = maxDepth > 0 ? node.depth / maxDepth : 1
 
   // Constant per-node data: the local offset toward this bone's own tip
   // (its first dangled child, or a synthetic tip reusing its own rest
@@ -263,6 +276,9 @@ const _segmentPoint = new THREE.Vector3()
 const _decPos = new THREE.Vector3()
 const _decScale = new THREE.Vector3()
 const _identity = new THREE.Matrix4()
+const _identQ = new THREE.Quaternion()
+const _axis = new THREE.Vector3()
+const _qLimit = new THREE.Quaternion()
 const ALL_OWN = 1 // a whole mesh that hangs off a dangling bone
 
 // ---------------------------------------------------------------------------
@@ -568,7 +584,9 @@ export function stepDangleLive(dt) {
     if (needsSelfCollision) selfCollider = meshColliderFor(rt, 'self', proxyBudget)
     if (needsBoneCollision) prepareBoneSegments(rt)
     for (const chain of rt.chains.values()) {
-      const { stiffness, gravity, damping, collideWithBones, collideWithMesh, collideWithSelf } = chain.params
+      const { stiffness, gravity, damping, collideWithBones, collideWithMesh, collideWithSelf, bounce, reaction, swingLimit, holdTop } = chain.params
+      const carry = 1 - reaction
+      const limitRad = THREE.MathUtils.degToRad(swingLimit)
       // Exponential damping keeps the response consistent at different frame rates.
       const velocityKeep = Math.exp(-damping * 6 * subDt)
       const springFactor = 1 - Math.exp(-stiffness * 40 * subDt)
@@ -593,6 +611,7 @@ export function stepDangleLive(dt) {
           _pivot.copy(node.bone.position).applyMatrix4(parentWorld)
           // Carry the simulation with a translating attachment instead of leaving it behind.
           _vel.copy(_pivot).sub(node.lastPivot)
+          _vel.multiplyScalar(carry)
           node.physPos.add(_vel)
           node.physPrev.add(_vel)
           node.lastPivot.copy(_pivot)
@@ -601,6 +620,7 @@ export function stepDangleLive(dt) {
 
           // Verlet integrate the free tip particle.
           _vel.copy(node.physPos).sub(node.physPrev).multiplyScalar(velocityKeep)
+          _vel.y *= bounce
           node.physPrev.copy(node.physPos)
           node.physPos.add(_vel)
           node.physPos.y -= GRAVITY_MS2 * gravity * subDt * subDt
@@ -637,6 +657,22 @@ export function stepDangleLive(dt) {
           _targetDir.copy(_targetTip).sub(_pivot).normalize()
           _physDir.copy(node.physPos).sub(_pivot).normalize()
           _qSwing.setFromUnitVectors(_targetDir, _physDir)
+          // Swing limit and rigid top both shrink the swing; the particle follows so it does not wind up.
+          let swingScale = 1
+          if (holdTop > 0) swingScale = THREE.MathUtils.clamp((node.depthFrac - holdTop * 0.999) / (1 - holdTop * 0.999), 0, 1)
+          const angle = _targetDir.angleTo(_physDir)
+          if (swingScale < 1 || angle > limitRad) {
+            const wanted = Math.min(angle * swingScale, limitRad)
+            if (angle > 1e-6) {
+              _axis.crossVectors(_targetDir, _physDir)
+              if (_axis.lengthSq() > 1e-12) {
+                _axis.normalize()
+                _qSwing.copy(_qLimit.setFromAxisAngle(_axis, wanted))
+                _physDir.copy(_targetDir).applyQuaternion(_qSwing)
+                node.physPos.copy(_pivot).addScaledVector(_physDir, node.tipLength)
+              }
+            }
+          }
           _finalWQ.copy(_targetWQ).premultiply(_qSwing)
           _localQ.copy(parentWorldQuat).invert().multiply(_finalWQ)
           node.bone.quaternion.copy(_localQ)
@@ -799,8 +835,10 @@ export function groupDangleChainsByRig(chains, rigs) {
         }
       }
     }
-    if (!rig) {
-      rig = entries.find((entry) => chain.name === entry.name || chain.name.startsWith(`${entry.name} `))
+    if (!rig && !chain.groupId) {
+      // Old chains with no group id: match by name, but only when exactly one rig could own the name.
+      const byName = entries.filter((entry) => chain.name === entry.name || chain.name.startsWith(`${entry.name} `))
+      if (byName.length === 1) rig = byName[0]
     }
     if (!rig) {
       sections.push({ id: chain.id, chains: [chain] })
@@ -817,14 +855,60 @@ export function groupDangleChainsByRig(chains, rigs) {
   return sections
 }
 
-export function getDangleChainsForRig(chains, rig) {
-  const rigBones = new Set(rig?.boneNames || [])
+// The chains that belong to one Add bones rig. A chain's group id (or the rig bones it uses) decides this;
+// the name is only a last resort for old chains, and never when another rig could own the same name.
+export function getDangleChainsForRig(chains, rig, allRigs = []) {
   if (!rig?.id) return []
-  return (chains || []).filter((chain) =>
-    chain.groupId === rig.id ||
-    (chain.boneNames || []).some((name) => rigBones.has(name)) ||
-    chain.name === rig.label ||
-    chain.name.startsWith(`${rig.label} `),
+  const rigBones = new Set(rig.boneNames || [])
+  const others = (allRigs || []).filter((other) => other.id !== rig.id)
+  const usesBones = (chain, bones) => (chain.boneNames || []).some((name) => bones.has(name))
+  return (chains || []).filter((chain) => {
+    if (chain.groupId) return chain.groupId === rig.id
+    if (usesBones(chain, rigBones)) return true
+    if (others.some((other) => usesBones(chain, new Set(other.boneNames || [])))) return false
+    const named = (entry) => chain.name === entry.label || (chain.name || '').startsWith(`${entry.label} `)
+    return named(rig) && !others.some(named)
+  })
+}
+
+// After an Add bones rig is renamed or rebuilt: put its chains in a group of their own under the new name,
+// point them at the rebuilt bones (the bone names come from the rig name) and rename "Old 1" to "New 1".
+export function regroupRigChainsUndoable(chainIds, group, oldRig, newRig, descend) {
+  const ids = new Set(chainIds || [])
+  if (!ids.size || !group?.id || !oldRig || !newRig) return
+  const oldBones = oldRig.boneNames || []
+  const newBones = newRig.boneNames || []
+  const oldRoots = oldRig.rootBoneNames || []
+  const newRoots = newRig.rootBoneNames || []
+  const sameShape = oldBones.length === newBones.length
+  const renamed = new Map()
+  if (sameShape) oldBones.forEach((n, i) => renamed.set(n, newBones[i]))
+  const oldLabel = oldRig.label || ''
+  const newLabel = newRig.label || group.name || ''
+  editDangle(
+    activeId(),
+    (d) => ({
+      ...d,
+      chains: d.chains.flatMap((chain) => {
+        if (!ids.has(chain.id)) return [chain]
+        let boneNames
+        if (sameShape) {
+          boneNames = (chain.boneNames || []).map((n) => renamed.get(n) ?? n)
+        } else {
+          const set = new Set()
+          oldRoots.forEach((root, i) => {
+            if (newRoots[i] && (chain.boneNames || []).includes(root)) descend(newRoots[i]).forEach((n) => set.add(n))
+          })
+          boneNames = [...set]
+          if (!boneNames.length) return [] // the piece this chain belonged to is gone
+        }
+        let name = chain.name
+        if (oldLabel && name === oldLabel) name = newLabel
+        else if (oldLabel && (name || '').startsWith(`${oldLabel} `)) name = `${newLabel}${name.slice(oldLabel.length)}`
+        return [{ ...chain, name, boneNames, groupId: group.id, groupName: group.name || newLabel }]
+      }),
+    }),
+    { discrete: true },
   )
 }
 
@@ -835,6 +919,15 @@ export function removeDangleChainUndoable(chainId) {
 export function updateDangleChainUndoable(chainId, patch) {
   editDangle(activeId(), (d) => ({ ...d, chains: d.chains.map((c) => (c.id === chainId ? { ...c, ...patch } : c)) }), {
     key: `${chainId}:${Object.keys(patch).join(',')}`,
+  })
+}
+
+// Change one setting on several chains at once (a whole group). Slider drags merge into one undo step.
+export function updateDangleChainsUndoable(chainIds, patch) {
+  const ids = new Set(chainIds || [])
+  if (!ids.size) return
+  editDangle(activeId(), (d) => ({ ...d, chains: d.chains.map((c) => (ids.has(c.id) ? { ...c, ...patch } : c)) }), {
+    key: `group:${[...ids].join(',')}:${Object.keys(patch).join(',')}`,
   })
 }
 

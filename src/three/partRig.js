@@ -40,6 +40,17 @@ export function safeBoneName(label) {
   return s || 'Part'
 }
 
+// A label no other added-bone rig on this model already uses ("Cape", then "Cape_2"). Two rigs sharing a
+// label is what used to make renaming one of them drag the other one's physics chains along with it.
+export function uniqueRigLabel(model, label, excludeId = null) {
+  const base = safeBoneName(label)
+  const used = new Set(((model && model.__rigAdds) || []).filter((e) => e.id !== excludeId).map((e) => e.label))
+  if (!used.has(base)) return base
+  let n = 2
+  while (used.has(`${base}_${n}`)) n++
+  return `${base}_${n}`
+}
+
 // --- planning --------------------------------------------------------------------
 
 const bindPositionCache = new WeakMap() // geometry -> { matrix: string, positions }

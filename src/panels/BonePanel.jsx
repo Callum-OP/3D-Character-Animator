@@ -20,6 +20,7 @@ import {
   removeDangleChainUndoable as removeDangleChain,
   groupDangleChainsByRig,
   updateDangleChainUndoable as updateDangleChain,
+  updateDangleChainsUndoable as updateDangleChains,
   setAllDangleCollisionsUndoable as setAllDangleCollisions,
 } from '../three/dangle.js'
 import { collectActiveDangleDescendants, getCurrentModel, resetActiveDangle, setCameraToBones } from '../three/scene.js'
@@ -30,6 +31,90 @@ import IkPinsSection from './IkPinsSection.jsx'
 import FlattenerSection from './FlattenerSection.jsx'
 
 const AXES = ['x', 'y', 'z']
+
+// The settings for one dangle chain, or for a whole group of chains at once. With several chains a value that
+// differs between them shows their average with a "~"; moving a slider or ticking a box sets it on every chain.
+const pct = (v) => `${Math.round(v * 100)}%`
+const DANGLE_SLIDERS = [
+  { key: 'stiffness', label: 'Stiffness', def: 0.15, min: 0, max: 1, step: 0.01, hint: 'How strongly it springs back to the animated pose. Low = loose and floppy, high = barely moves.' },
+  { key: 'gravity', label: 'Gravity', def: 1, min: 0, max: 3, step: 0.05, hint: 'How strongly gravity pulls it down' },
+  { key: 'damping', label: 'Damping', def: 0.8, min: 0, max: 1, step: 0.01, hint: 'How long it keeps swinging before settling. Low = stops fast, high = keeps swaying.' },
+]
+const DANGLE_FEEL_SLIDERS = [
+  { key: 'bounce', label: 'Bounce (up and down)', def: 1, min: 0, max: 2.5, step: 0.05, format: pct, hint: 'How freely it bobs up and down as the body moves. Less = held firmly, 100% = normal, more = loose and bouncy, like a hood on a run.' },
+  { key: 'reaction', label: 'Body reaction', def: 0, min: 0, max: 1, step: 0.01, format: pct, hint: 'How much it is left behind when the whole body moves. 0 = it travels with the body (only turning swings it), 100% = it trails behind and gets thrown about.' },
+  { key: 'swingLimit', label: 'Swing limit', def: 180, min: 5, max: 180, step: 1, format: (v) => `${Math.round(v)}°`, hint: 'The furthest each bone can swing away from the pose, in degrees. 180° = no limit.' },
+  { key: 'holdTop', label: 'Rigid top', def: 0, min: 0, max: 0.8, step: 0.01, format: pct, hint: 'How much of the chain, from the top where it joins the body, stays locked to the pose. Only below this does it swing.' },
+]
+
+function DangleSettings({ chains, onPatch, name }) {
+  const many = chains.length > 1
+  const avg = (key, def) => chains.reduce((n, c) => n + (c[key] ?? def), 0) / chains.length
+  const mixedOf = (key, def) => {
+    const first = chains[0][key] ?? def
+    return chains.some((c) => Math.abs((c[key] ?? def) - first) > 1e-6)
+  }
+  const allTrue = (key) => chains.every((c) => c[key] === true)
+  const types = new Set(chains.map((c) => (c.type === 'cloth' ? 'cloth' : 'dangle')))
+  const slider = ({ key, label, def, min, max, step, hint, format }) => {
+    const mixed = many && mixedOf(key, def)
+    const value = avg(key, def)
+    const fmt = format || ((v) => v.toFixed(2))
+    return (
+      <label className="slider-row" key={key}>
+        <span className="slider-label" title={hint}>{label}</span>
+        <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onPatch({ [key]: Number(e.target.value) })} />
+        <EditableValue
+          value={value}
+          min={min}
+          max={max}
+          onChange={(v) => onPatch({ [key]: v })}
+          format={(v) => (mixed ? `~${fmt(v)}` : fmt(v))}
+          label={label}
+        />
+      </label>
+    )
+  }
+  const check = (key, text, title) => (
+    <FxCheck checked={allTrue(key)} onChange={(v) => onPatch({ [key]: v })} title={many ? `${title} (applies to every chain in the group)` : title}>
+      {text}
+    </FxCheck>
+  )
+  return (
+    <>
+      <FxField label="Physics type">
+        <select
+          aria-label={`${name} physics type`}
+          value={types.size > 1 ? 'mixed' : [...types][0]}
+          onChange={(e) => {
+            const type = e.target.value
+            if (type === 'mixed') return
+            onPatch({
+              type,
+              stiffness: type === 'cloth' ? 0.4 : 0.15,
+              gravity: type === 'cloth' ? 0.35 : 1,
+              damping: type === 'cloth' ? 0.55 : 0.8,
+            })
+          }}
+        >
+          {types.size > 1 && <option value="mixed" disabled>Mixed</option>}
+          <option value="dangle">Dangle</option>
+          <option value="cloth">Rigged cloth</option>
+        </select>
+      </FxField>
+
+      {check('collideWithBones', 'Collide with other bones', "Keep this chain's bone tips away from nearby skeleton bones.")}
+      {check('collideWithMesh', 'Collide with other meshes', 'Use visible model meshes as a lightweight barrier for this chain.')}
+      {check('collideWithSelf', 'Collide with self', 'Use the lightweight collision proxy for mesh faces mainly weighted to dangle bones.')}
+
+      {DANGLE_SLIDERS.map(slider)}
+      <details className="fx-more">
+        <summary>More feel settings</summary>
+        <div style={{ display: 'grid', gap: 8, marginTop: 8 }}>{DANGLE_FEEL_SLIDERS.map(slider)}</div>
+      </details>
+    </>
+  )
+}
 
 // X/Y/Z rotation sliders for the selected joint, in degrees relative to the
 // rest pose (0° = straight) — for people more at home with numbers and sliders
@@ -558,25 +643,6 @@ export default function BonePanel() {
                   </button>
                 </FxItemActions>
 
-                <FxField label="Physics type">
-                  <select
-                    aria-label={`${chain.name} physics type`}
-                    value={chain.type === 'cloth' ? 'cloth' : 'dangle'}
-                    onChange={(e) => {
-                      const type = e.target.value
-                      updateDangleChain(chain.id, {
-                        type,
-                        stiffness: type === 'cloth' ? 0.4 : 0.15,
-                        gravity: type === 'cloth' ? 0.35 : 1,
-                        damping: type === 'cloth' ? 0.55 : 0.8,
-                      })
-                    }}
-                  >
-                    <option value="dangle">Dangle</option>
-                    <option value="cloth">Rigged cloth</option>
-                  </select>
-                </FxField>
-
                 <details className="fx-more">
                   <summary>{chain.boneNames.length} bone{chain.boneNames.length === 1 ? '' : 's'} — view list</summary>
                   <ul className="fx-list">
@@ -586,98 +652,29 @@ export default function BonePanel() {
                   </ul>
                 </details>
 
-                <FxCheck
-                  checked={chain.collideWithBones === true}
-                  onChange={(v) => updateDangleChain(chain.id, { collideWithBones: v })}
-                  title="Keep this chain's bone tips away from nearby skeleton bones."
-                >
-                  Collide with other bones
-                </FxCheck>
-                <FxCheck
-                  checked={chain.collideWithMesh === true}
-                  onChange={(v) => updateDangleChain(chain.id, { collideWithMesh: v })}
-                  title="Use visible model meshes as a lightweight barrier for this chain."
-                >
-                  Collide with other meshes
-                </FxCheck>
-                <FxCheck
-                  checked={chain.collideWithSelf === true}
-                  onChange={(v) => updateDangleChain(chain.id, { collideWithSelf: v })}
-                  title="Use the lightweight collision proxy for mesh faces mainly weighted to dangle bones."
-                >
-                  Collide with self
-                </FxCheck>
-
-                <label className="slider-row">
-                  <span className="slider-label" title="How strongly it springs back to the animated pose. Low = loose and floppy, high = barely moves.">
-                    Stiffness
-                  </span>
-                  <input
-                    type="range"
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    value={chain.stiffness}
-                    onChange={(e) => updateDangleChain(chain.id, { stiffness: Number(e.target.value) })}
-                  />
-                  <EditableValue
-                    value={chain.stiffness}
-                    min={0}
-                    max={1}
-                    onChange={(v) => updateDangleChain(chain.id, { stiffness: v })}
-                    format={(v) => v.toFixed(2)}
-                    label="Stiffness"
-                  />
-                </label>
-
-                <label className="slider-row">
-                  <span className="slider-label" title="How strongly gravity pulls it down">Gravity</span>
-                  <input
-                    type="range"
-                    min={0}
-                    max={3}
-                    step={0.05}
-                    value={chain.gravity}
-                    onChange={(e) => updateDangleChain(chain.id, { gravity: Number(e.target.value) })}
-                  />
-                  <EditableValue
-                    value={chain.gravity}
-                    min={0}
-                    max={3}
-                    onChange={(v) => updateDangleChain(chain.id, { gravity: v })}
-                    format={(v) => v.toFixed(2)}
-                    label="Gravity"
-                  />
-                </label>
-
-                <label className="slider-row">
-                  <span className="slider-label" title="How long it keeps swinging before settling. Low = stops fast, high = keeps swaying.">
-                    Damping
-                  </span>
-                  <input
-                    type="range"
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    value={chain.damping}
-                    onChange={(e) => updateDangleChain(chain.id, { damping: Number(e.target.value) })}
-                  />
-                  <EditableValue
-                    value={chain.damping}
-                    min={0}
-                    max={1}
-                    onChange={(v) => updateDangleChain(chain.id, { damping: v })}
-                    format={(v) => v.toFixed(2)}
-                    label="Damping"
-                  />
-                </label>
+                <DangleSettings chains={[chain]} name={chain.name} onPatch={(patch) => updateDangleChain(chain.id, patch)} />
               </FxItem>
               ))
               if (!section.groupId) return items
               return (
                 <details className="fx-more" key={section.id}>
                   <summary>{section.name} · {section.chains.length} chain{section.chains.length === 1 ? '' : 's'}</summary>
-                  <div style={{ display: 'grid', gap: 8, marginTop: 8 }}>{items}</div>
+                  <div style={{ display: 'grid', gap: 8, marginTop: 8 }}>
+                    <FxItem title={`All of ${section.name}`} pills={[`${section.chains.length} chain${section.chains.length === 1 ? '' : 's'}`, 'group settings']}>
+                      <FxHelp>Changes here apply to every chain in this group. A “~” means the chains currently differ.</FxHelp>
+                      <FxItemActions>
+                        <button className="btn secondary" onClick={() => section.chains.forEach((c) => resetActiveDangle(c.id))} title="Snap every chain in this group back onto the current pose">
+                          Reset all
+                        </button>
+                      </FxItemActions>
+                      <DangleSettings
+                        chains={section.chains}
+                        name={section.name}
+                        onPatch={(patch) => updateDangleChains(section.chains.map((c) => c.id), patch)}
+                      />
+                    </FxItem>
+                    {items}
+                  </div>
                 </details>
               )
             })}

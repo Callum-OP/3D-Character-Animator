@@ -4,7 +4,7 @@ import * as THREE from 'three'
 import { useStore } from '../store.js'
 import { getCurrentModel } from '../three/scene.js'
 import { setFacePickHandler } from '../three/meshedit.js'
-import { addDangleChainUndoable, collectDescendantBoneNames, getDangleChainsForRig, groupDangleChainsUndoable } from '../three/dangle.js'
+import { addDangleChainUndoable, collectDescendantBoneNames, getDangleChainsForRig, regroupRigChainsUndoable } from '../three/dangle.js'
 import {
   isRigCapable,
   planForMeshes,
@@ -18,8 +18,7 @@ import {
   setPartRigHighlight,
   setPartRigPreview,
   clearPartRigFeedback,
-  fromRanges,
-} from '../three/partRig.js'
+  fromRanges, uniqueRigLabel } from '../three/partRig.js'
 
 // Add bones to a piece of a skinned mesh — a strand of hair, a hood, a cape, a scarf — without leaving
 // the app. Pick the faces, choose how many bones, press the button: the chain is built, the vertices are
@@ -163,7 +162,7 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
   }
 
   function onAdd() {
-    const res = applyPartRig(model, meshes, selections, opts, { label })
+    const res = applyPartRig(model, meshes, selections, opts, { label: uniqueRigLabel(model, label) })
     if (!res.ok) return setMessage(res.reason)
     const { entry } = res
     if (addPhysics) {
@@ -197,11 +196,19 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
   }
 
   function onUpdate() {
-    const chainsToGroup = getDangleChainsForRig(useStore.getState().dangleChains, editingEntry)
+    const before = { id: editingEntry.id, label: editingEntry.label, boneNames: editingEntry.boneNames, rootBoneNames: editingEntry.rootBoneNames }
+    const chainsToGroup = getDangleChainsForRig(useStore.getState().dangleChains, editingEntry, entries)
       .map((chain) => chain.id)
-    const result = updatePartRig(model, editingId, { label, options: opts })
+    const result = updatePartRig(model, editingId, { label: uniqueRigLabel(model, label, editingId), options: opts })
     if (!result.ok) return setMessage(result.reason)
-    groupDangleChainsUndoable(chainsToGroup, { id: result.entry.id, name: result.entry.label })
+    // Only this rig's own chains move into the renamed group, and they follow the rebuilt bones.
+    regroupRigChainsUndoable(
+      chainsToGroup,
+      { id: result.entry.id, name: result.entry.label },
+      before,
+      result.entry,
+      (root) => collectDescendantBoneNames(model, root, 64),
+    )
     setEditingId(null)
     setTrisByMesh({})
     setVersion((v) => v + 1)
@@ -215,18 +222,6 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
     if (editingId === entry.id) setEditingId(null)
     setVersion((v) => v + 1)
     setMessage(`Removed ${entry.label}'s bones. Ctrl+Z restores them.`)
-  }
-
-  function onPhysics(entry) {
-    entry.rootBoneNames.forEach((root, i) => {
-      addDangleChainUndoable(
-        entry.rootBoneNames.length > 1 ? `${entry.label} ${i + 1}` : entry.label,
-        collectDescendantBoneNames(model, root, 64),
-        'dangle',
-        { id: entry.id, name: entry.label },
-      )
-    })
-    setMessage('Swing physics added. Tune it in Pose mode under Dangle Physics.')
   }
 
   const modeHint = MODES.find((m) => m.id === mode)?.hint
@@ -253,7 +248,6 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
             return (
               <FxItem key={e.id} title={e.label} pills={[`${e.boneNames.length} bones`, `${partTotal} part${partTotal === 1 ? '' : 's'}`]}>
                 <FxItemActions>
-                  <button className="btn secondary" onClick={() => onPhysics(e)} title="Add swing physics for this chain">Physics</button>
                   <button className="btn secondary" onClick={() => onEdit(e)} title="Change this rig's name, bone count, and settings">Edit</button>
                   <button className="btn secondary" onClick={() => onDelete(e)} title="Delete these bones">Delete</button>
                 </FxItemActions>
