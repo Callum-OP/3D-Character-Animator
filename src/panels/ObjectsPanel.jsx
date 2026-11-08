@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react'
+import { confirmDialog } from '../dialogs.js'
 import { useStore } from '../store.js'
 import {
   addObjectFile,
@@ -128,7 +129,7 @@ export default function ObjectsPanel() {
   }
 
   function confirmDeleteObject(object) {
-    if (!window.confirm(`Are you sure you want to delete this${object.isCharacter ? ' character' : ' object'}?`)) return
+    if (!confirmDialog(`Are you sure you want to delete this${object.isCharacter ? ' character' : ' object'}?`)) return
     removeObjectById(object.id)
   }
 

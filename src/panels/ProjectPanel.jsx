@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { confirmDialog } from '../dialogs.js'
 import { useStore } from '../store.js'
 import { modelFileFromInput, MODEL_ACCEPT } from '../three/modelBundle.js'
 import {
@@ -96,7 +97,7 @@ export default function ProjectPanel() {
 
   function confirmDeleteCharacter(id) {
     const info = roster.find((character) => character.id === id)?.info
-    if (!window.confirm(`Are you sure you want to delete this character${info?.name ? ` "${info.name}"` : ''}?`)) return
+    if (!confirmDialog(`Are you sure you want to delete this character${info?.name ? ` "${info.name}"` : ''}?`)) return
     removeCharacter(id)
   }
 
@@ -233,7 +234,7 @@ export default function ProjectPanel() {
   // detached).
   function onNewProject() {
     if (busy) return
-    if (!window.confirm('Start a new project? Anything unsaved will be lost.')) return
+    if (!confirmDialog('Start a new project? Anything unsaved will be lost.')) return
     clearProjectScene()
     setCurrent(null)
     setMsg('Starting a new, empty project.')
@@ -315,7 +316,7 @@ export default function ProjectPanel() {
               className="btn secondary btn-tiny"
               style={{ marginTop: 8 }}
               onClick={() => {
-                if (!window.confirm('Are you sure you want to delete this character?')) return
+                if (!confirmDialog('Are you sure you want to delete this character?')) return
                 removeCharacter(activeCharacterId)
               }}
             >

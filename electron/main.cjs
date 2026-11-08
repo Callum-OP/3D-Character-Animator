@@ -110,6 +110,43 @@ function registerAppProtocol() {
   })
 }
 
+// --- Confirm dialogs + refocus ---------------------------------------------
+// The page's own window.confirm() leaves the window half focused on Windows: buttons still click, but
+// native form controls (the <select> popups, e.g. the clip dropdown) stop responding until another
+// native dialog has opened and closed. So confirms are shown from here instead, as a message box
+// parented to the window (same kind of dialog as Open/Save, which restores focus properly), and keyboard
+// focus is handed back to the page afterwards. The call is synchronous so the renderer's
+// `if (!confirm(...)) return` call sites stay as they are.
+// Only the page contents are re-focused, and only while the window already has focus. Never blur()/focus() the
+// window itself: on Windows blur() hands the foreground to another app (File Explorer) and the app is then not
+// allowed to take it back, which just flashes both taskbar buttons red.
+function refocusWindow(win) {
+  if (!win || win.isDestroyed() || !win.isFocused()) return
+  win.webContents.focus()
+}
+
+function registerDialogIpc() {
+  ipcMain.on('animare:confirm', (e, message) => {
+    const win = BrowserWindow.fromWebContents(e.sender) || mainWindow
+    const choice = dialog.showMessageBoxSync(win, {
+      type: 'question',
+      buttons: ['OK', 'Cancel'],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+      title: 'Animare 3D Animator',
+      message: String(message ?? ''),
+    })
+    e.returnValue = choice === 0
+    refocusWindow(win)
+  })
+
+  // Also used after the page's own <input type=file> pickers, which have the same focus problem.
+  ipcMain.on('animare:refocus', (e) => {
+    refocusWindow(BrowserWindow.fromWebContents(e.sender) || mainWindow)
+  })
+}
+
 // --- Native file dialogs / fs, exposed to the renderer via preload.cjs -----
 // Paths (unlike FileSystemFileHandles) never go stale, so these back the
 // Open/Save/Save As and Recent Projects/Clips flows on desktop builds.
@@ -319,6 +356,7 @@ app.on('child-process-gone', (_e, details) => {
 app.whenReady().then(() => {
   registerAppProtocol()
   registerFileIpc()
+  registerDialogIpc()
   registerCloseIpc()
   hardenSession()
   buildMenu()

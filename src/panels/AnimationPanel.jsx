@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
+import { confirmDialog } from '../dialogs.js'
 import { useStore } from '../store.js'
 import EditableValue from './EditableValue.jsx'
 import ShapeKeyPicker from './ShapeKeyPicker.jsx'
@@ -850,6 +851,31 @@ function ObjectMovementEditor({ onScrub, onCharacterKeyframe, onCharacterTrackCh
 // animation. Playback drives the bones, so it's mutually exclusive with posing —
 // the engine suspends the gizmo while a clip is armed and restores the rest pose
 // on Stop.
+// The clip dropdown lives in a panel that re-renders on every frame while anything plays (currentTime,
+// globalTime ...). A controlled native <select> that is re-rendered that often gets its option state
+// rewritten under the open popup, and the browser closes it again at once - so the dropdown looked dead
+// whenever another character was playing. Memoised on its real inputs, it only re-renders when the
+// active clip or the list of clips actually changes.
+const NO_CLIP_NAMES = []
+const ClipSelect = memo(function ClipSelect({ value, bakedNames, importedNames, onChange }) {
+  const names = [...(bakedNames || []), ...(importedNames || [])]
+  return (
+    <select
+      className="select"
+      value={value || ''}
+      onChange={(e) => onChange(e.target.value)}
+      aria-label="Character motion clip"
+    >
+      <option value="">Choose a motion clip…</option>
+      {names.map((name, i) => (
+        <option key={i} value={name}>
+          {name || `(clip ${i + 1})`}
+        </option>
+      ))}
+    </select>
+  )
+})
+
 export default function AnimationPanel() {
   const modelInfo = useStore((s) => s.modelInfo)
   const sceneObjects = useStore((s) => s.sceneObjects)
@@ -940,6 +966,8 @@ export default function AnimationPanel() {
   }
   const bvhRef = useRef(null)
   const clipFileRef = useRef(null)
+  const clipChangeRef = useRef(null) // always the latest onClipChange, so ClipSelect gets a stable callback
+  const handleClipSelect = useCallback((name) => clipChangeRef.current?.(name), [])
   const [bvhMsg, setBvhMsg] = useState(null)
   const [clipBoneWarning, setClipBoneWarning] = useState(null) // set when a selected/imported clip doesn't match this model's bones
   const [recentClips, setRecentClips] = useState([])
@@ -1167,7 +1195,7 @@ export default function AnimationPanel() {
     )
   }
 
-  const bakedNames = modelInfo.clipNames || []
+  const bakedNames = modelInfo.clipNames || NO_CLIP_NAMES
   const clipNames = [...bakedNames, ...importedClipNames]
   const bones = modelInfo.bones || []
   const hasBones = bones.length > 0
@@ -1208,7 +1236,7 @@ export default function AnimationPanel() {
       const hasCurrent = Object.keys(cur.tracks || {}).length > 0 || (cur.root || []).length > 0
       if (
         hasCurrent &&
-        !window.confirm(
+        !confirmDialog(
           `“${name}” remembers its own keyframes. Load them into the editor? This replaces the keyframes currently in “Edit keyframes” (they are not saved as a clip).`,
         )
       ) {
@@ -1289,6 +1317,7 @@ export default function AnimationPanel() {
     st().setPlayback('paused')
     setClipBoneWarning(describeClipBoneMismatch(name))
   }
+  clipChangeRef.current = onClipChange
 
   function onPlay() {
     if (source === 'edit') {
@@ -1719,7 +1748,7 @@ export default function AnimationPanel() {
   }
 
   function onNewAnimation() {
-    if (allKeyframes.length && !window.confirm('Start a new animation? This clears the current editable keyframes but keeps your clips.')) {
+    if (allKeyframes.length && !confirmDialog('Start a new animation? This clears the current editable keyframes but keeps your clips.')) {
       return
     }
     if (playback !== 'stopped') stop()
@@ -1945,7 +1974,7 @@ export default function AnimationPanel() {
       const mirrorsClip = adopted && JSON.stringify(adopted.root || []) === JSON.stringify(cur.root)
       if (
         mirrorsClip ||
-        window.confirm(
+        confirmDialog(
           'The editor still has character-movement keys. They would play on top of the combined clip and add extra movement. Clear them? (Cancel keeps them.)',
         )
       ) {
@@ -1988,19 +2017,12 @@ export default function AnimationPanel() {
       </div>
 
       <div className="clip-source-row">
-        <select
-          className="select"
-          value={activeClipName || ''}
-          onChange={(e) => onClipChange(e.target.value)}
-          aria-label="Character motion clip"
-        >
-          <option value="">Choose a motion clip…</option>
-          {clipNames.map((name, i) => (
-            <option key={i} value={name}>
-              {name || `(clip ${i + 1})`}
-            </option>
-          ))}
-        </select>
+        <ClipSelect
+          value={activeClipName}
+          bakedNames={bakedNames}
+          importedNames={importedClipNames}
+          onChange={handleClipSelect}
+        />
         {hasBones && (
           <button className="btn secondary" onClick={() => bvhRef.current?.click()} disabled={bvhBusy}>
             {bvhBusy ? 'Importing…' : 'Import BVH…'}

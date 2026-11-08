@@ -29,6 +29,13 @@ contextBridge.exposeInMainWorld('animare', {
   // Writes a UTF-8 string to `path`, creating/overwriting it.
   writeFile: (path, contents) => ipcRenderer.invoke('animare:write-file', path, contents),
 
+  // Native confirm (OK / Cancel) shown by the main process → true when OK was chosen. Synchronous, so it can
+  // stand in for window.confirm, which leaves the window half focused (dead <select> popups) after it closes.
+  confirm: (message) => ipcRenderer.sendSync('animare:confirm', String(message ?? '')),
+
+  // Hand keyboard focus back to the page contents after a native dialog (never moves the window itself).
+  refocusWindow: () => ipcRenderer.send('animare:refocus'),
+
   // Basename of a path, for display (e.g. Recent Projects list).
   baseName: (path) => ipcRenderer.invoke('animare:base-name', path),
 

@@ -1,4 +1,5 @@
 import { FxEditor, FxIntro, FxSection, FxField, FxHelp, FxButtons, FxFooter, FxPicking } from './FxCards.jsx'
+import { confirmDialog } from '../dialogs.js'
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store.js'
 import { applyModelMaterials } from '../three/scene.js'
@@ -169,7 +170,7 @@ export default function RegionEditor({ meshUuid, resolveMesh }) {
   const patchLook = (patch) => selected && patchLookOf(selected.id, patch)
 
   function removeRegion(region) {
-    if (!window.confirm(`Are you sure you want to delete "${region.name}"? (Ctrl+Z will bring it back.)`)) return
+    if (!confirmDialog(`Are you sure you want to delete "${region.name}"? (Ctrl+Z will bring it back.)`)) return
     commit(regions.filter((r) => r.id !== region.id))
     if (selectedId === region.id) setSelectedId(null)
   }

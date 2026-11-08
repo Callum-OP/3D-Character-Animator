@@ -1,4 +1,5 @@
 import { useStore } from '../store.js'
+import { confirmDialog } from '../dialogs.js'
 import {
   removeObjectById,
   resetObjectById,
@@ -322,7 +323,7 @@ export function objectMenu(targets, ctx, state = useStore.getState()) {
       const message = multi
         ? `Are you sure you want to delete these ${count} objects?`
         : `Are you sure you want to delete this${first.isCharacter ? ' character' : ' object'}?`
-      if (!window.confirm(message)) return
+      if (!confirmDialog(message)) return
       for (const o of targets) removeObjectById(o.id) // each is its own undo step
     }
   }

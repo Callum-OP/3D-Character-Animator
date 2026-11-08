@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { confirmDialog } from '../dialogs.js'
 import { useStore } from '../store.js'
 import QualitySection from './QualitySection.jsx'
 import { hasUndoHistory, clearUndoHistory } from '../three/undoHistory.js'
@@ -48,7 +49,7 @@ export default function ViewPanel() {
   function onToggleCameraIgnoresUndo(next) {
     if (
       hasUndoHistory() &&
-      !window.confirm(
+      !confirmDialog(
         'Changing this clears your undo and redo history, so steps recorded under the old setting can\'t cause problems. Continue?',
       )
     ) {

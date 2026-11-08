@@ -1,4 +1,5 @@
 import { PRIVACY_POLICY_URL } from '../links.js'
+import { confirmDialog } from '../dialogs.js'
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store.js'
 import {
@@ -228,7 +229,7 @@ export default function TitleBar({ onOpenSettings }) {
 
   const onNewProject = () =>
     withMenuClosed(async () => {
-      if (!window.confirm('Start a new project? Anything unsaved will be lost.')) return
+      if (!confirmDialog('Start a new project? Anything unsaved will be lost.')) return
       clearProjectScene()
       setCurrent(null)
     })
