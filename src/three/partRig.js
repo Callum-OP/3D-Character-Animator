@@ -308,7 +308,9 @@ function reindexRigBones(model, skeletons, start, count, removing, excludedEntry
 }
 
 function applyActiveRigWeights(model) {
-  const entries = [...(model.__rigAdds || [])].sort((a, b) => a.result.startIndex - b.result.startIndex)
+  const entries = (model.__rigAdds || [])
+    .filter((entry) => entry.result)
+    .sort((a, b) => a.result.startIndex - b.result.startIndex)
   for (const entry of entries) {
     for (const meshResult of entry.result.meshes || [entry.result]) {
       writeSkin(meshResult.mesh, meshResult.verts, meshResult.newIdx, meshResult.newW)
@@ -455,7 +457,7 @@ function attachEntry(model, entry) {
   if (model.__poseRestQuats) for (const b of r.created) model.__poseRestQuats.set(b, b.quaternion.clone())
   if (!model.__rigAdds) model.__rigAdds = []
   model.__rigAdds.push(entry)
-  model.__rigAdds.sort((a, b) => a.result.startIndex - b.result.startIndex)
+  model.__rigAdds.sort((a, b) => (a.result?.startIndex ?? Infinity) - (b.result?.startIndex ?? Infinity))
   applyActiveRigWeights(model)
   if (hooks.onBonesChanged) hooks.onBonesChanged(model)
   render()
@@ -531,20 +533,25 @@ export function getPartRigEntries(model) {
 
 // The recipe saved with a project.
 export function getPartRigData(model) {
-  return getPartRigEntries(model).map((e) => ({
-    id: e.id,
-    label: e.label,
-    meshIndex: e.meshIndex,
-    meshName: e.meshName,
-    meshIndices: e.meshIndices,
-    meshNames: e.meshNames,
-    tris: e.tris,
-    trisByMesh: e.trisByMesh,
-    vertexCount: e.vertexCount,
-    vertexCounts: e.result.meshes.map((item) => regionVertexCount(item.mesh.geometry)),
-    options: e.options,
-    boneNames: e.boneNames,
-  }))
+  return getPartRigEntries(model).map((e) => {
+    const meshIndices = e.meshIndices || [e.meshIndex]
+    const meshes = meshIndices.map((index, i) => e.result?.meshes?.[i]?.mesh || model?.meshes?.[index])
+    if (meshes.some((mesh) => !mesh)) return null
+    return {
+      id: e.id,
+      label: e.label,
+      meshIndex: e.meshIndex,
+      meshName: e.meshName,
+      meshIndices: e.meshIndices,
+      meshNames: e.meshNames,
+      tris: e.tris,
+      trisByMesh: e.trisByMesh,
+      vertexCount: e.vertexCount ?? regionVertexCount(meshes[0].geometry),
+      vertexCounts: meshes.map((mesh) => regionVertexCount(mesh.geometry)),
+      options: e.options,
+      boneNames: e.boneNames,
+    }
+  }).filter(Boolean)
 }
 
 // Replay saved recipes onto a freshly loaded model. Entries that no longer fit the mesh are skipped.

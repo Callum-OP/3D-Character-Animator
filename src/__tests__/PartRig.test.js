@@ -322,6 +322,27 @@ describe('adding the bones', () => {
     expect(two.model.bones).toHaveLength(one.model.bones.length)
   })
 
+  it('keeps copied rigs serializable and safe when adding and undoing new rigs', () => {
+    const { model, mesh, capeTris } = build()
+    const copiedRig = applyPartRig(model, mesh, capeTris, { segments: 2 }, { label: 'Cape' }).entry
+    const savedRig = { ...copiedRig }
+    delete savedRig.result
+    model.__rigAdds = [savedRig]
+
+    const saved = getPartRigData(model)
+    expect(saved).toHaveLength(1)
+    expect(saved[0].vertexCounts).toEqual([mesh.geometry.index.count])
+    const restored = build()
+    expect(restorePartRigs(restored.model, saved)).toBe(1)
+    expect(restored.model.bones.map((bone) => bone.name)).toEqual(model.bones.map((bone) => bone.name))
+
+    const added = applyPartRig(model, mesh, capeTris, { segments: 1 }, { label: 'Scarf' })
+    expect(added.ok).toBe(true)
+    performUndo(useStore.getState())
+    expect(mesh.skeleton.bones).toHaveLength(3 + copiedRig.boneNames.length)
+    expect(getPartRigData(model)).toHaveLength(1)
+  })
+
   it('skips a saved recipe that no longer fits the mesh', () => {
     const one = build()
     applyPartRig(one.model, one.mesh, one.capeTris, { segments: 2 }, { label: 'Cape' })

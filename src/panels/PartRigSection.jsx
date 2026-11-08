@@ -58,10 +58,10 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
 
   const model = getCurrentModel()
   const entries = getPartRigEntries(model)
-  const editingEntry = entries.find((entry) => entry.id === editingId) || null
+  const editingEntry = entries.find((entry) => entry.id === editingId && entry.result) || null
   const inputSelectionKey = (meshUuids?.length ? meshUuids : [meshUuid]).join('|')
   const requestedUuids = editingEntry
-    ? (editingEntry.result.meshes || [editingEntry.result]).map((item) => item.mesh.uuid)
+    ? (editingEntry.result.meshes || [editingEntry.result]).map((item) => item?.mesh?.uuid).filter(Boolean)
     : (meshUuids?.length ? meshUuids : [meshUuid])
   const selectionKey = requestedUuids.join('|')
   const meshes = requestedUuids.map((uuid) => resolveMesh(uuid)).filter(Boolean)
@@ -150,7 +150,8 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
     b.deform && (opts.allowAddedBoneAttachment || !generatedBoneNames.has(b.name)),
   )
   const visibleEntries = entries.filter((entry) => {
-    const targetMeshes = (entry.result.meshes || [entry.result]).map((item) => item.mesh)
+    if (!entry.result) return false
+    const targetMeshes = (entry.result.meshes || [entry.result]).map((item) => item?.mesh).filter(Boolean)
     return targetMeshes.some((item) => meshes.includes(item))
   })
 
