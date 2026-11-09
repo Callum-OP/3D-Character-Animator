@@ -8,6 +8,7 @@ import { growRegion, toRanges, fromRanges, fillConnected } from '../three/region
 import { getOriginalMaterials } from '../three/surfaceMaterials.js'
 import { makeSoftZone, newZoneId, setSoftOverlay, getSoftEntry, resetSoftCloth, SOFT_PRESETS, SOFT_MODES } from '../three/softcloth.js'
 import EditableValue from './EditableValue.jsx'
+import CopyFromMesh from './CopyFromMesh.jsx'
 
 const EMPTY = []
 
@@ -930,6 +931,8 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
           )}
         </div>
       </section>
+
+      {!editingZone && <CopyFromMesh kind="physics" targetMesh={mesh} />}
     </div>
   )
 }

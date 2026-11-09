@@ -786,7 +786,8 @@ export function setDangleEnabledUndoable(enabled) {
   editDangle(activeId(), (d) => ({ ...d, enabled: !!enabled }), { discrete: true })
 }
 
-export function addDangleChainUndoable(name, boneNames, type = 'dangle', group = null) {
+// `extra` (optional) overrides the starting physics settings, e.g. to copy them from another rig's chain.
+export function addDangleChainUndoable(name, boneNames, type = 'dangle', group = null, extra = null) {
   const cloth = type === 'cloth'
   editDangle(
     activeId(),
@@ -805,6 +806,7 @@ export function addDangleChainUndoable(name, boneNames, type = 'dangle', group =
           collideWithBones: false,
           collideWithMesh: false,
           collideWithSelf: false,
+          ...(extra || {}),
           ...(group?.id ? { groupId: group.id, groupName: group.name || name } : {}),
         },
       ],

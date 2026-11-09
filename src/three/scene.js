@@ -5103,6 +5103,11 @@ export function getCurrentModel() {
   return state.currentModel
 }
 
+// Any loaded character's model by id (the active one or not), or null.
+export function getCharacterModelById(id) {
+  return state.characters.get(id) || null
+}
+
 function prepareModelTextures(model) {
   if (!state.renderer) return
   const anisotropy = Math.min(4, state.renderer.capabilities.getMaxAnisotropy())

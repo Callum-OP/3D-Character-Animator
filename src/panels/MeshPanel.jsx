@@ -44,6 +44,7 @@ import ColorControl from './ColorControl.jsx'
 import MaterialEditor from './MaterialEditor.jsx'
 import RegionEditor from './RegionEditor.jsx'
 import PartRigSection from './PartRigSection.jsx'
+import CopyEffectsSection from './CopyEffectsSection.jsx'
 import SymmetrySection from './SymmetrySection.jsx'
 import { isRigCapable } from '../three/partRig.js'
 import DecimateEditor from './DecimateEditor.jsx'
@@ -459,6 +460,10 @@ export default function MeshPanel() {
           </FxSection>
         </FxEditor>
       )}
+
+      <FxCollapse title="Copy effects" hint="added bones, mesh physics from another character">
+        <CopyEffectsSection />
+      </FxCollapse>
 
       {selectedMesh && morphEntries.length > 0 && !isPropPart && (
             <FxCollapse title="Shape keys" hint={morphEntries.length}>

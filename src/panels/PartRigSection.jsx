@@ -1,9 +1,11 @@
 import { FxEditor, FxIntro, FxSection, FxItem, FxItemActions, FxField, FxCheck, FxHelp, FxButtons, FxFooter, FxPicking } from './FxCards.jsx'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import * as THREE from 'three'
 import { useStore } from '../store.js'
 import { getCurrentModel } from '../three/scene.js'
 import { setFacePickHandler } from '../three/meshedit.js'
+import CopyFromMesh from './CopyFromMesh.jsx'
+import { editPartRigDraft, getPartRigDraft, resetPartRigDraft, subscribePartRigDraft } from '../three/partRigDraft.js'
 import { addDangleChainUndoable, collectDescendantBoneNames, getDangleChainsForRig, regroupRigChainsUndoable, removeDangleChainUndoable } from '../three/dangle.js'
 import {
   isRigCapable,
@@ -33,19 +35,20 @@ const PRESETS = [
 ]
 
 const MODES = [
-  { id: 'piece', label: 'Whole piece', hint: 'Click once: selects the whole connected piece (a hair card, a cape, a sleeve…).' },
-  { id: 'brush', label: 'Brush', hint: 'Click to paint a patch on the surface — for a hood or cape that is joined to the rest of the mesh. Click again to add more.' },
-  { id: 'color', label: 'Same colour', hint: 'Selects the connected faces that keep the colour you clicked (hair against skin).' },
-  { id: 'face', label: 'Single face', hint: 'One face at a time, for fine tuning.' },
+  { id: 'piece', label: 'Whole piece', hint: 'Click once: selects the whole connected piece (a hair card, a cape, a sleeve…). Click it again to deselect it.' },
+  { id: 'brush', label: 'Brush', hint: 'Click to paint a patch on the surface — for a hood or cape that is joined to the rest of the mesh. Click again to add more; click a selected patch to remove it.' },
+  { id: 'color', label: 'Same colour', hint: 'Selects the connected faces that keep the colour you clicked (hair against skin). Click a selected area again to remove it.' },
+  { id: 'face', label: 'Single face', hint: 'One face at a time, for fine tuning. Click a selected face again to remove it.' },
 ]
 
 export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
   const modelInfo = useStore((s) => s.modelInfo)
   const [mode, setMode] = useState('piece')
-  const [erase, setErase] = useState(false)
   const [brushPct, setBrushPct] = useState(6)
   const [tolerance, setTolerance] = useState(0.25)
-  const [trisByMesh, setTrisByMesh] = useState({})
+  // The picked faces live in partRigDraft.js so every change to them is an undo / redo step.
+  const trisByMesh = useSyncExternalStore(subscribePartRigDraft, getPartRigDraft)
+  const [copyPhysics, setCopyPhysics] = useState(null) // physics settings carried over by Duplicate
   const [picking, setPicking] = useState(false)
   const [message, setMessage] = useState('')
   const [presetId, setPresetId] = useState('hair')
@@ -70,11 +73,12 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
   const tris = meshes.flatMap((item) => trisByMesh[item.uuid] || [])
   const selections = meshes.map((item) => ({ mesh: item, tris: trisByMesh[item.uuid] || [] }))
   const ref = useRef({})
-  ref.current = { meshes, mode, erase, brushPct, tolerance, model }
+  ref.current = { meshes, mode, brushPct, tolerance, model }
 
   // another part: drop the half-made selection
   useEffect(() => {
-    setTrisByMesh({})
+    resetPartRigDraft()
+    setCopyPhysics(null)
     setPicking(false)
     setMessage('')
     setEditingId(null)
@@ -95,10 +99,12 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
       const box = new THREE.Box3().setFromObject(r.model.root)
       const height = Math.max(box.max.y - box.min.y, 0.01)
       const picked = trisFromClick(hitMesh, hit, { mode: r.mode, tolerance: r.tolerance, radius: (height * r.brushPct) / 100 })
-      setMessage('')
-      setTrisByMesh((current) => {
+      // Clicking an area that is already selected takes it out again; clicking anywhere else adds to the selection.
+      const removing = (getPartRigDraft()[hit.uuid] || []).includes(hit.faceIndex)
+      setMessage(removing ? 'Removed that area. Click it again to add it back.' : '')
+      editPartRigDraft((current) => {
         const cur = current[hit.uuid] || []
-        if (r.erase) {
+        if (removing) {
           const drop = new Set(picked)
           return { ...current, [hit.uuid]: cur.filter((t) => !drop.has(t)) }
         }
@@ -158,6 +164,7 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
   function choosePreset(id) {
     const p = PRESETS.find((x) => x.id === id)
     setPresetId(id)
+    setCopyPhysics(null)
     setLabel(p.name)
     patch(p.o)
   }
@@ -173,10 +180,12 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
           collectDescendantBoneNames(model, root, 64),
           'dangle',
           { id: entry.id, name: entry.label },
+          copyPhysics,
         )
       })
     }
-    setTrisByMesh({})
+    resetPartRigDraft()
+    setCopyPhysics(null)
     setPicking(false)
     setVersion((v) => v + 1)
     setMessage(`Added ${entry.boneNames.length} bones${addPhysics ? ' with swing physics' : ''}. They show up in Pose mode’s bone list. Ctrl+Z undoes it.`)
@@ -191,9 +200,31 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
     setLabel(entry.label)
     const usesAddedParent = (entry.parentNames || []).some((name) => generatedBoneNames.has(name))
     setOpts({ ...PRESETS[0].o, influence: 1, includeNearbySurfaces: false, nearbySurfaceDistance: 0.02, ...entry.options, allowAddedBoneAttachment: entry.options.allowAddedBoneAttachment || usesAddedParent })
-    setTrisByMesh(Object.fromEntries(targetMeshes.map((item, i) => [item.uuid, fromRanges(savedRanges[i] || [])])))
+    resetPartRigDraft(Object.fromEntries(targetMeshes.map((item, i) => [item.uuid, fromRanges(savedRanges[i] || [])])))
+    setCopyPhysics(null)
     setPicking(false)
     setMessage(`Editing ${entry.label}. Change the settings, then update the bones.`)
+  }
+
+  // Start a NEW rig with this one's name, bone settings and physics, ready to pick its own faces — e.g. the same
+  // hair setup on another part of the same mesh. Nothing is built until Add bones, so the original keeps its bones.
+  function onDuplicate(entry) {
+    const usesAddedParent = (entry.parentNames || []).some((name) => generatedBoneNames.has(name))
+    const source = getDangleChainsForRig(useStore.getState().dangleChains, entry, entries)[0]
+    let physics = null
+    if (source) {
+      // eslint-disable-next-line no-unused-vars
+      const { id, name, boneNames, groupId, groupName, ...settings } = source
+      physics = settings
+    }
+    setEditingId(null)
+    setLabel(uniqueRigLabel(model, entry.label))
+    setOpts({ ...PRESETS[0].o, influence: 1, includeNearbySurfaces: false, nearbySurfaceDistance: 0.02, ...entry.options, allowAddedBoneAttachment: entry.options.allowAddedBoneAttachment || usesAddedParent })
+    setAddPhysics(!!source)
+    setCopyPhysics(physics)
+    resetPartRigDraft()
+    setPicking(true)
+    setMessage(`Copied ${entry.label}'s settings. Click the new area on the mesh, then press Add bones.`)
   }
 
   function onUpdate() {
@@ -211,7 +242,7 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
       (root) => collectDescendantBoneNames(model, root, 64),
     )
     setEditingId(null)
-    setTrisByMesh({})
+    resetPartRigDraft()
     setVersion((v) => v + 1)
     setMessage(`Updated ${result.entry.boneNames.length} bones. Ctrl+Z undoes it.`)
   }
@@ -252,6 +283,7 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
             return (
               <FxItem key={e.id} title={e.label} pills={[`${e.boneNames.length} bones`, `${partTotal} part${partTotal === 1 ? '' : 's'}`]}>
                 <FxItemActions>
+                  <button className="btn secondary" onClick={() => onDuplicate(e)} title="Start a new rig with this one's settings, then pick a different area for it">Duplicate</button>
                   <button className="btn secondary" onClick={() => onEdit(e)} title="Change this rig's name, bone count, and settings">Edit</button>
                   <button className="btn secondary" onClick={() => onDelete(e)} title="Delete these bones">Delete</button>
                 </FxItemActions>
@@ -260,6 +292,8 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
           })}
         </FxSection>
       )}
+
+      {!editingId && <CopyFromMesh kind="bones" targetMesh={mesh} />}
 
       <FxSection step={editingId ? 'EDIT' : 'STEP 1'} title={editingId ? 'Adjust the selected rig' : 'Pick the faces'} label="Pick faces">
         {!editingId && (
@@ -279,11 +313,11 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
           <button className={`btn fx-btn-main ${picking ? '' : 'secondary'}`} onClick={() => { setPicking((v) => !v); setMessage('') }}>
             {picking ? 'Picking: click the part…' : 'Pick faces'}
           </button>
-          <button className="btn secondary" disabled={!tris.length} onClick={() => setTrisByMesh({})} title="Forget every picked face">Clear</button>
+          <button className="btn secondary" disabled={!tris.length} onClick={() => editPartRigDraft(() => ({}))} title="Forget every picked face (Ctrl+Z brings them back)">Clear</button>
         </FxButtons>
         <FxButtons wide>
-          <button className="btn secondary" disabled={!trisByMesh[mesh.uuid]?.length} onClick={() => setTrisByMesh((current) => ({ ...current, [mesh.uuid]: resizeSelection(mesh, current[mesh.uuid] || [], 1) }))} title="Add one ring of faces around the primary part's selection">Grow</button>
-          <button className="btn secondary" disabled={!trisByMesh[mesh.uuid]?.length} onClick={() => setTrisByMesh((current) => ({ ...current, [mesh.uuid]: resizeSelection(mesh, current[mesh.uuid] || [], -1) }))} title="Take one ring of faces off the primary part's selection">Shrink</button>
+          <button className="btn secondary" disabled={!trisByMesh[mesh.uuid]?.length} onClick={() => editPartRigDraft((current) => ({ ...current, [mesh.uuid]: resizeSelection(mesh, current[mesh.uuid] || [], 1) }))} title="Add one ring of faces around the primary part's selection">Grow</button>
+          <button className="btn secondary" disabled={!trisByMesh[mesh.uuid]?.length} onClick={() => editPartRigDraft((current) => ({ ...current, [mesh.uuid]: resizeSelection(mesh, current[mesh.uuid] || [], -1) }))} title="Take one ring of faces off the primary part's selection">Shrink</button>
         </FxButtons>
 
         {picking && (
@@ -296,7 +330,6 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
             </FxField>
             {mode === 'brush' && sliderRow('Brush', "Brush size as a share of the character's height", 1, 40, brushPct, setBrushPct, `${brushPct}%`, 1)}
             {mode === 'color' && sliderRow('Tolerance', 'How far a colour may drift from the one you clicked', 0, 1, tolerance, setTolerance, `${Math.round(tolerance * 100)}%`, 0.01)}
-            <FxCheck checked={erase} onChange={setErase}>Remove from selection instead</FxCheck>
           </FxPicking>
         )}
         {message && <FxHelp>{message}</FxHelp>}
@@ -357,7 +390,7 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
             <button className="btn fx-btn-main" onClick={editingId ? onUpdate : onAdd} disabled={!summary || !!summary.error}>
               {editingId ? 'Update bones' : 'Add bones'}
             </button>
-            {editingId && <button className="btn secondary" onClick={() => { setEditingId(null); setTrisByMesh({}) }}>Cancel</button>}
+            {editingId && <button className="btn secondary" onClick={() => { setEditingId(null); resetPartRigDraft() }}>Cancel</button>}
           </FxFooter>
         </FxSection>
       )}
