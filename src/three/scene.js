@@ -238,6 +238,7 @@ import {
   setOnObjectMoveCommit,
   setOnObjectVisibilityChange,
   clearCharacterObject,
+  resyncObjectGizmo,
   getObjectsData,
   applyObjectsData,
   getObjectsForSave,
@@ -265,7 +266,7 @@ import {
   scrubObjectAnimation,
   getAllPropMeshes,
 } from './objects.js'
-import { getPose, applyPose } from './posing.js'
+import { getPose, applyPose, setPosingEnabled } from './posing.js'
 import { detectFacingYaw } from './bvh.js'
 import { useStore, captureCharacterRecord } from '../store.js'
 import { releaseFollowersOf, getContentBounds } from './attach.js'
@@ -3721,6 +3722,7 @@ function formatPartRigRestoreNotice(skipped) {
 function collectSettings() {
   const s = useStore.getState()
   return {
+    mode: s.mode, // Object / Pose / Mesh: a project reopens in the mode it was saved in
     materialMode: s.materialMode,
     toonSteps: s.toonSteps,
     colorGrading: s.colorGrading,
@@ -4197,6 +4199,30 @@ export async function applyProjectData(record) {
   // needs to happen after everything else, not just once inside the load
   // loop above.
   refreshPoseOverlays()
+
+  // 8. Selection and gizmos. Nothing from the previous project may stay selected (a bone, part or object of a
+  // character that no longer exists would keep a gizmo parked where it used to be), so select the active
+  // character, then open in the mode the project was saved in, then re-point the gizmos at what is really here.
+  {
+    const activeId = state.activeCharacterId
+    useStore.setState({
+      selectedObjectId: activeId ?? null,
+      selectedObjectIds: activeId ? [activeId] : [],
+      selectedBoneName: null,
+      selectedBoneNames: [],
+      selectedMeshUuid: null,
+      selectedMeshUuids: [],
+      selectedCameraId: null,
+      selectedLightId: null,
+    })
+    const savedMode = record.settings?.mode
+    if (savedMode === 'object' || savedMode === 'bone' || savedMode === 'mesh') {
+      const hasCharacter = state.characters.size > 0
+      useStore.getState().setMode(!hasCharacter && savedMode !== 'object' ? 'object' : savedMode)
+    }
+    resyncObjectGizmo()
+    setPosingEnabled(useStore.getState().mode === 'bone')
+  }
 
   // The freshly loaded project starts with a clean undo history — the add/key
   // steps recorded while rebuilding it aren't things a person did.

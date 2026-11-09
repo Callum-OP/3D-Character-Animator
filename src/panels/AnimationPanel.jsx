@@ -2378,10 +2378,11 @@ export default function AnimationPanel() {
                 </div>
               )}
               <div className="character-tools-collisions">
+                <strong>Collisions</strong>
                 <div className="character-tools-collision-row">
                   <span>
-                    <strong>Pose dangle chains</strong>
-                    <span className="wind-hint">Bone and mesh contacts for all chains on this character.</span>
+                    <strong>Dangle collisions</strong>
+                    <span className="wind-hint">Stops all pose dangle chains (hair, clothes, accessories) passing through the body and meshes.</span>
                   </span>
                   <button
                     type="button"
@@ -2390,13 +2391,13 @@ export default function AnimationPanel() {
                     disabled={!dangleChains.length}
                     onClick={() => setAllDangleCollisionsUndoable(!allDangleCollisionsEnabled)}
                   >
-                    {allDangleCollisionsEnabled ? 'Disable all' : 'Enable all'}
+                    {allDangleCollisionsEnabled ? 'Disable all collisions' : 'Enable all collisions'}
                   </button>
                 </div>
                 <div className="character-tools-collision-row">
                   <span>
-                    <strong>Mesh physics</strong>
-                    <span className="wind-hint">Other-mesh and self collision for all soft-cloth zones.</span>
+                    <strong>Mesh physics collisions</strong>
+                    <span className="wind-hint">Stops all soft-cloth zones passing through other meshes or themselves.</span>
                   </span>
                   <button
                     type="button"
@@ -2405,7 +2406,7 @@ export default function AnimationPanel() {
                     disabled={!meshPhysicsZones.length}
                     onClick={() => setAllMeshPhysicsCollisions(!allMeshPhysicsCollisionsEnabled)}
                   >
-                    {allMeshPhysicsCollisionsEnabled ? 'Disable all' : 'Enable all'}
+                    {allMeshPhysicsCollisionsEnabled ? 'Disable all collisions' : 'Enable all collisions'}
                   </button>
                 </div>
               </div>

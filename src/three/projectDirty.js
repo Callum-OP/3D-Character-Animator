@@ -1,5 +1,6 @@
 import { useStore } from '../store.js'
 import { getHistorySequence, getHistoryEpoch } from './undoHistory.js'
+import { askAboutUnsavedWork } from './unsavedPrompt.js'
 
 // Has the project changed since it was last saved (or opened / started fresh)? Used to decide
 // whether closing the app should ask about saving.
@@ -58,4 +59,13 @@ export function markProjectCleanAfterLoad(settleMs = 600) {
 
 export function isProjectDirty() {
   return dirty || getHistorySequence() !== savedSequence || getHistoryEpoch() !== savedEpoch
+}
+
+// Guard for anything that replaces the current project (New, Open, Open recent, opening a file from the OS).
+// Nothing unsaved -> resolves true silently; otherwise shows the app's Save / Don't save / Cancel box.
+// Resolves true when it is fine to go ahead (the project was saved, or the person chose not to).
+// `verb` finishes "Your changes will be lost if you ... without saving.", e.g. 'start a new project'.
+export async function confirmDiscardUnsaved(verb = 'continue') {
+  if (!isProjectDirty()) return true
+  return askAboutUnsavedWork(verb)
 }

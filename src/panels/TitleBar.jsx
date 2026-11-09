@@ -1,5 +1,5 @@
 import { PRIVACY_POLICY_URL } from '../links.js'
-import { confirmDialog } from '../dialogs.js'
+import { confirmDiscardUnsaved } from '../three/projectDirty.js'
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store.js'
 import {
@@ -105,6 +105,7 @@ export default function TitleBar({ onOpenSettings }) {
     let cancelled = false
     const openPath = async (filePath) => {
       if (!filePath || cancelled) return
+      if (!(await confirmDiscardUnsaved('open another project'))) return
       setBusy(true)
       setMsg(null)
       try {
@@ -180,6 +181,7 @@ export default function TitleBar({ onOpenSettings }) {
 
   const onOpen = () =>
     withMenuClosed(async () => {
+      if (!(await confirmDiscardUnsaved('open another project'))) return
       let opened
       if (fsAccess) {
         try {
@@ -200,6 +202,7 @@ export default function TitleBar({ onOpenSettings }) {
 
   const onOpenRecentFile = (recent) =>
     withMenuClosed(async () => {
+      if (!(await confirmDiscardUnsaved('open another project'))) return
       const { record, handle, name } = await openRecentProject(recent)
       await applyProjectData(record)
       setCurrent({ name, handle })
@@ -229,7 +232,7 @@ export default function TitleBar({ onOpenSettings }) {
 
   const onNewProject = () =>
     withMenuClosed(async () => {
-      if (!confirmDialog('Start a new project? Anything unsaved will be lost.')) return
+      if (!(await confirmDiscardUnsaved('start a new project'))) return
       clearProjectScene()
       setCurrent(null)
     })

@@ -682,6 +682,15 @@ function attachGizmoToSelected() {
 // selection is remembered so switching back re-attaches the gizmo.
 export function setPosingEnabled(enabled) {
   p.enabled = enabled
+  // A selected bone that isn't part of the loaded model any more (its character was deleted or replaced) must not
+  // keep the gizmo alive where that bone used to be.
+  if (p.selected && !p.bones.includes(p.selected)) {
+    p.selected = null
+    p.selectedBones = []
+    if (p.transform) p.transform.detach()
+  } else if (p.selectedBones.length) {
+    p.selectedBones = p.selectedBones.filter((b) => p.bones.includes(b))
+  }
   if (p.transform) {
     if (enabled && p.selected && !p.suspended) attachGizmoToSelected()
     else if (!enabled) p.transform.detach()

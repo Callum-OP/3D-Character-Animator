@@ -43,7 +43,7 @@ describe('AnimationPanel stays mounted across modelInfo going to null', () => {
     expect(tools.closest('details').open).toBe(false)
     fireEvent.click(screen.getByText('More character tools'))
     expect(screen.getByText('Wind simulation')).toBeTruthy()
-    expect(screen.getAllByRole('button', { name: 'Enable all' })).toHaveLength(2)
+    expect(screen.getAllByRole('button', { name: 'Enable all collisions' })).toHaveLength(2)
     expect(tools.closest('details').open).toBe(true)
   })
 
@@ -62,11 +62,18 @@ describe('AnimationPanel stays mounted across modelInfo going to null', () => {
     // Open File > New Project, same as the user's reported steps.
     fireEvent.click(screen.getByText('File'))
     const newProjectBtn = screen.getAllByText('New Project').find((el) => el.getAttribute('role') === 'menuitem')
-    window.confirm = () => true
     await act(async () => {
       fireEvent.click(newProjectBtn)
       await new Promise((r) => setTimeout(r, 50))
     })
+    // If the test setup left unsaved changes, the app's Save changes box shows first: carry on without saving.
+    const discard = screen.queryByRole('button', { name: "Don't save" })
+    if (discard) {
+      await act(async () => {
+        fireEvent.click(discard)
+        await new Promise((r) => setTimeout(r, 50))
+      })
+    }
 
     // The real symptom: the app-level crash screen should never appear.
     expect(screen.queryByText('Something went wrong')).toBeNull()

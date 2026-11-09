@@ -82,13 +82,13 @@ describe('closing the desktop app', () => {
     expect(screen.queryByRole('alertdialog')).toBeNull()
   })
 
-  it("Don't save closes without saving", () => {
+  it("Don't save closes without saving", async () => {
     render(<CloseGuard />)
     makeDirty()
     ask()
     fireEvent.click(screen.getByRole('button', { name: "Don't save" }))
     expect(save).not.toHaveBeenCalled()
-    expect(bridge.closeNow).toHaveBeenCalled()
+    await waitFor(() => expect(bridge.closeNow).toHaveBeenCalled())
   })
 
   it('Save writes the project, then closes', async () => {

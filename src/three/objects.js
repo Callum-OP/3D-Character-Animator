@@ -194,6 +194,7 @@ export function clearCharacterObject(id) {
     if (o.selected === entry.root) o.selected = null
     o.pivotRoots = o.pivotRoots.filter((r) => r !== entry.root)
     o.characterRoots.delete(id)
+    resyncObjectGizmo() // a group gizmo must not stay behind where the removed character stood
   }
 }
 
@@ -1092,13 +1093,38 @@ export function selectObject(id) {
 export function setObjectsEnabled(enabled) {
   o.enabled = enabled
   if (!o.transform) return
-  if (!enabled) {
-    o.transform.detach()
-  } else if (o.pivotRoots.length > 1 && o.pivot) {
-    o.transform.attach(o.pivot)
-  } else if (o.selected) {
-    o.transform.attach(o.selected)
+  resyncObjectGizmo()
+}
+
+// Is this root still something the gizmo can drive: registered as a prop/character AND still in the scene?
+function isLiveRoot(root) {
+  if (!root || !o.scene) return false
+  const registered = o.objects.some((e) => e.root === root) || [...o.characterRoots.values()].some((e) => e.root === root)
+  if (!registered) return false
+  for (let node = root; node; node = node.parent) if (node === o.scene) return true
+  return false
+}
+
+// Point the Move/Rotate/Resize gizmo at what is selected right now, and nothing else. A character or prop that was
+// removed (deleted, or cleared by opening another project) must never leave the gizmo parked where it used to be:
+// the handles would still draw there but drive an object that no longer exists, so dragging them did nothing.
+// Safe to call any time; it only reads the selection and re-attaches.
+export function resyncObjectGizmo() {
+  if (!o.transform) return
+  o.pivotRoots = o.pivotRoots.filter(isLiveRoot)
+  if (o.pivotRoots.length < 2) {
+    if (o.pivotRoots.length === 1 && !isLiveRoot(o.selected)) o.selected = o.pivotRoots[0]
+    o.pivotRoots = []
+    o.pivotStartMatrix = null
+    o.pivotRootStarts = null
+    o.multiDragBefore = null
+    if (o.pivot) o.pivot.visible = false
   }
+  if (!isLiveRoot(o.selected)) o.selected = null
+  if (!o.enabled) o.transform.detach()
+  else if (o.pivotRoots.length > 1 && o.pivot) o.transform.attach(o.pivot)
+  else if (o.selected) o.transform.attach(o.selected)
+  else o.transform.detach()
   o.requestRender()
 }
 

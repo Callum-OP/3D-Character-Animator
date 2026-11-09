@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { confirmDialog } from '../dialogs.js'
+import { confirmDiscardUnsaved } from '../three/projectDirty.js'
 import { useStore } from '../store.js'
 import { modelFileFromInput, MODEL_ACCEPT } from '../three/modelBundle.js'
 import {
@@ -104,6 +105,7 @@ export default function ProjectPanel() {
   // ---- Open ----
 
   async function onOpen() {
+    if (!(await confirmDiscardUnsaved('open another project'))) return
     setBusy(true)
     setMsg(null)
     try {
@@ -150,6 +152,7 @@ export default function ProjectPanel() {
   }
 
   async function onOpenRecent(recent) {
+    if (!(await confirmDiscardUnsaved('open another project'))) return
     setBusy(true)
     setMsg(null)
     try {
@@ -232,9 +235,9 @@ export default function ProjectPanel() {
   // valve since it runs the exact same Three.js disposal path as opening a
   // different project (geometries/textures/materials freed, not just
   // detached).
-  function onNewProject() {
+  async function onNewProject() {
     if (busy) return
-    if (!confirmDialog('Start a new project? Anything unsaved will be lost.')) return
+    if (!(await confirmDiscardUnsaved('start a new project'))) return
     clearProjectScene()
     setCurrent(null)
     setMsg('Starting a new, empty project.')

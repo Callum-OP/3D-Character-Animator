@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store.js'
 import { isProjectDirty } from '../three/projectDirty.js'
 import { saveCurrentProject } from '../three/projectSession.js'
+import { askAboutUnsavedWork, registerUnsavedPromptHost } from '../three/unsavedPrompt.js'
 
-// Asks "Save changes?" when the app is being closed with unsaved work.
+// The "Save changes?" box. Used whenever unsaved work is about to be thrown away: closing the app,
+// New Project, Open / Open recent (they ask through confirmDiscardUnsaved in projectDirty.js).
 //
 //  - Desktop app: the main process hands every close attempt to us first (window.animare). With
 //    nothing unsaved we let it through at once; otherwise a Save / Don't save / Cancel box shows.
@@ -14,8 +16,27 @@ export default function CloseGuard() {
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
+  const [verb, setVerb] = useState('close the app')
   const openRef = useRef(false)
+  const resolveRef = useRef(null)
   const name = useStore((s) => s.currentProject?.name)
+
+  // Anyone asking "is it OK to lose the unsaved work?" gets this box.
+  useEffect(
+    () =>
+      registerUnsavedPromptHost((request) => {
+        if (openRef.current) {
+          request.resolve(false) // already asking something: treat a second ask as Cancel
+          return
+        }
+        openRef.current = true
+        resolveRef.current = request.resolve
+        setVerb(request.verb)
+        setError(null)
+        setOpen(true)
+      }),
+    []
+  )
 
   useEffect(() => {
     const bridge = typeof window !== 'undefined' ? window.animare : null
@@ -26,10 +47,9 @@ export default function CloseGuard() {
           bridge.closeNow()
           return
         }
-        if (openRef.current) return // already asking
-        openRef.current = true
-        setError(null)
-        setOpen(true)
+        askAboutUnsavedWork('close the app').then((ok) => {
+          if (ok) bridge.closeNow()
+        })
       })
     }
     const onBeforeUnload = (e) => {
@@ -41,11 +61,14 @@ export default function CloseGuard() {
     return () => window.removeEventListener('beforeunload', onBeforeUnload)
   }, [])
 
-  function close(reallyQuit) {
+  // proceed = true: carry on with whatever was asked (close / new / open); false: stay put.
+  function close(proceed) {
     openRef.current = false
     setOpen(false)
     setBusy(false)
-    if (reallyQuit) window.animare?.closeNow()
+    const resolve = resolveRef.current
+    resolveRef.current = null
+    resolve?.(proceed)
   }
 
   async function onSave() {
@@ -75,7 +98,7 @@ export default function CloseGuard() {
     <div className="help-backdrop" role="presentation">
       <div className="help-modal close-guard" role="alertdialog" aria-modal="true" aria-labelledby="close-guard-title">
         <h2 id="close-guard-title">Save changes{name ? ` to “${name}”` : ''}?</h2>
-        <p className="help-intro">Your changes will be lost if you close without saving.</p>
+        <p className="help-intro">Your changes will be lost if you {verb} without saving.</p>
         {error && <p className="close-guard-error" role="alert">{error}</p>}
         <div className="close-guard-actions">
           <button className="btn" onClick={onSave} disabled={busy} autoFocus>
