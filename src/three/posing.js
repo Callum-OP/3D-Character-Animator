@@ -3,6 +3,8 @@ import { CombinedTransform } from './combinedTransform.js'
 import { markHistoryAction, pushUndoBatch, registerUndoHistory } from './undoHistory.js'
 import { poseToJSON, validatePose } from './poses.js'
 import { classifyBone, detectSide, buildSlotFallbackMap } from './bvh.js'
+import { followFlattener } from './flattener.js'
+import { addFlattenerUniforms } from './flattenerShader.js'
 import { showMarquee, hideMarquee, pointInRect } from './marquee.js'
 import {
   setLimitsModel,
@@ -2152,17 +2154,16 @@ function buildPartOverlays(model) {
   if (!meshes.length || p.bones.length === 0) return
 
   for (const def of REGION_DEFS) {
-    p.partMaterials.set(
-      def.key,
-      new THREE.MeshBasicMaterial({
-        color: def.color,
-        transparent: true,
-        opacity: PART_OPACITY.idle,
-        depthTest: false, // always draw over the character mesh (matches the bone-dot overlay's
-        depthWrite: false, // convention) — avoids z-fighting since this sits exactly on the surface
-        side: THREE.DoubleSide,
-      }),
-    )
+    const partMat = new THREE.MeshBasicMaterial({
+      color: def.color,
+      transparent: true,
+      opacity: PART_OPACITY.idle,
+      depthTest: false, // always draw over the character mesh (matches the bone-dot overlay's
+      depthWrite: false, // convention) — avoids z-fighting since this sits exactly on the surface
+      side: THREE.DoubleSide,
+    })
+    partMat.onBeforeCompile = (shader) => addFlattenerUniforms(shader.uniforms) // follow the flatten effect
+    p.partMaterials.set(def.key, partMat)
   }
 
   for (const mesh of meshes) {
@@ -2244,6 +2245,7 @@ function buildPartOverlays(model) {
       overlay.matrix.decompose(overlay.position, overlay.quaternion, overlay.scale)
       overlay.bind(mesh.skeleton, mesh.bindMatrix)
       overlay.userData.outlineParameters = { visible: false } // never outline the highlight overlay
+      followFlattener(overlay, mesh)
       mesh.parent.add(overlay)
       p.partMeshes.push({ region: regionKey, mesh: overlay })
     }

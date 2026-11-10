@@ -433,6 +433,17 @@ export function refreshFlattenerMeshes(characterId, model) {
   if (rt && rt.items.size) bindMeshes(characterId, model || rt.model)
 }
 
+// An aid mesh drawn over a character mesh (the body-part highlight) gets that mesh's flattening,
+// so it lands exactly on the flattened surface instead of on the unflattened shape.
+export function followFlattener(overlay, source) {
+  overlay.onBeforeRender = function onBeforeRender() {
+    fillUniforms(source)
+  }
+  overlay.onAfterRender = function onAfterRender() {
+    flatCount.value = 0
+  }
+}
+
 function fillUniforms(mesh) {
   flatCount.value = 0
   if (mesh.userData.flatOff) return
