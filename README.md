@@ -253,11 +253,7 @@ build/                   # packaging resources (app icon, Store tile images)
 scripts/                 # itch.io packaging, Electron dev runner, Store bundling
 ```
 
-## Future Work
-
-### New Packager
-Changing the packager for the app? 
-Originally Tauri had been used briefly but encountered issues with some of the keyboard controls and features not being accessible such as zoom and scroll and was unable to find an alternative way to get them working so Electron was used instead. While Electron works at keeping the app exactly how it should look and work on the web it increases the size of the app and increases memory usage, with this being a low memory app decreasing memory usage is important. Recently other previously Electron applications like Discord have been able to rebuild their client in Rust decreasing memory usage and file size. If something similar could be done for this app or an alternative low memory packager be found then it would be worth doing in the future especially if memory begins to increase as more features are added.
+## Possible Future Work
 
 ### Auto Rigger
 Implementing an Auto Rigger directly into the app? 
@@ -265,3 +261,7 @@ This had been attempted in previous projects before but found not as much succes
 
 ### Pose Saving
 While the app works well at importing mocap files for animation it is not as great when it comes to building animations from scratch, the first thing to combat this would be a way to directly save and access poses, maybe even with a preset library of not just full body poses but also hand poses so users are not starting from scratch. This could be improved further with sliders, especially for hands a slider to change and transition from open hand to closed fist.
+
+### Change Packager?
+Changing the packager for the app? 
+Originally Tauri had been used briefly but encountered issues with some of the keyboard controls and features not being accessible such as zoom and scroll and was unable to find an alternative way to get them working so Electron was used instead. While Electron works at keeping the app exactly how it should look and work on the web it increases the size of the app and increases memory usage, with this being a low memory app decreasing memory usage is important. Rebuilding app from scratch to not need Electron would be too much work and other alternative packagers may have the same issues as Tauri anyway, will continue to experiment with this to see what options are available and whether they are worth it, supposedly there isn't much difference in resting memory usage between Tauri and Electron anyway only file size. For now Electron is the safe option, the app works well with it and there are no issues that will change the functionality of the app.
