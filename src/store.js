@@ -25,7 +25,7 @@ const APP_SETTINGS_FIELDS = [
   'envLightingEnabled', 'envLightingIntensity', 'outlineEnabled', 'outlineWidth',
   'outlineColor', 'outlineOpacity', 'softenEnabled', 'softenAmount',
   'dofEnabled', 'dofFocusDistance', 'dofAperture', 'dofMaxBlur',
-  'blurEnabled', 'blurAmount',
+  'blurEnabled', 'blurAmount', 'transformOuterRing',
 ]
 
 function appSettingsOnly(state) {
@@ -900,6 +900,8 @@ export const useStore = create((set) => ({
   // to find and click the exact joint dot.
   boneViewMode: 'bones', // default to the Bones overlay; saved/restored per-project (see getProjectData/applyProjectData)
   setBoneViewMode: (boneViewMode) => set({ boneViewMode }),
+  transformOuterRing: 'resize', // what the grey outer ring of the combined Transform widget does: 'resize' | 'rotate'
+  setTransformOuterRing: (mode) => set({ transformOuterRing: mode === 'rotate' ? 'rotate' : 'resize' }),
   showAllPartHighlights: false, // Parts view: tint every region faintly, not just hover/selected
   setShowAllPartHighlights: (showAllPartHighlights) => set({ showAllPartHighlights }),
   rotationSnap: false, // rotate in 15° steps (hold Shift for the opposite)
@@ -1896,6 +1898,7 @@ export function migrateAppSettings(saved) {
     next.shadows = normalizeShadows(next.shadows)
   }
   if (next.materialLook !== undefined) next.materialLook = normalizeMaterialLook(next.materialLook) // older saves lack newer controls
+  if (next.transformOuterRing !== undefined) next.transformOuterRing = next.transformOuterRing === 'rotate' ? 'rotate' : 'resize'
   for (const k of legacy) delete next[k]
   delete next.settingsVersion // the store's current version is re-saved below
   return next

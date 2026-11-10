@@ -2,6 +2,8 @@ import * as THREE from 'three'
 import { planPartRig, normaliseOptions } from './partRigMath.js'
 import { pushSceneHistory } from './sceneHistory.js'
 import { getAdjacency, growRegion, toRanges, fromRanges, regionVertexCount } from './regions.js'
+import { followFlattener } from './flattener.js'
+import { addFlattenerUniforms } from './flattenerShader.js'
 
 export { fromRanges }
 
@@ -703,7 +705,9 @@ export function setPartRigHighlight(mesh, tris) {
       color: 0xff2bd6, transparent: true, opacity: 0.5, side: THREE.DoubleSide,
       polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2, depthWrite: false,
     })
+    mat.onBeforeCompile = (shader) => addFlattenerUniforms(shader.uniforms) // follow the flatten effect
     const highlight = new THREE.Mesh(g, mat)
+    followFlattener(highlight, mesh)
     highlight.name = '(part rig highlight)'
     highlight.frustumCulled = false
     highlight.renderOrder = 998
