@@ -204,43 +204,92 @@ describe('CombinedTransform combined mode', () => {
 })
 
 describe('CombinedTransform without Resize (bones)', () => {
-  const pointerAt = (x) => {
-    const p = new THREE.Vector3(x, 0, 0).project(camera)
+  const pointerAtXY = (x, y) => {
+    const p = new THREE.Vector3(x, y, 0).project(camera)
     return { x: p.x, y: p.y }
   }
-
-  it('the inside of the gizmo turns the bone: Rotate wins over Move, and Move keeps the long arrows', () => {
+  const setup = () => {
     const t = make({ allowScale: false })
     t.attach(target)
     t.setMode('combined')
     t.getHelper().updateMatrixWorld(true)
-    // find a spot where both rotate and move have a handle: rotate must take it
-    const rotatePicker = t._parts.rotate._gizmo.picker.rotate
+    return t
+  }
+  const hover = (t, p) => {
+    for (const mode of ['rotate', 'translate']) t._parts[mode].pointerHover(p)
+  }
+  const rawHits = (t, p) => {
+    const ray = new THREE.Raycaster()
+    ray.setFromCamera(p, camera)
+    return {
+      move: ray.intersectObject(t._parts.translate._gizmo.picker.translate, true).length > 0,
+      rings: ray.intersectObject(t._parts.rotate._gizmo.picker.rotate, true).filter((h) => h.object.name !== 'E').length > 0,
+      outer: ray.intersectObject(t._parts.rotate._gizmo.picker.rotate, true).some((h) => h.object.name === 'E'),
+    }
+  }
+
+  it("Move's arrows end inside the outer ring, not past it", () => {
+    const t = setup()
+    expect(0.6 * unit(t._parts.translate)).toBeLessThan(0.75 * unit(t._parts.rotate))
+  })
+
+  it('the inside of the gizmo turns the bone: where an axis ring and a Move handle overlap, Rotate wins', () => {
+    const t = setup()
     let contested = null
-    for (let x = 0.05; x <= 0.6 && !contested; x += 0.01) {
-      const p = pointerAt(x)
-      const ray = new THREE.Raycaster()
-      ray.setFromCamera(p, camera)
-      const moveHit = ray.intersectObject(t._parts.translate._gizmo.picker.translate, true).length > 0
-      const turnHit = ray.intersectObject(rotatePicker, true).length > 0
-      if (moveHit && turnHit) contested = p
+    for (let x = 0.05; x <= 0.9 && !contested; x += 0.01) {
+      const p = pointerAtXY(x, 0.01)
+      const hits = rawHits(t, p)
+      if (hits.move && hits.rings) contested = p
     }
     expect(contested).not.toBe(null)
-    t._parts.translate.pointerHover(contested)
-    t._parts.rotate.pointerHover(contested)
+    hover(t, contested)
     expect(t._parts.rotate.axis).not.toBe(null)
+    expect(t._parts.rotate.axis).not.toBe('E')
     expect(t._parts.translate.axis).toBe(null)
-    // out on the arrow tip, Move still works
-    const tip = pointerAt(0.55 * unit(t._parts.translate)) // out on the arrow, past the outer ring
-    t._parts.rotate.pointerHover(tip)
-    t._parts.translate.pointerHover(tip)
-    expect(t._parts.translate.axis).toBe('X')
+  })
+
+  it('Move can still be grabbed out on its arrows, past the axis rings', () => {
+    const t = setup()
+    let grabbed = null
+    for (let x = 0.2; x <= 0.9; x += 0.01) {
+      for (const y of [0, 0.03, 0.06, 0.09]) {
+        const p = pointerAtXY(x, y)
+        hover(t, p)
+        if (t._parts.translate.axis !== null && t._parts.rotate.axis === null) grabbed = { x, p }
+        t._parts.translate.axis = null
+        t._parts.rotate.axis = null
+      }
+    }
+    expect(grabbed).not.toBe(null)
+    expect(grabbed.x).toBeGreaterThan(0.3 * unit(t._parts.translate))
+  })
+
+  it('the grey outer ring can be grabbed where there is no arrow, and gives way to a Move arrow where they touch', () => {
+    const t = setup()
+    const r = 0.75 * unit(t._parts.rotate)
+    const away = pointerAtXY(r * Math.SQRT1_2, r * Math.SQRT1_2) // 45 degrees, between the arrows
+    hover(t, away)
+    expect(t._parts.rotate.axis).toBe('E')
+    expect(t._parts.translate.axis).toBe(null)
+
+    let touching = null
+    for (let x = 0.3; x <= 1 && !touching; x += 0.005) {
+      for (const y of [0, 0.02, 0.04, 0.06, 0.08, 0.1, 0.12]) {
+        const hits = rawHits(t, pointerAtXY(x, y))
+        if (hits.move && hits.outer && !hits.rings) { touching = pointerAtXY(x, y); break }
+      }
+    }
+    expect(touching).not.toBe(null)
+    if (touching) {
+      hover(t, touching)
+      expect(t._parts.translate.axis).not.toBe(null)
+      expect(t._parts.rotate.axis).toBe(null)
+    }
   })
 
   it('the axis rings get a fatter hit area for bones only, and it is put back afterwards', () => {
     const bone = make({ allowScale: false })
     const full = make()
-    const tube = (t) => t._parts.rotate._gizmo.picker.rotate.children.find((c) => c.name === 'Z').geometry.boundingBox ?? null
     const size = (t) => {
       const g = t._parts.rotate._gizmo.picker.rotate.children.find((c) => c.name === 'Z').geometry
       g.computeBoundingBox()
@@ -248,7 +297,6 @@ describe('CombinedTransform without Resize (bones)', () => {
     }
     bone.setMode('combined')
     full.setMode('combined')
-    expect(tube).toBeTypeOf('function')
     expect(size(bone)).toBeGreaterThan(size(full))
     const before = size(bone)
     bone.setMode('rotate')

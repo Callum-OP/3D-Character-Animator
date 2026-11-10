@@ -20,7 +20,6 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 
 const ALL = ['translate', 'rotate', 'scale']
 const PRIORITY = ['scale', 'translate', 'rotate'] // who wins where handles overlap
-const PRIORITY_NO_SCALE = ['rotate', 'translate']
 const FORWARDED = ['change', 'dragging-changed', 'objectChange']
 
 // Size of each layer relative to the gizmo's base size, times COMBINED_GROW for the whole tool. Rotate's outer ring
@@ -29,12 +28,13 @@ const FORWARDED = ['change', 'dragging-changed', 'objectChange']
 const COMBINED_GROW = 1.15
 const SIZES = { translate: 0.95 * COMBINED_GROW, rotate: 0.85 * COMBINED_GROW, scale: 0.42 * COMBINED_GROW }
 
-// Without Resize (bones, cameras): the rings are smaller, so Move's arrows poke well out past the outer ring and
-// are easy to grab there, while the inside of the gizmo belongs to Rotate.
-const SIZES_NO_SCALE = { translate: 1.1 * COMBINED_GROW, rotate: 0.62 * COMBINED_GROW }
+// Without Resize (bones, cameras): Move's arrows end just inside Rotate's outer ring (0.6 x 0.99 against
+// 0.75 x 0.9), and stick out only a little past the axis rings' fat hit area, which is where they are grabbed.
+// The inside of the gizmo belongs to Rotate.
+const SIZES_NO_SCALE = { translate: 0.99 * COMBINED_GROW, rotate: 0.9 * COMBINED_GROW }
 
 // Without Resize (bones) the axis rings get a fatter invisible hit area, since they now win over Move's arrows.
-const FAT_RING_TUBE = 0.15
+const FAT_RING_TUBE = 0.12
 const RING_PICKER_ROTATIONS = { X: [0, -Math.PI / 2, -Math.PI / 2], Y: [Math.PI / 2, 0, 0], Z: [0, 0, -Math.PI / 2] }
 
 // Handles kept in combined mode (names inside three's gizmo). 'E' is the outer ring, 'XYZE' the free-rotate sphere.
@@ -76,18 +76,21 @@ export class CombinedTransform extends THREE.EventDispatcher {
         this.dispatchEvent({ type: 'mouseUp', mode })
         this._dragMode = null
       })
-      // Where handles of two layers overlap under the pointer, only the higher-priority layer reacts.
+      // Where handles of two layers overlap under the pointer, only the one that ranks higher reacts.
       const hover = part.pointerHover.bind(part)
       part.pointerHover = (pointer) => {
         hover(pointer)
         // Never take a handle away in the middle of a drag: the drag would stop and, with no axis left, the layer
         // would not report the end of it, so the edit would be missing from undo.
         if (this._mode !== 'combined' || part.axis === null || part.dragging) return
+        const own = this._rank(mode, part.axis)
         const ray = part.getRaycaster()
-        for (const other of this._priority()) {
-          if (other === mode) break
+        for (const other of ALL) {
+          if (other === mode || !this._combinedModes().includes(other)) continue
           const rival = this._parts[other]
-          if (this._combinedModes().includes(other) && rival.object && hitsPicker(rival, ray)) {
+          if (!rival.object) continue
+          const hit = firstPickerHit(rival, ray)
+          if (hit && this._rank(other, hit.object.name) < own) {
             part.axis = null
             return
           }
@@ -222,10 +225,13 @@ export class CombinedTransform extends THREE.EventDispatcher {
 
   // --- layout ----------------------------------------------------------------------------------------
 
-  // Who wins where handles overlap. With Resize present the smallest target wins (Resize, Move, Rotate). Without it
-  // (bones) the rings win over Move's arrows, so the inside of the gizmo turns the bone and Move is the long arrows.
-  _priority() {
-    return this._allowScale ? PRIORITY : PRIORITY_NO_SCALE
+  // Who wins where handles overlap (lower wins). With Resize present the smallest target wins: Resize, Move, then
+  // Rotate. Without it (bones) the axis rings win over Move's arrows, so the inside of the gizmo turns the bone, and
+  // the outer ring comes last so it never covers the arrow tips.
+  _rank(mode, handle) {
+    if (this._allowScale) return PRIORITY.indexOf(mode)
+    if (mode === 'rotate') return handle === 'E' ? 2 : 0
+    return 1
   }
 
   _combinedModes() {
@@ -309,7 +315,7 @@ export class CombinedTransform extends THREE.EventDispatcher {
   }
 }
 
-function hitsPicker(part, raycaster) {
+function firstPickerHit(part, raycaster) {
   const picker = part._gizmo.picker[part.mode]
-  return raycaster.intersectObject(picker, true).some((hit) => hit.object.visible)
+  return raycaster.intersectObject(picker, true).find((hit) => hit.object.visible) || null
 }

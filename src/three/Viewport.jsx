@@ -120,11 +120,13 @@ const TRANSFORM_BUTTONS = [
   {
     value: 'combined',
     icon: (
-      <span className="tw-combo" aria-hidden="true">
-        <span className="tw-combo-move">✥</span>
-        <span className="tw-combo-rotate">↻</span>
-        <span className="tw-combo-scale">⤢</span>
-      </span>
+      // one custom icon, the gizmo itself: a ring (Rotate), arrows (Move) and a cube in the middle (Resize)
+      <svg className="tw-combo" viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="10.2" />
+        <path d="M12 6.4v11.2M6.4 12h11.2" />
+        <path d="M12 3.4l2.2 3h-4.4zM12 20.6l2.2-3h-4.4zM3.4 12l3-2.2v4.4zM20.6 12l-3-2.2v4.4z" fill="currentColor" strokeWidth="1" />
+        <rect x="9.8" y="9.8" width="4.4" height="4.4" fill="currentColor" strokeWidth="1" />
+      </svg>
     ),
     label: 'Transform',
     title: 'Transform (T): Move, Rotate and Resize together; the grey outer ring turns it around the view',
