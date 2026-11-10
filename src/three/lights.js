@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
+import { CombinedTransform } from './combinedTransform.js'
 import { pushSceneHistory } from './sceneHistory.js'
 import { getHistorySequence, getHistoryEpoch } from './undoHistory.js'
 import { useStore } from '../store.js'
@@ -72,7 +72,7 @@ export function initLights(refs) {
   l.getPlacement = refs.getPlacement || null
   l.onChange = refs.onChange || null
 
-  const transform = new TransformControls(l.camera, l.renderer.domElement)
+  const transform = new CombinedTransform(l.camera, l.renderer.domElement)
   transform.setMode('translate')
   transform.setSize(0.8)
   transform.addEventListener('dragging-changed', (e) => {

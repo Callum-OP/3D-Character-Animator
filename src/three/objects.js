@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
+import { CombinedTransform } from './combinedTransform.js'
 import { disposeObject } from './loadModel.js'
 import { markHistoryAction, pushUndoBatch, registerUndoHistory } from './undoHistory.js'
 import { useStore } from '../store.js'
@@ -107,7 +107,7 @@ export function initObjects(refs) {
   o.setContinuousRender = refs.setContinuousRender
   o.resolveBone = refs.resolveBone || null
 
-  const transform = new TransformControls(o.camera, o.renderer.domElement)
+  const transform = new CombinedTransform(o.camera, o.renderer.domElement)
   transform.setMode('translate')
   transform.setSize(0.9)
   transform.addEventListener('dragging-changed', (e) => {
@@ -1222,7 +1222,7 @@ function commitMultiDragUndo() {
 
 export function setObjectMode(mode) {
   if (!o.transform) return
-  o.transform.setMode(mode) // 'translate' | 'rotate' | 'scale'
+  o.transform.setMode(mode) // 'translate' | 'rotate' | 'scale' | 'combined'
   o.requestRender()
 }
 

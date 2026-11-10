@@ -68,6 +68,7 @@ const MODES = [
   { value: 'translate', label: 'Move', title: 'Drag arrows to move the part (W)' },
   { value: 'rotate', label: 'Rotate', title: 'Drag rings to turn the part (E)' },
   { value: 'scale', label: 'Resize', title: 'Drag handles to resize the part (R)' },
+  { value: 'combined', label: 'Transform', title: 'Move, Rotate and Resize together; the grey outer ring turns it around the view (T)' },
 ]
 
 const AXES = ['X', 'Y', 'Z']

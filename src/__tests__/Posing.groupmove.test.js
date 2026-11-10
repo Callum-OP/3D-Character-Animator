@@ -7,6 +7,7 @@ import {
   selectBones,
   setBoneGizmoMode,
   getBoneGizmoMode,
+  getBoneGizmoForTest,
   getSelectedBoneNames,
   simulateGroupMoveForTest,
   simulateGroupRotateForTest,
@@ -123,5 +124,30 @@ describe('Pose mode: moving several bones at once', () => {
     setBoneGizmoMode('rotate')
     selectBone('R3')
     expect(getBoneGizmoMode()).toBe('rotate')
+  })
+
+  it('the combined tool puts Move (IK) and Rotate on one bone: Move drives the IK target, Rotate the bone', () => {
+    setBoneGizmoMode('combined')
+    expect(getBoneGizmoMode()).toBe('combined')
+    selectBone('L3')
+    const gizmo = getBoneGizmoForTest()
+    expect(gizmo.mode).toBe('combined')
+    expect(gizmo._parts.rotate.object).toBe(rig.byName('L3'))
+    expect(gizmo._parts.translate.object).toBeTruthy()
+    expect(gizmo._parts.translate.object).not.toBe(rig.byName('L3'))
+    expect(gizmo._parts.scale.object).toBeUndefined() // bones have no Resize
+    // the IK target waits on the bone
+    expect(worldPos(gizmo._parts.translate.object).distanceTo(worldPos(rig.byName('L3')))).toBeLessThan(1e-6)
+  })
+
+  it('combined with several bones selected: both layers share the group pivot, and a rotate drag rotates them', () => {
+    setBoneGizmoMode('combined')
+    selectBones(['L3', 'R3'])
+    const gizmo = getBoneGizmoForTest()
+    expect(gizmo._parts.translate.object).toBe(gizmo._parts.rotate.object)
+    expect(getBoneGizmoMode()).toBe('combined')
+    const before = rig.byName('L3').quaternion.clone()
+    simulateGroupRotateForTest(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), 0.4))
+    expect(rig.byName('L3').quaternion.angleTo(before)).toBeGreaterThan(0.01)
   })
 })

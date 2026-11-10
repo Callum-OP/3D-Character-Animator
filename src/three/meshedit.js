@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
+import { CombinedTransform } from './combinedTransform.js'
 import { markHistoryAction, pushUndoBatch, registerUndoHistory } from './undoHistory.js'
 import { showMarquee, hideMarquee, pointInRect } from './marquee.js'
 
@@ -106,7 +106,7 @@ export function initMeshEdit(refs) {
   m.onChange = refs.onChange || null
   m.onVisibilityChange = refs.onVisibilityChange || null
 
-  const transform = new TransformControls(m.camera, m.renderer.domElement)
+  const transform = new CombinedTransform(m.camera, m.renderer.domElement)
   transform.setMode('translate')
   transform.setSize(0.9)
   transform.addEventListener('dragging-changed', (e) => {

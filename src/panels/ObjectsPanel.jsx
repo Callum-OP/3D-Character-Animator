@@ -33,6 +33,7 @@ const MODES = [
   { value: 'translate', label: 'Move' },
   { value: 'rotate', label: 'Rotate' },
   { value: 'scale', label: 'Resize' },
+  { value: 'combined', label: 'Transform' },
 ]
 
 export default function ObjectsPanel() {

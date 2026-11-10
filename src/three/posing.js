@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
+import { CombinedTransform } from './combinedTransform.js'
 import { markHistoryAction, pushUndoBatch, registerUndoHistory } from './undoHistory.js'
 import { poseToJSON, validatePose } from './poses.js'
 import { classifyBone, detectSide, buildSlotFallbackMap } from './bvh.js'
@@ -151,7 +151,7 @@ const p = {
 
   transform: null, // TransformControls
   helper: null, // transform.getHelper() (added to scene)
-  gizmoMode: 'rotate', // 'rotate' (FK) | 'translate' (IK move) — bones have no resize gizmo
+  gizmoMode: 'rotate', // 'rotate' (FK) | 'translate' (IK move) | 'combined' (both) — bones have no resize gizmo
 
   ikProxy: null, // invisible Object3D the translate gizmo actually drags
   ikChain: [], // selected bone's ancestor joints (nearest first) solved by solveIk()
@@ -244,7 +244,7 @@ export function initPosing(refs) {
   p.onPoseChange = refs.onPoseChange || null
   p.onGizmoModeChange = refs.onGizmoModeChange || null
 
-  const transform = new TransformControls(p.camera, p.renderer.domElement)
+  const transform = new CombinedTransform(p.camera, p.renderer.domElement, { allowScale: false })
   transform.setMode('rotate')
   transform.setSpace('local')
   transform.setSize(0.8)
@@ -259,9 +259,9 @@ export function initPosing(refs) {
     // together, following the same gizmo choice as a single bone.
     if (p.selectedBones.length > 1) {
       // several bones selected → the same rotation, or the same move, on all of them
-      if (p.gizmoMode === 'translate') applyGroupMove()
+      if (isMoveDrag()) applyGroupMove()
       else applyGroupRotationDelta()
-    } else if (p.gizmoMode === 'translate') {
+    } else if (isMoveDrag()) {
       solveIk() // drag the proxy → CCD-solve the ancestor chain toward it
     } else if (p.selected) {
       clampBoneLocal(p.selected) // keep gizmo edits inside the limb limits
@@ -272,9 +272,9 @@ export function initPosing(refs) {
   transform.addEventListener('mouseDown', () => {
     if (!p.selected) return
     if (p.selectedBones.length > 1) {
-      if (p.gizmoMode === 'translate') beginGroupMoveDrag()
+      if (isMoveDrag()) beginGroupMoveDrag()
       else beginGroupRotateDrag()
-    } else if (p.gizmoMode === 'translate') {
+    } else if (isMoveDrag()) {
       p.ikDragBefore = new Map(p.ikChain.map((b) => [b, b.quaternion.clone()]))
     } else {
       p.dragBefore = p.selected.quaternion.clone()
@@ -282,10 +282,12 @@ export function initPosing(refs) {
   })
   transform.addEventListener('mouseUp', () => {
     if (p.selectedBones.length > 1) {
-      if (p.gizmoMode === 'translate') commitGroupMoveUndo()
+      if (isMoveDrag()) commitGroupMoveUndo()
       else commitGroupRotateUndo()
-    } else if (p.gizmoMode === 'translate') commitIkDragUndo()
+    } else if (isMoveDrag()) commitIkDragUndo()
     else commitDragUndo()
+    // Move + Rotate together: both layers sit on the bone, so bring the Move target back onto it
+    if (p.gizmoMode === 'combined' && p.selected && p.selectedBones.length <= 1) p.selected.getWorldPosition(p.ikProxy.position)
     p.requestRender()
   })
   p.transform = transform
@@ -653,6 +655,16 @@ function commitGroupRotateUndo() {
 // (always rotate — see selectBones), the bone directly for a single-bone FK
 // rotate, or the IK proxy — parked on the bone's current world position —
 // for a single-bone IK move.
+// Which layer a drag on the gizmo belongs to: Move (IK) or Rotate (FK). With the combined tool both are on screen
+// at once, so it depends on the handle that was grabbed.
+function gizmoLayerMode() {
+  return p.gizmoMode === 'translate' || p.gizmoMode === 'combined' ? p.gizmoMode : 'rotate'
+}
+
+function isMoveDrag() {
+  return (p.transform?.activeMode || p.gizmoMode) === 'translate'
+}
+
 function attachGizmoToSelected() {
   if (!p.transform) return
   if (p.selectedBones.length > 1) {
@@ -660,7 +672,7 @@ function attachGizmoToSelected() {
     // turns them all together, Move drags them all by the same offset (see
     // beginGroupMoveDrag). The widget sits at the group's centre, un-rotated.
     centerGroupPivot()
-    p.transform.setMode(p.gizmoMode === 'translate' ? 'translate' : 'rotate')
+    p.transform.setMode(gizmoLayerMode())
     p.transform.attach(p.rotatePivot)
     return
   }
@@ -668,8 +680,13 @@ function attachGizmoToSelected() {
     p.transform.detach()
     return
   }
-  p.transform.setMode(p.gizmoMode === 'translate' ? 'translate' : 'rotate')
-  if (p.gizmoMode === 'translate') {
+  p.transform.setMode(gizmoLayerMode())
+  if (p.gizmoMode === 'combined') {
+    // Move drives the IK target (parked on the bone), Rotate turns the bone itself
+    p.selected.getWorldPosition(p.ikProxy.position)
+    p.transform.attach(p.selected)
+    p.transform.attachPart('translate', p.ikProxy)
+  } else if (p.gizmoMode === 'translate') {
     p.selected.getWorldPosition(p.ikProxy.position)
     p.transform.attach(p.ikProxy)
   } else {
@@ -720,13 +737,18 @@ export function resumePosing() {
 // capped by its reach and each joint's own limb limits). Bones have no resize
 // gizmo — there's nothing on a bone to resize.
 export function setBoneGizmoMode(mode) {
-  p.gizmoMode = mode === 'translate' ? 'translate' : 'rotate'
+  p.gizmoMode = mode === 'translate' || mode === 'combined' ? mode : 'rotate'
   if (p.transform) p.transform.setMode(p.gizmoMode)
   if (p.selected) attachGizmoToSelected()
   p.requestRender()
 }
 
 // Debug/test surface: the gizmo mode as posing.js currently sees it.
+// The gizmo itself, for tests.
+export function getBoneGizmoForTest() {
+  return p.transform
+}
+
 export function getBoneGizmoMode() {
   return p.gizmoMode
 }

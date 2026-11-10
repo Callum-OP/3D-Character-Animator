@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
+import { CombinedTransform } from './combinedTransform.js'
 import { pushSceneHistory } from './sceneHistory.js'
 import { useStore } from '../store.js'
 import { createMount, reparentKeepingWorld, setObjectWorldTransform, registerFollower, unregisterFollower, getWorldTransform } from './attach.js'
@@ -55,7 +55,7 @@ export function initCameras(refs) {
   c.requestRender = refs.requestRender
   c.getSceneScale = refs.getSceneScale || (() => 1)
 
-  const transform = new TransformControls(c.camera, c.renderer.domElement)
+  const transform = new CombinedTransform(c.camera, c.renderer.domElement, { allowScale: false })
   transform.setMode('translate')
   transform.setSize(0.8)
   transform.addEventListener('dragging-changed', (e) => {

@@ -106,7 +106,7 @@ const MODE_BUTTONS = [
   { value: 'mesh', label: 'Mesh', title: 'Move, rotate or resize parts like eyes and hair (4)' },
 ]
 const MODE_KEYS = { 1: 'view', 2: 'object', 3: 'bone', 4: 'mesh' }
-const GIZMO_KEYS = { w: 'translate', e: 'rotate', r: 'scale' }
+const GIZMO_KEYS = { w: 'translate', e: 'rotate', r: 'scale', t: 'combined' }
 
 // Move / Rotate / Resize widgets, shown below the mode strip for every mode
 // except View (nothing is selectable there, so nothing to transform). Which
@@ -117,6 +117,18 @@ const TRANSFORM_BUTTONS = [
   { value: 'translate', icon: '✥', label: 'Move', title: 'Move (W)' },
   { value: 'rotate', icon: '↻', label: 'Rotate', title: 'Rotate (E)' },
   { value: 'scale', icon: '⤢', label: 'Resize', title: 'Resize (R)' },
+  {
+    value: 'combined',
+    icon: (
+      <span className="tw-combo" aria-hidden="true">
+        <span className="tw-combo-move">✥</span>
+        <span className="tw-combo-rotate">↻</span>
+        <span className="tw-combo-scale">⤢</span>
+      </span>
+    ),
+    label: 'Transform',
+    title: 'Transform (T): Move, Rotate and Resize together; the grey outer ring turns it around the view',
+  },
 ]
 
 // Catches render-time crashes (e.g. while a project switch is mid-flight)
@@ -1003,7 +1015,7 @@ function Viewport() {
               <button
                 key={b.value}
                 className={'transform-widget-btn' + (active ? ' active' : '') + (disabled ? ' disabled' : '')}
-                title={disabled ? b.title + ' — not available for bones (no size of their own)' : b.title}
+                title={disabled ? b.title + ' — not available for bones (no size of their own)' : isBone && b.value === 'combined' ? 'Transform (T): Move and Rotate together' : b.title}
                 aria-label={b.label}
                 disabled={disabled}
                 onClick={() => {
