@@ -101,6 +101,30 @@ const REGION_DEFS = [
   { key: 'toes.R', label: 'Right Toes', color: 0xbde5ff, control: ['toe.R'], ik: true },
 ]
 
+// One region per finger segment: finger.<L|R>.<thumb|index|middle|ring|pinky>.<1|2|3>, titled e.g.
+// "LeftIndexHand2". The plain 'fingers.L/R' regions above stay as the catch-all for hand bones that
+// can't be placed on a finger (palm/metacarpal helpers, or a rig whose fingers can't be told apart).
+export const FINGER_TYPES = ['thumb', 'index', 'middle', 'ring', 'pinky']
+const FINGER_SEGMENT_COLORS = [0xffc0cd, 0xffa8ba, 0xff90a8] // alternate shades so neighbouring segments read apart
+for (const [side, sideLabel] of [['L', 'Left'], ['R', 'Right']]) {
+  for (const type of FINGER_TYPES) {
+    for (let seg = 1; seg <= 3; seg++) {
+      REGION_DEFS.push({
+        key: `finger.${side}.${type}.${seg}`,
+        label: `${sideLabel}${type[0].toUpperCase()}${type.slice(1)}Hand${seg}`,
+        color: FINGER_SEGMENT_COLORS[seg - 1],
+        control: [],
+        ik: true,
+      })
+    }
+  }
+}
+
+// The title of a region (e.g. "LeftThumbHand1", "Left Upper Arm"), or null if the key is unknown.
+export function getRegionLabel(regionKey) {
+  return REGION_DEFS.find((d) => d.key === regionKey)?.label || null
+}
+
 // Direct classifyBone-slot → region mapping. 'spine'/'chest' are deliberately
 // left out — they're split across waist/lowerTorso/upperTorso by chain
 // position instead (assignTorsoChainRegions), since classifyBone has no way
@@ -1896,7 +1920,135 @@ function buildBoneRegionMap() {
     return region
   }
   for (const b of p.bones) resolve(b)
+  assignFingerSegments(final)
   return final
+}
+
+// --- finger segments ---------------------------------------------------------------------------------------
+// Bones that inherited 'fingers.L/R' from the hand are split into one region per finger and segment. A finger
+// is a chain of bones starting at a bone whose parent isn't itself a finger bone; its segments are numbered 1-3
+// from the knuckle outwards (anything past the third, e.g. a tip/end bone, joins segment 3). Palm and
+// metacarpal helper bones are skipped (they keep the general fingers region), except the thumb's, which counts.
+// Which finger a chain is comes from the bone names (thumb/index/middle/ring/pinky/little), and when the rig
+// doesn't name its fingers, from where its five chains sit on the hand.
+const FINGER_NAME_TESTS = [
+  ['thumb', /thumb/],
+  ['index', /index/],
+  ['middle', /middle|(^|[^a-z])mid([^a-z]|$)/],
+  ['ring', /(?<!st|sp)ring/],
+  ['pinky', /pinky|pinkie|little/],
+]
+
+function fingerTypeFromName(name) {
+  const n = name.toLowerCase()
+  for (const [type, re] of FINGER_NAME_TESTS) if (re.test(n)) return type
+  return null
+}
+
+function isFingerHelperBone(bone) {
+  const n = bone.name.toLowerCase()
+  return /palm|carpal/.test(n) && !/thumb/.test(n)
+}
+
+// Finger types for chains whose bones carry no finger names, from the hand-local layout of their first bones.
+// Returns an array of types (one per chain) or null if the layout isn't a recognisable hand.
+function fingerTypesByLayout(hand, chains) {
+  if (!hand || chains.length !== 5) return null
+  hand.updateWorldMatrix(true, false)
+  const local = (bone) => hand.worldToLocal(bone.getWorldPosition(new THREE.Vector3()))
+  const info = chains.map((chain) => {
+    const root = chain[0]
+    const next = chain[1] || null
+    const a = local(root)
+    const dir = next ? local(next).sub(a) : new THREE.Vector3()
+    return { a, dir: dir.lengthSq() > 1e-12 ? dir.normalize() : null }
+  })
+  // lateral axis = the line through the two roots furthest apart
+  let ends = [0, 1]
+  let far = -1
+  for (let i = 0; i < info.length; i++) {
+    for (let j = i + 1; j < info.length; j++) {
+      const d = info[i].a.distanceToSquared(info[j].a)
+      if (d > far) { far = d; ends = [i, j] }
+    }
+  }
+  if (far <= 1e-12) return null
+  const axis = info[ends[1]].a.clone().sub(info[ends[0]].a).normalize()
+  const order = info.map((_, i) => i).sort((i, j) => info[i].a.dot(axis) - info[j].a.dot(axis)) // one end to the other
+  const mean = new THREE.Vector3()
+  for (const i of order.slice(1, 4)) if (info[i].dir) mean.add(info[i].dir)
+  if (mean.lengthSq() > 1e-12) mean.normalize()
+  const first = order[0]
+  const last = order[4]
+  const score = (i) => (info[i].dir && mean.lengthSq() > 0 ? info[i].dir.dot(mean) : 1)
+  const sFirst = score(first)
+  const sLast = score(last)
+  let thumbAtStart
+  if (Math.abs(sFirst - sLast) > 0.02) thumbAtStart = sFirst < sLast // the more angled end is the thumb
+  else thumbAtStart = info[first].a.lengthSq() <= info[last].a.lengthSq() // else the end nearer the wrist
+  const seq = thumbAtStart ? order : [...order].reverse() // thumb, index, middle, ring, pinky
+  const types = new Array(chains.length)
+  seq.forEach((chainIdx, k) => { types[chainIdx] = FINGER_TYPES[k] })
+  return types
+}
+
+function assignFingerSegments(final) {
+  for (const side of ['L', 'R']) {
+    const generic = `fingers.${side}`
+    const members = p.bones.filter((b) => final.get(b) === generic && !isFingerHelperBone(b))
+    if (!members.length) continue
+    const memberSet = new Set(members)
+    const kids = new Map()
+    for (const b of members) kids.set(b, [])
+    const roots = []
+    for (const b of members) {
+      // nearest member ancestor, skipping helper bones in between
+      let up = b.parent
+      while (up && up.isBone && !memberSet.has(up) && final.get(up) === generic) up = up.parent
+      if (up && memberSet.has(up)) kids.get(up).push(b)
+      else roots.push(b)
+    }
+    // each chain, root first (a breadth-first walk keeps depth order)
+    const chains = roots.map((root) => {
+      const list = []
+      const queue = [root]
+      while (queue.length) {
+        const bone = queue.shift()
+        list.push(bone)
+        queue.push(...kids.get(bone))
+      }
+      return list
+    })
+    const depthOf = new Map()
+    for (const root of roots) {
+      depthOf.set(root, 1)
+      const queue = [root]
+      while (queue.length) {
+        const bone = queue.shift()
+        for (const child of kids.get(bone)) {
+          depthOf.set(child, depthOf.get(bone) + 1)
+          queue.push(child)
+        }
+      }
+    }
+    let types = chains.map((chain) => {
+      for (const bone of chain) {
+        const t = fingerTypeFromName(bone.name)
+        if (t) return t
+      }
+      return null
+    })
+    if (types.every((t) => !t)) {
+      const hand = p.bones.find((b) => final.get(b) === `hand.${side}` && chains.some((c) => c[0].parent === b)) ||
+        (chains[0] && chains[0][0].parent && chains[0][0].parent.isBone ? chains[0][0].parent : null)
+      types = fingerTypesByLayout(hand, chains) || types
+    }
+    chains.forEach((chain, i) => {
+      const type = types[i]
+      if (!type) return
+      for (const bone of chain) final.set(bone, `finger.${side}.${type}.${Math.min(3, depthOf.get(bone))}`)
+    })
+  }
 }
 
 // How many Bone ancestors sit above this bone (within the rig) — used to break

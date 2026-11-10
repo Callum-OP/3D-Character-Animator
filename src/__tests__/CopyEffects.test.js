@@ -5,8 +5,8 @@ import { initObjects } from '../three/objects.js'
 import { initPosing } from '../three/posing.js'
 import { initMeshEdit } from '../three/meshedit.js'
 import { initAnimation } from '../three/animation.js'
-import { initDangle } from '../three/dangle.js'
-import { __seedCharacterForTest, getCurrentModel } from '../three/scene.js'
+import { clearDangleChainsUndoable, initDangle } from '../three/dangle.js'
+import { __seedCharacterForTest, getCurrentModel, reapplyAddBonesGroups, getPhysicsBoneNames } from '../three/scene.js'
 import { applyPartRig, getPartRigEntries, initPartRig } from '../three/partRig.js'
 import { performUndo, performRedo } from '../three/undoPriority.js'
 import { clearUndoHistory } from '../three/undoHistory.js'
@@ -16,6 +16,9 @@ import {
   copyAddedBonesFromMesh,
   copyMeshPhysicsFromCharacter,
   copyMeshPhysicsFromMesh,
+  clearAddedBonesFromCharacter,
+  clearAllDangleChainsAndBones,
+  clearMeshPhysicsFromCharacter,
   describeBonesCopy,
   listCopySources,
   baseMeshName,
@@ -158,6 +161,19 @@ describe('matching and carrying faces over', () => {
 })
 
 describe('copy added bones', () => {
+  it('clears added bones and their dangle chains together, in one undo step', () => {
+    seed(new THREE.BoxGeometry(2, 5, 2, 2, 2, 2))
+    copyAddedBonesFromCharacter('source')
+    const removed = clearAddedBonesFromCharacter()
+    expect(removed).toEqual(['Hair'])
+    expect(getPartRigEntries(getCurrentModel())).toHaveLength(0)
+    expect(useStore.getState().dangleChains).toHaveLength(0)
+
+    performUndo(useStore.getState())
+    expect(getPartRigEntries(getCurrentModel())).toHaveLength(1)
+    expect(useStore.getState().dangleChains).toHaveLength(1)
+  })
+
   it('rebuilds the rig and its swing physics on a character of different proportions, in one undo step', () => {
     seed(new THREE.BoxGeometry(2, 5, 2, 2, 2, 2))
     expect(listCopySources()).toMatchObject([{ id: 'source', name: 'Source', rigs: 1, physicsParts: 1 }])
@@ -237,6 +253,18 @@ describe('characters whose parts carry different Blender numbers', () => {
 })
 
 describe('copy mesh physics', () => {
+  it('clears mesh physics across the character and restores it with undo', () => {
+    seed(new THREE.BoxGeometry(2, 5, 2, 2, 2, 2))
+    copyMeshPhysicsFromCharacter('source')
+
+    const result = clearMeshPhysicsFromCharacter()
+    expect(result.removed).toBe(1)
+    expect(useStore.getState().meshOverrides[target.meshes[0].uuid]?.softZones || []).toHaveLength(0)
+
+    performUndo(useStore.getState())
+    expect(useStore.getState().meshOverrides[target.meshes[0].uuid].softZones).toHaveLength(1)
+  })
+
   it('copies zones with a fresh id and the matching area, once, as one undo step', () => {
     seed(new THREE.BoxGeometry(2, 5, 2, 2, 2, 2))
     const result = copyMeshPhysicsFromCharacter('source')
@@ -259,6 +287,32 @@ describe('copy mesh physics', () => {
     const zone = useStore.getState().meshOverrides[target.meshes[0].uuid].softZones[0]
     expect(zone.area.kind).toBe('tris')
     expect(zone.area.vertexCount).toBe(target.meshes[0].geometry.index.count)
+  })
+})
+
+describe('clear dangle chains', () => {
+  it('also removes the added bones the chains swing, in one undo step', () => {
+    seed(new THREE.BoxGeometry(2, 5, 2, 2, 2, 2))
+    copyAddedBonesFromCharacter('source')
+    clearAllDangleChainsAndBones()
+    expect(getPartRigEntries(getCurrentModel())).toHaveLength(0)
+    expect(useStore.getState().dangleChains).toHaveLength(0)
+
+    performUndo(useStore.getState())
+    expect(getPartRigEntries(getCurrentModel())).toHaveLength(1)
+    expect(useStore.getState().dangleChains).toHaveLength(1)
+  })
+
+  it('clears every chain in one undo step', () => {
+    seed(new THREE.BoxGeometry(2, 5, 2, 2, 2, 2))
+    const chain = { id: 'target-chain', name: 'Hair', boneNames: ['Hips'], type: 'dangle' }
+    useStore.setState({ dangleChains: [chain] })
+
+    clearDangleChainsUndoable()
+    expect(useStore.getState().dangleChains).toEqual([])
+
+    performUndo(useStore.getState())
+    expect(useStore.getState().dangleChains).toEqual([chain])
   })
 })
 
@@ -329,5 +383,47 @@ describe('replace existing effects', () => {
     const result = copyAddedBonesFromMesh('source', source.meshes[0], target.meshes[0], { replace: true })
     expect(result.removed).toEqual(['Cape'])
     expect(getPartRigEntries(getCurrentModel()).map((e) => e.label)).toEqual(['Hair'])
+  })
+})
+
+describe('reset bone physics (reapply Add bones groups)', () => {
+  it('rebuilds each group from its own settings and keeps its dangle chains attached, in one undo step', () => {
+    seed(new THREE.BoxGeometry(2, 5, 2, 2, 2, 2))
+    const own = applyPartRig(target, target.meshes[0], topFaces(target.meshes[0]), { segments: 2 }, { label: 'Cape' })
+    expect(own.ok).toBe(true)
+    useStore.setState({
+      dangleEnabled: true,
+      dangleChains: [{ id: 'own', name: 'Cape', boneNames: own.entry.boneNames, type: 'dangle', stiffness: 0.5, gravity: 1, damping: 0.4, groupId: own.entry.id, groupName: 'Cape' }],
+    })
+
+    const result = reapplyAddBonesGroups()
+    expect(result).toEqual({ updated: 1, chainsOnly: 0 })
+    const entries = getPartRigEntries(getCurrentModel())
+    expect(entries).toHaveLength(1)
+    expect(entries[0].label).toBe('Cape')
+    const chains = useStore.getState().dangleChains
+    expect(chains).toHaveLength(1)
+    expect(chains[0].boneNames).toEqual(entries[0].boneNames)
+    expect(chains[0].stiffness).toBe(0.5)
+    expect(chains[0].groupId).toBe(entries[0].id)
+
+    performUndo(useStore.getState())
+    expect(getPartRigEntries(getCurrentModel())).toHaveLength(1)
+  })
+
+  it('does nothing when there are no groups', () => {
+    seed(new THREE.BoxGeometry(2, 5, 2, 2, 2, 2))
+    expect(reapplyAddBonesGroups()).toEqual({ updated: 0, chainsOnly: 0 })
+  })
+})
+
+describe('physics bone names (for hiding dangle & cloth bones)', () => {
+  it('covers Add bones group bones even with no dangle chain, plus every chain\'s bones', () => {
+    seed(new THREE.BoxGeometry(2, 5, 2, 2, 2, 2))
+    const own = applyPartRig(target, target.meshes[0], topFaces(target.meshes[0]), { segments: 2 }, { label: 'Cape' })
+    expect(own.ok).toBe(true)
+    const names = getPhysicsBoneNames([{ id: 'c', type: 'cloth', boneNames: ['SomeClothBone'] }])
+    own.entry.boneNames.forEach((n) => expect(names.has(n)).toBe(true))
+    expect(names.has('SomeClothBone')).toBe(true)
   })
 })

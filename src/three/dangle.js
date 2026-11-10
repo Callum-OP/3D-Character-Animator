@@ -969,6 +969,10 @@ export function removeDangleChainUndoable(chainId) {
   editDangle(activeId(), (d) => ({ ...d, chains: d.chains.filter((c) => c.id !== chainId) }), { discrete: true })
 }
 
+export function clearDangleChainsUndoable() {
+  editDangle(activeId(), (d) => ({ ...d, chains: [] }), { discrete: true })
+}
+
 export function updateDangleChainUndoable(chainId, patch) {
   editDangle(activeId(), (d) => ({ ...d, chains: d.chains.map((c) => (c.id === chainId ? { ...c, ...patch } : c)) }), {
     key: `${chainId}:${Object.keys(patch).join(',')}`,

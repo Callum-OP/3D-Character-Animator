@@ -34,6 +34,7 @@ import {
   setOrbitSuspended,
   getObjectScreenPosition,
   mirrorSelectedMeshes,
+  getPhysicsBoneNames,
 } from './scene.js'
 import RadialScale from '../panels/RadialScale.jsx'
 import { getSelectedUniformScale, setSelectedUniformScale, commitUniformScale, snapshotObject } from './objects.js'
@@ -505,13 +506,19 @@ function Viewport() {
   // "Hide helper bones" trims the dot overlay + picking to the primary bones.
   // (modelInfo is also a dep so a freshly loaded rig gets its filter applied.)
   const deformOnly = useStore((s) => s.deformOnly)
+  const hideDangleBones = useStore((s) => s.hideDangleBones)
+  const chainsForBoneFilter = useStore((s) => s.dangleChains)
   const modelInfo = useStore((s) => s.modelInfo)
   useEffect(() => {
     const bones = modelInfo?.bones || []
+    const dangleNames = hideDangleBones ? getPhysicsBoneNames(chainsForBoneFilter) : null
+    const trim = deformOnly || (dangleNames && dangleNames.size > 0)
     setPickableBones(
-      deformOnly ? bones.filter((b) => b.deform).map((b) => b.name) : null,
+      trim
+        ? bones.filter((b) => (!deformOnly || b.deform) && !(dangleNames && dangleNames.has(b.name))).map((b) => b.name)
+        : null,
     )
-  }, [deformOnly, modelInfo])
+  }, [deformOnly, hideDangleBones, chainsForBoneFilter, modelInfo])
 
   // --- Dangle bones: push the active character's chains/settings into the
   // physics engine whenever the master toggle or any chain (add/remove/

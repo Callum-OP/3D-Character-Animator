@@ -462,7 +462,7 @@ export default function MeshPanel() {
         </FxEditor>
       )}
 
-      <FxCollapse title="Copy effects" hint="added bones, mesh physics from another character">
+      <FxCollapse title="Effects" hint="copy or clear added bones and mesh physics">
         <CopyEffectsSection />
       </FxCollapse>
 

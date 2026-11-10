@@ -1446,17 +1446,12 @@ export function pause() {
 // Stop playback, return the rig to its rest pose + pre-play placement, and hand
 // control back to posing.
 export function stop() {
-  // A clip that never moves the root leaves the character wherever the user
-  // put it, rather than snapping back to where it was when the clip was armed.
-  const movesRoot =
-    !!a.editRoot?.length || !!a.clip?.tracks?.some((t) => t.name === '.position' || t.name === '.quaternion')
   if (a.mixer) a.mixer.stopAllAction()
   a.action = null
   a.clip = null
   if (!anyPlaying()) a.refs.setContinuousRender(false)
   restoreRest()
-  if (movesRoot) restoreRootRest()
-  else a.rootRest = null
+  restoreRootRest()
   if (a.editRoot?.length && a.editRoot[0].time <= 1e-6) sampleRoot(0)
   applyMeshPlaybackSnapshot(a.meshRest)
   a.meshRest = null

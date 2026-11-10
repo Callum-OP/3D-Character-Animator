@@ -71,7 +71,7 @@ export function classifyBone(rawName) {
   const sided = (base) => (side ? `${base}.${side}` : null) // needs a side to place
 
   // Skip fingers / twist / helper bones outright.
-  if (/thumb|index|middle|ring|pinky|finger|twist|palm|metacarpal/.test(n)) return null
+  if (/thumb|index|middle|ring|pinky|pinkie|little|finger|twist|palm|metacarpal/.test(n)) return null
   // Facial bones ("eye_ball" must not read as a toe), correctives, attachments.
   // "face" also excludes rigs that carry a separate face-direction/orientation
   // helper bone (not a deforming joint) alongside the real Head bone.

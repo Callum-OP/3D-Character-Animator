@@ -60,6 +60,7 @@ import {
   pauseGlobalClock,
   keyObjectAttachmentById,
   removeObjectAttachmentKeyById,
+  reapplyAddBonesGroups,
 } from '../three/scene.js'
 import { setAllDangleCollisionsUndoable } from '../three/dangle.js'
 import * as THREE from 'three'
@@ -990,6 +991,7 @@ export default function AnimationPanel() {
   const [kfMsg, setKfMsg] = useState(null) // feedback after adding a keyframe
   const [blankFrames, setBlankFrames] = useState(4) // how many frames to insert
   const [ragdollMsg, setRagdollMsg] = useState(null) // feedback after a ragdoll bake
+  const [boneResetMsg, setBoneResetMsg] = useState(null) // feedback after Reset bone physics
   const [renameOpen, setRenameOpen] = useState(false)
   const [renameText, setRenameText] = useState('')
   // "Keep original movement" — when baking a clip (e.g. mocap) to editable
@@ -2416,6 +2418,28 @@ export default function AnimationPanel() {
                 </div>
               )}
               <div className="character-tools-collisions">
+                <div className="character-tools-collision-row">
+                  <span>
+                    <strong>Reset bone physics</strong>
+                    <span className="wind-hint">Rebuilds every Add bones group from its own settings (like Edit, then Update with no changes) and settles the dangle chains.</span>
+                  </span>
+                  <button
+                    type="button"
+                    className="btn secondary"
+                    onClick={() => {
+                      const r = reapplyAddBonesGroups()
+                      const total = r.updated + r.chainsOnly
+                      setBoneResetMsg(
+                        total
+                          ? `Reset ${total} Add bones group${total === 1 ? '' : 's'}${r.chainsOnly ? ` (${r.chainsOnly} only had their dangle chains reset because other groups hang off them)` : ''}. Ctrl+Z undoes it.`
+                          : 'There are no Add bones groups to reset.',
+                      )
+                    }}
+                  >
+                    Reset
+                  </button>
+                </div>
+                {boneResetMsg && <div className="pose-msg">{boneResetMsg}</div>}
                 <strong>Collisions</strong>
                 <div className="character-tools-collision-row">
                   <span>

@@ -125,9 +125,12 @@ import {
   setDangleConfig,
   stepDangleLive,
   clearDangle,
+  resetDangle,
   resetDanglePose,
   collectDescendantBoneNames,
   rebuildRigChainsUndoable,
+  regroupRigChainsUndoable,
+  getDangleChainsForRig,
 } from './dangle.js'
 import {
   initSoftCloth,
@@ -141,7 +144,7 @@ import {
   suspendSoftCloth,
   resumeSoftCloth,
 } from './softcloth.js'
-import { initPartRig, getPartRigData, restorePartRigs, getPartRigEntries, invalidatePartRigGeometry } from './partRig.js'
+import { initPartRig, getPartRigData, restorePartRigs, getPartRigEntries, invalidatePartRigGeometry, updatePartRig } from './partRig.js'
 import { initMeshSymmetry, getSymmetryData, restoreSymmetry, mirrorMeshes } from './meshSymmetry.js'
 import { combineMeshes as combineExportMeshes, describeCombine } from './combineMeshes.js'
 import { STATIC_FORMATS, bakeStaticMeshes, writeStaticModel } from './exportStatic.js'
@@ -279,7 +282,7 @@ import { buildPartsGroup, safeFileStem } from './extractParts.js'
 import { bakeRegionsForExport, fromRanges, setRegionsRenderHook } from './regions.js'
 import { analyseSurface, outwardDirection, adjustDirection, faceOfObject, averageSurfaceColor, lightColourFrom } from './lightFromPart.js'
 import { getOriginalMaterials } from './surfaceMaterials.js'
-import { pushSceneHistory } from './sceneHistory.js'
+import { pushSceneHistory, runAsOneSceneStep } from './sceneHistory.js'
 
 // ---------------------------------------------------------------------------
 // Scene manager (module singleton)
@@ -1424,6 +1427,46 @@ export function resetDangleChainsToRigs() {
   const count = rebuildRigChainsUndoable(getPartRigEntries(model), (root) => collectDescendantBoneNames(model, root, 64))
   if (count) resetActiveDangle()
   return count
+}
+
+// Every bone that belongs to a dangle chain (dangle or cloth type) or to an Add bones group on the ACTIVE
+// character, rigged cloth bones included whether or not the group has physics on yet. Used by the Pose
+// panel's "Hide dangle & cloth bones" toggle.
+export function getPhysicsBoneNames(chains) {
+  const names = new Set((chains || []).flatMap((c) => c.boneNames || []))
+  if (state.currentModel) {
+    for (const rig of getPartRigEntries(state.currentModel)) (rig.boneNames || []).forEach((n) => names.add(n))
+  }
+  return names
+}
+
+// "Reset bone physics": do what opening every Add bones group with Edit and pressing Update with no changes does —
+// rebuild its bones from its own settings and re-point its dangle chains at them — then settle the simulation.
+// A group other groups hang off can't be rebuilt in place (same rule as Update), so its chains are reset to the
+// group's defaults instead. One undo step. Returns { updated, chainsOnly }.
+export function reapplyAddBonesGroups() {
+  const none = { updated: 0, chainsOnly: 0 }
+  if (!state.activeCharacterId || !state.currentModel) return none
+  const model = state.currentModel
+  const descend = (root) => collectDescendantBoneNames(model, root, 64)
+  const result = { ...none }
+  runAsOneSceneStep(() => {
+    for (const entry of [...getPartRigEntries(model)]) {
+      if (!entry.result) continue
+      const entries = getPartRigEntries(model)
+      const before = { id: entry.id, label: entry.label, boneNames: entry.boneNames, rootBoneNames: entry.rootBoneNames }
+      const chainIds = getDangleChainsForRig(useStore.getState().dangleChains, entry, entries).map((c) => c.id)
+      const res = updatePartRig(model, entry.id, { label: entry.label, options: entry.options })
+      if (res.ok) {
+        regroupRigChainsUndoable(chainIds, { id: res.entry.id, name: res.entry.label }, before, res.entry, descend)
+        result.updated++
+      } else if (rebuildRigChainsUndoable([entry], descend)) {
+        result.chainsOnly++
+      }
+    }
+  })
+  if (result.updated || result.chainsOnly) resetActiveDangle()
+  return result
 }
 
 // Bone name + every bone hanging off it in the ACTIVE character's skeleton —

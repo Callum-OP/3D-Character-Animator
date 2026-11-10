@@ -4,7 +4,7 @@ import { runAsOneSceneStep } from './sceneHistory.js'
 import { recordOverrideEdit } from './materialHistory.js'
 import { regionVertexCount, toRanges, fromRanges } from './regions.js'
 import { applyPartRig, getPartRigEntries, removePartRig, uniqueRigLabel } from './partRig.js'
-import { addDangleChainUndoable, collectDescendantBoneNames, getDangleChainsForRig, removeDangleChainUndoable } from './dangle.js'
+import { addDangleChainUndoable, clearDangleChainsUndoable, collectDescendantBoneNames, getDangleChainsForRig, removeDangleChainUndoable } from './dangle.js'
 import { newZoneId } from './softcloth.js'
 
 // Copy "Add bones" rigs and Mesh Physics (soft cloth / swing zones) from one character, or one mesh, to another.
@@ -233,6 +233,22 @@ function clearTargetRigs(target, onlyMesh = null) {
   return removed
 }
 
+// Remove every dangle chain and the Add bones rigs (with their bones) that the chains were driving.
+export function clearAllDangleChainsAndBones() {
+  const target = getCurrentModel()
+  return runAsOneSceneStep(() => {
+    const removed = target ? clearTargetRigs(target) : []
+    clearDangleChainsUndoable()
+    return removed
+  })
+}
+
+export function clearAddedBonesFromCharacter() {
+  const target = getCurrentModel()
+  if (!target) return []
+  return runAsOneSceneStep(() => clearTargetRigs(target))
+}
+
 // Rebuild `source`'s Add bones rigs on `target` (the ACTIVE character) for the given part pairs.
 function copyRigs(source, sourceId, target, pairs, { missingParts = [], replace = false, onlyMesh = null } = {}) {
   const result = { copied: [], skipped: [], notes: [], approx: false, matched: pairs.length, unmatched: missingParts, removed: [] }
@@ -399,6 +415,12 @@ export function copyMeshPhysicsFromMesh(sourceCharacterId, sourceMesh, targetMes
     replace,
     clearMeshes: [targetMesh],
   })
+}
+
+export function clearMeshPhysicsFromCharacter() {
+  const target = getCurrentModel()
+  if (!target) return null
+  return copyZones({}, [], [], { replace: true, clearMeshes: target.meshes || [] })
 }
 
 // --- wording for the panel ----------------------------------------------------------------------------

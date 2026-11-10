@@ -23,8 +23,9 @@ import {
   updateDangleChainsUndoable as updateDangleChains,
   setAllDangleCollisionsUndoable as setAllDangleCollisions,
 } from '../three/dangle.js'
-import { collectActiveDangleDescendants, getCurrentModel, resetActiveDangle, setCameraToBones } from '../three/scene.js'
+import { collectActiveDangleDescendants, getCurrentModel, getPhysicsBoneNames, resetActiveDangle, setCameraToBones } from '../three/scene.js'
 import { getPartRigEntries } from '../three/partRig.js'
+import { clearAllDangleChainsAndBones } from '../three/copyEffects.js'
 import { performUndo, performRedo } from '../three/undoPriority.js'
 import EditableValue from './EditableValue.jsx'
 import IkPinsSection from './IkPinsSection.jsx'
@@ -199,6 +200,8 @@ export default function BonePanel() {
   const selectedBoneName = useStore((s) => s.selectedBoneName)
   const boneFilter = useStore((s) => s.boneFilter)
   const deformOnly = useStore((s) => s.deformOnly)
+  const hideDangleBones = useStore((s) => s.hideDangleBones)
+  const setHideDangleBones = useStore((s) => s.setHideDangleBones)
   const transformSpace = useStore((s) => s.transformSpace)
   const showBones = useStore((s) => s.showBones)
   const boneViewMode = useStore((s) => s.boneViewMode)
@@ -303,8 +306,11 @@ export default function BonePanel() {
   }
 
   const filter = boneFilter.trim().toLowerCase()
+  const dangleBoneNames = hideDangleBones ? getPhysicsBoneNames(dangleChains) : new Set()
+  const hidingDangle = hideDangleBones && boneViewMode === 'bones' && dangleBoneNames.size > 0
   const visibleBones = bones.filter((b) => {
     if (deformOnly && !b.deform) return false
+    if (hidingDangle && dangleBoneNames.has(b.name)) return false
     if (
       filter &&
       !b.name.toLowerCase().includes(filter) &&
@@ -445,6 +451,20 @@ export default function BonePanel() {
           />
           Limb limits
         </label>
+        {boneViewMode === 'bones' && (dangleChains.length > 0 || getPartRigEntries(getCurrentModel()).length > 0) && (
+          <label
+            className="toggle-row"
+            style={{ padding: 0 }}
+            title="Hide the bones of dangle chains, rigged cloth and Add bones groups (hair, clothes, accessories) from the dots and the bone list"
+          >
+            <input
+              type="checkbox"
+              checked={hideDangleBones}
+              onChange={(e) => setHideDangleBones(e.target.checked)}
+            />
+            Hide dangle & cloth bones
+          </label>
+        )}
         {hasHelpers && (
           <label
             className="toggle-row"
@@ -616,14 +636,23 @@ export default function BonePanel() {
             countLabel={`${dangleChains.length} chains`}
             label="Bone physics chains"
             actions={
-              <button
-                className="btn secondary"
-                aria-pressed={allDangleCollisionsEnabled}
-                onClick={() => setAllDangleCollisions(!allDangleCollisionsEnabled)}
-                title="Toggle all three collision settings on every chain"
-              >
-                {allDangleCollisionsEnabled ? 'Disable all collisions' : 'Enable all collisions'}
-              </button>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-end' }}>
+                <button
+                  className="btn secondary"
+                  aria-pressed={allDangleCollisionsEnabled}
+                  onClick={() => setAllDangleCollisions(!allDangleCollisionsEnabled)}
+                  title="Toggle all three collision settings on every chain"
+                >
+                  {allDangleCollisionsEnabled ? 'Disable all collisions' : 'Enable all collisions'}
+                </button>
+                <button
+                  className="btn secondary"
+                  onClick={() => clearAllDangleChainsAndBones()}
+                  title="Remove every dangle and rigged-cloth chain, along with the Add bones rigs they swing. Ctrl+Z restores them."
+                >
+                  Clear all dangle chains
+                </button>
+              </div>
             }
           >
             {dangleChainSections.map((section) => {

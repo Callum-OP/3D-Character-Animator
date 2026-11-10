@@ -10,7 +10,7 @@ import { normalizeVideoFps } from './three/exportSize.js'
 // in their own local-storage record so opening a project cannot overwrite the
 // user's preferred viewport and look defaults.
 const APP_SETTINGS_FIELDS = [
-  'undoLimit', 'cameraIgnoresUndo', 'settingsVersion', 'transformOuterRing',
+  'undoLimit', 'cameraIgnoresUndo', 'settingsVersion',
   'exportScale', 'exportImageResolution', 'exportVideoResolution', 'exportAspect',
   'exportVideoFps', 'exportVideoQuality', 'exportVideoFormat', 'showTargetFrameRateInPreview',
   'showGrid', 'showGround', 'solidBackground', 'backgroundColor', 'shadows', 'showStats',
@@ -407,8 +407,6 @@ export const useStore = create((set) => ({
 
   // ---- Viewport display toggles ----
   showGrid: true,
-  transformOuterRing: 'resize',
-  setTransformOuterRing: (value) => set({ transformOuterRing: value === 'rotate' ? 'rotate' : 'resize' }),
   showGround: false, // solid ground plane
   solidBackground: false, // false = transparent (the default, for compositing)
   backgroundColor: '#202127',
@@ -1033,6 +1031,9 @@ export const useStore = create((set) => ({
 
   setBoneFilter: (boneFilter) => set({ boneFilter }),
   setDeformOnly: (deformOnly) => set({ deformOnly }),
+  // Bones view: leave the bones of dangle chains / Add bones groups out of the dots and the bone list.
+  hideDangleBones: false,
+  setHideDangleBones: (hideDangleBones) => set({ hideDangleBones }),
   setTransformSpace: (transformSpace) => set({ transformSpace }),
   setShowBones: (showBones) => set({ showBones }),
 
@@ -1882,7 +1883,6 @@ const APP_SETTINGS_STORAGE_KEY = '3d-animator-app-settings'
 // blob-vs-real) and takes the new realistic defaults for everything else.
 export function migrateAppSettings(saved) {
   const next = { ...saved }
-  if (next.transformOuterRing !== undefined) next.transformOuterRing = next.transformOuterRing === 'rotate' ? 'rotate' : 'resize'
   if (next.exportVideoFps !== undefined) next.exportVideoFps = normalizeVideoFps(next.exportVideoFps)
   const legacy = ['showShadow', 'shadowMapping', 'shadowSoftness', 'shadowStrength', 'shadowType', 'shadowQuality', 'shadowTint']
   if ((next.settingsVersion || 1) < 3 && next.shadows === undefined) {
