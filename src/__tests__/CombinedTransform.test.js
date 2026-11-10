@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import * as THREE from 'three'
 import { CombinedTransform } from '../three/combinedTransform.js'
+import { useStore } from '../store.js'
 
 let camera, dom, target
 
@@ -9,6 +10,7 @@ function make(options) {
   camera.position.set(0, 0, 5)
   camera.updateMatrixWorld(true)
   dom = document.createElement('canvas')
+  dom.getBoundingClientRect = () => ({ left: 0, top: 0, width: 800, height: 800 })
   const scene = new THREE.Scene()
   target = new THREE.Object3D()
   scene.add(target)
@@ -31,7 +33,7 @@ describe('CombinedTransform single modes', () => {
     for (const mode of ['translate', 'rotate', 'scale']) {
       t.setMode(mode)
       expect(t.mode).toBe(mode)
-      expect(attached(t)).toEqual([mode])
+      expect(attached(t)).toEqual(mode === 'scale' ? ['rotate', 'scale'] : [mode])
       expect(t.object).toBe(target)
       expect(t.activeMode).toBe(mode)
     }
@@ -151,7 +153,7 @@ describe('CombinedTransform combined mode', () => {
     expect(t._parts.translate.axis).toBe('X')
   })
 
-  it('the outer ring is the Rotate layer: it turns the object around the view and clears the other layers', () => {
+  it('the outer ring defaults to Resize and clears the other layers', () => {
     const t = make()
     t.attach(target)
     t.setMode('combined')
@@ -162,8 +164,59 @@ describe('CombinedTransform combined mode', () => {
     for (const mode of ['scale', 'translate', 'rotate']) t._parts[mode].pointerHover(pointer)
     expect(ring).toBeTruthy()
     expect(rotate.axis).toBe('E')
+    expect(t.activeMode).toBe('scale')
     expect(t._parts.translate.axis).toBe(null)
     expect(t._parts.scale.axis).toBe(null)
+  })
+
+  it.each(['scale', 'combined'])('resizes proportionally in %s mode and reports a single scale drag', (mode) => {
+    const t = make()
+    target.scale.set(2, 1, 0.5)
+    t.attach(target)
+    t.setMode(mode)
+    t.getHelper().updateMatrixWorld(true)
+    const part = t._parts.rotate
+    const radius = 0.75 * unit(part)
+    const start = pointerAt(radius)
+    for (const layer of ['scale', 'translate', 'rotate']) t._parts[layer].pointerHover(start)
+    expect(part.axis).toBe('E')
+    const events = []
+    t.addEventListener('mouseDown', (e) => events.push(['down', e.mode, t.activeMode]))
+    t.addEventListener('objectChange', () => events.push(['change', t.activeMode]))
+    t.addEventListener('mouseUp', (e) => events.push(['up', e.mode, t.activeMode]))
+    part.pointerDown({ ...start, button: 0 })
+    part.pointerMove({ ...pointerAt(radius * 1.5), button: -1 })
+    target.scale.toArray().forEach((value, i) => expect(value).toBeCloseTo([3, 1.5, 0.75][i]))
+    part.pointerMove({ ...pointerAt(radius * 0.5), button: -1 })
+    target.scale.toArray().forEach((value, i) => expect(value).toBeCloseTo([1, 0.5, 0.25][i]))
+    part.pointerUp({ ...start, button: 0 })
+    expect(events).toEqual([['down', 'scale', 'scale'], ['change', 'scale'], ['change', 'scale'], ['up', 'scale', 'scale']])
+    t.dispose()
+  })
+
+  it('switches the combined outer ring to rotation without changing the Resize tool', () => {
+    const t = make()
+    t.attach(target)
+    t.setMode('combined')
+    useStore.getState().setTransformOuterRing('rotate')
+    t.getHelper().updateMatrixWorld(true)
+    const part = t._parts.rotate
+    const r = 0.75 * unit(part)
+    part.pointerHover(pointerAt(r))
+    expect(t.activeMode).toBe('rotate')
+    part.pointerDown({ ...pointerAt(r), button: 0 })
+    const p = new THREE.Vector3(0, r, 0).project(camera)
+    part.pointerMove({ x: p.x, y: p.y, button: -1 })
+    part.pointerUp({ x: p.x, y: p.y, button: 0 })
+    expect(target.quaternion.angleTo(new THREE.Quaternion())).toBeGreaterThan(1)
+    expect(target.scale.toArray()).toEqual([1, 1, 1])
+    t.setMode('scale')
+    t.getHelper().updateMatrixWorld(true)
+    part.pointerHover(pointerAt(0.75 * unit(part)))
+    expect(part.axis).toBe('E')
+    expect(t._outerResizes()).toBe(true)
+    useStore.getState().setTransformOuterRing('resize')
+    t.dispose()
   })
 
   // Camera 5 units away; see pointerAt above for the layout this relies on

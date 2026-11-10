@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { MIN_UNIFORM_SCALE, formatScale } from '../three/scaleLimits.js'
 
 // Pure math kept for a SINGLE before/after angle comparison (still exercised
@@ -54,6 +54,19 @@ export function turnsToFactor(turns, startValue) {
 export default function RadialScale({ value, getValue, onChange, onDragStart, onCommit, label = 'Scale', compact = false }) {
   const dialRef = useRef(null)
   const [dragging, setDragging] = useState(false)
+  const [liveValue, setLiveValue] = useState(value)
+  const getValueRef = useRef(getValue)
+  getValueRef.current = getValue
+  useEffect(() => {
+    if (!getValueRef.current || dragging) return undefined
+    let frame
+    const update = () => {
+      setLiveValue(getValueRef.current())
+      frame = requestAnimationFrame(update)
+    }
+    update()
+    return () => cancelAnimationFrame(frame)
+  }, [dragging])
   // turns: total accumulated rotation (in full turns) since the drag began —
   // unbounded, unlike a single wrapped angle delta.
   const startRef = useRef({ lastAngle: 0, turns: 0, value: 1 })
@@ -119,7 +132,7 @@ export default function RadialScale({ value, getValue, onChange, onDragStart, on
         <div className="radial-scale-center">⤢</div>
       </div>
       <div className="radial-scale-info">
-        <div className="radial-scale-value">{formatScale(value)}×</div>
+        <div className="radial-scale-value">{formatScale(!dragging && getValue ? liveValue : value)}×</div>
         {!compact && <div className="radial-scale-label">{label} — drag the ring</div>}
       </div>
     </div>

@@ -1,13 +1,14 @@
 import * as THREE from 'three'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
+import { useStore } from '../store.js'
+import { MIN_UNIFORM_SCALE } from './scaleLimits.js'
 
 // A drop-in replacement for TransformControls that can also show Move, Rotate and Resize TOGETHER ("combined").
 //
-// In the single modes ('translate' | 'rotate' | 'scale') it is exactly one ordinary TransformControls, so nothing
-// about the existing gizmos changes. In 'combined' mode three of them are layered on the same object:
+// In 'combined' mode three controls are layered on the same object:
 //
 //   Move    longest   axis arrows + plane squares
-//   Rotate  middle    the three axis rings, plus the grey outer ring that turns the object around the view
+//   Rotate  middle    the three axis rings, plus a configurable grey outer ring
 //   Resize  smallest  axis cubes + the centre cube
 //
 // The handles that would sit on top of each other are left out (the free-rotate sphere, Move's centre), and where
@@ -60,6 +61,13 @@ export class CombinedTransform extends THREE.EventDispatcher {
     this._partObjects = {} // per-layer attach targets (pose mode: Move drives an IK proxy, Rotate the bone)
     this._dragMode = null // which layer the current drag belongs to
     this._stash = {}
+    this._outerRingMode = useStore.getState().transformOuterRing
+    this._unsubscribeSettings = useStore.subscribe((state) => {
+      if (state.transformOuterRing !== this._outerRingMode) {
+        this._outerRingMode = state.transformOuterRing
+        this.dispatchEvent({ type: 'change' })
+      }
+    })
 
     this._parts = {}
     this._helper = new THREE.Group()
@@ -69,24 +77,59 @@ export class CombinedTransform extends THREE.EventDispatcher {
       part.setMode(mode)
       for (const type of FORWARDED) part.addEventListener(type, (e) => this.dispatchEvent({ ...e, target: this }))
       part.addEventListener('mouseDown', () => {
-        this._dragMode = mode
-        this.dispatchEvent({ type: 'mouseDown', mode })
+        this._dragMode = mode === 'rotate' && this._outerResizeDrag ? 'scale' : mode
+        this.dispatchEvent({ type: 'mouseDown', mode: this._dragMode })
       })
       part.addEventListener('mouseUp', () => {
-        this.dispatchEvent({ type: 'mouseUp', mode })
+        this.dispatchEvent({ type: 'mouseUp', mode: this._dragMode })
         this._dragMode = null
+        this._outerResizeDrag = null
       })
+      if (mode === 'rotate') {
+        const down = part.pointerDown.bind(part)
+        const move = part.pointerMove.bind(part)
+        part.pointerDown = (pointer) => {
+          if (pointer && pointer.button === 0 && part.object && !part.dragging && part.axis === 'E' && this._outerResizes()) {
+            const center = part.object.getWorldPosition(new THREE.Vector3()).project(part.camera)
+            const rect = this.domElement.getBoundingClientRect()
+            const distance = Math.hypot((pointer.x - center.x) * rect.width, (pointer.y - center.y) * rect.height)
+            if (distance > 0) this._outerResizeDrag = { center, width: rect.width, height: rect.height, distance, scale: part.object.scale.clone() }
+          }
+          down(pointer)
+          if (!part.dragging) this._outerResizeDrag = null
+        }
+        part.pointerMove = (pointer) => {
+          if (!this._outerResizeDrag) return move(pointer)
+          if (!pointer || pointer.button !== -1 || !part.dragging || !part.object) return
+          const drag = this._outerResizeDrag
+          const distance = Math.hypot((pointer.x - drag.center.x) * drag.width, (pointer.y - drag.center.y) * drag.height)
+          const largest = Math.max(Math.abs(drag.scale.x), Math.abs(drag.scale.y), Math.abs(drag.scale.z))
+          const factor = Math.max(largest ? MIN_UNIFORM_SCALE / largest : 0, distance / drag.distance)
+          const next = drag.scale.clone().multiplyScalar(factor)
+          if (part.scaleSnap) {
+            for (const axis of ['x', 'y', 'z']) {
+              const snapped = Math.round(next[axis] / part.scaleSnap) * part.scaleSnap
+              next[axis] = snapped || Math.sign(next[axis]) * part.scaleSnap
+            }
+          }
+          if (!next.equals(part.object.scale)) {
+            part.object.scale.copy(next)
+            part.dispatchEvent({ type: 'change' })
+            part.dispatchEvent({ type: 'objectChange' })
+          }
+        }
+      }
       // Where handles of two layers overlap under the pointer, only the one that ranks higher reacts.
       const hover = part.pointerHover.bind(part)
       part.pointerHover = (pointer) => {
         hover(pointer)
         // Never take a handle away in the middle of a drag: the drag would stop and, with no axis left, the layer
         // would not report the end of it, so the edit would be missing from undo.
-        if (this._mode !== 'combined' || part.axis === null || part.dragging) return
+        if (this._activeModes().length < 2 || part.axis === null || part.dragging) return
         const own = this._rank(mode, part.axis)
         const ray = part.getRaycaster()
         for (const other of ALL) {
-          if (other === mode || !this._combinedModes().includes(other)) continue
+          if (other === mode || !this._activeModes().includes(other)) continue
           const rival = this._parts[other]
           if (!rival.object) continue
           const hit = firstPickerHit(rival, ray)
@@ -181,7 +224,8 @@ export class CombinedTransform extends THREE.EventDispatcher {
   get activeMode() {
     if (this._dragMode) return this._dragMode
     if (this._mode !== 'combined') return this._mode
-    return ALL.find((mode) => this._parts[mode].axis !== null && this._combinedModes().includes(mode)) || null
+    const mode = ALL.find((mode) => this._parts[mode].axis !== null && this._combinedModes().includes(mode))
+    return mode === 'rotate' && this._parts.rotate.axis === 'E' && this._outerResizes() ? 'scale' : mode || null
   }
 
   // The handle under the pointer, or null.
@@ -217,6 +261,7 @@ export class CombinedTransform extends THREE.EventDispatcher {
   }
 
   dispose() {
+    this._unsubscribeSettings()
     for (const mode of ALL) {
       this._prune(mode, false) // hand the clashing handles back so they are disposed with the layer
       this._parts[mode].dispose()
@@ -239,7 +284,12 @@ export class CombinedTransform extends THREE.EventDispatcher {
   }
 
   _activeModes() {
-    return this._mode === 'combined' ? this._combinedModes() : [this._mode]
+    if (this._mode === 'combined') return this._combinedModes()
+    return this._mode === 'scale' ? ['rotate', 'scale'] : [this._mode]
+  }
+
+  _outerResizes() {
+    return this._mode === 'scale' || (this._mode === 'combined' && this._allowScale && this._outerRingMode !== 'rotate')
   }
 
   _layout() {
@@ -249,7 +299,7 @@ export class CombinedTransform extends THREE.EventDispatcher {
     for (const mode of ALL) {
       const part = this._parts[mode]
       const on = modes.includes(mode)
-      this._prune(mode, combined && on)
+      this._prune(mode, combined && on ? 'combined' : mode === 'rotate' && this._mode === 'scale' ? 'outer' : null)
       part.size = this._size * (combined && on ? sizes[mode] : 1)
       part.enabled = on && this._enabledOverride !== false
     }
@@ -260,7 +310,7 @@ export class CombinedTransform extends THREE.EventDispatcher {
     const modes = this._activeModes()
     for (const mode of ALL) {
       const part = this._parts[mode]
-      const target = this._partObjects[mode] ?? this._object
+      const target = (mode === 'rotate' && this._mode === 'scale' ? this._partObjects.scale : this._partObjects[mode]) ?? this._object
       if (modes.includes(mode) && target) part.attach(target)
       else part.detach()
     }
@@ -268,11 +318,23 @@ export class CombinedTransform extends THREE.EventDispatcher {
 
   // Take the handles that clash out of a layer for combined mode, and put them back afterwards. The outer ring of
   // Rotate is also turned grey there, so it reads as the frame around everything.
-  _prune(mode, on) {
+  _prune(mode, layout) {
     const gizmo = this._parts[mode]._gizmo
-    if (on) {
-      if (this._stash[mode]) return
-      const keep = new Set(KEEP[mode])
+    if (this._stash[mode] && this._stash[mode].layout !== layout) {
+      for (const item of this._stash[mode].items) {
+        if (item.group) item.group.add(item.child)
+        else if (item.fat) {
+          item.child.geometry = item.geometry
+          item.fat.dispose()
+        } else {
+          item.child.material = item.material
+          item.grey.dispose()
+        }
+      }
+      this._stash[mode] = null
+    }
+    if (layout && !this._stash[mode]) {
+      const keep = new Set(layout === 'outer' ? ['E'] : KEEP[mode])
       const stash = []
       for (const group of [gizmo.gizmo[mode], gizmo.picker[mode]]) {
         for (const child of [...group.children]) {
@@ -298,19 +360,7 @@ export class CombinedTransform extends THREE.EventDispatcher {
           group.remove(child)
         }
       }
-      this._stash[mode] = stash
-    } else if (this._stash[mode]) {
-      for (const item of this._stash[mode]) {
-        if (item.group) item.group.add(item.child)
-        else if (item.fat) {
-          item.child.geometry = item.geometry
-          item.fat.dispose()
-        } else {
-          item.child.material = item.material
-          item.grey.dispose()
-        }
-      }
-      this._stash[mode] = null
+      this._stash[mode] = { layout, items: stash }
     }
   }
 }

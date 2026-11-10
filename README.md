@@ -187,6 +187,10 @@ Vite build sets `base: '/3D-Character-Animator/'` (see `vite.config.js`). Local
    a part in the viewport or the **Parts** list, drag the gizmo (`W` move /
    `E` rotate / `R` resize) or type exact values, and **Key part** to animate it
    on the timeline.
+   The grey outer circle on the Resize and combined Transform widgets resizes
+   all axes together: drag away from the centre to grow, or towards it to shrink.
+   In viewport settings, **Transform outer circle** can instead be set to Rotate;
+   Resize is the default. Selections without combined resizing retain rotation.
 9. The **Cameras** panel places cameras: orbit until the shot looks right, then
    **+ Add camera (from this view)**. Select a camera to move, rotate, or resize
    its visible body with the Object-mode gizmo; use the viewport's frame button

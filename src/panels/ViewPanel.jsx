@@ -42,6 +42,8 @@ export default function ViewPanel() {
   const setUndoLimit = useStore((s) => s.setUndoLimit)
   const cameraIgnoresUndo = useStore((s) => s.cameraIgnoresUndo)
   const setCameraIgnoresUndo = useStore((s) => s.setCameraIgnoresUndo)
+  const transformOuterRing = useStore((s) => s.transformOuterRing)
+  const setTransformOuterRing = useStore((s) => s.setTransformOuterRing)
 
   // History recorded under the old setting still holds (or lacks) camera steps, and
   // replaying those against the new setting is what made undo misbehave — so a change
@@ -66,6 +68,15 @@ export default function ViewPanel() {
         The background is see-through by default, so saved images layer cleanly
         into 2D art.
       </p>
+
+      <label className="toggle-row" title="Choose what the grey outer ring does in the combined Transform widget">
+        <span>Transform outer circle</span>
+        <select className="select select-sm" value={transformOuterRing} onChange={(e) => setTransformOuterRing(e.target.value)}>
+          <option value="resize">Resize</option>
+          <option value="rotate">Rotate</option>
+        </select>
+      </label>
+      <p className="panel-hint">The Resize tool always uses the outer circle to resize. Transform keeps rotation for bones and other selections that cannot be resized.</p>
 
       <label className="toggle-row">
         <input type="checkbox" checked={showGrid} onChange={(e) => setShowGrid(e.target.checked)} />
