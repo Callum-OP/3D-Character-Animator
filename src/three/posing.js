@@ -87,20 +87,20 @@ const REGION_DEFS = [
   { key: 'upperArm.L', label: 'Left Upper Arm', color: 0xff9db3, control: ['upperArm.L', 'shoulder.L'], ik: true },
   { key: 'lowerArm.L', label: 'Left Lower Arm', color: 0xff88a1, control: ['lowerArm.L'], ik: true },
   { key: 'hand.L', label: 'Left Hand', color: 0xff7893, control: ['hand.L'], ik: true },
-  { key: 'fingers.L', label: 'Left Fingers', color: 0xffc0cd, control: [], ik: true },
+  { key: 'fingers.L', label: 'Left Fingers', color: 0xff2d6f, control: [], ik: true },
   { key: 'upperArm.R', label: 'Right Upper Arm', color: 0xff9db3, control: ['upperArm.R', 'shoulder.R'], ik: true },
   { key: 'lowerArm.R', label: 'Right Lower Arm', color: 0xff88a1, control: ['lowerArm.R'], ik: true },
   { key: 'hand.R', label: 'Right Hand', color: 0xff7893, control: ['hand.R'], ik: true },
-  { key: 'fingers.R', label: 'Right Fingers', color: 0xffc0cd, control: [], ik: true },
+  { key: 'fingers.R', label: 'Right Fingers', color: 0xff2d6f, control: [], ik: true },
 
   { key: 'upperLeg.L', label: 'Left Upper Leg', color: 0x8fd0ff, control: ['upperLeg.L'], ik: true },
   { key: 'lowerLeg.L', label: 'Left Lower Leg', color: 0x79c3fb, control: ['lowerLeg.L'], ik: true },
   { key: 'foot.L', label: 'Left Foot', color: 0x63b6f7, control: ['foot.L'], ik: true },
-  { key: 'toes.L', label: 'Left Toes', color: 0xbde5ff, control: ['toe.L'], ik: true },
+  { key: 'toes.L', label: 'Left Toes', color: 0x1e90ff, control: ['toe.L'], ik: true },
   { key: 'upperLeg.R', label: 'Right Upper Leg', color: 0x8fd0ff, control: ['upperLeg.R'], ik: true },
   { key: 'lowerLeg.R', label: 'Right Lower Leg', color: 0x79c3fb, control: ['lowerLeg.R'], ik: true },
   { key: 'foot.R', label: 'Right Foot', color: 0x63b6f7, control: ['foot.R'], ik: true },
-  { key: 'toes.R', label: 'Right Toes', color: 0xbde5ff, control: ['toe.R'], ik: true },
+  { key: 'toes.R', label: 'Right Toes', color: 0x1e90ff, control: ['toe.R'], ik: true },
 ]
 
 // One region per finger segment: finger.<L|R>.<thumb|index|middle|ring|pinky>.<1|2|3>, titled e.g.
@@ -162,7 +162,9 @@ const CENTRELINE_REGIONS = new Set(['head', 'neck', 'hips', 'waist', 'lowerTorso
 // invisible by design — the character looks completely normal in Parts view
 // until you interact with it; hover gives a light preview of what a click
 // would select; selected is the only state meant to stand out.
-const PART_OPACITY = { idle: 0, allSubtle: 0.12, hover: 0.16, selected: 0.55 }
+const PART_OPACITY = { idle: 0, allSubtle: 0.12, hover: 0.18, selected: 0.8 }
+// Brighter, more saturated than the bone-dot selection colour so it stays visible over light skin.
+const PART_SELECTED_COLOR = 0xffb000
 
 // Module state (mirrors the scene-manager singleton style used elsewhere).
 const p = {
@@ -219,6 +221,8 @@ const p = {
   regionControl: new Map(), // region key -> control bone name, built per model
   partMaterials: new Map(), // region key -> shared MeshBasicMaterial
   partMeshes: [], // [{ region, mesh (SkinnedMesh overlay) }]
+  partsOn: false, // Parts view overlay currently shown
+  hoverPending: null, // latest pointer event awaiting the next-frame hover pick
   hoverRegion: null, // region key under the pointer in Parts view
   onGizmoModeChange: null, // (mode) => void — keeps the store's gizmo toggle in sync
 
@@ -989,7 +993,8 @@ function applyOverlayVisibility() {
   const bonesOn = on && p.viewMode !== 'parts'
   const partsOn = on && p.viewMode === 'parts'
   if (p.points) p.points.visible = bonesOn
-  for (const { mesh } of p.partMeshes) mesh.visible = partsOn
+  p.partsOn = partsOn
+  updatePartMaterials()
   if (p.helper) p.helper.visible = on && !!p.selected && !p.suspended
   if (!partsOn) p.hoverRegion = null
 }
@@ -1733,7 +1738,7 @@ function onPointerUp(e) {
 
   if (p.viewMode === 'parts') {
     if (!p.overlayVisible || !p.partMeshes.length) return
-    selectRegion(pickPartRegion(e), e.shiftKey || e.ctrlKey || e.metaKey)
+    selectRegion(p.hoverRegion || pickPartRegion(e), e.shiftKey || e.ctrlKey || e.metaKey)
     return
   }
 
@@ -1758,6 +1763,7 @@ function onPointerMove(e) {
   }
 
   if (!p.enabled || p.suspended || p.viewMode !== 'parts' || !p.overlayVisible || !p.partMeshes.length) {
+    p.hoverPending = null
     if (p.hoverRegion) {
       p.hoverRegion = null
       updatePartMaterials()
@@ -1765,12 +1771,25 @@ function onPointerMove(e) {
     }
     return
   }
-  const region = pickPartRegion(e)
-  if (region !== p.hoverRegion) {
-    p.hoverRegion = region
-    updatePartMaterials()
-    p.requestRender()
+  // Skip hover picking while orbiting/dragging; otherwise coalesce to one CPU-skinned raycast per frame.
+  if (e.buttons) {
+    p.hoverPending = null
+    return
   }
+  const queued = !!p.hoverPending
+  p.hoverPending = { clientX: e.clientX, clientY: e.clientY }
+  if (queued) return
+  requestAnimationFrame(() => {
+    const ev = p.hoverPending
+    p.hoverPending = null
+    if (!ev || !p.enabled || p.viewMode !== 'parts' || !p.partMeshes.length) return
+    const region = pickPartRegion(ev)
+    if (region !== p.hoverRegion) {
+      p.hoverRegion = region
+      updatePartMaterials()
+      p.requestRender()
+    }
+  })
 }
 
 // Resolve a body-part region click to its control bone and select it. The
@@ -1800,16 +1819,24 @@ function pickPartRegion(e) {
   _partNdc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1
   _partRaycaster.setFromCamera(_partNdc, p.camera)
   const meshes = p.partMeshes.map((pm) => pm.mesh)
-  // THREE.SkinnedMesh#raycast only computes its bounding sphere/box lazily,
-  // the FIRST time it's ever raycast against, and then caches it forever —
-  // it never re-derives it as the pose changes. Since these overlays get
-  // posed continuously (dragging limbs, mirror/symmetrise, project loads),
-  // a cached volume from any one moment is wrong for every other pose. Force
-  // a fresh compute against the CURRENT pose before every pick instead of
-  // relying on that cache.
+  // SkinnedMesh#raycast lazily skins EVERY vertex to build its bounding sphere/box and caches it
+  // forever, so it must be refreshed per pick (the pose changes). The region overlays all share
+  // the same vertex buffers, so compute the bounds once per source buffer and share them rather
+  // than re-skinning the whole mesh once per region.
+  const boundsBySource = new Map()
   for (const mesh of meshes) {
-    mesh.boundingSphere = null
-    mesh.boundingBox = null
+    const src = mesh.geometry.getAttribute('position')
+    const shared = boundsBySource.get(src)
+    if (shared) {
+      mesh.boundingSphere = shared.boundingSphere
+      mesh.boundingBox = shared.boundingBox
+    } else {
+      mesh.boundingSphere = null
+      mesh.boundingBox = null
+      mesh.computeBoundingBox()
+      mesh.computeBoundingSphere()
+      boundsBySource.set(src, mesh)
+    }
   }
   const hits = _partRaycaster.intersectObjects(meshes, false)
   if (!hits.length) return null
@@ -1830,7 +1857,13 @@ function updatePartMaterials() {
     const isSelected = def.key === selectedRegion
     const isHover = def.key === p.hoverRegion
     mat.opacity = isSelected ? PART_OPACITY.selected : isHover ? PART_OPACITY.hover : idleOpacity
-    mat.color.copy(isSelected ? SELECTED_COLOR : new THREE.Color(def.color))
+    mat.color.set(isSelected ? PART_SELECTED_COLOR : def.color)
+  }
+  // Regions that are fully transparent are skipped by the renderer entirely (picking ignores
+  // visibility), instead of drawing ~20 skinned meshes every frame for nothing.
+  for (const { region, mesh } of p.partMeshes) {
+    const mat = p.partMaterials.get(region)
+    mesh.visible = !!p.partsOn && !!mat && mat.opacity > 0
   }
 }
 
