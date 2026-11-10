@@ -19,6 +19,7 @@ export default function CopyFromMesh({ kind, targetMesh }) {
   const meshOverrides = useStore((s) => s.meshOverrides)
   const [pick, setPick] = useState('')
   const [message, setMessage] = useState('')
+  const [replace, setReplace] = useState(false)
 
   const sources = targetMesh ? listMeshCopySources(kind, targetMesh) : []
   if (!sources.length) return null
@@ -27,8 +28,8 @@ export default function CopyFromMesh({ kind, targetMesh }) {
 
   const copy = () => {
     const result = kind === 'bones'
-      ? describeBonesCopy(copyAddedBonesFromMesh(selected.characterId, selected.mesh, targetMesh))
-      : describePhysicsCopy(copyMeshPhysicsFromMesh(selected.characterId, selected.mesh, targetMesh))
+      ? describeBonesCopy(copyAddedBonesFromMesh(selected.characterId, selected.mesh, targetMesh, { replace }))
+      : describePhysicsCopy(copyMeshPhysicsFromMesh(selected.characterId, selected.mesh, targetMesh, { replace }))
     setMessage(result)
   }
 
@@ -41,6 +42,10 @@ export default function CopyFromMesh({ kind, targetMesh }) {
           ))}
         </select>
       </FxField>
+      <label className="slider-row" title="Delete what this part already has first, so it ends up identical to the chosen mesh. Ctrl+Z restores it.">
+        <input type="checkbox" checked={replace} onChange={(e) => { setReplace(e.target.checked); setMessage('') }} />
+        <span className="slider-label">Replace existing (make identical)</span>
+      </label>
       <FxButtons wide>
         <button className="btn secondary" onClick={copy} title="Copy it onto the selected part (areas are matched by position if the meshes differ)">
           {kind === 'bones' ? 'Copy added bones here' : 'Copy mesh physics here'}

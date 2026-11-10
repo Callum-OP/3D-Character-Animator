@@ -31,6 +31,7 @@ import {
   rebakeClipFromKeys,
   markClipKeysAdopted,
   isClipKeysAdopted,
+  overlayForClip,
 } from '../three/animation.js'
 import { runWithoutHistoryCapture } from '../three/undoHistory.js'
 import { recordOverrideEdit } from '../three/materialHistory.js'
@@ -289,7 +290,14 @@ function ObjectMovementEditor({ onScrub, onCharacterKeyframe, onCharacterTrackCh
     Number(duration) || 2,
     transformKeys[transformKeys.length - 1]?.time || 0,
   )
-  const characterKeys = animData.root || []
+  const activeClipName = useStore((s) => s.activeClipName)
+  const carryKeysAcrossClips = useStore((s) => s.carryKeysAcrossClips)
+  // A clip that doesn't own the editor's position keys plays without them (unless
+  // carrying is on), so don't list them as if they were part of it either.
+  const characterKeys =
+    source === 'clip' && activeClipName && !carryKeysAcrossClips && !isClipKeysAdopted(activeClipName)
+      ? []
+      : animData.root || []
   const characterTime = Math.min(currentTime, source === 'edit' ? animDuration : duration)
   const characterPlaying = playback === 'playing'
   const [message, setMessage] = useState('')
@@ -907,6 +915,7 @@ export default function AnimationPanel() {
   const animData = useStore((s) => s.animData)
 
   const importedClipNames = useStore((s) => s.importedClipNames)
+  const carryKeysAcrossClips = useStore((s) => s.carryKeysAcrossClips)
   const characterOrder = useStore((s) => s.characterOrder)
   const stopAtFirstClipEnd = useStore((s) => s.stopAtFirstClipEnd)
   const setStopAtFirstClipEnd = useStore((s) => s.setStopAtFirstClipEnd)
@@ -1214,7 +1223,7 @@ export default function AnimationPanel() {
   const displayDuration = source === 'edit' ? animDuration : duration
   const snap = (t) => Math.round(t * animFps) / animFps // to the fps grid
   const boneKeys = (selectedBoneName && animData.tracks[selectedBoneName]) || []
-  const allKeyframes = collectKeyframes(animData)
+  const allKeyframes = collectKeyframes(source === 'clip' && activeClipName ? overlayForClip(animData, activeClipName) : animData)
 
   // --- transport handlers ---------------------------------------------------
 
@@ -1318,6 +1327,20 @@ export default function AnimationPanel() {
     setClipBoneWarning(describeClipBoneMismatch(name))
   }
   clipChangeRef.current = onClipChange
+
+  // Carry keyed positions across clips: re-arm the clip on screen so what plays
+  // matches the new setting straight away.
+  function onCarryKeysToggle(on) {
+    st().setCarryKeysAcrossClips(on)
+    if (source === 'clip' && activeClipName) {
+      stop()
+      st().setPlayback('stopped')
+      st().setCurrentTime(0)
+      const d = selectClip(activeClipName, { loop, speed }, st().animData)
+      st().setDuration(d)
+      st().setPlayback('paused')
+    }
+  }
 
   function onPlay() {
     if (source === 'edit') {
@@ -1696,10 +1719,13 @@ export default function AnimationPanel() {
     const gotRoot = preserveMotion && res.root && res.root.length > 1 && rootTravels(res.root)
     // Layer clip travel over authored character placement rather than
     // replacing the user's position keys with the baked clip's path.
+    // Start from what this clip actually plays: keys that belong to another clip
+    // are left behind unless carrying is on.
+    const base = overlayForClip(animData, activeClipName)
     const nextData = {
-      ...animData,
+      ...base,
       tracks: res.tracks,
-      root: gotRoot ? mergeRootMotionTracks(animData.root, res.root) : animData.root,
+      root: gotRoot ? mergeRootMotionTracks(base.root, res.root) : base.root,
     }
     const editDuration = Math.max(res.duration, ...collectKeyframes(nextData).map((key) => key.time))
     const editTime = Math.min(time, editDuration)
@@ -2087,6 +2113,18 @@ export default function AnimationPanel() {
 
           {toolsOpen && (
             <div style={{ marginTop: 4 }}>
+              <label
+                className="slider-row"
+                style={{ marginTop: 6 }}
+                title="Off: each clip plays only the positions keyed on it, and a clip with none plays as it was made. On: your keyed positions and part/shape-key edits stay on top of whichever clip you pick, new or existing."
+              >
+                <input
+                  type="checkbox"
+                  checked={!!carryKeysAcrossClips}
+                  onChange={(e) => onCarryKeysToggle(e.target.checked)}
+                />
+                <span className="slider-label">Carry keyed positions to other clips</span>
+              </label>
               {activeClipName && importedClipNames.includes(activeClipName) && !renameOpen && (
                 <button className="btn secondary" style={{ marginTop: 6 }} onClick={onOpenRename} title="Rename this clip">
                   ✏️ Rename

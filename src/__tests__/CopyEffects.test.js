@@ -261,3 +261,73 @@ describe('copy mesh physics', () => {
     expect(zone.area.vertexCount).toBe(target.meshes[0].geometry.index.count)
   })
 })
+
+describe('replace existing effects', () => {
+  it('deletes the target\'s own rigs and swing physics first, so it ends up identical to the source, in one undo step', () => {
+    seed(new THREE.BoxGeometry(2, 5, 2, 2, 2, 2))
+    const own = applyPartRig(target, target.meshes[0], topFaces(target.meshes[0]), { segments: 2 }, { label: 'Cape' })
+    expect(own.ok).toBe(true)
+    useStore.setState({
+      dangleEnabled: true,
+      dangleChains: [{ id: 'own', name: 'Cape', boneNames: own.entry.boneNames, type: 'dangle', stiffness: 0.5, gravity: 1, damping: 0.4, groupId: own.entry.id }],
+    })
+
+    const result = copyAddedBonesFromCharacter('source', { replace: true })
+    expect(result.removed).toEqual(['Cape'])
+    expect(result.copied).toHaveLength(1)
+    const entries = getPartRigEntries(getCurrentModel())
+    expect(entries.map((e) => e.label)).toEqual(['Hair'])
+    const chains = useStore.getState().dangleChains
+    expect(chains).toHaveLength(1)
+    expect(chains[0]).toMatchObject({ stiffness: 0.77, gravity: 3, damping: 0.2 })
+    expect(describeBonesCopy(result)).toMatch(/Removed 1 existing rig \(Cape\)/)
+
+    performUndo(useStore.getState())
+    expect(getPartRigEntries(getCurrentModel()).map((e) => e.label)).toEqual(['Cape'])
+    expect(useStore.getState().dangleChains.map((c) => c.id)).toEqual(['own'])
+  })
+
+  it('without replace, existing rigs are kept (the old behaviour)', () => {
+    seed(new THREE.BoxGeometry(2, 5, 2, 2, 2, 2))
+    applyPartRig(target, target.meshes[0], topFaces(target.meshes[0]), { segments: 2 }, { label: 'Cape' })
+    const result = copyAddedBonesFromCharacter('source')
+    expect(result.removed).toEqual([])
+    expect(getPartRigEntries(getCurrentModel()).map((e) => e.label).sort()).toEqual(['Cape', 'Hair'])
+  })
+
+  it('replaces mesh physics: the target\'s own zones go, the source\'s come in, and it undoes together', () => {
+    seed(new THREE.BoxGeometry(2, 5, 2, 2, 2, 2))
+    const uuid = target.meshes[0].uuid
+    useStore.setState((st) => ({
+      meshOverrides: { ...st.meshOverrides, [uuid]: { softZones: [{ id: 'mine', name: 'Sleeve', mode: 'soft', enabled: true, stiffness: 0.9, damping: 0.1, area: { kind: 'all' } }] } },
+    }))
+    const result = copyMeshPhysicsFromCharacter('source', { replace: true })
+    expect(result).toMatchObject({ copied: 1, removed: 1 })
+    const zones = useStore.getState().meshOverrides[uuid].softZones
+    expect(zones.map((z) => z.name)).toEqual(['Hood'])
+
+    performUndo(useStore.getState())
+    expect(useStore.getState().meshOverrides[uuid].softZones.map((z) => z.name)).toEqual(['Sleeve'])
+  })
+
+  it('still clears the target when none of the source\'s parts match it', () => {
+    seed(new THREE.BoxGeometry(2, 5, 2, 2, 2, 2))
+    target.meshes[0].name = 'Other'
+    const uuid = target.meshes[0].uuid
+    useStore.setState((st) => ({
+      meshOverrides: { ...st.meshOverrides, [uuid]: { softZones: [{ id: 'mine', name: 'Sleeve', mode: 'soft', enabled: true, stiffness: 0.9, damping: 0.1, area: { kind: 'all' } }] } },
+    }))
+    const result = copyMeshPhysicsFromCharacter('source', { replace: true })
+    expect(result.removed).toBe(1)
+    expect(useStore.getState().meshOverrides[uuid]?.softZones || []).toHaveLength(0)
+  })
+
+  it('mesh-to-mesh replace only touches that part', () => {
+    seed(new THREE.BoxGeometry(2, 5, 2, 2, 2, 2))
+    const own = applyPartRig(target, target.meshes[0], topFaces(target.meshes[0]), { segments: 2 }, { label: 'Cape' })
+    expect(own.ok).toBe(true)
+    const result = copyAddedBonesFromMesh('source', source.meshes[0], target.meshes[0], { replace: true })
+    expect(result.removed).toEqual(['Cape'])
+    expect(getPartRigEntries(getCurrentModel()).map((e) => e.label)).toEqual(['Hair'])
+  })
+})

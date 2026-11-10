@@ -3,8 +3,8 @@ import { getCharacterModelById, getCurrentModel, refreshSoftCloth } from './scen
 import { runAsOneSceneStep } from './sceneHistory.js'
 import { recordOverrideEdit } from './materialHistory.js'
 import { regionVertexCount, toRanges, fromRanges } from './regions.js'
-import { applyPartRig, getPartRigEntries, uniqueRigLabel } from './partRig.js'
-import { addDangleChainUndoable, collectDescendantBoneNames, getDangleChainsForRig } from './dangle.js'
+import { applyPartRig, getPartRigEntries, removePartRig, uniqueRigLabel } from './partRig.js'
+import { addDangleChainUndoable, collectDescendantBoneNames, getDangleChainsForRig, removeDangleChainUndoable } from './dangle.js'
 import { newZoneId } from './softcloth.js'
 
 // Copy "Add bones" rigs and Mesh Physics (soft cloth / swing zones) from one character, or one mesh, to another.
@@ -212,9 +212,31 @@ function stripIdentity(chain) {
   return settings
 }
 
+// "Replace" copies: delete the rigs `target` (the ACTIVE character) already has, with their swing physics, so that
+// afterwards it holds exactly what was copied. onlyMesh limits this to rigs that sit on that one part. A rig other
+// rigs hang off can only go after them, so this keeps going round until nothing more can be removed.
+function clearTargetRigs(target, onlyMesh = null) {
+  const removed = []
+  const touches = (entry) => !onlyMesh || (entry.result?.meshes || [entry.result]).some((r) => r?.mesh === onlyMesh)
+  for (let progress = true; progress; ) {
+    progress = false
+    const all = getPartRigEntries(target).filter((e) => e.result)
+    for (const entry of [...all].reverse()) {
+      if (!touches(entry)) continue
+      const chains = getDangleChainsForRig(useStore.getState().dangleChains, entry, all)
+      if (!removePartRig(target, entry.id)) continue // something is still attached to it; next round
+      chains.forEach((chain) => removeDangleChainUndoable(chain.id))
+      removed.push(entry.label)
+      progress = true
+    }
+  }
+  return removed
+}
+
 // Rebuild `source`'s Add bones rigs on `target` (the ACTIVE character) for the given part pairs.
-function copyRigs(source, sourceId, target, pairs, { missingParts = [] } = {}) {
-  const result = { copied: [], skipped: [], notes: [], approx: false, matched: pairs.length, unmatched: missingParts }
+function copyRigs(source, sourceId, target, pairs, { missingParts = [], replace = false, onlyMesh = null } = {}) {
+  const result = { copied: [], skipped: [], notes: [], approx: false, matched: pairs.length, unmatched: missingParts, removed: [] }
+  if (replace) result.removed = clearTargetRigs(target, onlyMesh)
   const sourceEntries = getPartRigEntries(source).filter((e) => e.result)
   const sourceChains = characterData(sourceId).dangleChains
   const boneMap = new Map() // a copied rig's source bone name -> the new bone name (for rigs hanging off other rigs)
@@ -289,32 +311,45 @@ function copyRigs(source, sourceId, target, pairs, { missingParts = [] } = {}) {
   return result
 }
 
-export function copyAddedBonesFromCharacter(sourceId) {
+// replace: first delete every rig the target already has, so it ends up with the source's rigs and nothing else.
+export function copyAddedBonesFromCharacter(sourceId, { replace = false } = {}) {
   const target = getCurrentModel()
   const source = getCharacterModelById(sourceId)
   if (!target || !source) return null
   const { pairs, missing } = matchMeshes(source, target)
-  return runAsOneSceneStep(() => copyRigs(source, sourceId, target, pairs, { missingParts: missing }))
+  return runAsOneSceneStep(() => copyRigs(source, sourceId, target, pairs, { missingParts: missing, replace }))
 }
 
 // Rigs that touch `sourceMesh`, rebuilt on `targetMesh` only (the part of each rig that lies on that mesh).
-export function copyAddedBonesFromMesh(sourceCharacterId, sourceMesh, targetMesh) {
+export function copyAddedBonesFromMesh(sourceCharacterId, sourceMesh, targetMesh, { replace = false } = {}) {
   const target = getCurrentModel()
   const source = getCharacterModelById(sourceCharacterId)
   if (!target || !source) return null
-  return runAsOneSceneStep(() => copyRigs(source, sourceCharacterId, target, [{ src: sourceMesh, tgt: targetMesh }]))
+  return runAsOneSceneStep(() =>
+    copyRigs(source, sourceCharacterId, target, [{ src: sourceMesh, tgt: targetMesh }], { replace, onlyMesh: targetMesh }),
+  )
 }
 
 // --- copying mesh physics -----------------------------------------------------------------------------
 
-function copyZones(sourceOverrides, pairs, unmatched = []) {
-  const result = { copied: 0, parts: 0, skipped: [], notes: [], approx: false, matched: pairs.length, unmatched }
+// replace: every part in `clearMeshes` loses the effects it already has first, so the parts that were copied to hold
+// exactly the source's effects and the others hold none.
+function copyZones(sourceOverrides, pairs, unmatched = [], { replace = false, clearMeshes = [] } = {}) {
+  const result = { copied: 0, parts: 0, skipped: [], notes: [], approx: false, matched: pairs.length, unmatched, removed: 0 }
   const current = useStore.getState().meshOverrides
   const updates = {}
+  if (replace) {
+    for (const mesh of clearMeshes) {
+      const had = (current[mesh.uuid]?.softZones || []).length
+      if (!had) continue
+      updates[mesh.uuid] = []
+      result.removed += had
+    }
+  }
   for (const { src, tgt } of pairs) {
     const zones = sourceOverrides[src.uuid]?.softZones || []
     if (!zones.length) continue
-    const existing = current[tgt.uuid]?.softZones || []
+    const existing = replace ? [] : current[tgt.uuid]?.softZones || []
     const added = []
     for (const zone of zones) {
       let area = zone.area || { kind: 'all' }
@@ -350,17 +385,20 @@ function copyZones(sourceOverrides, pairs, unmatched = []) {
   return result
 }
 
-export function copyMeshPhysicsFromCharacter(sourceId) {
+export function copyMeshPhysicsFromCharacter(sourceId, { replace = false } = {}) {
   const target = getCurrentModel()
   const source = getCharacterModelById(sourceId)
   if (!target || !source) return null
   const { pairs, missing } = matchMeshes(source, target)
-  return copyZones(characterData(sourceId).meshOverrides, pairs, missing)
+  return copyZones(characterData(sourceId).meshOverrides, pairs, missing, { replace, clearMeshes: target.meshes || [] })
 }
 
-export function copyMeshPhysicsFromMesh(sourceCharacterId, sourceMesh, targetMesh) {
+export function copyMeshPhysicsFromMesh(sourceCharacterId, sourceMesh, targetMesh, { replace = false } = {}) {
   if (!getCurrentModel()) return null
-  return copyZones(characterData(sourceCharacterId).meshOverrides, [{ src: sourceMesh, tgt: targetMesh }])
+  return copyZones(characterData(sourceCharacterId).meshOverrides, [{ src: sourceMesh, tgt: targetMesh }], [], {
+    replace,
+    clearMeshes: [targetMesh],
+  })
 }
 
 // --- wording for the panel ----------------------------------------------------------------------------
@@ -370,26 +408,34 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
 export function describeBonesCopy(r) {
   if (!r) return 'Nothing to copy from.'
   const parts = []
-  if (r.matched === 0) return 'No parts with matching names were found on this character, so nothing was copied.'
+  if (r.matched === 0) {
+    const gone = r.removed?.length ? `Removed ${plural(r.removed.length, 'existing rig')} (${r.removed.join(', ')}). ` : ''
+    return `${gone}No parts with matching names were found on this character, so nothing was copied.${gone ? ' Ctrl+Z undoes it.' : ''}`
+  }
+  if (r.removed?.length) parts.push(`Removed ${plural(r.removed.length, 'existing rig')} (${r.removed.join(', ')}).`)
   if (r.copied.length) parts.push(`Copied ${plural(r.copied.length, 'rig')} (${r.copied.map((c) => c.label).join(', ')}).`)
   else parts.push('Nothing was copied.')
   if (r.unmatched?.length) parts.push(`No matching part for: ${r.unmatched.join(', ')}.`)
   if (r.skipped.length) parts.push(`Skipped: ${r.skipped.map((s) => `${s.label} (${s.reason})`).join('; ')}.`)
   if (r.notes.length) parts.push(`${r.notes.join('; ')}.`)
   if (r.approx) parts.push('The meshes differ, so the areas were matched by position. Check the result.')
-  if (r.copied.length) parts.push('Ctrl+Z undoes it.')
+  if (r.copied.length || r.removed?.length) parts.push('Ctrl+Z undoes it.')
   return parts.join(' ')
 }
 
 export function describePhysicsCopy(r) {
   if (!r) return 'Nothing to copy from.'
   const parts = []
-  if (r.matched === 0) return 'No parts with matching names were found on this character, so nothing was copied.'
+  if (r.matched === 0) {
+    const gone = r.removed ? `Removed ${plural(r.removed, 'existing effect')}. ` : ''
+    return `${gone}No parts with matching names were found on this character, so nothing was copied.${gone ? ' Ctrl+Z undoes it.' : ''}`
+  }
+  if (r.removed) parts.push(`Removed ${plural(r.removed, 'existing effect')}.`)
   if (r.copied) parts.push(`Copied ${plural(r.copied, 'effect')} onto ${plural(r.parts, 'part')}.`)
   else parts.push('Nothing was copied.')
   if (r.unmatched?.length) parts.push(`No matching part for: ${r.unmatched.join(', ')}.`)
   if (r.skipped.length) parts.push(`Skipped: ${r.skipped.map((s) => `${s.label} (${s.reason})`).join('; ')}.`)
   if (r.approx) parts.push('The meshes differ, so the areas were matched by position. Check the result.')
-  if (r.copied) parts.push('Ctrl+Z undoes it.')
+  if (r.copied || r.removed) parts.push('Ctrl+Z undoes it.')
   return parts.join(' ')
 }

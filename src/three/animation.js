@@ -248,7 +248,7 @@ export function updateAnimation(delta) {
 export function selectClip(name, opts = {}, animData = null) {
   const clip = findClip(name)
   if (!clip) return 0
-  setupOverlayTracks(withClipOverlay(animData, clip))
+  setupOverlayTracks(withClipOverlay(overlayForClip(animData, name), clip))
   activate(clip, opts)
   return clip.duration
 }
@@ -892,6 +892,21 @@ function denamifyMorphTracks(nameTracks) {
 // morphs the session doesn't already have an opinion on. This is what makes
 // "Save Clip As" → reopen (possibly on a different character) bring shape-
 // key and mesh-transform changes back, not just joint motion.
+// The editor's keyed positions (and part / shape-key edits) belong to the clip
+// they were keyed on. Unless "carry keyed positions across clips" is on, a clip
+// that doesn't own them (it isn't the one the editor's keys were loaded from)
+// plays exactly as it was made, with none of them layered on top. Cameras,
+// lights and cuts are scene-level, so they are never dropped here.
+export function overlayForClip(animData, name) {
+  if (!animData) return animData
+  const carry = !!(a.refs && a.refs.getCarryKeysAcrossClips && a.refs.getCarryKeysAcrossClips())
+  if (carry || isClipKeysAdopted(name)) return animData
+  const hasOverlay =
+    (animData.root && animData.root.length) || hasKeys(animData.meshes) || hasMorphKeys(animData.morphs)
+  if (!hasOverlay) return animData
+  return { ...animData, root: [], meshes: {}, morphs: {} }
+}
+
 function withClipOverlay(animData, clip) {
   const meshFromClip = clip && clip.charMeshTracks ? denamifyMeshTracks(clip.charMeshTracks) : null
   const morphFromClip = clip && clip.charMorphTracks ? denamifyMorphTracks(clip.charMorphTracks) : null

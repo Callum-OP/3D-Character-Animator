@@ -621,6 +621,7 @@ export function initScene(container) {
       transitionViewCameraTo(targetId)
     },
     getFollowCameraCuts: () => useStore.getState().followCameraCuts,
+    getCarryKeysAcrossClips: () => useStore.getState().carryKeysAcrossClips,
     getViewCameraId: () => useStore.getState().viewCameraId,
     setViewCameraId: (id) => useStore.getState().setViewCameraId(id),
     transitionViewCameraId: (id) => transitionViewCameraTo(id),

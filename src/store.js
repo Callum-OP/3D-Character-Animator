@@ -1421,6 +1421,11 @@ export const useStore = create((set) => ({
   // a recorded shot.
   followCameraCuts: false,
   setFollowCameraCuts: (followCameraCuts) => set({ followCameraCuts }),
+  // Off (default): each clip plays only its own keyed positions — a clip with
+  // none plays exactly as it was made. On: the character's keyed positions /
+  // part and shape-key edits stay layered on top of whichever clip is chosen.
+  carryKeysAcrossClips: false,
+  setCarryKeysAcrossClips: (carryKeysAcrossClips) => set({ carryKeysAcrossClips }),
   playbackSource: 'edit', // 'clip' (baked) | 'edit' (in-app keyframes)
   activeClipName: null, // selected clip (baked or imported)
   importedClipNames: [], // names of retargeted BVH mocap clips

@@ -18,6 +18,7 @@ export default function CopyEffectsSection() {
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const [sourceId, setSourceId] = useState('')
   const [message, setMessage] = useState('')
+  const [replace, setReplace] = useState(false)
 
   const sources = activeCharacterId ? listCopySources() : []
   const source = sources.find((s) => s.id === sourceId) || sources[0] || null
@@ -44,20 +45,27 @@ export default function CopyEffectsSection() {
           ))}
         </select>
       </FxField>
+      <label
+        className="slider-row"
+        title="Delete this character's existing added bones and mesh physics first, so its effects end up identical to the chosen character's. Ctrl+Z restores them."
+      >
+        <input type="checkbox" checked={replace} onChange={(e) => { setReplace(e.target.checked); setMessage('') }} />
+        <span className="slider-label">Replace existing effects (make identical)</span>
+      </label>
       <FxButtons wide>
         <button
           className="btn secondary"
-          disabled={!source.rigs}
-          title="Rebuild this character's added bones (and their swing physics) from the chosen one"
-          onClick={() => setMessage(describeBonesCopy(copyAddedBonesFromCharacter(source.id)))}
+          disabled={!source.rigs && !replace}
+          title={replace ? "Delete this character's added bones, then rebuild them from the chosen one" : "Rebuild this character's added bones (and their swing physics) from the chosen one"}
+          onClick={() => setMessage(describeBonesCopy(copyAddedBonesFromCharacter(source.id, { replace })))}
         >
           Copy added bones
         </button>
         <button
           className="btn secondary"
-          disabled={!source.physicsParts}
-          title="Copy the soft cloth and swing effects of every matching part"
-          onClick={() => setMessage(describePhysicsCopy(copyMeshPhysicsFromCharacter(source.id)))}
+          disabled={!source.physicsParts && !replace}
+          title={replace ? "Clear every part's mesh physics, then copy the chosen character's" : "Copy the soft cloth and swing effects of every matching part"}
+          onClick={() => setMessage(describePhysicsCopy(copyMeshPhysicsFromCharacter(source.id, { replace })))}
         >
           Copy mesh physics
         </button>

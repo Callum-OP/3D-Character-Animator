@@ -40,6 +40,9 @@ describe('play/pause/stop hand-off to posing + mesh-edit', () => {
         suspendPosing: () => { calls.suspend += 1 },
         resumePosing: () => { calls.resume += 1 },
         onTime: () => {},
+        // These tests drive the root-key overlay on a baked clip, which is what
+        // "carry keyed positions to other clips" switches on.
+        getCarryKeysAcrossClips: () => true,
       },
       calls,
     }
