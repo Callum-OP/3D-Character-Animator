@@ -315,20 +315,83 @@ function applyActiveRigWeights(model) {
     .sort((a, b) => a.result.startIndex - b.result.startIndex)
   for (const entry of entries) {
     for (const meshResult of entry.result.meshes || [entry.result]) {
-      writeSkin(meshResult.mesh, meshResult.verts, meshResult.newIdx, meshResult.newW)
+      if (model.__partRigBodyFollow) {
+        const { indices, weights } = blendBodyWeights(meshResult, entry.result.startIndex ?? entry.result.baseCount, entry.result.created.length)
+        writeSkin(meshResult.mesh, meshResult.verts, indices, weights)
+      } else {
+        writeSkin(meshResult.mesh, meshResult.verts, meshResult.newIdx, meshResult.newW)
+      }
     }
   }
 }
 
+// Keep two slots for each skinning source so the body's bending and the added
+// bones' motion both survive glTF's usual four-influence limit.
+function blendBodyWeights(result, startIndex, boneCount) {
+  const indices = new Uint32Array(result.verts.length * 4)
+  const weights = new Float32Array(indices.length)
+  for (let n = 0; n < result.verts.length; n++) {
+    let hasAddedInfluence = false
+    for (let k = 0; k < 4; k++) {
+      const i = n * 4 + k
+      if (result.newW[i] > 0 && result.newIdx[i] >= startIndex && result.newIdx[i] < startIndex + boneCount) hasAddedInfluence = true
+    }
+    if (!hasAddedInfluence) {
+      indices.set(result.newIdx.subarray(n * 4, n * 4 + 4), n * 4)
+      weights.set(result.newW.subarray(n * 4, n * 4 + 4), n * 4)
+      continue
+    }
+    const groups = [[result.oldIdx, result.oldW], [result.newIdx, result.newW]]
+    const combined = new Map()
+    for (const [group, [sourceIndices, sourceWeights]] of groups.entries()) {
+      const source = new Map()
+      for (let k = 0; k < 4; k++) {
+        const i = n * 4 + k
+        if (sourceWeights[i] > 0) source.set(sourceIndices[i], (source.get(sourceIndices[i]) || 0) + sourceWeights[i])
+      }
+      const sorted = [...source].sort((a, b) => b[1] - a[1])
+      const strongest = sorted.slice(0, 2)
+      if (group === 1 && !strongest.some(([index]) => index >= startIndex && index < startIndex + boneCount)) {
+        const added = sorted.find(([index]) => index >= startIndex && index < startIndex + boneCount)
+        if (added) strongest[1] = added
+      }
+      const total = strongest.reduce((sum, item) => sum + item[1], 0)
+      if (!total) continue
+      for (const [index, weight] of strongest) {
+        combined.set(index, (combined.get(index) || 0) + weight / total * 0.5)
+      }
+    }
+    const slots = [...combined].sort((a, b) => b[1] - a[1])
+    const total = slots.reduce((sum, item) => sum + item[1], 0)
+    for (let k = 0; k < slots.length; k++) {
+      indices[n * 4 + k] = slots[k][0]
+      weights[n * 4 + k] = slots[k][1] / total
+    }
+  }
+  return { indices, weights }
+}
+
+export function setPartRigBodyFollow(model, enabled) {
+  if (!model || model.__partRigBodyFollow === !!enabled) return
+  model.__partRigBodyFollow = !!enabled
+  applyActiveRigWeights(model)
+  render()
+}
+
 // Add the planned bone chains to one or more compatible skinned meshes.
 export function applyPartRig(model, meshOrMeshes, trisOrSelections, options = {}, { label = 'Part', names = null, record = true, id = null } = {}) {
+  const bodyFollow = !!model.__partRigBodyFollow
+  if (bodyFollow) setPartRigBodyFollow(model, false)
   const meshes = Array.isArray(meshOrMeshes) ? meshOrMeshes : [meshOrMeshes]
   const selections = Array.isArray(meshOrMeshes)
     ? trisOrSelections
     : [{ mesh: meshOrMeshes, tris: trisOrSelections }]
   const generatedBoneNames = (model.__rigAdds || []).flatMap((entry) => entry.boneNames)
   const plan = planForMeshes(meshes, selections, options, generatedBoneNames)
-  if (!plan.ok) return plan
+  if (!plan.ok) {
+    if (bodyFollow) setPartRigBodyFollow(model, true)
+    return plan
+  }
   for (const mesh of meshes) ensureSkinAttributes(mesh.geometry)
   const skeleton = meshes[0].skeleton
   const skeletons = Array.from(new Set(meshes.map((mesh) => mesh.skeleton)))
@@ -406,6 +469,7 @@ export function applyPartRig(model, meshOrMeshes, trisOrSelections, options = {}
   }
   if (!model.__rigAdds) model.__rigAdds = []
   model.__rigAdds.push(entry)
+  if (bodyFollow) setPartRigBodyFollow(model, true)
   if (hooks.onBonesChanged) hooks.onBonesChanged(model)
   render()
 

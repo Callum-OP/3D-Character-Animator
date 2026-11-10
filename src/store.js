@@ -92,6 +92,7 @@ const CHARACTER_FIELDS = [
   'softClothEnabled',
   'dangleEnabled',
   'dangleChains',
+  'partRigBodyFollow',
   'ikEnabled',
   'ikPins',
   'flattenerEnabled',
@@ -147,6 +148,7 @@ function defaultCharacterFields(modelInfo) {
     softClothEnabled: true,
     dangleEnabled: true,
     dangleChains: [],
+    partRigBodyFollow: false,
     ikEnabled: true,
     ikPins: [],
     flattenerEnabled: true,
@@ -831,6 +833,8 @@ export const useStore = create((set) => ({
   // dangle.js works out the parent/child structure from the live skeleton.
   dangleEnabled: true,
   dangleChains: [],
+  partRigBodyFollow: false,
+  setPartRigBodyFollow: (partRigBodyFollow) => set({ partRigBodyFollow: !!partRigBodyFollow }),
   softClothEnabled: true,
   setSoftClothEnabled: (softClothEnabled) => set({ softClothEnabled: !!softClothEnabled }),
 
@@ -904,6 +908,10 @@ export const useStore = create((set) => ({
   setTransformOuterRing: (mode) => set({ transformOuterRing: mode === 'rotate' ? 'rotate' : 'resize' }),
   showAllPartHighlights: false, // Parts view: tint every region faintly, not just hover/selected
   setShowAllPartHighlights: (showAllPartHighlights) => set({ showAllPartHighlights }),
+  ignorePhysicsParts: false, // Parts view: leave dangle/cloth bones out of the regions (off = they act as part of their limb)
+  setIgnorePhysicsParts: (ignorePhysicsParts) => set({ ignorePhysicsParts }),
+  showPhysicsPartsOnly: false, // Bones + Parts views: highlight only dangle/cloth bone chains
+  setShowPhysicsPartsOnly: (showPhysicsPartsOnly) => set({ showPhysicsPartsOnly }),
   rotationSnap: false, // rotate in 15° steps (hold Shift for the opposite)
   limbLimits: true, // keep new poses (and the ragdoll) inside natural joint ranges
   poseClipboard: null, // a copied pose ({ format:'pose-v1', bones:{...} }) for paste

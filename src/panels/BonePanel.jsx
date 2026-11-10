@@ -203,9 +203,14 @@ export default function BonePanel() {
   const hideDangleBones = useStore((s) => s.hideDangleBones)
   const setHideDangleBones = useStore((s) => s.setHideDangleBones)
   const transformSpace = useStore((s) => s.transformSpace)
-  const showBones = useStore((s) => s.showBones)
   const boneViewMode = useStore((s) => s.boneViewMode)
   const showAllPartHighlights = useStore((s) => s.showAllPartHighlights)
+  const ignorePhysicsParts = useStore((s) => s.ignorePhysicsParts)
+  const showPhysicsPartsOnly = useStore((s) => s.showPhysicsPartsOnly)
+  const setShowPhysicsPartsOnly = useStore((s) => s.setShowPhysicsPartsOnly)
+  const setIgnorePhysicsParts = useStore((s) => s.setIgnorePhysicsParts)
+  const partRigBodyFollow = useStore((s) => s.partRigBodyFollow)
+  const setPartRigBodyFollow = useStore((s) => s.setPartRigBodyFollow)
   const rotationSnap = useStore((s) => s.rotationSnap)
   const limbLimits = useStore((s) => s.limbLimits)
   const playback = useStore((s) => s.playback)
@@ -217,7 +222,6 @@ export default function BonePanel() {
   const setBoneFilter = useStore((s) => s.setBoneFilter)
   const setDeformOnly = useStore((s) => s.setDeformOnly)
   const setTransformSpace = useStore((s) => s.setTransformSpace)
-  const setShowBones = useStore((s) => s.setShowBones)
   const setBoneViewMode = useStore((s) => s.setBoneViewMode)
   const setShowAllPartHighlights = useStore((s) => s.setShowAllPartHighlights)
   const setRotationSnap = useStore((s) => s.setRotationSnap)
@@ -405,28 +409,6 @@ export default function BonePanel() {
       {poseMsg && <div className="pose-msg">{poseMsg}</div>}
 
       <div className="pose-toggles">
-        <label className="toggle-row" style={{ padding: 0 }} title={boneViewMode === 'parts' ? 'Show the highlighted body-part regions on the character' : 'Show the joint dots on the character'}>
-          <input
-            type="checkbox"
-            checked={showBones}
-            onChange={(e) => setShowBones(e.target.checked)}
-          />
-          {boneViewMode === 'parts' ? 'Show body parts' : 'Show joints'}
-        </label>
-        {boneViewMode === 'parts' && (
-          <label
-            className="toggle-row"
-            style={{ padding: 0 }}
-            title="Faintly tint every body part all the time, instead of only on hover or when selected"
-          >
-            <input
-              type="checkbox"
-              checked={showAllPartHighlights}
-              onChange={(e) => setShowAllPartHighlights(e.target.checked)}
-            />
-            Highlight all parts
-          </label>
-        )}
         <label
           className="toggle-row"
           style={{ padding: 0 }}
@@ -451,18 +433,48 @@ export default function BonePanel() {
           />
           Limb limits
         </label>
-        {boneViewMode === 'bones' && (dangleChains.length > 0 || getPartRigEntries(getCurrentModel()).length > 0) && (
+        {(dangleChains.length > 0 || getPartRigEntries(getCurrentModel()).length > 0) && (
           <label
             className="toggle-row"
             style={{ padding: 0 }}
-            title="Hide the bones of dangle chains, rigged cloth and Add bones groups (hair, clothes, accessories) from the dots and the bone list"
+            title={boneViewMode === 'parts'
+              ? 'Leave dangle and cloth parts out of highlighting and picking'
+              : 'Hide the bones of dangle chains, rigged cloth and Add bones groups from the dots and the bone list'}
           >
             <input
               type="checkbox"
-              checked={hideDangleBones}
-              onChange={(e) => setHideDangleBones(e.target.checked)}
+              checked={boneViewMode === 'parts' ? ignorePhysicsParts : hideDangleBones}
+              onChange={(e) => boneViewMode === 'parts' ? setIgnorePhysicsParts(e.target.checked) : setHideDangleBones(e.target.checked)}
             />
-            Hide dangle & cloth bones
+            {boneViewMode === 'parts' ? 'Hide dangle & cloth parts' : 'Hide dangle & cloth bones'}
+          </label>
+        )}
+        {(dangleChains.length > 0 || getPartRigEntries(getCurrentModel()).length > 0) && (
+          <label
+            className="toggle-row"
+            style={{ padding: 0 }}
+            title="Show only the dangle and cloth bones (added bones, or bones turned into dangle/cloth) and hide everything else"
+          >
+            <input
+              type="checkbox"
+              checked={showPhysicsPartsOnly}
+              onChange={(e) => setShowPhysicsPartsOnly(e.target.checked)}
+            />
+            Highlight dangle & cloth only
+          </label>
+        )}
+        {getPartRigEntries(getCurrentModel()).length > 0 && (
+          <label
+            className="toggle-row"
+            style={{ padding: 0 }}
+            title="Blend the original body weights with added-bone weights, so clothing follows body bends while added bones can still swing. Turning this off restores the added-bone weights."
+          >
+            <input
+              type="checkbox"
+              checked={partRigBodyFollow}
+              onChange={(e) => setPartRigBodyFollow(e.target.checked)}
+            />
+            Blend clothing with body
           </label>
         )}
         {hasHelpers && (
@@ -477,6 +489,20 @@ export default function BonePanel() {
               onChange={(e) => setDeformOnly(e.target.checked)}
             />
             Hide helper bones
+          </label>
+        )}
+        {boneViewMode === 'parts' && (
+          <label
+            className="toggle-row"
+            style={{ padding: 0 }}
+            title="Faintly tint every body part all the time, instead of only on hover or when selected"
+          >
+            <input
+              type="checkbox"
+              checked={showAllPartHighlights}
+              onChange={(e) => setShowAllPartHighlights(e.target.checked)}
+            />
+            Highlight all parts
           </label>
         )}
       </div>

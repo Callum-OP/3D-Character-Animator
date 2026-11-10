@@ -31,6 +31,7 @@ import {
   setActiveCharacter,
   dollyViewport,
   syncActiveDangleConfig,
+  syncActivePartRigBodyFollow,
   setOrbitSuspended,
   getObjectScreenPosition,
   mirrorSelectedMeshes,
@@ -50,6 +51,9 @@ import {
   setBoneGizmoMode,
   setBoneViewMode,
   setShowAllPartHighlights,
+  setIgnorePhysicsParts,
+  setShowPhysicsPartsOnly,
+  setPhysicsBoneNames,
   mirrorPose,
   symmetrisePose,
 } from './posing.js'
@@ -462,7 +466,6 @@ function Viewport() {
   // more than one, or behaves like a plain single-select otherwise.
   const selectedBoneNames = useStore((s) => s.selectedBoneNames)
   const transformSpace = useStore((s) => s.transformSpace)
-  const showBones = useStore((s) => s.showBones)
 
   useEffect(() => {
     selectBones(selectedBoneNames)
@@ -478,8 +481,8 @@ function Viewport() {
   }, [boneGizmoMode])
 
   useEffect(() => {
-    setBonesVisible(showBones)
-  }, [showBones])
+    setBonesVisible(true)
+  }, [])
 
   const boneViewMode = useStore((s) => s.boneViewMode)
   useEffect(() => {
@@ -490,6 +493,27 @@ function Viewport() {
   useEffect(() => {
     setShowAllPartHighlights(showAllPartHighlights)
   }, [showAllPartHighlights])
+
+  const showPhysicsPartsOnly = useStore((s) => s.showPhysicsPartsOnly)
+  useEffect(() => {
+    setShowPhysicsPartsOnly(showPhysicsPartsOnly)
+  }, [showPhysicsPartsOnly])
+
+  const ignorePhysicsParts = useStore((s) => s.ignorePhysicsParts)
+  useEffect(() => {
+    setIgnorePhysicsParts(ignorePhysicsParts)
+  }, [ignorePhysicsParts])
+
+  const partChains = useStore((s) => s.dangleChains)
+  const partModelInfo = useStore((s) => s.modelInfo)
+  useEffect(() => {
+    setPhysicsBoneNames(getPhysicsBoneNames(partChains))
+  }, [partChains, partModelInfo])
+
+  const partRigBodyFollow = useStore((s) => s.partRigBodyFollow)
+  useEffect(() => {
+    syncActivePartRigBodyFollow(partRigBodyFollow)
+  }, [partRigBodyFollow, partModelInfo])
 
   const rotationSnap = useStore((s) => s.rotationSnap)
   useEffect(() => {
@@ -511,14 +535,16 @@ function Viewport() {
   const modelInfo = useStore((s) => s.modelInfo)
   useEffect(() => {
     const bones = modelInfo?.bones || []
-    const dangleNames = hideDangleBones ? getPhysicsBoneNames(chainsForBoneFilter) : null
+    const dangleNames = hideDangleBones || showPhysicsPartsOnly ? getPhysicsBoneNames(chainsForBoneFilter) : null
     const trim = deformOnly || (dangleNames && dangleNames.size > 0)
     setPickableBones(
       trim
-        ? bones.filter((b) => (!deformOnly || b.deform) && !(dangleNames && dangleNames.has(b.name))).map((b) => b.name)
+        ? bones
+            .filter((b) => (!deformOnly || b.deform) && (!dangleNames || dangleNames.has(b.name) === !!showPhysicsPartsOnly))
+            .map((b) => b.name)
         : null,
     )
-  }, [deformOnly, hideDangleBones, chainsForBoneFilter, modelInfo])
+  }, [deformOnly, hideDangleBones, showPhysicsPartsOnly, chainsForBoneFilter, modelInfo])
 
   // --- Dangle bones: push the active character's chains/settings into the
   // physics engine whenever the master toggle or any chain (add/remove/

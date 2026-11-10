@@ -144,7 +144,7 @@ import {
   suspendSoftCloth,
   resumeSoftCloth,
 } from './softcloth.js'
-import { initPartRig, getPartRigData, restorePartRigs, getPartRigEntries, invalidatePartRigGeometry, updatePartRig } from './partRig.js'
+import { initPartRig, getPartRigData, restorePartRigs, getPartRigEntries, invalidatePartRigGeometry, updatePartRig, setPartRigBodyFollow } from './partRig.js'
 import { initMeshSymmetry, getSymmetryData, restoreSymmetry, mirrorMeshes } from './meshSymmetry.js'
 import { combineMeshes as combineExportMeshes, describeCombine } from './combineMeshes.js'
 import { STATIC_FORMATS, bakeStaticMeshes, writeStaticModel } from './exportStatic.js'
@@ -1407,6 +1407,13 @@ export function syncActiveDangleConfig(enabled, chains, windEnabled, windDirecti
   setWindConfig(windEnabled, windDirection, windStrength, windFluctuation)
   if (!state.activeCharacterId || !state.currentModel) return
   setDangleConfig(state.activeCharacterId, state.currentModel, enabled, chains)
+}
+
+export function syncActivePartRigBodyFollow(enabled) {
+  if (!state.currentModel) return
+  setPartRigBodyFollow(state.currentModel, enabled)
+  refreshPoseOverlays()
+  requestRender()
 }
 
 // Snap the active character's dangle bones back onto its current pose,
@@ -3684,6 +3691,7 @@ export function getSceneData() {
       scale: root.scale.toArray(),
       meshSymmetry: getSymmetryData(state.currentModel),
       partRigs: getPartRigData(state.currentModel),
+      partRigBodyFollow: useStore.getState().partRigBodyFollow,
       pose: getPose(),
       meshEdits: getMeshEditsData(),
     }
@@ -3711,6 +3719,8 @@ export function applySceneData(json) {
       restorePartRigs(model, c.partRigs, { onSkip: (entry) => skipped.push(entry) })
       if (skipped.length) useStore.getState().setLoadNotice(formatPartRigRestoreNotice(skipped))
     }
+    useStore.getState().setPartRigBodyFollow(!!c.partRigBodyFollow)
+    setPartRigBodyFollow(model, !!c.partRigBodyFollow)
     if (c.pose) {
       try {
         applyPose(c.pose)
@@ -3909,6 +3919,7 @@ export function getProjectData() {
       playbackSource: live.playbackSource,
       meshSymmetry: getSymmetryData(model),
       partRigs: getPartRigData(model),
+      partRigBodyFollow: live.partRigBodyFollow,
       dangleEnabled: live.dangleEnabled,
       dangleChains: live.dangleChains,
       ikEnabled: live.ikEnabled,
@@ -4067,6 +4078,7 @@ export async function applyProjectData(record) {
       playbackSource: c.playbackSource || 'edit',
       dangleEnabled: c.dangleEnabled ?? true,
       dangleChains: c.dangleChains || [],
+      partRigBodyFollow: !!c.partRigBodyFollow,
       ikEnabled: c.ikEnabled ?? true,
       ikPins: [],
       flattenerEnabled: c.flattenerEnabled ?? true,
@@ -4074,6 +4086,7 @@ export async function applyProjectData(record) {
     })
     setFlattenerConfig(id, model, c.flattenerEnabled ?? true, c.flatteners || [])
     setDangleConfig(id, model, c.dangleEnabled ?? true, c.dangleChains || [])
+    setPartRigBodyFollow(model, !!c.partRigBodyFollow)
     pendingIk.push({ id, model, enabled: c.ikEnabled ?? true, saved: c.ikPins || [] })
     if (c.isActive || (record.format === 'project-v1' && i === 0)) activeIdToRestore = id
   }

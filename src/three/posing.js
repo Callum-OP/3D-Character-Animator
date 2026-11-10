@@ -107,7 +107,11 @@ const REGION_DEFS = [
 // "LeftIndexHand2". The plain 'fingers.L/R' regions above stay as the catch-all for hand bones that
 // can't be placed on a finger (palm/metacarpal helpers, or a rig whose fingers can't be told apart).
 export const FINGER_TYPES = ['thumb', 'index', 'middle', 'ring', 'pinky']
-const FINGER_SEGMENT_COLORS = [0xffc0cd, 0xffa8ba, 0xff90a8] // alternate shades so neighbouring segments read apart
+const FINGER_SEGMENT_COLORS = [0xff2d6f, 0xff0f5a, 0xe8004c] // saturated, alternating shades so fingers stand out on light skin
+// Pseudo-region for dangle/cloth bones, used only by "Highlight dangle & cloth only".
+const PHYSICS_REGION = 'physics'
+const PHYSICS_DEF = { key: PHYSICS_REGION, label: 'Dangle & cloth', color: 0xc77dff }
+const PHYSICS_OPACITY = { shown: 0.5, hover: 0.7 }
 for (const [side, sideLabel] of [['L', 'Left'], ['R', 'Right']]) {
   for (const type of FINGER_TYPES) {
     for (let seg = 1; seg <= 3; seg++) {
@@ -222,6 +226,11 @@ const p = {
   partMaterials: new Map(), // region key -> shared MeshBasicMaterial
   partMeshes: [], // [{ region, mesh (SkinnedMesh overlay) }]
   partsOn: false, // Parts view overlay currently shown
+  physicsNames: new Set(), // bone names in dangle/cloth chains or Add bones groups
+  physicsKey: '',
+  ignorePhysics: false, // Parts view: leave dangle/cloth bones out of the regions
+  physicsOnly: false, // highlight/pick only dangle/cloth bones (Parts and Bones views)
+  pickedBone: null, // bone under the last pick, set for dangle/cloth regions
   hoverPending: null, // latest pointer event awaiting the next-frame hover pick
   hoverRegion: null, // region key under the pointer in Parts view
   onGizmoModeChange: null, // (mode) => void — keeps the store's gizmo toggle in sync
@@ -1017,6 +1026,38 @@ export function setShowAllPartHighlights(enabled) {
   p.requestRender()
 }
 
+// Parts view: leave dangle/cloth bones (and the mesh weighted to them) out of the highlighting and picking
+// entirely. When off, they act as part of whichever limb they hang from.
+export function setIgnorePhysicsParts(enabled) {
+  const on = !!enabled
+  if (on === p.ignorePhysics) return
+  p.ignorePhysics = on
+  refreshPoseOverlays()
+  p.requestRender()
+}
+
+// Highlight only the dangle/cloth bones: purple regions in Parts view (picking selects the exact bone under
+// the pointer). The Bones view's dots are trimmed separately through setPickableBones.
+export function setShowPhysicsPartsOnly(enabled) {
+  const on = !!enabled
+  if (on === p.physicsOnly) return
+  p.physicsOnly = on
+  p.hoverRegion = null
+  refreshPoseOverlays()
+  p.requestRender()
+}
+
+// Tell the overlay which bones belong to dangle/cloth chains or Add bones groups. Rebuilds the overlay only
+// when the set changes and it matters.
+export function setPhysicsBoneNames(names) {
+  const list = [...(names || [])].sort()
+  const key = list.join('\n')
+  if (key === p.physicsKey) return
+  p.physicsKey = key
+  p.physicsNames = new Set(list)
+  refreshPoseOverlays()
+}
+
 // Restore every bone to its rest rotation as one undoable batch.
 export function resetPose() {
   if (!p.model) return
@@ -1738,7 +1779,9 @@ function onPointerUp(e) {
 
   if (p.viewMode === 'parts') {
     if (!p.overlayVisible || !p.partMeshes.length) return
-    selectRegion(p.hoverRegion || pickPartRegion(e), e.shiftKey || e.ctrlKey || e.metaKey)
+    // Reuse the hover result for a snappy click, except for dangle/cloth regions where the exact bone matters.
+    const cached = p.hoverRegion && !p.physicsOnly ? p.hoverRegion : null
+    selectRegion(cached || pickPartRegion(e), e.shiftKey || e.ctrlKey || e.metaKey)
     return
   }
 
@@ -1803,7 +1846,7 @@ function selectRegion(regionKey, additive) {
     p.onSelect(null)
     return
   }
-  const controlName = p.regionControl.get(regionKey)
+  const controlName = regionKey === PHYSICS_REGION ? p.pickedBone?.name : p.regionControl.get(regionKey)
   p.onSelect(controlName || null, additive)
 }
 
@@ -1818,7 +1861,8 @@ function pickPartRegion(e) {
   _partNdc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1
   _partNdc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1
   _partRaycaster.setFromCamera(_partNdc, p.camera)
-  const meshes = p.partMeshes.map((pm) => pm.mesh)
+  // Only the overlays of the active mode are pickable: dangle/cloth ones, or everything else.
+  const meshes = p.partMeshes.filter((pm) => (pm.region === PHYSICS_REGION) === p.physicsOnly).map((pm) => pm.mesh)
   // SkinnedMesh#raycast lazily skins EVERY vertex to build its bounding sphere/box and caches it
   // forever, so it must be refreshed per pick (the pose changes). The region overlays all share
   // the same vertex buffers, so compute the bounds once per source buffer and share them rather
@@ -1839,8 +1883,13 @@ function pickPartRegion(e) {
     }
   }
   const hits = _partRaycaster.intersectObjects(meshes, false)
+  p.pickedBone = null
   if (!hits.length) return null
   const found = p.partMeshes.find((pm) => pm.mesh === hits[0].object)
+  if (found && found.region === PHYSICS_REGION) {
+    const vertexBone = found.mesh.userData.vertexBone
+    p.pickedBone = (vertexBone && hits[0].face && vertexBone[hits[0].face.a]) || null
+  }
   return found ? found.region : null
 }
 
@@ -1851,12 +1900,16 @@ function updatePartMaterials() {
   if (!p.partMaterials.size) return
   const selectedRegion = p.selected ? resolveBoneRegion(p.selected) : null
   const idleOpacity = p.showAllHighlights ? PART_OPACITY.allSubtle : PART_OPACITY.idle
-  for (const def of REGION_DEFS) {
+  for (const def of [...REGION_DEFS, PHYSICS_DEF]) {
     const mat = p.partMaterials.get(def.key)
     if (!mat) continue
     const isSelected = def.key === selectedRegion
     const isHover = def.key === p.hoverRegion
-    mat.opacity = isSelected ? PART_OPACITY.selected : isHover ? PART_OPACITY.hover : idleOpacity
+    if (def.key === PHYSICS_REGION) {
+      mat.opacity = !p.physicsOnly ? 0 : isSelected ? PART_OPACITY.selected : isHover ? PHYSICS_OPACITY.hover : PHYSICS_OPACITY.shown
+    } else {
+      mat.opacity = p.physicsOnly ? 0 : isSelected ? PART_OPACITY.selected : isHover ? PART_OPACITY.hover : idleOpacity
+    }
     mat.color.set(isSelected ? PART_SELECTED_COLOR : def.color)
   }
   // Regions that are fully transparent are skipped by the renderer entirely (picking ignores
@@ -1941,12 +1994,19 @@ function buildBoneRegionMap() {
     if (region) direct.set(b, region)
   }
   assignTorsoChainRegions(direct)
+  // Dangle/cloth bones never classify on their own: they either inherit their parent's region (as if
+  // they weren't on the mesh at all) or, when ignored, belong to no region.
+  for (const b of p.bones) if (p.physicsNames.has(b.name)) direct.delete(b)
 
   const final = new Map()
   function resolve(bone) {
     if (final.has(bone)) return final.get(bone)
     final.set(bone, null) // guard against cycles while resolving
     let region = direct.get(bone) || null
+    if (!region && p.ignorePhysics && p.physicsNames.has(bone.name)) {
+      final.set(bone, null)
+      return null
+    }
     if (!region) {
       const parent = bone.parent && bone.parent.isBone && p.boneMap.has(bone.parent.name) ? bone.parent : null
       region = substituteChildRegion(parent ? resolve(parent) : null)
@@ -1955,6 +2015,7 @@ function buildBoneRegionMap() {
     return region
   }
   for (const b of p.bones) resolve(b)
+  if (p.physicsOnly) for (const b of p.bones) if (p.physicsNames.has(b.name)) final.set(b, PHYSICS_REGION)
   assignFingerSegments(final)
   return final
 }
@@ -2186,7 +2247,7 @@ function buildPartOverlays(model) {
   const meshes = model.skinnedMeshes || []
   if (!meshes.length || p.bones.length === 0) return
 
-  for (const def of REGION_DEFS) {
+  for (const def of [...REGION_DEFS, PHYSICS_DEF]) {
     const partMat = new THREE.MeshBasicMaterial({
       color: def.color,
       transparent: true,
@@ -2210,6 +2271,7 @@ function buildPartOverlays(model) {
 
     // Dominant (highest-weight) bone's region per vertex.
     const vertexRegion = new Array(posAttr.count)
+    const vertexBone = new Array(posAttr.count)
     for (let i = 0; i < posAttr.count; i++) {
       let bestW = -1
       let bestBoneIdx = 0
@@ -2221,6 +2283,7 @@ function buildPartOverlays(model) {
         }
       }
       const bone = bones[bestBoneIdx]
+      vertexBone[i] = bone || null
       vertexRegion[i] = bone ? resolveBoneRegion(bone) : null
     }
 
@@ -2278,6 +2341,7 @@ function buildPartOverlays(model) {
       overlay.matrix.decompose(overlay.position, overlay.quaternion, overlay.scale)
       overlay.bind(mesh.skeleton, mesh.bindMatrix)
       overlay.userData.outlineParameters = { visible: false } // never outline the highlight overlay
+      if (regionKey === PHYSICS_REGION) overlay.userData.vertexBone = vertexBone
       followFlattener(overlay, mesh)
       mesh.parent.add(overlay)
       p.partMeshes.push({ region: regionKey, mesh: overlay })

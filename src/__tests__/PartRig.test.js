@@ -2,10 +2,11 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
 import { useStore } from '../store.js'
-import { initPartRig, planForMesh, applyPartRig, updatePartRig, getPartRigData, restorePartRigs, getPartRigEntries, getPartRigDependents, removeLastPartRig, removePartRig, planForMeshes, resizeSelection, trisFromClick } from '../three/partRig.js'
+import { initPartRig, planForMesh, applyPartRig, updatePartRig, getPartRigData, restorePartRigs, getPartRigEntries, getPartRigDependents, removeLastPartRig, removePartRig, planForMeshes, resizeSelection, trisFromClick, setPartRigBodyFollow } from '../three/partRig.js'
 import { cloneForExport } from '../three/exportPose.js'
 import { performUndo, performRedo } from '../three/undoPriority.js'
 import { clearUndoHistory } from '../three/undoHistory.js'
+import { clearDangle, initDangle, setDangleConfig, stepDangleLive } from '../three/dangle.js'
 
 // A synthetic character: hips > spine > head, a torso strip skinned to the spine, and a cape (a 6x6 grid hanging from
 // y = 1.5 to y = 0.5) that is a separate piece skinned to the spine.
@@ -135,6 +136,71 @@ describe('part rig plan', () => {
 })
 
 describe('adding the bones', () => {
+  it('blends body bends and added bone motion, and restores the original rig weights when disabled', () => {
+    const { model, mesh, capeTris, spine } = build()
+    const bottom = 4 + (N - 1) * N
+    // The hem originally follows the hips, while the added chain hangs from the spine.
+    for (let v = 4 + N; v < 4 + N * N; v++) mesh.geometry.attributes.skinIndex.setX(v, 0)
+    const { entry } = applyPartRig(model, mesh, capeTris, { segments: 4, columns: 1, direction: 'down', parentBoneName: 'spine', stick: 0 }, { label: 'Jacket' })
+    const originalIndices = Array.from(mesh.geometry.attributes.skinIndex.array)
+    const originalWeights = Array.from(mesh.geometry.attributes.skinWeight.array)
+    spine.rotation.z = 0.8
+    const rigged = posed(mesh)[bottom]
+    setPartRigBodyFollow(model, true)
+    const blended = posed(mesh)[bottom]
+    expect(blended.distanceTo(rigged)).toBeGreaterThan(0.1)
+    const bone = entry.result.created[0]
+    bone.rotation.z = 0.6
+    const swung = posed(mesh)[bottom]
+    expect(swung.distanceTo(blended)).toBeGreaterThan(0.03)
+    setPartRigBodyFollow(model, false)
+    expect(Array.from(mesh.geometry.attributes.skinIndex.array)).toEqual(originalIndices)
+    expect(Array.from(mesh.geometry.attributes.skinWeight.array)).toEqual(originalWeights)
+  })
+
+  it('keeps body-follow weights through rig removal and undo', () => {
+    const { model, mesh, capeTris } = build()
+    const { entry } = applyPartRig(model, mesh, capeTris, { segments: 3, columns: 1 }, { label: 'Jacket' })
+    setPartRigBodyFollow(model, true)
+    const expected = Array.from(mesh.geometry.attributes.skinWeight.array)
+    expect(removePartRig(model, entry.id)).toBe(true)
+    performUndo(useStore.getState())
+    expect(Array.from(mesh.geometry.attributes.skinWeight.array)).toEqual(expected)
+    setPartRigBodyFollow(model, false)
+    expect(model.__partRigBodyFollow).toBe(false)
+  })
+
+  it('creates and restores rigs using their unblended weights while the toggle is enabled', () => {
+    const { model, mesh, capeTris } = build()
+    setPartRigBodyFollow(model, true)
+    const { entry } = applyPartRig(model, mesh, capeTris, { segments: 3, columns: 1, stick: 0 }, { label: 'Jacket' })
+    const blended = Array.from(mesh.geometry.attributes.skinWeight.array)
+    const saved = getPartRigData(model)
+    setPartRigBodyFollow(model, false)
+    expect(Array.from(mesh.geometry.attributes.skinWeight.array)).not.toEqual(blended)
+    const restored = build()
+    expect(restorePartRigs(restored.model, saved)).toBe(1)
+    setPartRigBodyFollow(restored.model, true)
+    expect(Array.from(restored.mesh.geometry.attributes.skinWeight.array)).toEqual(blended)
+    expect(entry.result.meshes[0].oldW[0]).toBeCloseTo(0.6)
+  })
+
+  it('still moves the clothing during live bone physics', () => {
+    const { model, mesh, capeTris, spine } = build()
+    const { entry } = applyPartRig(model, mesh, capeTris, { segments: 4, columns: 1, direction: 'down', stick: 0 }, { label: 'Jacket' })
+    setPartRigBodyFollow(model, true)
+    initDangle({ requestRender: () => {} })
+    const id = 'body-follow-test'
+    setDangleConfig(id, model, true, [{ id: 'jacket', boneNames: entry.boneNames, stiffness: 0.1, gravity: 1, damping: 0.2 }])
+    spine.rotation.z = 0.8
+    const bottom = 4 + (N - 1) * N
+    const before = posed(mesh)[bottom]
+    for (let i = 0; i < 90; i++) stepDangleLive(1 / 60)
+    const after = posed(mesh)[bottom]
+    clearDangle(id)
+    expect(after.distanceTo(before)).toBeGreaterThan(0.03)
+  })
+
   it('changes nothing visible on the frame it is added, even in a pose', () => {
     const { model, mesh, capeTris, spine } = build()
     spine.rotation.z = 0.5

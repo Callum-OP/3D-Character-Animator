@@ -45,6 +45,7 @@ mocap retargeting, allows mesh-level edits for accessories and clothing, and add
   and a reset/restore workflow. Dangle-bone physics adds lightweight
   jiggle and secondary motion for hair, accessories, and loose parts.
 - **Add bones to hair, hoods and capes** — in Mesh mode, pick faces across one or more compatible skinned parts, choose how many bones and chains, and the bones and skin weights are built for you. New rigs attach to the original skeleton by default; attaching one added rig to another is an explicit opt-in. Edit or delete added rigs later; deleting never removes dependent rigs automatically. Rigs are saved with projects and scene layouts, restored before saved poses, included in glTF/GLB exports, and undoable.
+- **Blend clothing with body** — in either Pose view, blend the original body skinning with the added-bone skinning so clothing can follow body bends while its added bones can still swing during animation. This is an approximate blend, limited to the four strongest retained influences, not a cloth simulation. It applies to rigs created with Add bones, whose original weights are available; existing imported dangle bones are not changed. Turning it off restores the added-bone weights. The setting is saved per character with projects and scene layouts.
 - **Ragdoll and physics-based motion** — bake a ragdoll-style animation from a
   posed character or motion clip, then reuse it as a generated clip with the same
   timeline and export flow as other animation data.

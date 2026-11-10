@@ -2,9 +2,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, within } from '@testing-library/react'
 import React from 'react'
 
+const rigFixture = vi.hoisted(() => ({ model: null }))
 vi.mock('../three/scene.js', async (importOriginal) => {
   const actual = await importOriginal()
-  return { ...actual, applyModelMaterials: () => {}, resetActiveDangle: vi.fn(), collectActiveDangleDescendants: (names) => names }
+  return { ...actual, getCurrentModel: () => rigFixture.model, applyModelMaterials: () => {}, resetActiveDangle: vi.fn(), collectActiveDangleDescendants: (names) => names }
 })
 
 import BonePanel from '../panels/BonePanel.jsx'
@@ -24,6 +25,7 @@ const bones = [
 const chain = { id: 'c1', name: 'Hair', type: 'dangle', boneNames: ['Hair_1', 'Hair_2'], stiffness: 0.15, gravity: 1, damping: 0.8 }
 
 beforeEach(() => {
+  rigFixture.model = null
   useStore.setState({
     modelInfo: { meshes: [], bones },
     selectedBoneName: null,
@@ -34,6 +36,8 @@ beforeEach(() => {
     flatteners: [],
     sceneObjects: [],
     mode: 'pose',
+    boneViewMode: 'bones',
+    partRigBodyFollow: false,
   })
 })
 
@@ -68,6 +72,51 @@ describe('shared card pieces', () => {
 })
 
 describe('Pose area sections use the card layout', () => {
+  it('shares the body-follow toggle and position between both pose views', () => {
+    rigFixture.model = { __rigAdds: [{ boneNames: ['Hair_1'] }] }
+    useStore.setState({ dangleChains: [chain] })
+    const { container } = render(<BonePanel />)
+    const toggle = () => screen.getByLabelText('Blend clothing with body')
+    const position = () => [...container.querySelectorAll('.pose-toggles input')].indexOf(toggle())
+    const bonePosition = position()
+    fireEvent.click(toggle())
+    expect(st().partRigBodyFollow).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Body Parts' }))
+    expect(toggle().checked).toBe(true)
+    expect(position()).toBe(bonePosition)
+    fireEvent.click(toggle())
+    expect(st().partRigBodyFollow).toBe(false)
+  })
+
+  it('keeps corresponding pose toggles in the same grid positions in both views', () => {
+    useStore.setState({
+      dangleChains: [chain],
+      boneViewMode: 'bones',
+      modelInfo: { meshes: [], bones: [...bones, { name: 'Helper', label: 'Helper', depth: 1, deform: false }] },
+    })
+    const { container } = render(<BonePanel />)
+    const labels = () => [...container.querySelectorAll('.pose-toggles > label')].map((label) => label.textContent.trim())
+    const boneLabels = labels()
+    fireEvent.click(screen.getByRole('button', { name: 'Body Parts' }))
+    const partLabels = labels()
+    expect(boneLabels.slice(0, 4)).toEqual([
+      'Snap 15°', 'Limb limits', 'Hide dangle & cloth bones', 'Highlight dangle & cloth only',
+    ])
+    expect(partLabels.slice(0, 4)).toEqual([
+      'Snap 15°', 'Limb limits', 'Hide dangle & cloth parts', 'Highlight dangle & cloth only',
+    ])
+    expect(boneLabels.indexOf('Hide helper bones')).toBe(4)
+    expect(partLabels.indexOf('Hide helper bones')).toBe(4)
+  })
+
+  it('keeps shared toggles aligned without dangle chains', () => {
+    const { container } = render(<BonePanel />)
+    const labels = () => [...container.querySelectorAll('.pose-toggles > label')].map((label) => label.textContent.trim())
+    expect(labels().slice(0, 2)).toEqual(['Snap 15°', 'Limb limits'])
+    fireEvent.click(screen.getByRole('button', { name: 'Body Parts' }))
+    expect(labels().slice(0, 2)).toEqual(['Snap 15°', 'Limb limits'])
+  })
+
   it('pose controls and the bone list are collapsible and open by default', () => {
     const { container } = render(<BonePanel />)
     const details = [...container.querySelectorAll('.fx-card')]
