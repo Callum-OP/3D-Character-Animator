@@ -22,12 +22,14 @@ vi.mock('../three/exportShot.js', () => ({
   runExportShot: vi.fn(),
   canRecordVideo: () => false,
   resolveShotView: () => ({}),
-  hideGizmosForShot: () => () => {},
+  hideGizmosForShot: vi.fn(() => () => {}),
 }))
 
 import ExportPanel from '../panels/ExportPanel.jsx'
 import { forgetAccordionStates } from '../panels/Accordion.jsx'
 import { capturePNG, captureAnimationPNGs, exportSceneModel } from '../three/scene.js'
+import { hideGizmosForShot } from '../three/exportShot.js'
+import * as fsAccess from '../three/fsAccess.js'
 import { useStore } from '../store.js'
 
 let originalClipboard
@@ -35,6 +37,7 @@ afterEach(() => {
   cleanup()
   forgetAccordionStates()
   vi.clearAllMocks()
+  vi.restoreAllMocks()
   if (originalClipboard === undefined) delete navigator.clipboard
   else Object.defineProperty(navigator, 'clipboard', { configurable: true, value: originalClipboard })
   originalClipboard = undefined
@@ -87,7 +90,97 @@ describe('Export panel — copy images', () => {
 
     await waitFor(() => expect(write).toHaveBeenCalledTimes(1))
     expect(capturePNG).toHaveBeenCalledWith(2)
-    expect(write.mock.calls[0][0][0].data['image/png']).toBeInstanceOf(Blob)
+    expect(await write.mock.calls[0][0][0].data['image/png']).toBeInstanceOf(Blob)
+    await waitFor(() => expect(screen.getByText('Copied a 100×100 PNG to the clipboard.')).toBeTruthy())
+  })
+
+  it('reports clipboard failures instead of claiming the image was copied', async () => {
+    const write = enableImageClipboard()
+    write.mockRejectedValueOnce(new Error('Permission denied'))
+    const restore = vi.fn()
+    hideGizmosForShot.mockReturnValueOnce(restore)
+    render(<ExportPanel />)
+    openSection('Export image')
+    fireEvent.click(screen.getByRole('button', { name: 'Copy image' }))
+
+    await waitFor(() => expect(screen.getByText('Could not copy the image: Permission denied')).toBeTruthy())
+    expect(screen.queryByText(/Copied a .* PNG/)).toBeNull()
+    expect(screen.getByRole('button', { name: 'Copy image' }).disabled).toBe(false)
+    expect(restore).toHaveBeenCalledOnce()
+  })
+
+  it('reports an image capture failure and restores the gizmos', async () => {
+    const write = enableImageClipboard()
+    const restore = vi.fn()
+    hideGizmosForShot.mockReturnValueOnce(restore)
+    capturePNG.mockRejectedValueOnce(new Error('Capture failed'))
+    render(<ExportPanel />)
+    openSection('Export image')
+    fireEvent.click(screen.getByRole('button', { name: 'Copy image' }))
+
+    await waitFor(() => expect(screen.getByText('Could not copy the image: Capture failed')).toBeTruthy())
+    expect(write).toHaveBeenCalledOnce()
+    await expect(write.mock.calls[0][0][0].data['image/png']).rejects.toThrow('Capture failed')
+    expect(restore).toHaveBeenCalledOnce()
+    expect(screen.getByRole('button', { name: 'Copy image' }).disabled).toBe(false)
+  })
+
+  it('reports when image clipboard writing is unavailable', () => {
+    originalClipboard = navigator.clipboard
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined })
+    vi.stubGlobal('ClipboardItem', undefined)
+    render(<ExportPanel />)
+    openSection('Export image')
+    fireEvent.click(screen.getByRole('button', { name: 'Copy image' }))
+
+    expect(screen.getByText('Clipboard image copying is not supported in this browser.')).toBeTruthy()
+    expect(capturePNG).not.toHaveBeenCalled()
+  })
+
+  it('starts the clipboard write in the click handler before capture finishes', async () => {
+    let resolveCapture
+    capturePNG.mockReturnValueOnce(new Promise((resolve) => { resolveCapture = resolve }))
+    const write = enableImageClipboard()
+    render(<ExportPanel />)
+    openSection('Export image')
+    fireEvent.click(screen.getByRole('button', { name: 'Copy image' }))
+
+    expect(write).toHaveBeenCalledOnce()
+    expect(screen.getByText('Copying image…')).toBeTruthy()
+    resolveCapture(new Blob(['png'], { type: 'image/png' }))
+    await waitFor(() => expect(screen.getByText('Copied a 100×100 PNG to the clipboard.')).toBeTruthy())
+  })
+
+  it('waits for capture to finish before restoring gizmos after clipboard denial', async () => {
+    let resolveCapture
+    capturePNG.mockReturnValueOnce(new Promise((resolve) => { resolveCapture = resolve }))
+    const write = enableImageClipboard()
+    write.mockRejectedValueOnce(new DOMException('Denied', 'NotAllowedError'))
+    const restore = vi.fn()
+    hideGizmosForShot.mockReturnValueOnce(restore)
+    vi.spyOn(fsAccess, 'inCrossOriginFrame').mockReturnValue(true)
+    render(<ExportPanel />)
+    openSection('Export image')
+    fireEvent.click(screen.getByRole('button', { name: 'Copy image' }))
+
+    await Promise.resolve()
+    expect(restore).not.toHaveBeenCalled()
+    resolveCapture(new Blob(['png'], { type: 'image/png' }))
+    await waitFor(() => expect(screen.getByText(/hosting page may block clipboard access/)).toBeTruthy())
+    expect(screen.getByText(/Save the image as a PNG instead/)).toBeTruthy()
+    expect(restore).toHaveBeenCalledOnce()
+  })
+
+  it('suggests a PNG when the clipboard API is unavailable in an embedded page', () => {
+    originalClipboard = navigator.clipboard
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined })
+    vi.spyOn(fsAccess, 'inCrossOriginFrame').mockReturnValue(true)
+    render(<ExportPanel />)
+    openSection('Export image')
+    fireEvent.click(screen.getByRole('button', { name: 'Copy image' }))
+
+    expect(screen.getByText(/hosting page may block clipboard access/)).toBeTruthy()
+    expect(capturePNG).not.toHaveBeenCalled()
   })
 
   it('saves every animation frame as a numbered PNG in one zip, in order', async () => {

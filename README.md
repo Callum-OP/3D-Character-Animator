@@ -51,7 +51,8 @@ mocap retargeting, allows mesh-level edits for accessories and clothing, and add
   timeline and export flow as other animation data.
 - **Light and camera keyframing** — animate lights as part of the same timeline,
   giving you more control over cinematic presentation and interactive shot setups.
-- **Export pipeline** — export transparent stills at 1×/2×/4× viewport sizes,
+- **Export pipeline** — save or copy transparent PNG stills at 1×/2×/4× viewport sizes
+  (clipboard copying requires a browser that supports image clipboard writes),
   record WebM video from the current camera view, export animation clips as BVH,
   and use fullscreen capture for screen recordings and presentation work. Play
   All and video export can optionally stop when the shortest active character
@@ -102,6 +103,9 @@ For a zip file to use in sites like itch.io run:
 npm install
 npm run package:itch
 ```
+
+On the itch.io embedded page, the host or browser may block image clipboard
+access and the ability for the app to open project files.
 
 ### Run as a desktop app (Electron)
 

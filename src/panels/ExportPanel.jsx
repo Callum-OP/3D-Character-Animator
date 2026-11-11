@@ -15,6 +15,7 @@ import { pickVideoFormat, videoBitrate, VIDEO_FPS, MIN_VIDEO_FPS, MAX_VIDEO_FPS,
 import { webCodecsAvailable } from '../three/videoCapture.js'
 import { createZip } from '../three/zipStore.js'
 import { runExportShot, resolveShotView, canRecordVideo, hideGizmosForShot } from '../three/exportShot.js'
+import { inCrossOriginFrame } from '../three/fsAccess.js'
 
 // Side-panel section: get your work out of the app. Four collapsible groups, most-used first —
 //   Export video   preview + record the animation (open by default), then its settings
@@ -136,9 +137,15 @@ export default function ExportPanel() {
     notify('image', `Saved a ${size.width}×${size.height} PNG${size.clamped ? ' (reduced to what your GPU supports)' : ''}.`)
   }
 
+  function clipboardUnavailable(message) {
+    return inCrossOriginFrame()
+      ? `${message} The hosting page may block clipboard access. Save the image as a PNG instead, or save your project and open the app outside the embedded page.`
+      : message
+  }
+
   function clipboardWriter() {
     if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
-      notify('image', 'Clipboard image copying is not supported in this browser.')
+      notify('image', clipboardUnavailable('Clipboard image copying is not supported in this browser.'))
       return null
     }
     return navigator.clipboard.write.bind(navigator.clipboard)
@@ -151,13 +158,19 @@ export default function ExportPanel() {
     setCopying(true)
     notify('image', 'Copying image…')
     let restoreGizmos = () => {}
+    let capture = null
     try {
       restoreGizmos = hideGizmosForShot()
-      const blob = await capturePNG(exportScale)
-      await write([new ClipboardItem({ 'image/png': blob })])
+      capture = Promise.resolve().then(() => capturePNG(exportScale))
+      const writing = write([new ClipboardItem({ 'image/png': capture })])
+      await Promise.all([writing, capture])
       notify('image', `Copied a ${imageSize.width}×${imageSize.height} PNG to the clipboard.`)
     } catch (error) {
-      notify('image', `Could not copy the image: ${error?.message || String(error)}`)
+      if (capture) await capture.catch(() => {})
+      const message = `Could not copy the image: ${error?.message || String(error)}`
+      notify('image', error?.name === 'NotAllowedError' || error?.name === 'SecurityError'
+        ? clipboardUnavailable(message)
+        : message)
     } finally {
       restoreGizmos()
       setCopying(false)
