@@ -167,7 +167,7 @@ export default function SymmetrySection({ meshUuid, resolveMesh, partsList = [],
               <button className={`btn fx-btn-main ${picking ? '' : 'secondary'}`} onClick={() => { setPicking((v) => !v); setMessage('') }}>
                 {picking ? 'Picking: click the part…' : 'Pick faces'}
               </button>
-              <button className="btn secondary" disabled={!tris.length} onClick={() => setTris([])} title="Forget every picked face">Clear</button>
+              <button className="btn secondary danger" disabled={!tris.length} onClick={() => setTris([])} title="Forget every picked face">Clear</button>
             </FxButtons>
             <FxButtons wide>
               <button className="btn secondary" disabled={!tris.length} onClick={() => setTris((cur) => resizeSelection(mesh, cur, 1))} title="Add one ring of faces around the selection">Grow</button>

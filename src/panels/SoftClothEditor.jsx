@@ -517,7 +517,7 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
                     <button className="btn secondary" onClick={() => resetSoftCloth(target, z.id)} title="Stop this effect and start it again from the current pose">
                       Reset
                     </button>
-                    <button className="btn secondary" onClick={() => remove(target.uuid, z.id, key)} title="Remove this effect" aria-label="Remove this effect">
+                    <button className="btn secondary danger" onClick={() => remove(target.uuid, z.id, key)} title="Remove this effect" aria-label="Remove this effect">
                       ×
                     </button>
                   </span>
@@ -919,7 +919,7 @@ export default function SoftClothEditor({ mesh, meshes, clothOn = false }) {
           )}
           {!editingZone && areaKind === 'picked' && pendingCount > 0 && (
             <button
-              className="btn secondary"
+              className="btn secondary danger"
               onClick={() => {
                 setPicksByUuid({})
                 setFillsByUuid({})

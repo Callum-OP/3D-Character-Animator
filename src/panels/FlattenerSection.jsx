@@ -77,7 +77,7 @@ export default function FlattenerSection() {
                 >
                   Auto-fit
                 </button>
-                <button className="btn secondary" onClick={() => removeFlattener(f.id)} title="Remove this flattener" aria-label="Remove this flattener">
+                <button className="btn secondary danger" onClick={() => removeFlattener(f.id)} title="Remove this flattener" aria-label="Remove this flattener">
                   ×
                 </button>
               </FxItemActions>

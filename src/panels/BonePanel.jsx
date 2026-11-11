@@ -672,7 +672,7 @@ export default function BonePanel() {
                   {allDangleCollisionsEnabled ? 'Disable all collisions' : 'Enable all collisions'}
                 </button>
                 <button
-                  className="btn secondary"
+                  className="btn secondary danger"
                   onClick={() => clearAllDangleChainsAndBones()}
                   title="Remove every dangle and rigged-cloth chain, along with the Add bones rigs they swing. Ctrl+Z restores them."
                 >
@@ -693,7 +693,7 @@ export default function BonePanel() {
                   <button className="btn secondary" onClick={() => resetActiveDangle(chain.id)} title="Snap this chain back onto the current pose">
                     Reset
                   </button>
-                  <button className="btn secondary" onClick={() => removeDangleChain(chain.id)} title="Remove this chain" aria-label="Remove this chain">
+                  <button className="btn secondary danger" onClick={() => removeDangleChain(chain.id)} title="Remove this chain" aria-label="Remove this chain">
                     ×
                   </button>
                 </FxItemActions>

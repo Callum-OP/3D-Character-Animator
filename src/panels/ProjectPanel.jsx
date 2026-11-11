@@ -316,7 +316,7 @@ export default function ProjectPanel() {
               <span className="chip">{modelInfo.clipNames.length} clips</span>
             </div>
             <button
-              className="btn secondary btn-tiny"
+              className="btn secondary btn-tiny danger"
               style={{ marginTop: 8 }}
               onClick={() => {
                 if (!confirmDialog('Are you sure you want to delete this character?')) return
@@ -413,7 +413,7 @@ export default function ProjectPanel() {
                       </button>
                     )}
                     <button
-                      className="obj-del"
+                      className="obj-del neutral"
                       title="Remove from recent list (does not delete the file)"
                       onClick={(e) => onRemoveRecent(r.id, e)}
                       disabled={busy}

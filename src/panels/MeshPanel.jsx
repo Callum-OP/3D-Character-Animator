@@ -818,7 +818,7 @@ export default function MeshPanel() {
                         💾 Save Vertex Group
                       </button>
                       <button
-                        className="btn secondary"
+                        className="btn secondary danger"
                         title="Remove every pin from this part"
                         onClick={() => {
                           clearPins(selectedMesh.uuid)

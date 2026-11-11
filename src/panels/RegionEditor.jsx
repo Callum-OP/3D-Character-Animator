@@ -339,7 +339,7 @@ export default function RegionEditor({ meshUuid, resolveMesh }) {
             <FxHelp>{pending.length} face{pending.length === 1 ? '' : 's'} selected (shown in pink)</FxHelp>
             <FxFooter>
               <button className="btn secondary" onClick={addRegion} disabled={!pending.length}>Make this a region</button>
-              <button className="btn secondary" onClick={() => { setSeed(null); setPending(null) }}>Clear</button>
+              <button className="btn secondary danger" onClick={() => { setSeed(null); setPending(null) }}>Clear</button>
             </FxFooter>
           </FxPicking>
         )}

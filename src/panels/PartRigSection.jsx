@@ -285,7 +285,7 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
                 <FxItemActions>
                   <button className="btn secondary" onClick={() => onDuplicate(e)} title="Start a new rig with this one's settings, then pick a different area for it">Duplicate</button>
                   <button className="btn secondary" onClick={() => onEdit(e)} title="Change this rig's name, bone count, and settings">Edit</button>
-                  <button className="btn secondary" onClick={() => onDelete(e)} title="Delete these bones">Delete</button>
+                  <button className="btn secondary danger" onClick={() => onDelete(e)} title="Delete these bones">Delete</button>
                 </FxItemActions>
               </FxItem>
             )
@@ -313,7 +313,7 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
           <button className={`btn fx-btn-main ${picking ? '' : 'secondary'}`} onClick={() => { setPicking((v) => !v); setMessage('') }}>
             {picking ? 'Picking: click the part…' : 'Pick faces'}
           </button>
-          <button className="btn secondary" disabled={!tris.length} onClick={() => editPartRigDraft(() => ({}))} title="Forget every picked face (Ctrl+Z brings them back)">Clear</button>
+          <button className="btn secondary danger" disabled={!tris.length} onClick={() => editPartRigDraft(() => ({}))} title="Forget every picked face (Ctrl+Z brings them back)">Clear</button>
         </FxButtons>
         <FxButtons wide>
           <button className="btn secondary" disabled={!trisByMesh[mesh.uuid]?.length} onClick={() => editPartRigDraft((current) => ({ ...current, [mesh.uuid]: resizeSelection(mesh, current[mesh.uuid] || [], 1) }))} title="Add one ring of faces around the primary part's selection">Grow</button>

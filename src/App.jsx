@@ -192,7 +192,7 @@ function AppInner() {
                 <span className="eyebrow">Preferences</span>
                 <h2>Viewport settings</h2>
               </div>
-              <button className="icon-btn" title="Close settings (Esc)" aria-label="Close settings" onClick={() => setSettingsOpen(false)}>
+              <button className="icon-btn danger" title="Close settings (Esc)" aria-label="Close settings" onClick={() => setSettingsOpen(false)}>
                 ×
               </button>
             </div>

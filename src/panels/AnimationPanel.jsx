@@ -2299,7 +2299,7 @@ export default function AnimationPanel() {
                       Combine {combineSel.length > 1 ? `(${combineSel.length})` : ''}
                     </button>
                     {combineSel.length > 0 && (
-                      <button className="btn secondary" onClick={() => setCombineSel([])}>
+                      <button className="btn secondary danger" onClick={() => setCombineSel([])}>
                         Clear selection
                       </button>
                     )}
@@ -2809,7 +2809,7 @@ export default function AnimationPanel() {
 
               {selectedBoneName && boneKeys.length > 0 && (
                 <button
-                  className="btn secondary"
+                  className="btn secondary danger"
                   style={{ marginTop: 6 }}
                   onClick={() => {
                     st().deleteKeyframe(selectedBoneName, snap(currentTime))
@@ -2822,7 +2822,7 @@ export default function AnimationPanel() {
               )}
 
               <div className="kf-actions" style={{ marginTop: 8 }}>
-                <button className="btn secondary" onClick={() => st().clearAnim()}>
+                <button className="btn secondary danger" onClick={() => st().clearAnim()}>
                   Clear
                 </button>
               </div>

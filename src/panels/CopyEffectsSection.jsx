@@ -78,7 +78,7 @@ export default function CopyEffectsSection() {
       )}
       <FxButtons wide>
         <button
-          className="btn secondary"
+          className="btn secondary danger"
           disabled={!currentModel || rigCount === 0}
           title="Remove all added-bones rigs and the dangle chains attached to them. Ctrl+Z restores them."
           onClick={() => {
@@ -91,7 +91,7 @@ export default function CopyEffectsSection() {
           Clear added bones
         </button>
         <button
-          className="btn secondary"
+          className="btn secondary danger"
           disabled={!currentModel || physicsCount === 0}
           title="Remove mesh physics effects from every part. Ctrl+Z restores them."
           onClick={() => {

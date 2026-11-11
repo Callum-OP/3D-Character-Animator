@@ -236,7 +236,7 @@ export default function MaterialEditor({ selectedMeshUuids, primaryUuid, resolve
                 onChange={(v) => patchReplace({ softness: v })}
                 onReset={() => {}}
               />
-              <button className="btn secondary" onClick={() => edit({ replace: null })}>
+              <button className="btn secondary danger" onClick={() => edit({ replace: null })}>
                 Remove colour replace
               </button>
             </>
@@ -257,7 +257,7 @@ export default function MaterialEditor({ selectedMeshUuids, primaryUuid, resolve
           Paste look
         </button>
         <button
-          className="btn secondary"
+          className="btn secondary danger"
           disabled={!hasLook(look)}
           onClick={() => edit(CLEAR_ALL)}
           title="Remove every change to the selected material(s)"

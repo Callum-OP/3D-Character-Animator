@@ -118,7 +118,7 @@ export default function IkPinsSection() {
                   <button className="btn secondary" onClick={() => snapIkMarkerToBone(pin.id)} title="Move the marker onto where the bone is right now">
                     Marker to bone
                   </button>
-                  <button className="btn secondary" onClick={() => removeIkPin(pin.id)} title="Remove this IK pin" aria-label="Remove this IK pin">
+                  <button className="btn secondary danger" onClick={() => removeIkPin(pin.id)} title="Remove this IK pin" aria-label="Remove this IK pin">
                     ×
                   </button>
                 </FxItemActions>

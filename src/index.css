@@ -6,6 +6,8 @@
   --text-dim: #9a9ca6;
   --accent: #ff5a3c;
   --accent-2: #e5397a;
+  --danger: #c62828;
+  --danger-strong: #af2020;
   font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
   color: var(--text);
 }
@@ -3796,4 +3798,43 @@ body {
 }
 .fx-footer .btn.fx-btn-main {
   flex: 1 1 auto;
+}
+
+
+/* --- Danger red: every delete / clear / remove / x button ---------------------------------- */
+.btn.danger,
+.btn.secondary.danger {
+  background: var(--danger-strong);
+  color: #fff;
+}
+.btn.danger:hover:not(:disabled) {
+  background: #d93232;
+  box-shadow: 0 2px 12px rgba(229, 72, 77, 0.35);
+}
+.btn.danger:disabled {
+  opacity: 0.5;
+}
+.obj-del,
+.kf-del,
+.help-close,
+.ve-notice-close,
+.icon-btn.danger {
+  color: var(--danger);
+}
+.obj-del:hover,
+.kf-del:hover,
+.help-close:hover,
+.ve-notice-close:hover,
+.icon-btn.danger:hover {
+  color: #ff6b70;
+}
+.icon-btn.danger:hover {
+  background: rgba(229, 72, 77, 0.15);
+}
+/* the recent-projects list keeps its own plain x */
+.obj-del.neutral {
+  color: inherit;
+}
+.obj-del.neutral:hover {
+  color: inherit;
 }
