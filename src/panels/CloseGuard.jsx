@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store.js'
-import { isProjectDirty } from '../three/projectDirty.js'
+import { isProjectDirty, markProjectSaveFailed } from '../three/projectDirty.js'
 import { saveCurrentProject } from '../three/projectSession.js'
+import { hasPendingSaves, waitForPendingSaves } from '../three/projectStore.js'
 import { askAboutUnsavedWork, registerUnsavedPromptHost } from '../three/unsavedPrompt.js'
 
 // The "Save changes?" box. Used whenever unsaved work is about to be thrown away: closing the app,
@@ -43,17 +44,22 @@ export default function CloseGuard() {
     if (bridge && bridge.onCloseRequested) {
       return bridge.onCloseRequested(() => {
         bridge.closeAck() // tell the main process the page is alive and handling it
-        if (!isProjectDirty()) {
-          bridge.closeNow()
-          return
+        const decide = (failures = []) => {
+          if (!isProjectDirty() && !failures.length) {
+            bridge.closeNow()
+            return
+          }
+          askAboutUnsavedWork('close the app').then((ok) => {
+            if (ok) bridge.closeNow()
+          })
         }
-        askAboutUnsavedWork('close the app').then((ok) => {
-          if (ok) bridge.closeNow()
-        })
+        // A save that is still being written finishes first; only then is "unsaved changes" a real question.
+        if (hasPendingSaves()) waitForPendingSaves().then(decide)
+        else decide()
       })
     }
     const onBeforeUnload = (e) => {
-      if (!isProjectDirty()) return
+      if (!isProjectDirty() && !hasPendingSaves()) return
       e.preventDefault()
       e.returnValue = '' // required by some browsers to show the warning
     }
@@ -76,11 +82,19 @@ export default function CloseGuard() {
     setError(null)
     try {
       await saveCurrentProject()
+      if (isProjectDirty()) {
+        setBusy(false)
+        setError({ title: 'Changes not yet saved', message: 'The project changed while it was saving. Save again to include your latest changes.' })
+        return
+      }
       close(true)
     } catch (e) {
       setBusy(false)
       // Cancelling the "where to save" dialog just returns to this box; the app stays open.
-      if (e?.name !== 'AbortError') setError('Could not save: ' + (e?.message || String(e)))
+      if (e?.name !== 'AbortError') {
+        markProjectSaveFailed()
+        setError({ title: 'Save failed', message: 'Could not save: ' + (e?.message || String(e)) })
+      }
     }
   }
 
@@ -99,7 +113,13 @@ export default function CloseGuard() {
       <div className="help-modal close-guard" role="alertdialog" aria-modal="true" aria-labelledby="close-guard-title">
         <h2 id="close-guard-title">Save changes{name ? ` to “${name}”` : ''}?</h2>
         <p className="help-intro">Your changes will be lost if you {verb} without saving.</p>
-        {error && <p className="close-guard-error" role="alert">{error}</p>}
+        {error && (
+          <div className="save-error-details" role="alert">
+            <strong>{error.title}</strong>
+            <p>{error.message}</p>
+            <p>Your changes are still in the app. Try saving again or choose Don&apos;t save to discard them.</p>
+          </div>
+        )}
         <div className="close-guard-actions">
           <button className="btn" onClick={onSave} disabled={busy} autoFocus>
             {busy ? 'Saving…' : 'Save'}

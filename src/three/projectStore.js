@@ -28,7 +28,7 @@
 // ---------------------------------------------------------------------------
 
 import { openDB, PROJECTS_STORE as STORE } from './localdb.js'
-import { markProjectClean } from './projectDirty.js'
+import { markProjectCleanIfUnchanged, markProjectSaveFailed, projectSaveRevision } from './projectDirty.js'
 import { pickerUsable, isPickerBlocked } from './fsAccess.js'
 
 const FILE_EXT = '.3dcp' // "3D Character Poser" project — just JSON inside
@@ -264,13 +264,24 @@ function safeFileName(name) {
   return clean
 }
 
+// A project that starts like one but stops part-way was cut off while it was being saved (the app closing, a
+// failed write, a cloud drive syncing it). Say so, rather than calling it "not a valid project".
+export function describeUnreadableProject(text) {
+  const trimmed = String(text || '').trimEnd()
+  if (trimmed.startsWith('{"') && !trimmed.endsWith('}')) {
+    const mb = (new Blob([text]).size / 1048576).toFixed(1)
+    return `This project file is incomplete: it stops after ${mb} MB, so a save was cut off before it finished. If it is in a cloud drive, look in its version history for an earlier copy; the data after the cut cannot be recovered from this file.`
+  }
+  return 'That file is not a valid project (' + FILE_EXT + ').'
+}
+
 async function readProjectFile(file) {
   const text = await file.text()
   let portable
   try {
     portable = JSON.parse(text)
   } catch {
-    throw new Error('That file is not a valid project (' + FILE_EXT + ').')
+    throw new Error(describeUnreadableProject(text))
   }
   return restoreBlobsFromBase64(portable)
 }
@@ -353,37 +364,93 @@ export async function openProjectFromFileObject(file, { remember = true } = {}) 
 // Save / Save As
 // ---------------------------------------------------------------------------
 
-async function writeToHandle(handle, record) {
+// Saves in progress. The app must not close while one is being written, and two saves to the same file must
+// never run at once (two writers on one file is how a project ends up half-written), so they queue per file.
+const pendingSaves = new Set()
+const lastSaveByHandle = new Map()
+
+export function hasPendingSaves() {
+  return pendingSaves.size > 0
+}
+
+export async function waitForPendingSaves() {
+  const failures = []
+  while (pendingSaves.size) {
+    const results = await Promise.allSettled([...pendingSaves])
+    failures.push(...results.filter((result) => result.status === 'rejected' && result.reason?.name !== 'AbortError'))
+  }
+  return failures.map((result) => result.reason)
+}
+
+function trackSave(save) {
+  const saved = projectSaveRevision()
+  const tracked = Promise.resolve().then(save).then((result) => {
+    markProjectCleanIfUnchanged(saved)
+    return result
+  }, (error) => {
+    if (error?.name !== 'AbortError') markProjectSaveFailed()
+    throw error
+  }).finally(() => pendingSaves.delete(tracked))
+  pendingSaves.add(tracked)
+  return tracked
+}
+
+function writeToHandle(handle, record) {
+  const previous = lastSaveByHandle.get(handle) || Promise.resolve()
+  const job = previous.catch(() => {}).then(() => writeToHandleNow(handle, record))
+  const tracked = job.finally(() => {
+    if (lastSaveByHandle.get(handle) === tracked) lastSaveByHandle.delete(handle)
+  })
+  lastSaveByHandle.set(handle, tracked)
+  return tracked
+}
+
+async function writeToHandleNow(handle, record) {
   const portable = await replaceBlobsWithBase64(record)
   const json = JSON.stringify(portable)
   if (isNativeHandle(handle)) {
+    // The desktop side writes to a temporary file, checks it is complete and only then replaces the project
+    // (electron/safeWrite.cjs), so a save that fails or is cut off leaves the previous version untouched.
     await nativeBridge().writeFile(handle, json)
     return
   }
   await ensureWritePermission(handle)
-  const writable = await handle.createWritable()
+  const expected = new Blob([json]).size
+  const writable = await handle.createWritable() // the browser writes to a hidden copy and swaps it in on close
   await writable.write(json)
   await writable.close()
+  // A synced / cloud folder can still hand back less than was written: check before calling it saved.
+  const written = await handle.getFile()
+  if (written.size !== expected) {
+    throw new Error(`The project was not saved completely (${written.size} of ${expected} bytes on disk). Try saving again, or save to a folder that is not synced.`)
+  }
 }
 
 // Save straight back to a known handle (no dialog) — this is "Save" once a
 // project already has a file on disk, exactly like Ctrl+S.
-export async function saveProjectToHandle(handle, record) {
+export function saveProjectToHandle(handle, record) {
+  return trackSave(() => saveProjectToHandleNow(handle, record))
+}
+
+async function saveProjectToHandleNow(handle, record) {
   await writeToHandle(handle, record)
-  markProjectClean() // what is on disk now is what is on screen
   if (isNativeHandle(handle)) {
     const name = await nativeBridge().baseName(handle)
-    const recent = await upsertRecent({ name, handle })
+    const recent = await rememberRecent({ name, handle })
     return { handle, name, savedAt: recent.savedAt }
   }
   const file = await handle.getFile().catch(() => null)
   const name = file?.name || record.name || 'project'
-  const recent = await upsertRecent({ name, handle })
+  const recent = await rememberRecent({ name, handle })
   return { handle, name, savedAt: recent.savedAt }
 }
 
 // "Save As…" — always shows a picker for a new (or different) location.
-export async function saveProjectAs(record, suggestedName) {
+export function saveProjectAs(record, suggestedName) {
+  return trackSave(() => saveProjectAsNow(record, suggestedName))
+}
+
+async function saveProjectAsNow(record, suggestedName) {
   const native = nativeBridge()
   if (native) {
     const suggested = `${safeFileName(suggestedName || record.name)}${FILE_EXT}`
@@ -397,9 +464,8 @@ export async function saveProjectAs(record, suggestedName) {
       throw err
     }
     await writeToHandle(filePath, record)
-    markProjectClean()
     const name = await native.baseName(filePath)
-    const recent = await upsertRecent({ name, handle: filePath })
+    const recent = await rememberRecent({ name, handle: filePath })
     return { handle: filePath, name, savedAt: recent.savedAt }
   }
 
@@ -417,8 +483,7 @@ export async function saveProjectAs(record, suggestedName) {
     }
     if (handle) {
       await writeToHandle(handle, record)
-      markProjectClean()
-      const recent = await upsertRecent({ name: handle.name, handle })
+      const recent = await rememberRecent({ name: handle.name, handle })
       return { handle, name: handle.name, savedAt: recent.savedAt }
     }
   }
@@ -436,7 +501,6 @@ export async function saveProjectAs(record, suggestedName) {
   a.download = name
   a.click()
   URL.revokeObjectURL(url)
-  markProjectClean()
   const recent = await rememberRecent({ name, handle: null })
   return { handle: null, name, savedAt: recent.savedAt }
 }

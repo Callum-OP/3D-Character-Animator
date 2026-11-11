@@ -1,5 +1,6 @@
 import { PRIVACY_POLICY_URL } from '../links.js'
-import { confirmDiscardUnsaved } from '../three/projectDirty.js'
+import SaveErrorDialog from './SaveErrorDialog.jsx'
+import { confirmDiscardUnsaved, markProjectSaveFailed } from '../three/projectDirty.js'
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store.js'
 import {
@@ -65,6 +66,7 @@ export default function TitleBar({ onOpenSettings }) {
   const [recents, setRecents] = useState([])
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState(null)
+  const [saveError, setSaveError] = useState(null)
   const rootRef = useRef(null)
   const modelInputRef = useRef(null)
   const modelFolderInputRef = useRef(null)
@@ -165,14 +167,20 @@ export default function TitleBar({ onOpenSettings }) {
     setOpenMenu((m) => (m === name ? null : name))
   }
 
-  async function withMenuClosed(fn) {
+  async function withMenuClosed(fn, saving = false) {
     setOpenMenu(null)
     setBusy(true)
     setMsg(null)
     try {
       await fn()
     } catch (e) {
-      if (e?.name !== 'AbortError') setMsg(e.message || String(e))
+      if (e?.name !== 'AbortError') {
+        if (saving) {
+          markProjectSaveFailed()
+          setSaveError(e)
+        }
+        else setMsg(e.message || String(e))
+      }
     } finally {
       setBusy(false)
     }
@@ -227,7 +235,7 @@ export default function TitleBar({ onOpenSettings }) {
         setCurrent({ name, handle })
         setLastProjectSave({ name, savedAt })
       }
-    })
+    }, true)
 
   const onSaveAs = () =>
     withMenuClosed(async () => {
@@ -235,7 +243,7 @@ export default function TitleBar({ onOpenSettings }) {
       const { handle, name, savedAt } = await saveProjectAs({ name: current?.name || 'Untitled', ...data }, current?.name)
       setCurrent({ name, handle })
       setLastProjectSave({ name, savedAt })
-    })
+    }, true)
 
   const onNewProject = () =>
     withMenuClosed(async () => {
@@ -669,6 +677,7 @@ export default function TitleBar({ onOpenSettings }) {
       <div className="titlebar-drag-fill" />
 
       {msg && <div className="titlebar-msg">{msg}</div>}
+      <SaveErrorDialog error={saveError} onClose={() => setSaveError(null)} />
     </div>
   )
 }

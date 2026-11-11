@@ -121,6 +121,12 @@ acceleration stays on, page/pinch zoom is locked (the app zooms the 3D camera
 itself), and the renderer is sandboxed. WebGL context loss (GPU reset) is
 handled in `src/three/scene.js`.
 
+If a project save fails, a warning stays visible until acknowledged. The desktop
+app waits for ongoing saves before closing; if saving fails, it stays open so
+you can retry, cancel, or explicitly choose **Don't save** to discard changes.
+In browsers without file-system access, saving uses a download, whose completion
+cannot be verified by the app.
+
 ### Build for the Microsoft Store (MSIX)
 
 Build and package the desktop app for the Microsoft Store (both arm64 and x64)

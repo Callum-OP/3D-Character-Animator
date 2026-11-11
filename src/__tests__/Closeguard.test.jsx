@@ -9,6 +9,7 @@ import CloseGuard from '../panels/CloseGuard.jsx'
 import { useStore } from '../store.js'
 import { isProjectDirty, markProjectClean } from '../three/projectDirty.js'
 import { pushSceneHistory } from '../three/sceneHistory.js'
+import { saveProjectToHandle } from '../three/projectStore.js'
 
 let requestClose
 let bridge
@@ -92,7 +93,10 @@ describe('closing the desktop app', () => {
   })
 
   it('Save writes the project, then closes', async () => {
-    save.mockResolvedValue({ name: 'Chase scene' })
+    save.mockImplementation(async () => {
+      markProjectClean()
+      return { name: 'Chase scene' }
+    })
     render(<CloseGuard />)
     makeDirty()
     ask()
@@ -121,6 +125,55 @@ describe('closing the desktop app', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('disk full'))
     expect(bridge.closeNow).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: "Don't save" }))
+    await waitFor(() => expect(bridge.closeNow).toHaveBeenCalledTimes(1))
+  })
+
+  it('can retry a failed save and close only after it succeeds', async () => {
+    save.mockRejectedValueOnce(new Error('disk full'))
+    save.mockImplementationOnce(async () => {
+      markProjectClean()
+      return { name: 'Chase scene' }
+    })
+    render(<CloseGuard />)
+    makeDirty()
+    ask()
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await screen.findByRole('alert')
+    expect(bridge.closeNow).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(bridge.closeNow).toHaveBeenCalledTimes(1))
+  })
+
+  it('keeps the app open when edits occur during a save', async () => {
+    let finish
+    save.mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+    render(<CloseGuard />)
+    makeDirty()
+    ask()
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    act(() => useStore.setState({ sceneLights: [{ id: 100 }] }))
+    await act(async () => finish({ name: 'Chase scene' }))
+    expect(screen.getByRole('alert').textContent).toContain('changed while it was saving')
+    expect(bridge.closeNow).not.toHaveBeenCalled()
+  })
+
+  it('waits for a pending save and asks before closing if it fails even when the project was clean', async () => {
+    let fail
+    const handle = {
+      queryPermission: async () => 'granted',
+      createWritable: async () => ({ write: () => new Promise((_resolve, reject) => { fail = reject }) }),
+    }
+    render(<CloseGuard />)
+    const saving = saveProjectToHandle(handle, { name: 'Chase scene' }).catch(() => {})
+    await waitFor(() => expect(fail).toBeTypeOf('function'))
+    ask()
+    expect(bridge.closeNow).not.toHaveBeenCalled()
+    await act(async () => { fail(new Error('disk full')); await saving })
+    expect(await screen.findByRole('alertdialog')).toBeTruthy()
+    expect(bridge.closeNow).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: "Don't save" }))
+    await waitFor(() => expect(bridge.closeNow).toHaveBeenCalledTimes(1))
   })
 
   it('Escape cancels', () => {

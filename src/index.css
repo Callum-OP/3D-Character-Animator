@@ -3184,10 +3184,32 @@ body {
   justify-content: flex-end;
   margin-top: 16px;
 }
-.close-guard-error {
+.save-error-backdrop {
+  z-index: 110;
+}
+.save-error-modal {
+  max-width: 440px;
+  border-color: var(--danger);
+}
+.save-error-modal h2 {
   color: #ff8a80;
-  font-size: 12.5px;
-  margin: 8px 0 0;
+}
+.save-error-details {
+  color: #ffd9d6;
+  background: rgba(175, 32, 32, 0.22);
+  border: 1px solid var(--danger);
+  border-left: 4px solid var(--danger);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin: 12px 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.save-error-details strong {
+  color: #ff9a91;
+}
+.save-error-details p {
+  margin: 6px 0 0;
 }
 
 /* Soft cloth: give the multi-step setup a clearer rhythm without changing its controls. */

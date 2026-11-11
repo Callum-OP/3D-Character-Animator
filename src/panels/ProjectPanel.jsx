@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { confirmDialog } from '../dialogs.js'
-import { confirmDiscardUnsaved } from '../three/projectDirty.js'
+import SaveErrorDialog from './SaveErrorDialog.jsx'
+import { confirmDiscardUnsaved, markProjectSaveFailed } from '../three/projectDirty.js'
 import { useStore } from '../store.js'
 import { modelFileFromInput, MODEL_ACCEPT } from '../three/modelBundle.js'
 import { importProjectFromFile } from '../three/importProject.js'
@@ -61,6 +62,7 @@ export default function ProjectPanel() {
   const lastProjectSave = useStore((s) => s.lastProjectSave)
   const [recents, setRecents] = useState([])
   const [msg, setMsg] = useState(null)
+  const [saveError, setSaveError] = useState(null)
   const [busy, setBusy] = useState(false)
   const fsAccess = hasFileSystemAccess()
 
@@ -218,7 +220,10 @@ export default function ProjectPanel() {
       }
       refreshRecents()
     } catch (e) {
-      if (e?.name !== 'AbortError') setMsg('Save failed: ' + (e.message || String(e)))
+      if (e?.name !== 'AbortError') {
+        markProjectSaveFailed()
+        setSaveError(e)
+      }
     } finally {
       setBusy(false)
     }
@@ -237,7 +242,10 @@ export default function ProjectPanel() {
       setMsg(`Saved “${name}”.`)
       refreshRecents()
     } catch (e) {
-      if (e?.name !== 'AbortError') setMsg('Save failed: ' + (e.message || String(e)))
+      if (e?.name !== 'AbortError') {
+        markProjectSaveFailed()
+        setSaveError(e)
+      }
     } finally {
       setBusy(false)
     }
@@ -345,6 +353,7 @@ export default function ProjectPanel() {
         )}
       </div>
 
+      <SaveErrorDialog error={saveError} onClose={() => setSaveError(null)} />
       {/* ---- Source 2: the project file ---- */}
       <div className="subpanel">
         <div className="subpanel-head">

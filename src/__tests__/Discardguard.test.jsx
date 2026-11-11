@@ -58,7 +58,10 @@ describe('confirmDiscardUnsaved uses the app\'s Save changes box', () => {
     await waitFor(() => expect(save).toHaveBeenCalledTimes(1))
     expect(result).toBeUndefined()
     expect(screen.getByRole('alertdialog')).toBeTruthy()
-    save.mockResolvedValueOnce({ name: 'Chase scene' })
+    save.mockImplementationOnce(async () => {
+      markProjectClean()
+      return { name: 'Chase scene' }
+    })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(result).toBe(true))
     expect(screen.queryByRole('alertdialog')).toBeNull()

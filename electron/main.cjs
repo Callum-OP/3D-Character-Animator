@@ -15,6 +15,7 @@ const fs = require('node:fs')
 const fsp = require('node:fs/promises')
 const { pathToFileURL } = require('node:url')
 const { registerBlenderIpc } = require('./blender.cjs')
+const { writeFileSafely } = require('./safeWrite.cjs')
 
 const DIST = path.join(__dirname, '..', 'dist')
 const DEV_URL = process.env.ELECTRON_START_URL || ''
@@ -173,9 +174,18 @@ function registerFileIpc() {
     return fsp.readFile(filePath, 'utf-8')
   })
 
-  ipcMain.handle('animare:write-file', async (_e, filePath, contents) => {
-    await fsp.writeFile(filePath, contents, 'utf-8')
-    return true
+  // Saves are written safely (see safeWrite.cjs) and tracked, so the window can't close - and the app can't quit -
+  // in the middle of one. Saves to the same file run one after another, never two at once.
+  ipcMain.handle('animare:write-file', (_e, filePath, contents) => {
+    const previous = lastWriteByPath.get(filePath) || Promise.resolve()
+    const job = previous.catch(() => {}).then(() => writeFileSafely(filePath, contents)).then(() => true)
+    const tracked = job.finally(() => {
+      pendingWrites.delete(tracked)
+      if (lastWriteByPath.get(filePath) === tracked) lastWriteByPath.delete(filePath)
+    })
+    pendingWrites.add(tracked)
+    lastWriteByPath.set(filePath, tracked)
+    return tracked
   })
 
   ipcMain.handle('animare:base-name', (_e, filePath) => path.basename(filePath))
@@ -199,6 +209,9 @@ function registerFileIpc() {
 // then either confirms (closeNow) or, if the person cancels, does nothing and the window stays.
 // If it never acknowledges — it crashed or is frozen — the window closes anyway rather than
 // becoming impossible to close.
+// Writes in progress. The window waits for them before it closes.
+const pendingWrites = new Set()
+const lastWriteByPath = new Map()
 let closeApproved = false
 let closeAckTimer = null
 const CLOSE_ACK_MS = 5000
@@ -325,6 +338,14 @@ function createWindow() {
 
   win.loadURL(DEV_URL || `${APP_ORIGIN}/index.html`)
   win.on('close', (event) => {
+    // Ask a live renderer immediately so it can observe failures; otherwise wait for writes before closing.
+    if (pendingWrites.size && (closeApproved || !rendererReady || wc.isDestroyed() || wc.isCrashed())) {
+      event.preventDefault()
+      Promise.allSettled([...pendingWrites]).then(() => {
+        if (!win.isDestroyed()) win.close()
+      })
+      return
+    }
     if (closeApproved || !rendererReady || wc.isDestroyed() || wc.isCrashed()) return
     event.preventDefault()
     if (closeAckTimer) return // already asking

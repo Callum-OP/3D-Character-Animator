@@ -114,6 +114,38 @@ describe('title-bar project saves', () => {
     expect(saveProjectAs).toHaveBeenCalledOnce()
   })
 
+  it.each([
+    ['title bar Save', 'menuitem', 'Save'],
+    ['title bar Save As', 'menuitem', 'Save As…'],
+    ['project panel Save', 'button', 'Save'],
+    ['project panel Save As', 'button', 'Save As…'],
+  ])('shows a persistent error dialog for %s failures', async (_label, role, name) => {
+    useStore.setState({ currentProject: { name: 'Scene.3dcp', handle: {} }, sceneObjects: [{ id: 'object' }] })
+    saveProjectToHandle.mockRejectedValue(new Error('disk full'))
+    saveProjectAs.mockRejectedValue(new Error('disk full'))
+    render(role === 'menuitem' ? <TitleBar /> : <ProjectPanel />)
+    if (role === 'menuitem') fireEvent.click(screen.getByRole('button', { name: 'File' }))
+    fireEvent.click(screen.getByRole(role, { name }))
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog.textContent).toContain('Save failed')
+    expect(dialog.textContent).toContain('disk full')
+    expect(dialog.textContent).toContain('changes are still in the app')
+    fireEvent.keyDown(screen.getByRole('button', { name: 'OK' }), { key: 'Escape' })
+    expect(screen.getByRole('alertdialog')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'OK' }))
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+  })
+
+  it('does not show an error when the save picker is cancelled', async () => {
+    useStore.setState({ currentProject: null, sceneObjects: [{ id: 'object' }] })
+    saveProjectAs.mockRejectedValue(Object.assign(new Error('cancelled'), { name: 'AbortError' }))
+    render(<TitleBar />)
+    fireEvent.click(screen.getByRole('button', { name: 'File' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Save As…' }))
+    await waitFor(() => expect(saveProjectAs).toHaveBeenCalled())
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+  })
+
   it('toggles all scene objects and switches the command when any object is hidden', () => {
     useStore.setState({
       sceneObjects: [
