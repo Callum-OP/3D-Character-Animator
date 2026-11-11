@@ -3,6 +3,7 @@ import { confirmDialog } from '../dialogs.js'
 import { confirmDiscardUnsaved } from '../three/projectDirty.js'
 import { useStore } from '../store.js'
 import { modelFileFromInput, MODEL_ACCEPT } from '../three/modelBundle.js'
+import { importProjectFromFile } from '../three/importProject.js'
 import {
   importModelAuto,
   setActiveCharacter,
@@ -146,6 +147,21 @@ export default function ProjectPanel() {
       refreshRecents()
     } catch (e) {
       setMsg('Open failed: ' + (e.message || String(e)))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // ---- Import another project into this one ----
+
+  async function onImportProject() {
+    setBusy(true)
+    setMsg(null)
+    try {
+      const result = await importProjectFromFile()
+      if (result) setMsg(result.message)
+    } catch (e) {
+      setMsg('Import failed: ' + (e.message || String(e)))
     } finally {
       setBusy(false)
     }
@@ -357,6 +373,14 @@ export default function ProjectPanel() {
             style={{ display: 'none' }}
             onChange={onPickOpenFile}
           />
+          <button
+            className="btn secondary"
+            onClick={onImportProject}
+            disabled={busy || loading}
+            title="Add another project's characters, objects and animations to this one. Your lighting, shadows, material look and camera view stay as they are."
+          >
+            Import Project…
+          </button>
           <div style={{ display: 'flex', gap: 8 }}>
             <button className="btn" onClick={onSave} disabled={busy} title="Save back to the currently open file (or choose one, if none is open yet)">
               Save

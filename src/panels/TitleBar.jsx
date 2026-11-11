@@ -27,6 +27,7 @@ import {
   saveProjectAs,
 } from '../three/projectStore.js'
 import { pickFileWithInput } from '../three/fsAccess.js'
+import { importProjectFromFile } from '../three/importProject.js'
 import { modelFileFromInput, MODEL_ACCEPT } from '../three/modelBundle.js'
 import { exportAnimationBVH, play, pause, stop, selectClip, selectEdit } from '../three/animation.js'
 import { runExportShot, canRecordVideo } from '../three/exportShot.js'
@@ -198,6 +199,12 @@ export default function TitleBar({ onOpenSettings }) {
       }
       await applyProjectData(opened.record)
       setCurrent({ name: opened.name, handle: opened.handle })
+    })
+
+  const onImportProject = () =>
+    withMenuClosed(async () => {
+      const result = await importProjectFromFile()
+      if (result) setMsg(result.message)
     })
 
   const onOpenRecentFile = (recent) =>
@@ -501,6 +508,7 @@ export default function TitleBar({ onOpenSettings }) {
               <button role="menuitem" onClick={onSave} disabled={!hasSceneContent && !current}>Save</button>
               <button role="menuitem" onClick={onSaveAs} disabled={!hasSceneContent && !current}>Save As…</button>
               <div className="titlebar-dropdown-sep" />
+              <button role="menuitem" onClick={onImportProject} title="Add another project's characters, objects and animations to this one">Import Project…</button>
               <button role="menuitem" onClick={() => setFileView('import')}>Import As… ▸</button>
               <button role="menuitem" onClick={() => setFileView('export')} disabled={!hasSceneContent}>Export As… ▸</button>
               {recents.length > 0 && (

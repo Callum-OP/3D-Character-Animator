@@ -282,7 +282,9 @@ async function readProjectFile(file) {
 // Returns { record, handle, name } — handle is null on browsers without the
 // File System Access API (Firefox/Safari), in which case "Save" later on
 // will have to fall back to Save As (there's no disk handle to write back to).
-export async function openProjectFromDisk() {
+// `remember: false` reads the file without putting it in the Recent Projects list (used by Import Project, which
+// adds a file's contents to the current project rather than opening it).
+export async function openProjectFromDisk({ remember = true } = {}) {
   const native = nativeBridge()
   if (native) {
     const filePath = await native.pickOpenFile({
@@ -296,7 +298,7 @@ export async function openProjectFromDisk() {
     const text = await native.readFile(filePath)
     const record = await readProjectFile({ text: () => Promise.resolve(text) })
     const name = await native.baseName(filePath)
-    await upsertRecent({ name, handle: filePath })
+    if (remember) await upsertRecent({ name, handle: filePath })
     return { record, handle: filePath, name }
   }
 
@@ -317,7 +319,7 @@ export async function openProjectFromDisk() {
     }
     const file = await handle.getFile()
     const record = await readProjectFile(file)
-    await upsertRecent({ name: file.name, handle })
+    if (remember) await upsertRecent({ name: file.name, handle })
     return { record, handle, name: file.name }
   }
 
@@ -341,9 +343,9 @@ export async function openProjectFromPath(filePath) {
 
 // Fallback path for browsers without the picker API: caller supplies the
 // File it got from a normal <input type="file">.
-export async function openProjectFromFileObject(file) {
+export async function openProjectFromFileObject(file, { remember = true } = {}) {
   const record = await readProjectFile(file)
-  await rememberRecent({ name: file.name, handle: null })
+  if (remember) await rememberRecent({ name: file.name, handle: null })
   return { record, handle: null, name: file.name }
 }
 

@@ -98,6 +98,7 @@ import {
   detachLightFromObject,
   getAttachedLightsData,
   addLightOnObject,
+  uniqueLightName,
   withdrawLight,
   reinstateLight,
   disposeWithdrawnLight,
@@ -3878,8 +3879,7 @@ export function ikPinsForSave(pins) {
   })
 }
 
-export function ikPinsFromSave(saved) {
-  const objects = useStore.getState().sceneObjects
+export function ikPinsFromSave(saved, objects = useStore.getState().sceneObjects) {
   return (saved || []).map((pin) => {
     const { attachedObjectIndex, ...rest } = pin
     const target = attachedObjectIndex != null ? objects[attachedObjectIndex] : null
@@ -3985,6 +3985,141 @@ export function clearProjectScene() {
   trimMemory(state.renderer)
 }
 
+// Props that were attached to another prop: once every prop exists, re-parent them (their saved transform is
+// already relative to the parent) and put that transform back. `restoredObjects` come from restoreObjectRecord;
+// parents are found by the SAVED animation key (obj.animationKey), whatever key each prop ended up with.
+function reattachRestoredObjectParents(restoredObjects) {
+  const idByKey = new Map(restoredObjects.filter((r) => r.obj.animationKey).map((r) => [r.obj.animationKey, r.id]))
+  for (const { obj, id } of restoredObjects) {
+    const parentId = obj.attachedToKey ? idByKey.get(obj.attachedToKey) : null
+    if (parentId == null) continue
+    if (attachObjectToObject(id, parentId, { keepLocal: true })) setObjectTransform(id, obj.transform)
+  }
+}
+
+// Rebuild ONE saved prop / image from its project record: the file, then its name, bone attachment, transform,
+// visibility, per-part overrides and look settings. `animationKey` is the prop's keyframe-track key: omitted, the
+// prop gets a fresh one (an import, where the saved key could already belong to a prop in this project).
+// Shared by opening a project and by importing one. Returns { obj, id, animationKey }.
+async function restoreObjectRecord(obj, { animationKey = obj.animationKey, attachTo = null } = {}) {
+  const file = new File([obj.blob], obj.fileName)
+  const meta = obj.kind === 'image'
+    ? await addImageFile(file, { animationKey })
+    : await addObjectFile(file, { animationKey })
+  // The list shows the name it was saved under (it may have been renamed), not the file's.
+  if (obj.name && obj.name !== meta.name) renameObjectById(meta.id, obj.name)
+  // Re-attach to its bone (if any) BEFORE applying the saved transform —
+  // attaching reparents-and-preserves-current-world-position, which we
+  // then immediately overwrite with the saved (already bone-local) TRS.
+  if (obj.attachedBoneName) {
+    // a prop worn on a bone goes onto the character named by `attachTo` (an import), else the active one
+    const wearer = attachTo && state.characters.has(attachTo) ? attachTo : null
+    const previous = state.activeCharacterId
+    if (wearer && wearer !== previous) setActiveCharacter(wearer)
+    setObjectAttachmentById(meta.id, obj.attachedBoneName)
+    if (wearer && wearer !== previous) setActiveCharacter(previous)
+  }
+  setObjectTransform(meta.id, obj.transform)
+  setObjectVisibleById(meta.id, obj.visible !== false, false)
+  // Restore this prop's per-part (mesh) overrides — saved keyed by mesh
+  // INDEX (see objectMeshOverridesByIndex in objects.js), remapped here
+  // onto whatever fresh uuids this load just gave its meshes.
+  if (obj.meshOverridesByIndex) {
+    const meshes = getObjectMeshesById(meta.id)
+    const patch = {}
+    for (const [idx, ov] of Object.entries(obj.meshOverridesByIndex)) {
+      const mesh = meshes[Number(idx)]
+      if (mesh) patch[mesh.uuid] = ov
+    }
+    if (Object.keys(patch).length) {
+      useStore.setState((s2) => ({ meshOverrides: { ...s2.meshOverrides, ...patch } }))
+    }
+  }
+  // Parts of this prop that were moved with the gizmo (saved by mesh index).
+  if (obj.meshEdits) applyMeshEditsToMeshes(getObjectMeshesById(meta.id), obj.meshEdits)
+  if (obj.kind !== 'image') {
+    // 'lit' is the old (pre-styles) save field: false meant "flat/unlit".
+    // Map it onto the new style system so older project files still work.
+    const style = obj.style || (obj.lit === false ? 'unlit' : 'auto')
+    if (style !== 'auto') setObjectStyleById(meta.id, style, false)
+    // 'off' / 'on' (or an older save's true) are the person's own choice; anything else follows the style
+    if (obj.outline === 'off') setObjectOutlineById(meta.id, false, false)
+    else if (obj.outline === 'on' || obj.outline === true) setObjectOutlineById(meta.id, true, false)
+    if (obj.castShadow === false) setObjectCastShadowById(meta.id, false, false)
+    if (obj.nightImmune) setObjectNightImmuneById(meta.id, true, false)
+    if (obj.shadowImmune) setObjectShadowImmuneById(meta.id, true, false)
+    if (obj.rimImmune) setObjectRimImmuneById(meta.id, true, false)
+  }
+  return { obj, id: meta.id, animationKey: meta.animationKey }
+}
+
+// Rebuild ONE saved character from its project record: the model, then everything saved with it (transform,
+// pose, mesh edits and overrides, clips, Add bones rigs, dangle / IK / Flattener settings). Shared by opening a
+// project and by importing one into the current project. Returns the new character's id; it is left active.
+async function restoreCharacterRecord(c, { addNew, legacyAnimData = null, skippedPartRigs, pendingIk }) {
+  await loadModelFile(new File([c.blob], c.fileName), { addNew })
+  const id = state.activeCharacterId // whatever we just loaded is now active
+  const model = state.characters.get(id)
+  if (c.name) renameObjectById(id, c.name)
+
+  if (c.transform) {
+    model.root.position.fromArray(c.transform.position)
+    model.root.quaternion.fromArray(c.transform.quaternion)
+    model.root.scale.fromArray(c.transform.scale)
+  }
+  if (c.meshSymmetry?.length) restoreSymmetry(model, c.meshSymmetry)
+  if (c.partRigs?.length) {
+    restorePartRigs(model, c.partRigs, {
+      onSkip: (entry) => skippedPartRigs.push({ ...entry, characterName: c.name || model.info.name }),
+    })
+  }
+  if (c.pose) {
+    try {
+      applyPose(c.pose)
+    } catch {
+      /* pose from a different rig — skip */
+    }
+  }
+  applyMeshEditsData(c.meshEdits)
+  if (c.nightImmune) setObjectNightImmuneById(id, true, false)
+  if (c.shadowImmune) setObjectShadowImmuneById(id, true, false)
+  if (c.rimImmune) setObjectRimImmuneById(id, true, false)
+  if (c.meshOverridesByIndex) {
+    useStore.setState({ meshOverrides: meshOverridesFromIndex(model, c.meshOverridesByIndex) })
+  }
+  // project-v1 saves (from before multi-character support) may have kept
+  // the keyframe data at the top level (record.animData) instead of on
+  // the character record itself — fall back to that so genuinely old save
+  // files don't lose their animation, without touching the normal (v2,
+  // per-character) path above.
+  if (c.animData) useStore.setState({ animData: c.animData })
+  else if (legacyAnimData) {
+    useStore.setState({ animData: legacyAnimData })
+  }
+  // Restore any imported/generated clips (BVH, ragdoll bakes, combined/
+  // trimmed) — these live on the model's mixer entry, not in animData, so
+  // they need their own restore step — then bring back which clip/tab was
+  // selected so the panel looks exactly like it did when saved.
+  restoreImportedClips(id, c.importedClips)
+  useStore.setState({
+    importedClipNames: c.importedClipNames || (c.importedClips || []).map((j) => j.name),
+    activeClipName: c.activeClipName ?? null,
+    playbackSource: c.playbackSource || 'edit',
+    dangleEnabled: c.dangleEnabled ?? true,
+    dangleChains: c.dangleChains || [],
+    partRigBodyFollow: !!c.partRigBodyFollow,
+    ikEnabled: c.ikEnabled ?? true,
+    ikPins: [],
+    flattenerEnabled: c.flattenerEnabled ?? true,
+    flatteners: c.flatteners || [],
+  })
+  setFlattenerConfig(id, model, c.flattenerEnabled ?? true, c.flatteners || [])
+  setDangleConfig(id, model, c.dangleEnabled ?? true, c.dangleChains || [])
+  setPartRigBodyFollow(model, !!c.partRigBodyFollow)
+  pendingIk.push({ id, model, enabled: c.ikEnabled ?? true, saved: c.ikPins || [] })
+  return id
+}
+
 // Restore a project record: tear down the current session, then rebuild every
 // character, props/images, style settings and pose sequence from the saved
 // blobs. Async — models are re-parsed from their blobs.
@@ -4034,66 +4169,7 @@ export async function applyProjectData(record) {
     if (!c.blob) continue
     // The first character replaces the (already-empty) active slot; every
     // subsequent one is added alongside it as its own character.
-    await loadModelFile(new File([c.blob], c.fileName), { addNew: i > 0 })
-    const id = state.activeCharacterId // whatever we just loaded is now active
-    const model = state.characters.get(id)
-    if (c.name) renameObjectById(id, c.name)
-
-    if (c.transform) {
-      model.root.position.fromArray(c.transform.position)
-      model.root.quaternion.fromArray(c.transform.quaternion)
-      model.root.scale.fromArray(c.transform.scale)
-    }
-    if (c.meshSymmetry?.length) restoreSymmetry(model, c.meshSymmetry)
-    if (c.partRigs?.length) {
-      restorePartRigs(model, c.partRigs, {
-        onSkip: (entry) => skippedPartRigs.push({ ...entry, characterName: c.name || model.info.name }),
-      })
-    }
-    if (c.pose) {
-      try {
-        applyPose(c.pose)
-      } catch {
-        /* pose from a different rig — skip */
-      }
-    }
-    applyMeshEditsData(c.meshEdits)
-    if (c.nightImmune) setObjectNightImmuneById(id, true, false)
-    if (c.shadowImmune) setObjectShadowImmuneById(id, true, false)
-    if (c.rimImmune) setObjectRimImmuneById(id, true, false)
-    if (c.meshOverridesByIndex) {
-      useStore.setState({ meshOverrides: meshOverridesFromIndex(model, c.meshOverridesByIndex) })
-    }
-    // project-v1 saves (from before multi-character support) may have kept
-    // the keyframe data at the top level (record.animData) instead of on
-    // the character record itself — fall back to that so genuinely old save
-    // files don't lose their animation, without touching the normal (v2,
-    // per-character) path above.
-    if (c.animData) useStore.setState({ animData: c.animData })
-    else if (record.format === 'project-v1' && record.animData) {
-      useStore.setState({ animData: record.animData })
-    }
-    // Restore any imported/generated clips (BVH, ragdoll bakes, combined/
-    // trimmed) — these live on the model's mixer entry, not in animData, so
-    // they need their own restore step — then bring back which clip/tab was
-    // selected so the panel looks exactly like it did when saved.
-    restoreImportedClips(id, c.importedClips)
-    useStore.setState({
-      importedClipNames: c.importedClipNames || (c.importedClips || []).map((j) => j.name),
-      activeClipName: c.activeClipName ?? null,
-      playbackSource: c.playbackSource || 'edit',
-      dangleEnabled: c.dangleEnabled ?? true,
-      dangleChains: c.dangleChains || [],
-      partRigBodyFollow: !!c.partRigBodyFollow,
-      ikEnabled: c.ikEnabled ?? true,
-      ikPins: [],
-      flattenerEnabled: c.flattenerEnabled ?? true,
-      flatteners: c.flatteners || [],
-    })
-    setFlattenerConfig(id, model, c.flattenerEnabled ?? true, c.flatteners || [])
-    setDangleConfig(id, model, c.dangleEnabled ?? true, c.dangleChains || [])
-    setPartRigBodyFollow(model, !!c.partRigBodyFollow)
-    pendingIk.push({ id, model, enabled: c.ikEnabled ?? true, saved: c.ikPins || [] })
+    const id = await restoreCharacterRecord(c, { addNew: i > 0, legacyAnimData: record.format === 'project-v1' ? record.animData : null, skippedPartRigs, pendingIk })
     if (c.isActive || (record.format === 'project-v1' && i === 0)) activeIdToRestore = id
   }
   if (skippedPartRigs.length) {
@@ -4151,60 +4227,10 @@ export async function applyProjectData(record) {
   const restoredObjects = []
   for (const obj of record.objects || []) {
     if (!obj.blob) continue
-    const file = new File([obj.blob], obj.fileName)
-    const meta = obj.kind === 'image'
-      ? await addImageFile(file, { animationKey: obj.animationKey })
-      : await addObjectFile(file, { animationKey: obj.animationKey })
-    restoredObjects.push({ obj, id: meta.id })
-    // The list shows the name it was saved under (it may have been renamed), not the file's.
-    if (obj.name && obj.name !== meta.name) renameObjectById(meta.id, obj.name)
-    // Re-attach to its bone (if any) BEFORE applying the saved transform —
-    // attaching reparents-and-preserves-current-world-position, which we
-    // then immediately overwrite with the saved (already bone-local) TRS.
-    if (obj.attachedBoneName) setObjectAttachmentById(meta.id, obj.attachedBoneName)
-    setObjectTransform(meta.id, obj.transform)
-    setObjectVisibleById(meta.id, obj.visible !== false, false)
-    // Restore this prop's per-part (mesh) overrides — saved keyed by mesh
-    // INDEX (see objectMeshOverridesByIndex in objects.js), remapped here
-    // onto whatever fresh uuids this load just gave its meshes.
-    if (obj.meshOverridesByIndex) {
-      const meshes = getObjectMeshesById(meta.id)
-      const patch = {}
-      for (const [idx, ov] of Object.entries(obj.meshOverridesByIndex)) {
-        const mesh = meshes[Number(idx)]
-        if (mesh) patch[mesh.uuid] = ov
-      }
-      if (Object.keys(patch).length) {
-        useStore.setState((s2) => ({ meshOverrides: { ...s2.meshOverrides, ...patch } }))
-      }
-    }
-    // Parts of this prop that were moved with the gizmo (saved by mesh index).
-    if (obj.meshEdits) applyMeshEditsToMeshes(getObjectMeshesById(meta.id), obj.meshEdits)
-    if (obj.kind !== 'image') {
-      // 'lit' is the old (pre-styles) save field: false meant "flat/unlit".
-      // Map it onto the new style system so older project files still work.
-      const style = obj.style || (obj.lit === false ? 'unlit' : 'auto')
-      if (style !== 'auto') setObjectStyleById(meta.id, style, false)
-      // 'off' / 'on' (or an older save's true) are the person's own choice; anything else follows the style
-      if (obj.outline === 'off') setObjectOutlineById(meta.id, false, false)
-      else if (obj.outline === 'on' || obj.outline === true) setObjectOutlineById(meta.id, true, false)
-      if (obj.castShadow === false) setObjectCastShadowById(meta.id, false, false)
-      if (obj.nightImmune) setObjectNightImmuneById(meta.id, true, false)
-      if (obj.shadowImmune) setObjectShadowImmuneById(meta.id, true, false)
-      if (obj.rimImmune) setObjectRimImmuneById(meta.id, true, false)
-    }
+    restoredObjects.push(await restoreObjectRecord(obj))
   }
 
-  // Props that were attached to another prop: every prop exists now, so re-parent them (their
-  // saved transform is already relative to the parent) and put that transform back.
-  {
-    const idByKey = new Map(restoredObjects.filter((r) => r.obj.animationKey).map((r) => [r.obj.animationKey, r.id]))
-    for (const { obj, id } of restoredObjects) {
-      const parentId = obj.attachedToKey ? idByKey.get(obj.attachedToKey) : null
-      if (parentId == null) continue
-      if (attachObjectToObject(id, parentId, { keepLocal: true })) setObjectTransform(id, obj.transform)
-    }
-  }
+  reattachRestoredObjectParents(restoredObjects)
 
   const objectAnimData = record.objectAnimData || {}
   const objectAttachmentData = record.objectAttachmentData || {}
@@ -4293,6 +4319,139 @@ export async function applyProjectData(record) {
   markProjectCleanAfterLoad() // what is on screen is what is on disk
 
   requestRender()
+}
+
+// Import another project INTO the current one: every character (with its pose, clips, Add bones rigs, dangle /
+// mesh physics, IK pins, Flattener settings...), prop and image, with their keyframes, and any light that was
+// attached to one of them, is added as it was saved. Nothing already in the scene is touched, and nothing about
+// the scene itself is taken from the file: lighting, shadows, night mode, background, outline, the material
+// look, the grid and the camera view all stay as they are. Free-standing lights and cameras are not brought in
+// (they would change this scene's lighting and shots). Returns a summary for the caller to show.
+export async function importProjectData(record) {
+  if (!record || (record.format !== 'project-v1' && record.format !== 'project-v2')) {
+    throw new Error('Not a valid saved project.')
+  }
+  const characterRecords = record.format === 'project-v1'
+    ? (record.character ? [record.character] : [])
+    : record.characters || []
+  const objectRecords = (record.objects || []).filter((o) => o.blob)
+  if (!characterRecords.some((c) => c.blob) && !objectRecords.length) {
+    return { characters: 0, objects: 0, lights: 0, skippedPartRigs: [] }
+  }
+
+  const before = useStore.getState()
+  const originalActiveId = state.activeCharacterId
+  const knownIds = new Set(before.sceneObjects.map((o) => o.id))
+  const viewCamera = getViewportCameraData() // loading a model frames the camera; the view must not move
+  const skippedPartRigs = []
+  const pendingIk = []
+  const importedCharacterIds = []
+  let importedActiveId = null
+  let restoredObjects = []
+  let lightCount = 0
+
+  try {
+    for (const c of characterRecords) {
+      if (!c.blob) continue
+      const id = await restoreCharacterRecord(c, {
+        addNew: state.characters.size > 0,
+        legacyAnimData: record.format === 'project-v1' ? record.animData : null,
+        skippedPartRigs,
+        pendingIk,
+      })
+      importedCharacterIds.push(id)
+      if (c.isActive) importedActiveId = id
+    }
+    if (importedActiveId == null) importedActiveId = importedCharacterIds[importedCharacterIds.length - 1] ?? null
+
+    // Back to the character the person was working on; props are restored with it active, the same way a
+    // prop added by hand is.
+    if (originalActiveId && state.activeCharacterId !== originalActiveId) setActiveCharacter(originalActiveId)
+
+    // Props and images, each with a fresh keyframe key (the saved one could already be in use here).
+    for (const obj of objectRecords) {
+      restoredObjects.push(await restoreObjectRecord(obj, { animationKey: null, attachTo: importedActiveId }))
+    }
+    reattachRestoredObjectParents(restoredObjects)
+
+    // Keyframes: carry each prop's tracks over to the key it was given here.
+    const savedAnim = record.objectAnimData || {}
+    const savedAttach = record.objectAttachmentData || {}
+    const animPatch = {}
+    const attachPatch = {}
+    let latest = 0
+    for (const { obj, animationKey } of restoredObjects) {
+      const track = obj.animationKey ? savedAnim[obj.animationKey] : null
+      const attach = obj.animationKey ? savedAttach[obj.animationKey] : null
+      if (track?.length) {
+        animPatch[animationKey] = track
+        latest = Math.max(latest, track[track.length - 1]?.time || 0)
+      }
+      if (attach) {
+        attachPatch[animationKey] = attach
+        latest = Math.max(latest, attach.keys?.[attach.keys.length - 1]?.time || 0)
+      }
+    }
+    if (Object.keys(animPatch).length || Object.keys(attachPatch).length) {
+      useStore.setState((s) => ({
+        objectAnimData: { ...s.objectAnimData, ...animPatch },
+        objectAttachmentData: { ...s.objectAttachmentData, ...attachPatch },
+        objectAnimDuration: Math.max(s.objectAnimDuration || 2, Number(record.objectAnimDuration) || 0, latest),
+      }))
+    }
+
+    // What came in, in the order the saved object indexes assume (characters first, then props).
+    const imported = new Set([...importedCharacterIds, ...restoredObjects.map((r) => r.id)])
+    const importedObjects = useStore.getState().sceneObjects.filter((o) => imported.has(o.id) && !knownIds.has(o.id))
+
+    // Lights that were attached to something that came in belong to it (a car's headlights...); loose lights stay out.
+    const attachedLights = (record.lights || []).filter((item) => item && item.attachedObjectIndex != null && importedObjects[item.attachedObjectIndex])
+    if (attachedLights.length) {
+      const metas = []
+      for (const item of attachedLights) {
+        const [meta] = applyLightsData([{ ...item, name: uniqueLightName(item.name || 'Light') }])
+        metas.push(meta)
+      }
+      useStore.setState((s) => ({
+        sceneLights: [...s.sceneLights.filter((l) => !metas.some((m) => m.id === l.id)), ...metas],
+        selectedLightId: s.selectedLightId,
+      }))
+      reapplyLightAttachments(attachedLights, metas, importedObjects)
+      lightCount = metas.length
+    }
+
+    // IK pins that were pinned to an imported prop.
+    for (const { id, model, enabled, saved } of pendingIk) {
+      const pins = ikPinsFromSave(saved, importedObjects)
+      writeIkPins(id, pins)
+      setIkConfig(id, model, enabled, pins)
+    }
+  } finally {
+    if (useStore.getState().loading) useStore.getState().setLoading(false)
+    applyViewportCameraData(viewCamera)
+    if (originalActiveId && state.activeCharacterId !== originalActiveId && state.characters.has(originalActiveId)) {
+      setActiveCharacter(originalActiveId)
+    }
+    refreshPoseOverlays()
+    applyModelMaterials() // the scene's own look, applied to what came in
+    refreshSoftCloth() // mesh physics saved with what came in
+    resyncObjectGizmo()
+    requestRender()
+  }
+
+  // The undo steps recorded while rebuilding aren't things a person did, and undoing half an import would leave
+  // the rest behind; the history starts afresh from here.
+  clearUndoHistory()
+  if (skippedPartRigs.length) {
+    const byRig = skippedPartRigs.map((entry) => ({ ...entry, label: `${entry.characterName}: ${entry.label}` }))
+    useStore.getState().setLoadNotice(formatPartRigRestoreNotice(byRig))
+  }
+  return {
+    characters: importedCharacterIds.length,
+    objects: restoredObjects.length,
+    lights: lightCount,
+    skippedPartRigs,
+  }
 }
 
 // Dispose EVERY loaded character (full reset — used by the "clear" button and
@@ -5306,8 +5465,7 @@ export function attachCameraToObject(cameraId, objectId) {
 // survive a reload). Objects are restored before lights/cameras, so by now that
 // index points at the same object again. The saved transform is already relative
 // to the object, hence keepLocal.
-function reapplyAttachments(saved, metas, attach) {
-  const objects = useStore.getState().sceneObjects
+function reapplyAttachments(saved, metas, attach, objects = useStore.getState().sceneObjects) {
   saved.forEach((item, i) => {
     const idx = item && item.attachedObjectIndex
     const target = idx != null ? objects[idx] : null
@@ -5315,8 +5473,8 @@ function reapplyAttachments(saved, metas, attach) {
     if (root && metas[i]) attach(metas[i].id, root, target.id, { keepLocal: true })
   })
 }
-function reapplyLightAttachments(saved, metas) {
-  reapplyAttachments(saved, metas, attachLightToRoot)
+function reapplyLightAttachments(saved, metas, objects) {
+  reapplyAttachments(saved, metas, attachLightToRoot, objects)
 }
 function reapplyCameraAttachments(saved, metas) {
   reapplyAttachments(saved, metas, attachCameraToRoot)
