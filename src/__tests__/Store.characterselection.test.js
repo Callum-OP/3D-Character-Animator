@@ -17,13 +17,14 @@ beforeEach(() => {
 describe('active characters are selected in the scene object list', () => {
   it('keeps the body-follow setting per character when switching', () => {
     useStore.getState().addCharacter('char-1', { name: 'First' })
-    useStore.getState().setPartRigBodyFollow(true)
+    expect(useStore.getState().partRigBodyFollow).toBe(true) // clothing follows the body by default
+    useStore.getState().setPartRigBodyFollow(false)
     useStore.getState().addCharacter('char-2', { name: 'Second' })
-    expect(useStore.getState().partRigBodyFollow).toBe(false)
-    useStore.getState().setActiveCharacterId('char-1')
     expect(useStore.getState().partRigBodyFollow).toBe(true)
-    useStore.getState().setActiveCharacterId('char-2')
+    useStore.getState().setActiveCharacterId('char-1')
     expect(useStore.getState().partRigBodyFollow).toBe(false)
+    useStore.getState().setActiveCharacterId('char-2')
+    expect(useStore.getState().partRigBodyFollow).toBe(true)
   })
 
   it('selects a newly loaded character', () => {

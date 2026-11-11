@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { classifyBone } from './bvh.js'
+import { fingerInfo, looksLikeHand } from './fingers.js'
 
 // ---------------------------------------------------------------------------
 // Limb limits (anatomical joint constraints)
@@ -41,6 +42,14 @@ const ROLE_LIMITS = {
   lowerLeg: { fwd: 145, back: 8, twist: 30 }, // knee
   foot: { swing: 55, twist: 25 },
   toe: { swing: 50, twist: 10 },
+  // Fingers: a symmetric cone per joint. Bone names say nothing about which way the palm faces, so the
+  // hyperextension side of a finger cannot be told apart from its curl side; the cone is sized for the curl.
+  fingerBase: { swing: 90, twist: 15 }, // knuckle
+  fingerMid: { swing: 105, twist: 8 },
+  fingerTip: { swing: 85, twist: 8 },
+  thumbBase: { swing: 55, twist: 30 },
+  thumbMid: { swing: 75, twist: 15 },
+  thumbTip: { swing: 80, twist: 12 },
   // hips (the root) and unclassified bones are unconstrained
 }
 
@@ -80,7 +89,7 @@ export function setLimitsModel(model, resolveSlot) {
   const wp = new THREE.Vector3()
   const cp = new THREE.Vector3()
   for (const bone of bones) {
-    const slot = getSlot(bone)
+    const slot = getSlot(bone) || fingerLimitSlot(bone, getSlot)
     if (!slot) continue
     const lim = ROLE_LIMITS[slot.split('.')[0]]
     if (!lim) continue
@@ -130,6 +139,15 @@ export function setLimitsModel(model, resolveSlot) {
     }
     state.specs.set(bone, spec)
   }
+}
+
+// Limit role of a finger bone (see ROLE_LIMITS), or null for anything else - including the helper
+// tip marker at the end of a finger, which stays unconstrained.
+function fingerLimitSlot(bone, getSlot) {
+  const info = fingerInfo(bone, (b) => (getSlot(b) || '').startsWith('hand') || looksLikeHand(b))
+  if (!info || info.tip) return null
+  const part = info.segment <= 1 ? 'Base' : info.segment === 2 ? 'Mid' : 'Tip'
+  return (info.finger === 'thumb' ? 'thumb' : 'finger') + part
 }
 
 export function clearLimitsModel() {

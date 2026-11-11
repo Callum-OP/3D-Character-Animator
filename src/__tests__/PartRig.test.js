@@ -4,6 +4,7 @@ import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
 import { useStore } from '../store.js'
 import { initPartRig, planForMesh, applyPartRig, updatePartRig, getPartRigData, restorePartRigs, getPartRigEntries, getPartRigDependents, removeLastPartRig, removePartRig, planForMeshes, resizeSelection, trisFromClick, setPartRigBodyFollow } from '../three/partRig.js'
 import { cloneForExport } from '../three/exportPose.js'
+import { skinnedVertexWithRig } from '../three/rigDeltaShader.js'
 import { performUndo, performRedo } from '../three/undoPriority.js'
 import { clearUndoHistory } from '../three/undoHistory.js'
 import { clearDangle, initDangle, setDangleConfig, stepDangleLive } from '../three/dangle.js'
@@ -62,8 +63,7 @@ function posed(mesh) {
   const out = []
   const v = new THREE.Vector3()
   for (let i = 0; i < mesh.geometry.attributes.position.count; i++) {
-    v.fromBufferAttribute(mesh.geometry.attributes.position, i)
-    mesh.applyBoneTransform(i, v)
+    skinnedVertexWithRig(mesh, i, v) // the drawn position, including the added bones' offsets in follow mode
     out.push(v.clone())
   }
   return out

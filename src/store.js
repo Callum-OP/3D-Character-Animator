@@ -148,7 +148,7 @@ function defaultCharacterFields(modelInfo) {
     softClothEnabled: true,
     dangleEnabled: true,
     dangleChains: [],
-    partRigBodyFollow: false,
+    partRigBodyFollow: true,
     ikEnabled: true,
     ikPins: [],
     flattenerEnabled: true,
@@ -833,7 +833,7 @@ export const useStore = create((set) => ({
   // dangle.js works out the parent/child structure from the live skeleton.
   dangleEnabled: true,
   dangleChains: [],
-  partRigBodyFollow: false,
+  partRigBodyFollow: true,
   setPartRigBodyFollow: (partRigBodyFollow) => set({ partRigBodyFollow: !!partRigBodyFollow }),
   softClothEnabled: true,
   setSoftClothEnabled: (softClothEnabled) => set({ softClothEnabled: !!softClothEnabled }),

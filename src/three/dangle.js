@@ -320,18 +320,37 @@ function ownVertexFlags(mesh, boneSet) {
     if (!skinIndex || !skinWeight || !mesh.skeleton) return null
     const bones = mesh.skeleton.bones
     const flags = new Uint8Array(skinIndex.count)
+    // With "Blend clothing with body" on, a rigged piece keeps its body weights in skinIndex and the
+    // added bones' share lives in rigIndex / rigWeight instead (see rigDeltaShader.js). Count both.
+    const rigIndex = geometry.getAttribute('rigIndex')
+    const rigWeight = geometry.getAttribute('rigWeight')
+    const hasRig = !!(rigIndex && rigWeight)
     let any = false
     for (let v = 0; v < flags.length; v++) {
-      let best = 0
+      let rigTotal = 0
+      let bestBone = null
       let bestWeight = -1
-      for (let k = 0; k < 4; k++) {
-        const w = skinWeight.getComponent(v, k)
-        if (w > bestWeight) {
-          bestWeight = w
-          best = k
+      if (hasRig) {
+        for (let k = 0; k < 4; k++) {
+          const stored = rigIndex.getComponent(v, k)
+          const rw = rigWeight.getComponent(v, k)
+          if (stored > 1.5 && rw > 0) {
+            rigTotal += rw
+            if (rw > bestWeight) {
+              bestWeight = rw
+              bestBone = bones[stored - 2]
+            }
+          }
         }
       }
-      if (bestWeight > 0 && boneSet.has(bones[skinIndex.getComponent(v, best)])) {
+      for (let k = 0; k < 4; k++) {
+        const w = skinWeight.getComponent(v, k) * (1 - rigTotal)
+        if (w > bestWeight) {
+          bestWeight = w
+          bestBone = bones[skinIndex.getComponent(v, k)]
+        }
+      }
+      if (bestWeight > 0 && bestBone && boneSet.has(bestBone)) {
         flags[v] = 1
         any = true
       }

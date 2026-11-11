@@ -5,6 +5,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { SimplifyModifier } from 'three/examples/jsm/modifiers/SimplifyModifier.js'
 import { convertBlendToGlb } from './blendImport.js'
 import { sanitizeLoadedMaterials } from './materialUserData.js'
+import { fingerInfo, looksLikeHand } from './fingers.js'
 import {
   readArchive,
   pickMainModelPath,
@@ -568,7 +569,8 @@ export function collapseNestedBoneDuplicates(bones) {
 // roll correctives, weapon sockets. Flag those as deform=false so the UI can
 // hide their dots and rows. Two schemes:
 // - Rigify rigs (any DEF- bone present): primary = the DEF- bones, as before.
-// - Everything else: primary = bones that don't match the helper name patterns.
+// - Everything else: primary = bones that don't match the helper name patterns, and aren't the
+//   marker at the tip of a finger (Index4 / Thumb4 / "..._tip" / "...Nub" - see fingers.js).
 
 // Blender/Sketchfab tail bones: "..._end", possibly followed by uniquifying
 // numeric suffixes ("HeadTop_End_07", "index_03_l_end_0458").
@@ -586,7 +588,7 @@ export function classifyBones(bones) {
     depth: boneDepth(b),
     deform: rigify
       ? /^DEF-/.test(names[i])
-      : !(END_BONE_RE.test(names[i]) || HELPER_BONE_RE.test(names[i])),
+      : !(END_BONE_RE.test(names[i]) || HELPER_BONE_RE.test(names[i]) || fingerInfo(b, looksLikeHand)?.tip === true),
   }))
 }
 

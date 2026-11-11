@@ -149,6 +149,7 @@ import { initMeshSymmetry, getSymmetryData, restoreSymmetry, mirrorMeshes } from
 import { combineMeshes as combineExportMeshes, describeCombine } from './combineMeshes.js'
 import { STATIC_FORMATS, bakeStaticMeshes, writeStaticModel } from './exportStatic.js'
 import { installFlattenerShader } from './flattenerShader.js'
+import { installRigDeltaShader } from './rigDeltaShader.js'
 import { advanceWind, setWindConfig } from './wind.js'
 import {
   initFlattener,
@@ -387,6 +388,7 @@ function bakeStudioEnvironment(generator) {
 export function initScene(container) {
   installShadowDarkening() // before any material compiles
   installFlattenerShader()
+  installRigDeltaShader() // added bones swing on top of the body's own skinning (Add bones > Blend clothing with body)
   if (state.renderer) return // already initialised
 
   state.container = container
@@ -2875,6 +2877,9 @@ export async function exportSceneModel(format = 'glb', name = 'scene', poseMode 
     return { ok: false, message: 'Nothing to export — load a character or add an object first.' }
   }
   suspendSoftCloth() // a file always gets the clean pose, never a mid-swing one
+  // Blended clothing keeps its added-bone share in a shader-only offset; a file needs the real skin weights.
+  const blended = [...state.characters.values()].filter((c) => c.__partRigBodyFollow)
+  for (const c of blended) setPartRigBodyFollow(c, false)
   try {
     const staticInfo = STATIC_FORMATS[format] || null
     const [gltfModule, { cloneForExport }] = await Promise.all([
@@ -2956,6 +2961,7 @@ export async function exportSceneModel(format = 'glb', name = 'scene', poseMode 
   } catch (err) {
     return { ok: false, message: 'Export failed: ' + (err && err.message ? err.message : String(err)) }
   } finally {
+    for (const c of blended) setPartRigBodyFollow(c, true)
     resumeSoftCloth()
   }
 }

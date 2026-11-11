@@ -4,6 +4,7 @@ import { pushSceneHistory } from './sceneHistory.js'
 import { getAdjacency, growRegion, toRanges, fromRanges, regionVertexCount } from './regions.js'
 import { followFlattener } from './flattener.js'
 import { addFlattenerUniforms } from './flattenerShader.js'
+import { RIG_INDEX_ATTR, RIG_WEIGHT_ATTR, RIG_INDEX_BASE, RIG_MAX_INFLUENCES, installRigDeltaShader, isRigDeltaShaderInstalled, writeRigOffsets } from './rigDeltaShader.js'
 
 export { fromRanges }
 
@@ -309,71 +310,167 @@ function reindexRigBones(model, skeletons, start, count, removing, excludedEntry
   }
 }
 
-function applyActiveRigWeights(model) {
-  const entries = (model.__rigAdds || [])
+function activeEntries(model) {
+  return (model.__rigAdds || [])
     .filter((entry) => entry.result)
     .sort((a, b) => a.result.startIndex - b.result.startIndex)
+}
+
+function entryRange(entry) {
+  const start = entry.result.startIndex ?? entry.result.baseCount
+  return [start, start + entry.result.created.length]
+}
+
+// For every skeleton the rigs touch: which skeleton slots are added bones, and which body bone each
+// one hangs from (the first ancestor that is not itself an added bone).
+function rigLinksBySkeleton(model, entries) {
+  const added = new Set(entries.flatMap((entry) => entry.result.created))
+  const out = new Map()
+  for (const entry of entries) {
+    for (const skeleton of rigSkeletons(entry)) {
+      let info = out.get(skeleton)
+      if (!info) out.set(skeleton, (info = { links: [], valid: new Set() }))
+      for (const bone of entry.result.created) {
+        const index = skeleton.bones.indexOf(bone)
+        let p = bone.parent
+        while (p && added.has(p)) p = p.parent
+        const parent = p ? skeleton.bones.indexOf(p) : -1
+        if (index >= 0 && parent >= 0) {
+          info.links.push({ index, parent })
+          info.valid.add(index)
+        }
+      }
+    }
+  }
+  return out
+}
+
+// The vertex's original body weights, with any added-bone slots dropped and the rest scaled back to 1.
+function bodyOnlyWeights(result, ranges, fallbackSlot) {
+  const idx = new Uint32Array(result.oldIdx.length)
+  const w = new Float32Array(result.oldW.length)
+  const isAdded = (i) => ranges.some(([a, b]) => i >= a && i < b)
+  for (let n = 0; n < result.verts.length; n++) {
+    let slot = 0
+    let total = 0
+    for (let k = 0; k < 4; k++) {
+      const i = n * 4 + k
+      if (result.oldW[i] > 0 && !isAdded(result.oldIdx[i])) {
+        idx[n * 4 + slot] = result.oldIdx[i]
+        w[n * 4 + slot] = result.oldW[i]
+        total += result.oldW[i]
+        slot++
+      }
+    }
+    if (total > 0) for (let k = 0; k < slot; k++) w[n * 4 + k] /= total
+    else {
+      idx[n * 4] = fallbackSlot
+      w[n * 4] = 1
+    }
+  }
+  return { idx, w }
+}
+
+function setRigAttributes(mesh, indexData, weightData) {
+  const geo = mesh.geometry
+  for (const [name, data] of [[RIG_INDEX_ATTR, indexData], [RIG_WEIGHT_ATTR, weightData]]) {
+    const current = geo.getAttribute(name)
+    if (current && current.array.length === data.length) {
+      current.array.set(data)
+      current.needsUpdate = true
+    } else geo.setAttribute(name, new THREE.BufferAttribute(data, 4))
+  }
+}
+
+function removeRigAttributes(mesh) {
+  const geo = mesh.geometry
+  if (!geo) return
+  if (geo.getAttribute(RIG_INDEX_ATTR)) geo.deleteAttribute(RIG_INDEX_ATTR)
+  if (geo.getAttribute(RIG_WEIGHT_ATTR)) geo.deleteAttribute(RIG_WEIGHT_ATTR)
+}
+
+// Skeleton.update() fills boneMatrices from the live bones; afterwards the added bones' slots are
+// rewritten as offsets from their body parent (see rigDeltaShader.js). Removed again when off.
+function setSkeletonOffsets(skeleton, links) {
+  if (links && links.length) {
+    skeleton.__rigLinks = links
+    if (skeleton.__rigHooked) return
+    skeleton.__rigHooked = true
+    skeleton.update = function updateWithRigOffsets() {
+      THREE.Skeleton.prototype.update.call(this)
+      writeRigOffsets(this.boneMatrices, this.__rigLinks)
+    }
+  } else if (skeleton.__rigHooked) {
+    skeleton.__rigHooked = false
+    skeleton.__rigLinks = null
+    delete skeleton.update
+    THREE.Skeleton.prototype.update.call(skeleton) // slots back to the real skin matrices right away
+  }
+}
+
+function applyActiveRigWeights(model) {
+  const entries = activeEntries(model)
+  if (model.__partRigBodyFollow && entries.length) installRigDeltaShader()
+  const follow = !!model.__partRigBodyFollow && entries.length > 0 && isRigDeltaShaderInstalled()
+  const ranges = entries.map(entryRange)
+  const linksBySkeleton = follow ? rigLinksBySkeleton(model, entries) : new Map()
+
+  // Follow mode: every vertex keeps its ORIGINAL body weights; the added bones only offset it on top
+  // of that. Otherwise the vertex is skinned straight to the added bones (the plain rig).
   for (const entry of entries) {
     for (const meshResult of entry.result.meshes || [entry.result]) {
-      if (model.__partRigBodyFollow) {
-        const { indices, weights } = blendBodyWeights(meshResult, entry.result.startIndex ?? entry.result.baseCount, entry.result.created.length)
-        writeSkin(meshResult.mesh, meshResult.verts, indices, weights)
+      if (follow) {
+        const parentBone = entry.result.created[0]?.parent
+        const fallback = Math.max(0, meshResult.mesh.skeleton.bones.indexOf(parentBone))
+        const body = bodyOnlyWeights(meshResult, ranges, fallback)
+        writeSkin(meshResult.mesh, meshResult.verts, body.idx, body.w)
       } else {
         writeSkin(meshResult.mesh, meshResult.verts, meshResult.newIdx, meshResult.newW)
       }
     }
   }
-}
 
-// Keep two slots for each skinning source so the body's bending and the added
-// bones' motion both survive glTF's usual four-influence limit.
-function blendBodyWeights(result, startIndex, boneCount) {
-  const indices = new Uint32Array(result.verts.length * 4)
-  const weights = new Float32Array(indices.length)
-  for (let n = 0; n < result.verts.length; n++) {
-    let hasAddedInfluence = false
-    for (let k = 0; k < 4; k++) {
-      const i = n * 4 + k
-      if (result.newW[i] > 0 && result.newIdx[i] >= startIndex && result.newIdx[i] < startIndex + boneCount) hasAddedInfluence = true
-    }
-    if (!hasAddedInfluence) {
-      indices.set(result.newIdx.subarray(n * 4, n * 4 + 4), n * 4)
-      weights.set(result.newW.subarray(n * 4, n * 4 + 4), n * 4)
-      continue
-    }
-    const groups = [[result.oldIdx, result.oldW], [result.newIdx, result.newW]]
-    const combined = new Map()
-    for (const [group, [sourceIndices, sourceWeights]] of groups.entries()) {
-      const source = new Map()
-      for (let k = 0; k < 4; k++) {
-        const i = n * 4 + k
-        if (sourceWeights[i] > 0) source.set(sourceIndices[i], (source.get(sourceIndices[i]) || 0) + sourceWeights[i])
+  // The per-vertex added-bone influences the shader reads (follow mode only).
+  const buffers = new Map()
+  if (follow) {
+    for (const entry of entries) {
+      const [start, end] = entryRange(entry)
+      for (const r of entry.result.meshes || [entry.result]) {
+        const valid = linksBySkeleton.get(r.mesh.skeleton)?.valid
+        if (!valid) continue
+        const count = r.mesh.geometry.attributes.position.count
+        let buf = buffers.get(r.mesh)
+        if (!buf) buffers.set(r.mesh, (buf = { idx: new Float32Array(count * 4), w: new Float32Array(count * 4) }))
+        for (let n = 0; n < r.verts.length; n++) {
+          const v = r.verts[n]
+          for (let k = 0; k < RIG_MAX_INFLUENCES; k++) { buf.idx[v * 4 + k] = 0; buf.w[v * 4 + k] = 0 } // this rig owns the vertex now
+          let slot = 0
+          for (let k = 0; k < 4 && slot < RIG_MAX_INFLUENCES; k++) {
+            const i = n * 4 + k
+            const bone = r.newIdx[i]
+            if (r.newW[i] > 0 && bone >= start && bone < end && valid.has(bone)) {
+              buf.idx[v * 4 + slot] = bone + RIG_INDEX_BASE
+              buf.w[v * 4 + slot] = r.newW[i]
+              slot++
+            }
+          }
+        }
       }
-      const sorted = [...source].sort((a, b) => b[1] - a[1])
-      const strongest = sorted.slice(0, 2)
-      if (group === 1 && !strongest.some(([index]) => index >= startIndex && index < startIndex + boneCount)) {
-        const added = sorted.find(([index]) => index >= startIndex && index < startIndex + boneCount)
-        if (added) strongest[1] = added
-      }
-      const total = strongest.reduce((sum, item) => sum + item[1], 0)
-      if (!total) continue
-      for (const [index, weight] of strongest) {
-        combined.set(index, (combined.get(index) || 0) + weight / total * 0.5)
-      }
-    }
-    const slots = [...combined].sort((a, b) => b[1] - a[1])
-    const total = slots.reduce((sum, item) => sum + item[1], 0)
-    for (let k = 0; k < slots.length; k++) {
-      indices[n * 4 + k] = slots[k][0]
-      weights[n * 4 + k] = slots[k][1] / total
     }
   }
-  return { indices, weights }
+  for (const mesh of model.meshes || []) {
+    const buf = buffers.get(mesh)
+    if (buf) setRigAttributes(mesh, buf.idx, buf.w)
+    else removeRigAttributes(mesh)
+  }
+  const skeletons = new Set((model.meshes || []).map((mesh) => mesh.skeleton).filter(Boolean))
+  for (const skeleton of skeletons) setSkeletonOffsets(skeleton, linksBySkeleton.get(skeleton)?.links || null)
 }
 
 export function setPartRigBodyFollow(model, enabled) {
   if (!model || model.__partRigBodyFollow === !!enabled) return
   model.__partRigBodyFollow = !!enabled
+  if (enabled) installRigDeltaShader()
   applyActiveRigWeights(model)
   render()
 }

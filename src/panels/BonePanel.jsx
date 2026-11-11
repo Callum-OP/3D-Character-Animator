@@ -467,7 +467,7 @@ export default function BonePanel() {
           <label
             className="toggle-row"
             style={{ padding: 0 }}
-            title="Blend the original body weights with added-bone weights, so clothing follows body bends while added bones can still swing. Turning this off restores the added-bone weights."
+            title="The body moves the clothing exactly as it would without the added bones (so it bends with the torso and stops clipping), and dangle / cloth physics swing it on top. Turning this off skins the clothing straight to the added bones."
           >
             <input
               type="checkbox"
