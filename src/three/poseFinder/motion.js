@@ -4,6 +4,7 @@ import * as THREE from 'three'
 import { MHR_NAMES, MHR_REST_POS_CM, MHR_REST_QUAT } from './mhrRest.js'
 import { BVH_JOINTS, JOINT_INDEX } from './humanoid.js'
 import { maxAngleFromFirst } from './validate.js'
+import { limitTracks, toModelFrame, fromModelFrame } from './limits.js'
 
 export const MHR_J = 127
 const FLIP = [1, -1, -1] // model frame <-> camera frame (y down, z forward)
@@ -25,7 +26,7 @@ function quatFromMat3(G, off, flip, out) {
   return out.setFromRotationMatrix(_m)
 }
 
-const restQuat = (i) => new THREE.Quaternion(MHR_REST_QUAT[i * 4], MHR_REST_QUAT[i * 4 + 1], MHR_REST_QUAT[i * 4 + 2], MHR_REST_QUAT[i * 4 + 3])
+const restQuat = (i) => new THREE.Quaternion(MHR_REST_QUAT[i * 4], MHR_REST_QUAT[i * 4 + 1], MHR_REST_QUAT[i * 4 + 2], MHR_REST_QUAT[i * 4 + 3]).normalize()
 const REST_INV = Array.from({ length: MHR_J }, (_, i) => restQuat(i).invert())
 const restVec = (i) => new THREE.Vector3(MHR_REST_POS_CM[i * 3], MHR_REST_POS_CM[i * 3 + 1], MHR_REST_POS_CM[i * 3 + 2])
 
@@ -183,28 +184,49 @@ function resampleVec(values, dim, grid) {
 
 // ---- root path --------------------------------------------------------------------------------------------
 // Positions come from the camera-space keypoints (documented) + cam_t, then F maps camera -> y-up world.
-const KP = { lHip: 9, rHip: 10, lAnkle: 13, rAnkle: 14, lToe: 15, lSmallToe: 16, lHeel: 17, rToe: 18, rSmallToe: 19, rHeel: 20 }
+const KP = { lShoulder: 5, rShoulder: 6, lHip: 9, rHip: 10, lAnkle: 13, rAnkle: 14, lToe: 15, lSmallToe: 16, lHeel: 17, rToe: 18, rSmallToe: 19, rHeel: 20 }
 const worldKp = (f, i) => [f.kp3[i * 3] + f.camT[0], -(f.kp3[i * 3 + 1] + f.camT[1]), -(f.kp3[i * 3 + 2] + f.camT[2])]
+const UP = new THREE.Vector3(0, 1, 0)
+const median = (arr) => { const s = Array.from(arr).sort((a, b) => a - b); return s[s.length >> 1] }
 
-function rootInputs(frames) {
+// The model reports everything relative to the CAMERA. A camera tilted up or down makes a standing person look
+// like they lean or stand on a slope. Estimate "up" from how the legs and torso are oriented over the whole
+// clip (median, so bending over now and then does not matter) and return the rotation that levels it.
+export function estimateUprightCorrection(frames) {
+  const legs = [[], [], []], torso = [[], [], []]
+  for (const f of frames) {
+    const h = ['lHip', 'rHip'].map((k) => worldKp(f, KP[k])), a = ['lAnkle', 'rAnkle'].map((k) => worldKp(f, KP[k])), sh = ['lShoulder', 'rShoulder'].map((k) => worldKp(f, KP[k]))
+    const mid = (p) => [0, 1, 2].map((d) => (p[0][d] + p[1][d]) / 2)
+    const hm = mid(h), am = mid(a), sm = mid(sh)
+    const v1 = new THREE.Vector3(hm[0] - am[0], hm[1] - am[1], hm[2] - am[2]), v2 = new THREE.Vector3(sm[0] - hm[0], sm[1] - hm[1], sm[2] - hm[2])
+    if (v1.length() > 0.2) { v1.normalize(); for (let d = 0; d < 3; d++) legs[d].push(v1.getComponent(d)) }
+    if (v2.length() > 0.2) { v2.normalize(); for (let d = 0; d < 3; d++) torso[d].push(v2.getComponent(d)) }
+  }
+  if (!legs[0].length || !torso[0].length) return { q: new THREE.Quaternion(), tiltDeg: 0 }
+  const l = new THREE.Vector3(median(legs[0]), median(legs[1]), median(legs[2])).normalize()
+  const t = new THREE.Vector3(median(torso[0]), median(torso[1]), median(torso[2])).normalize()
+  const u = l.multiplyScalar(0.65).add(t.multiplyScalar(0.35)).normalize()
+  const q = new THREE.Quaternion().setFromUnitVectors(u, UP)
+  return { q, tiltDeg: (u.angleTo(UP) * 180) / Math.PI }
+}
+
+function rootInputs(frames, Rc) {
   const n = frames.length
   const pelvis = new Float32Array(n * 3)
-  const soles = [new Float32Array(n * 3), new Float32Array(n * 3)] // lowest point of each foot (3 floats per frame)
+  const soles = [new Float32Array(n * 3), new Float32Array(n * 3)]
   const legCm = []
+  const P = (f, i) => { const w = worldKp(f, i); return new THREE.Vector3(w[0], w[1], w[2]).applyQuaternion(Rc) }
   for (let i = 0; i < n; i++) {
     const f = frames[i]
-    const lh = worldKp(f, KP.lHip), rh = worldKp(f, KP.rHip)
-    pelvis.set([(lh[0] + rh[0]) / 2, (lh[1] + rh[1]) / 2, (lh[2] + rh[2]) / 2], i * 3)
-    const la = worldKp(f, KP.lAnkle), ra = worldKp(f, KP.rAnkle)
-    const mid = [(la[0] + ra[0]) / 2, (la[1] + ra[1]) / 2, (la[2] + ra[2]) / 2]
-    legCm.push(Math.hypot(pelvis[i * 3] - mid[0], pelvis[i * 3 + 1] - mid[1], pelvis[i * 3 + 2] - mid[2]) * 100)
+    const lh = P(f, KP.lHip), rh = P(f, KP.rHip)
+    const pel = lh.clone().add(rh).multiplyScalar(0.5)
+    pelvis.set([pel.x, pel.y, pel.z], i * 3)
+    const am = P(f, KP.lAnkle).add(P(f, KP.rAnkle)).multiplyScalar(0.5)
+    legCm.push(pel.distanceTo(am) * 100)
     ;[[KP.lToe, KP.lSmallToe, KP.lHeel], [KP.rToe, KP.rSmallToe, KP.rHeel]].forEach((ids, side) => {
       let best = null
-      for (const id of ids) {
-        const p = worldKp(f, id)
-        if (!best || p[1] < best[1]) best = p
-      }
-      soles[side].set(best, i * 3)
+      for (const id of ids) { const p = P(f, id); if (!best || p.y < best.y) best = p }
+      soles[side].set([best.x, best.y, best.z], i * 3)
     })
   }
   legCm.sort((a, b) => a - b)
@@ -213,14 +235,16 @@ function rootInputs(frames) {
 
 // Pin planted feet so depth noise cannot make the body glide: while a foot is low and slow, its XZ is held at
 // the segment's median and its sole is held on the ground. The correction is spread over the root path.
+// Also returns, per foot, how "planted" it is on each frame (0..1) so the foot can be levelled too.
 function footLock(rootXYZ, soles, ground, fps) {
   const n = rootXYZ.length / 3
   const corr = new Float32Array(n * 3)
   const weightSum = new Float32Array(n)
+  const planted = [new Float32Array(n), new Float32Array(n)]
   const ramp = Math.max(1, Math.round(0.1 * fps))
   const minLen = Math.max(2, Math.round(0.12 * fps))
   let segments = 0
-  for (const sole of soles) {
+  soles.forEach((sole, side) => {
     const sx = movingAverage(Float32Array.from({ length: n }, (_, i) => sole[i * 3]), 3)
     const sy = movingAverage(Float32Array.from({ length: n }, (_, i) => sole[i * 3 + 1]), 3)
     const sz = movingAverage(Float32Array.from({ length: n }, (_, i) => sole[i * 3 + 2]), 3)
@@ -245,11 +269,12 @@ function footLock(rootXYZ, soles, ground, fps) {
           corr[k * 3 + 1] += w * (sy[k] - ground)
           corr[k * 3 + 2] += w * (sz[k] - az)
           weightSum[k] += w
+          planted[side][k] = Math.max(planted[side][k], w)
         }
       }
       i = j + 1
     }
-  }
+  })
   const out = Float32Array.from(rootXYZ)
   for (let k = 0; k < n; k++) {
     const d = Math.max(1, weightSum[k])
@@ -257,7 +282,85 @@ function footLock(rootXYZ, soles, ground, fps) {
     out[k * 3 + 1] -= corr[k * 3 + 1] / d
     out[k * 3 + 2] -= corr[k * 3 + 2] / d
   }
-  return { path: out, segments }
+  return { path: out, segments, planted }
+}
+
+// ---- posture and feet --------------------------------------------------------------------------------------
+const SPINE = ['Spine', 'Spine1', 'Spine2', 'Spine3'].map((n) => JOINT_INDEX[n])
+const _q = new THREE.Quaternion(), _dq = new THREE.Quaternion(), _eu = new THREE.Euler()
+
+// The body model tends to read a front-on person as hunched (forward bend is ambiguous from the front). Remove the
+// CONSTANT part of the forward bend from the spine (median over the clip), keeping all movement around it, and let
+// the neck take half back so the head does not tip up. Returns the bend removed (radians).
+// MHR bend is rotation about z in the joint's own frame, positive = forward (its limit is [-0.5, 1.5]).
+function straightenPosture(local, count, allowance) {
+  const z = SPINE.map(() => new Float32Array(count)), eul = SPINE.map(() => new Array(count))
+  SPINE.forEach((j, s) => {
+    for (let k = 0; k < count; k++) {
+      _q.set(local[j][k * 4], local[j][k * 4 + 1], local[j][k * 4 + 2], local[j][k * 4 + 3])
+      toModelFrame(_q, j, _dq)
+      _eu.setFromQuaternion(_dq, 'ZYX')
+      eul[s][k] = [_eu.x, _eu.y, _eu.z]
+      z[s][k] = _eu.z
+    }
+  })
+  const med = z.map((arr) => median(arr))
+  const total = med.reduce((a, b) => a + Math.max(0, b), 0)
+  const excess = Math.min(0.9, Math.max(0, med.reduce((a, b) => a + b, 0) - allowance))
+  if (excess < 0.03 || total <= 0) return 0
+  SPINE.forEach((j, s) => {
+    const share = Math.max(0, med[s]) / total
+    if (share <= 0) return
+    for (let k = 0; k < count; k++) {
+      const e = eul[s][k]
+      _eu.set(e[0], e[1], e[2] - excess * share, 'ZYX')
+      _dq.setFromEuler(_eu)
+      fromModelFrame(_dq, j, _q)
+      local[j].set([_q.x, _q.y, _q.z, _q.w], k * 4)
+    }
+  })
+  // head: take half of the correction back through the neck
+  const nj = JOINT_INDEX.Neck
+  for (let k = 0; k < count; k++) {
+    _q.set(local[nj][k * 4], local[nj][k * 4 + 1], local[nj][k * 4 + 2], local[nj][k * 4 + 3])
+    toModelFrame(_q, nj, _dq)
+    _eu.setFromQuaternion(_dq, 'ZYX')
+    _eu.set(_eu.x, _eu.y, _eu.z + excess * 0.5, 'ZYX')
+    _dq.setFromEuler(_eu)
+    fromModelFrame(_dq, nj, _q)
+    local[nj].set([_q.x, _q.y, _q.z, _q.w], k * 4)
+  }
+  return excess
+}
+
+// While a foot is planted, make its sole level with the ground (removes toes-up / on-a-slope feet). Works on the
+// foot's world orientation and only ever swings the sole's up vector back to vertical (no twist, so heading is kept).
+function levelFeet(rot, count, planted, maxDeg = 40) {
+  const sides = [['LeftUpLeg', 'LeftLeg', 'LeftFoot'], ['RightUpLeg', 'RightLeg', 'RightFoot']]
+  const a = new THREE.Quaternion(), b = new THREE.Quaternion(), dLeg = new THREE.Quaternion(), dFoot = new THREE.Quaternion(), r = new THREE.Quaternion(), rw = new THREE.Quaternion(), id = new THREE.Quaternion()
+  const get = (j, k, out) => out.set(rot[j][k * 4], rot[j][k * 4 + 1], rot[j][k * 4 + 2], rot[j][k * 4 + 3])
+  const u = new THREE.Vector3()
+  let applied = 0
+  sides.forEach(([up, leg, foot], s) => {
+    const [ju, jl, jf] = [JOINT_INDEX[up], JOINT_INDEX[leg], JOINT_INDEX[foot]]
+    for (let k = 0; k < count; k++) {
+      const w = planted[s][k]
+      if (w < 0.02) continue
+      get(0, k, a); get(ju, k, b); a.multiply(b)            // hips * upleg
+      get(jl, k, b); dLeg.copy(a).multiply(b)              // ... * leg
+      get(jf, k, b); dFoot.copy(dLeg).multiply(b)          // ... * foot
+      u.set(0, 1, 0).applyQuaternion(dFoot)
+      const tilt = (u.angleTo(UP) * 180) / Math.PI
+      if (tilt > maxDeg || tilt < 0.5) continue
+      r.setFromUnitVectors(u, UP)
+      rw.copy(id).slerp(r, w)
+      dFoot.premultiply(rw)
+      b.copy(dLeg).invert().multiply(dFoot)                // new local foot rotation
+      rot[jf].set([b.x, b.y, b.z, b.w], k * 4)
+      applied = Math.max(applied, tilt * w)
+    }
+  })
+  return applied
 }
 
 // ---- main entry ------------------------------------------------------------------------------------------
@@ -266,7 +369,7 @@ function footLock(rootXYZ, soles, ground, fps) {
 // Returns { fps, count, root: Float32Array(count*3) in cm, rot: Float32Array(count*4)[] per BVH joint (local),
 //           info: {...} }
 export function solveMotion(frames, opts = {}) {
-  const o = { outFps: 30, smoothing: 'medium', footLock: true, ...opts }
+  const o = { outFps: 30, smoothing: 'medium', footLock: true, levelCamera: true, posture: 'auto', levelFeet: true, limitJoints: true, ...opts }
   if (!frames || frames.length < 2) throw new Error('Need at least two analysed frames.')
   const n = frames.length
   const times = frames.map((f) => f.t)
@@ -275,6 +378,14 @@ export function solveMotion(frames, opts = {}) {
   const conv = detectConvention(frames)
   const warnings = []
   if (conv.score < 0.85) warnings.push(`Pose conventions look inconsistent (agreement ${conv.score.toFixed(2)}); results may be wrong.`)
+
+  // 0) camera tilt
+  let Rc = new THREE.Quaternion(), tiltDeg = 0
+  if (o.levelCamera) {
+    const est = estimateUprightCorrection(frames)
+    if (est.tiltDeg > 40) warnings.push(`The camera tilt looks like ${est.tiltDeg.toFixed(0)}° (the person may be sitting or lying down), so it was not corrected.`)
+    else if (est.tiltDeg > 1) { Rc = est.q; tiltDeg = est.tiltDeg }
+  }
 
   // 1) local rotations relative to rest, per BVH joint
   const J = BVH_JOINTS.length
@@ -289,7 +400,9 @@ export function solveMotion(frames, opts = {}) {
     }
     for (let j = 0; j < J; j++) {
       const p = BVH_JOINTS[j].parent
-      l.copy(p < 0 ? D[j] : D[p].clone().invert().multiply(D[j])).normalize()
+      if (p < 0) l.copy(Rc).multiply(D[j]) // level the whole body by the camera tilt
+      else l.copy(D[p]).invert().multiply(D[j])
+      l.normalize()
       if (i > 0) { // keep each joint's track in one hemisphere so interpolation takes the short way
         const k = (i - 1) * 4
         if (l.x * local[j][k] + l.y * local[j][k + 1] + l.z * local[j][k + 2] + l.w * local[j][k + 3] < 0) { l.x *= -1; l.y *= -1; l.z *= -1; l.w *= -1 }
@@ -298,29 +411,38 @@ export function solveMotion(frames, opts = {}) {
     }
   }
 
-  // 2) resample to the output rate, then smooth there (zero-phase)
+  // 2) anatomical clean-up on the raw samples (before smoothing, so a one-frame spike is not smeared into neighbours)
+  let slouchDeg = 0, limitDeg = 0
+  if (o.posture !== 'off') slouchDeg = (straightenPosture(local, n, o.posture === 'strong' ? 0 : 0.12) * 180) / Math.PI
+  if (o.limitJoints) limitDeg = (limitTracks(local, n) * 180) / Math.PI
+
+  // 3) resample to the output rate, then smooth there (zero-phase)
   const grid = makeGrid(times, o.outFps)
   const sm = SMOOTHING[o.smoothing]
   const rot = local.map((track) => {
     const up = resampleQuat(track, grid)
     return sm ? zeroPhaseQuat(up, grid.count, 1 / o.outFps, sm) : up
   })
+  if (o.limitJoints) limitTracks(rot, grid.count)
 
-  // 3) root path
-  const raw = rootInputs(frames)
+  // 4) root path
+  const raw = rootInputs(frames, Rc)
   const pelvis = medianFilter(raw.pelvis, 3), soles = raw.soles.map((x) => medianFilter(x, 3)), legCm = raw.legCm
   const pelvisUp = resampleVec(pelvis, 3, grid)
   const solesUp = soles.map((s) => resampleVec(s, 3, grid))
+
   const lows = Array.from({ length: grid.count }, (_, i) => Math.min(solesUp[0][i * 3 + 1], solesUp[1][i * 3 + 1])).sort((a, b) => a - b)
   const ground = lows[Math.floor(lows.length * 0.03)]
   // Foot lock works on the RAW path (planted feet share the body's depth jitter exactly, so it cancels), and only
   // then is the path smoothed. Depth is the noisy axis, so it gets the longer window.
   let path = pelvisUp
   let lockSegments = 0
+  let planted = [new Float32Array(grid.count), new Float32Array(grid.count)]
   if (o.footLock) {
     const r = footLock(pelvisUp, solesUp, ground, o.outFps)
     path = r.path
     lockSegments = r.segments
+    planted = r.planted
   }
   const winXY = Math.max(1, Math.round(o.outFps * 0.15)) | 1
   const winZ = Math.max(1, Math.round(o.outFps * 0.4)) | 1
@@ -329,7 +451,11 @@ export function solveMotion(frames, opts = {}) {
   path = new Float32Array(grid.count * 3)
   for (let i = 0; i < grid.count; i++) path.set([px[i], py[i], pz[i]], i * 3)
 
-  // 4) into the template skeleton's units: ground at 0, start at the origin, scaled to the template's leg length
+  // 5) planted feet lie flat on the ground
+  let footLevelDeg = 0
+  if (o.levelFeet && o.footLock) footLevelDeg = levelFeet(rot, grid.count, planted)
+
+  // 6) into the template skeleton's units: ground at 0, start at the origin, scaled to the template's leg length
   const templateLeg = Math.abs(MHR_REST_POS_CM[IDX.root * 3 + 1] - MHR_REST_POS_CM[IDX.l_foot * 3 + 1])
   const scale = Math.min(2, Math.max(0.5, templateLeg / Math.max(1, legCm)))
   const root = new Float32Array(grid.count * 3)
@@ -345,7 +471,7 @@ export function solveMotion(frames, opts = {}) {
   for (const name of ['LeftArm', 'RightArm', 'LeftUpLeg', 'RightUpLeg', 'Spine2', 'Head']) variationDeg = Math.max(variationDeg, maxAngleFromFirst(rot[JOINT_INDEX[name]], grid.count))
   if (variationDeg < 4) warnings.push('The pose barely changes between frames. The model probably could not see the person — check the box and the "model view" picture.')
 
-  return { fps: o.outFps, count: grid.count, root, rot, info: { convention: conv, scale, groundM: ground, lockSegments, variationDeg, warnings } }
+  return { fps: o.outFps, count: grid.count, root, rot, info: { convention: conv, scale, groundM: ground, lockSegments, variationDeg, tiltDeg, slouchDeg, limitDeg, footLevelDeg, warnings } }
 }
 
 export { JOINT_INDEX }

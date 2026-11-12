@@ -45,6 +45,7 @@ export function keypointsFromFk(pos) {
   const add = (a, d) => [a[0] + d[0], a[1] + d[1], a[2] + d[2]]
   const head = j('c_head')
   set(0, add(head, [0, 0.1, 0.05])) // nose, just above the head joint
+  set(5, j('l_uparm')); set(6, j('r_uparm')) // shoulders
   for (const [side, s, k0] of [['l', 'l', 15], ['r', 'r', 18]]) {
     const ankle = j(`${s}_foot`), ball = j(`${s}_ball`)
     set(side === 'l' ? 13 : 14, ankle)
@@ -72,4 +73,16 @@ export function makeFrame(t, fkOut, { depth = 3, x = 0, rotFlip = false, coordFl
   camT[1] = 0
   if (coordFlip) for (let i = 0; i < 127; i++) { jc[i * 3 + 1] *= -1; jc[i * 3 + 2] *= -1 }
   return { t, G, jc, kp3, camT }
+}
+
+// Rotate a whole FK result about the world X axis (a camera pitched by `deg`): rotations and positions together.
+export function tiltFk(out, deg) {
+  const r = (deg * Math.PI) / 180, c = Math.cos(r), sn = Math.sin(r)
+  const Rt = [1, 0, 0, 0, c, -sn, 0, sn, c]
+  const G = new Float32Array(out.G.length), pos = new Float32Array(out.pos.length)
+  for (let j = 0; j < 127; j++) {
+    for (let a = 0; a < 3; a++) for (let b = 0; b < 3; b++) { let v = 0; for (let k = 0; k < 3; k++) v += Rt[a * 3 + k] * out.G[j * 9 + k * 3 + b]; G[j * 9 + a * 3 + b] = v }
+    for (let a = 0; a < 3; a++) { let v = 0; for (let k = 0; k < 3; k++) v += Rt[a * 3 + k] * out.pos[j * 3 + k]; pos[j * 3 + a] = v }
+  }
+  return { ...out, G, pos }
 }

@@ -27,6 +27,10 @@ export default function PoseFinderPanel({ onClose }) {
   const [outFps, setOutFps] = useState(30)
   const [smoothing, setSmoothing] = useState('medium')
   const [footLock, setFootLock] = useState(true)
+  const [levelCamera, setLevelCamera] = useState(true)
+  const [posture, setPosture] = useState('auto')
+  const [levelFeet, setLevelFeet] = useState(true)
+  const [limitJoints, setLimitJoints] = useState(true)
 
   const [running, setRunning] = useState(false)
   const [progress, setProgress] = useState(null)
@@ -137,7 +141,7 @@ export default function PoseFinderPanel({ onClose }) {
     abortRef.current = ac
     setRunning(true)
     setProgress({ done: 0, total: 1 })
-    diagRef.current = { app: '3D Character Animator Pose Finder', settings: { compute, sampleFps, outFps, smoothing, footLock, range, video: src && { name: src.name, width: src.width, height: src.height, duration: src.duration }, box }, frames: [], provider: null, error: null }
+    diagRef.current = { app: '3D Character Animator Pose Finder', settings: { compute, sampleFps, outFps, smoothing, footLock, levelCamera, posture, levelFeet, limitJoints, range, video: src && { name: src.name, width: src.width, height: src.height, duration: src.duration }, box }, frames: [], provider: null, error: null }
     setHasDiag(true)
     const cropper = makeCropper()
     const source = {
@@ -163,10 +167,10 @@ export default function PoseFinderPanel({ onClose }) {
         try {
           const r = await runPoseFinder({
             source, engine: pose, box, startTime: range[0], endTime: range[1], sampleFps, outFps, smoothing, footLock,
-            signal: ac.signal, onProgress: setProgress, onFrame,
+            signal: ac.signal, onProgress: setProgress, onFrame, clean: { levelCamera, posture, levelFeet, limitJoints },
           })
-          diagRef.current.solved = { variationDeg: r.solved.info.variationDeg, convention: r.solved.info.convention, scale: r.solved.info.scale, warnings: r.solved.info.warnings }
-          setResult({ bvh: r.bvh, name: src.name.replace(/\.[^.]+$/, '') + '-pose', warnings: r.solved.info.warnings })
+          diagRef.current.solved = { tiltDeg: r.solved.info.tiltDeg, slouchDeg: r.solved.info.slouchDeg, limitDeg: r.solved.info.limitDeg, footLevelDeg: r.solved.info.footLevelDeg, variationDeg: r.solved.info.variationDeg, convention: r.solved.info.convention, scale: r.solved.info.scale, warnings: r.solved.info.warnings }
+          setResult({ bvh: r.bvh, name: src.name.replace(/\.[^.]+$/, '') + '-pose', warnings: r.solved.info.warnings, info: r.solved.info })
           break
         } catch (err) {
           // The very first frame was garbage on the GPU: Adreno/DirectML drivers can do that. Retry once on the CPU.
@@ -313,9 +317,26 @@ export default function PoseFinderPanel({ onClose }) {
                     <option value="off">Off</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option>
                   </select>
                 </label>
+                <label className="pf-field">Straighten slouch
+                  <select value={posture} disabled={running} onChange={(e) => setPosture(e.target.value)}>
+                    <option value="off">Off</option><option value="auto">Auto (keeps natural curve)</option><option value="strong">Strong (fully upright)</option>
+                  </select>
+                </label>
                 <label className="pf-check" style={{ alignSelf: 'end' }}>
                   <input type="checkbox" checked={footLock} disabled={running} onChange={(e) => setFootLock(e.target.checked)} />
                   <span>Foot lock (stops planted feet sliding)</span>
+                </label>
+                <label className="pf-check" style={{ alignSelf: 'end' }}>
+                  <input type="checkbox" checked={levelFeet} disabled={running || !footLock} onChange={(e) => setLevelFeet(e.target.checked)} />
+                  <span>Level planted feet with the ground</span>
+                </label>
+                <label className="pf-check" style={{ alignSelf: 'end' }}>
+                  <input type="checkbox" checked={levelCamera} disabled={running} onChange={(e) => setLevelCamera(e.target.checked)} />
+                  <span>Correct camera tilt</span>
+                </label>
+                <label className="pf-check" style={{ alignSelf: 'end' }}>
+                  <input type="checkbox" checked={limitJoints} disabled={running} onChange={(e) => setLimitJoints(e.target.checked)} />
+                  <span>Keep fingers, elbows, knees, neck in human range</span>
                 </label>
               </div>
               <p className="pf-dim">Each analysed frame takes a few seconds on a laptop CPU. {src ? `This will analyse about ${estFrames} frames.` : ''} Frames in between are interpolated.</p>
@@ -347,6 +368,11 @@ export default function PoseFinderPanel({ onClose }) {
               <div className="pf-card">
                 <h3>4. Result</h3>
                 {result.warnings.map((w) => <div className="pf-warn" key={w}>{w}</div>)}
+                {result.info && (
+                  <p className="pf-dim">
+                    Cleaned up: camera tilt {result.info.tiltDeg.toFixed(0)}°, slouch removed {result.info.slouchDeg.toFixed(0)}°, foot levelling up to {result.info.footLevelDeg.toFixed(0)}°, joints pulled back into range by up to {result.info.limitDeg.toFixed(0)}°.
+                  </p>
+                )}
                 <div className="pf-grid">
                   <label className="pf-field">Clip name
                     <input type="text" value={result.name} onChange={(e) => setResult({ ...result, name: e.target.value })} />

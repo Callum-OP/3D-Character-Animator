@@ -12,7 +12,7 @@ export class BadOutputError extends Error {
 // source: { width, height, duration, frameAt(t, crop) -> Promise<Uint8Array rgba 512x512> }
 // engine: { infer(payload) -> Promise<{ ok, out } | { ok:false, error }> }   (window.animare.pose)
 // onFrame({ i, t, rgba, box, kp2d, valid, reason, source }) lets the UI show what the model was actually given.
-export async function runPoseFinder({ source, engine, box, startTime = 0, endTime, sampleFps = 10, outFps = 30, smoothing = 'medium', footLock = true, onProgress, onFrame, signal }) {
+export async function runPoseFinder({ source, engine, box, startTime = 0, endTime, sampleFps = 10, outFps = 30, smoothing = 'medium', footLock = true, clean = {}, onProgress, onFrame, signal }) {
   const end = Math.min(endTime ?? source.duration, source.duration)
   const total = Math.max(2, Math.floor((end - startTime) * sampleFps) + 1)
   const camera = defaultCamera(source.width, source.height)
@@ -54,7 +54,7 @@ export async function runPoseFinder({ source, engine, box, startTime = 0, endTim
     const elapsed = (Date.now() - t0) / 1000
     onProgress && onProgress({ done, total, etaSec: (elapsed / done) * (total - done), box: current, ms: o.ms })
   }
-  const solved = solveMotion(frames, { outFps, smoothing, footLock })
+  const solved = solveMotion(frames, { outFps, smoothing, footLock, ...clean })
   const bvh = writeBVH(solved)
   return { bvh, solved, frameCount: frames.length, diagnostics: diag }
 }
