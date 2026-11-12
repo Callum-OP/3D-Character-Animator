@@ -1,6 +1,6 @@
 {
   "name": "animare-3d-animator",
-  "version": "1.2.2",
+  "version": "1.2.1",
   "type": "module",
   "description": "Lightweight browser-based 3D scene and character animator (glTF)",
   "author": "Callum-OP",
@@ -24,6 +24,7 @@
     "meshoptimizer": "^0.25.0",
     "mp4-muxer": "^5.2.2",
     "node-unrar-js": "^2.0.2",
+    "onnxruntime-node": "^1.31.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "three": "^0.171.0",
@@ -54,7 +55,9 @@
       "dist/**/*",
       "electron/**/*",
       "build/icon.png",
-      "package.json"
+      "package.json",
+      "!node_modules/onnxruntime-node/bin/napi-v6/linux/**",
+      "!node_modules/onnxruntime-node/bin/napi-v6/darwin/**"
     ],
     "asar": true,
     "win": {
@@ -80,6 +83,9 @@
       "languages": [
         "en-US"
       ]
-    }
+    },
+    "asarUnpack": [
+      "node_modules/onnxruntime-node/**"
+    ]
   }
 }

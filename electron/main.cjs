@@ -15,8 +15,8 @@ const fs = require('node:fs')
 const fsp = require('node:fs/promises')
 const { pathToFileURL } = require('node:url')
 const { registerBlenderIpc } = require('./blender.cjs')
+const { registerPoseEngineIpc } = require('./poseEngine.cjs')
 const { writeFileSafely } = require('./safeWrite.cjs')
-const { isOwnOrigin: matchesOwnOrigin } = require('./origin.cjs')
 
 const DIST = path.join(__dirname, '..', 'dist')
 const DEV_URL = process.env.ELECTRON_START_URL || ''
@@ -90,7 +90,12 @@ app.on('open-file', (event, filePath) => {
 })
 
 function isOwnOrigin(url) {
-  return matchesOwnOrigin(url, DEV_URL)
+  try {
+    const origin = new URL(url).origin
+    return origin === 'app://app' || (DEV_URL && origin === new URL(DEV_URL).origin)
+  } catch {
+    return false
+  }
 }
 
 function registerAppProtocol() {
@@ -197,6 +202,7 @@ function registerFileIpc() {
 
   // Opening .blend files by running the user's own Blender (see blender.cjs).
   registerBlenderIpc({ ipcMain, dialog, app })
+  registerPoseEngineIpc({ ipcMain, app })
 }
 
 // --- Closing the window --------------------------------------------------------

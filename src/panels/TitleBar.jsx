@@ -60,7 +60,7 @@ import {
 // opening from here and saving from the sidebar (or vice versa) stay in
 // sync — there's only one place that actually owns the file I/O. Likewise
 // video export shares exportShot.js with the Export panel.
-export default function TitleBar({ onOpenSettings }) {
+export default function TitleBar({ onOpenSettings, onOpenPoseFinder }) {
   const [openMenu, setOpenMenu] = useState(null) // 'file' | 'edit' | 'animation' | 'help' | null
   const [fileView, setFileView] = useState('root') // 'root' | 'import' | 'export'
   const [recents, setRecents] = useState([])
@@ -647,6 +647,18 @@ export default function TitleBar({ onOpenSettings }) {
             </div>
           )}
         </div>
+
+        {onOpenPoseFinder && typeof window !== 'undefined' && window.animare?.pose && (
+          <div className="titlebar-menu-item">
+            <button
+              className="titlebar-menu-btn"
+              title="Turn a video into a mocap clip"
+              onClick={() => { setOpenMenu(null); onOpenPoseFinder() }}
+            >
+              Pose Finder
+            </button>
+          </div>
+        )}
 
         <div className="titlebar-menu-item">
           <button

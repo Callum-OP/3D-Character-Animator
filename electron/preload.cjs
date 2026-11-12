@@ -72,4 +72,23 @@ contextBridge.exposeInMainWorld('animare', {
     // payload: { main, files: [{ path, data }] } → { ok, glb, warnings } | { ok:false, error, code }
     convert: (payload) => ipcRenderer.invoke('animare:blender-convert', payload),
   },
+
+  // Pose Finder (video -> mocap): runs Meta's SAM 3D Body locally through onnxruntime-node (see poseEngine.cjs).
+  pose: {
+    // → { ortOk, ortError, modelReady, modelBytes, expectedBytes, modelPath, licenseUrl, loaded, provider, platform, arch }
+    status: () => ipcRenderer.invoke('animare:pose-status'),
+    // One-time ~1.4 GB model download. → { ok } | { ok:false, error }
+    download: () => ipcRenderer.invoke('animare:pose-download'),
+    cancelDownload: () => ipcRenderer.invoke('animare:pose-download-cancel'),
+    onDownloadProgress: (cb) => {
+      const handler = (_e, p) => cb(p)
+      ipcRenderer.on('animare:pose-download-progress', handler)
+      return () => ipcRenderer.removeListener('animare:pose-download-progress', handler)
+    },
+    // pref: 'auto' | 'cpu' | 'dml' → { ok, provider, loadMs } | { ok:false, error }
+    load: (pref) => ipcRenderer.invoke('animare:pose-load', pref),
+    unload: () => ipcRenderer.invoke('animare:pose-unload'),
+    // One person crop → { ok, out:{ keypoints_2d, keypoints_3d, cam_t, joint_coords, joint_rotations, ms } } | { ok:false, error }
+    infer: (payload) => ipcRenderer.invoke('animare:pose-infer', payload),
+  },
 })
