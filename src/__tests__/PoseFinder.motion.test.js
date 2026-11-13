@@ -11,7 +11,7 @@ import { POSE_PRESETS } from '../three/poseFinder/presets.js'
 
 const E = (x, y, z) => new THREE.Euler(x, y, z)
 // the exact-reproduction tests switch the anatomical clean-ups off
-const RAW = { levelCamera: false, posture: 'off', limitJoints: false, levelFeet: false }
+const RAW = { levelCamera: false, posture: 'off', limitJoints: false, levelFeet: false, lowerArms: 'off' }
 
 function poseAt(i) {
   const a = Math.sin(i * 0.7)
@@ -51,6 +51,42 @@ describe('detectConvention', () => {
 })
 
 describe('motion presets', () => {
+  it.each([['standing', 0], ['lying', Math.PI / 2], ['flips', Math.PI], ['adaptable', Math.PI / 2]])(
+    'uses the lower reference pose in %s mode',
+    (preset, angle) => {
+      const fr = Array.from({ length: 3 }, (_, i) => makeFrame(i * 0.1, fk({ root: E(angle, 0, 0) }), { depth: 4 }))
+      const opts = { ...POSE_PRESETS[preset].settings, outFps: 10, smoothing: 'off' }
+      const off = solveMotion(fr, { ...opts, lowerArms: 'off' })
+      const corrected = solveMotion(fr, opts)
+      const readPose = (solution, frame) => {
+        const { skeleton, clip } = new BVHLoader().parse(writeBVH(solution))
+        const bones = Object.fromEntries(skeleton.bones.map((b) => [b.name, b]))
+        for (const track of clip.tracks) {
+          if (track.name.endsWith('.quaternion')) bones[track.name.slice(0, -'.quaternion'.length)].quaternion.fromArray(track.values, frame * 4)
+        }
+        bones.Hips.updateWorldMatrix(false, true)
+        const torsoInverse = bones.Spine3.getWorldQuaternion(new THREE.Quaternion()).invert()
+        const direction = (a, b) => {
+          return bones[b].getWorldPosition(new THREE.Vector3()).sub(bones[a].getWorldPosition(new THREE.Vector3())).applyQuaternion(torsoInverse).normalize()
+        }
+        return (side) => [direction(`${side}Shoulder`, `${side}Arm`), direction(`${side}Arm`, `${side}ForeArm`)]
+      }
+      const offReference = readPose(off, 0), correctedReference = readPose(corrected, 0)
+      const offMotion = readPose(off, 1), correctedMotion = readPose(corrected, 1)
+      for (const side of ['Left', 'Right']) {
+        for (const [before, after] of [[offReference, correctedReference], [offMotion, correctedMotion]]) {
+          const original = before(side), lowered = after(side)
+          const elevation = (v) => Math.atan2(v.y, Math.hypot(v.x, v.z)) * 180 / Math.PI
+          expect(elevation(original[0]) - elevation(lowered[0])).toBeCloseTo(20.36, 2)
+          expect(elevation(original[1]) - elevation(lowered[1])).toBeCloseTo(3.52, 2)
+        }
+        const sign = side === 'Left' ? 1 : -1
+        const expected = [new THREE.Vector3(sign * 0.814649, -0.273116, -0.511620), new THREE.Vector3(sign * 0.595504, -0.780443, 0.190483)]
+        correctedReference(side).forEach((actual, i) => expect(actual.distanceTo(expected[i])).toBeLessThan(0.0001))
+      }
+    },
+  )
+
   it.each([-1, 1])('preserves a full flip (%s direction) and its height changes in the written BVH', (direction) => {
     const fr = Array.from({ length: 21 }, (_, i) => {
       const f = makeFrame(i * 0.1, fk({ root: E(direction * Math.PI * 2 * i / 20, 0, 0) }), { depth: 4 })
@@ -319,9 +355,9 @@ describe('anatomical clean-up', () => {
   })
 })
 
-describe('ground lock and shoulders', () => {
+describe('ground lock and arm lowering', () => {
   const idx = (n) => JOINT_INDEX[n]
-  const base = { outFps: 10, smoothing: 'off', footLock: false, levelCamera: false, posture: 'off', limitJoints: false, levelFeet: false, shoulders: 'off' }
+  const base = { outFps: 10, smoothing: 'off', footLock: false, levelCamera: false, posture: 'off', limitJoints: false, levelFeet: false, lowerArms: 'off' }
 
   it('strict mode keeps the feet on the ground: hip height ignores bobbing in the model\'s depth/height estimate', () => {
     // standing still, but the model's pelvis height wobbles by +-12 cm
@@ -375,29 +411,27 @@ describe('ground lock and shoulders', () => {
     }
   })
 
-  it('lowers a shrugged shoulder but keeps the arm pointing where it was', () => {
-    const fr = Array.from({ length: 12 }, (_, i) => makeFrame(i * 0.1, fk({ l_clavicle: E(0, 0, 0.35), l_uparm: E(0, 0, -0.35 + 0.1 * Math.sin(i)) }), { depth: 4 }))
-    const run = (shoulders) => solveMotion(fr, { ...base, ground: 'off', shoulders })
-    const off = run('off'), slight = run('slight'), more = run('more')
-    const elev = (s) => {
-      const q = new THREE.Quaternion().fromArray(s.rot[idx('LeftShoulder')], 4 * 4)
-      const d0 = new THREE.Vector3(14.8, 1.3, -9.6).normalize()
-      const d = d0.clone().applyQuaternion(q)
-      return Math.atan2(d.y, Math.hypot(d.x, d.z)) - Math.atan2(d0.y, Math.hypot(d0.x, d0.z))
+  it('preserves shoulder, arm and hand rotation deltas from the reference pose', () => {
+    const fr = Array.from({ length: 12 }, (_, i) => makeFrame(i * 0.1, fk({
+      root: E(0.8, 0.2, 0), l_clavicle: E(0.1, 0.2, 0.35),
+      l_uparm: E(0.4, -0.2, 0.1 * i), l_lowarm: E(0.3, 0.2, 0.1), l_wrist: E(0.1, 0.2, 0),
+    }), { depth: 4 }))
+    const off = solveMotion(fr, { ...base, ground: 'off' })
+    const corrected = solveMotion(fr, { ...base, ground: 'off', lowerArms: 'more' })
+    const world = (s, j, frame) => {
+      const chain = []
+      for (let p = j; p >= 0; p = BVH_JOINTS[p].parent) chain.unshift(p)
+      return chain.reduce((q, p) => q.multiply(new THREE.Quaternion().fromArray(frame < 0 ? s.restRot[p] : s.rot[p], frame < 0 ? 0 : frame * 4).normalize()), new THREE.Quaternion()).normalize()
     }
-    expect(elev(off)).toBeGreaterThan(0.25)
-    expect(elev(slight)).toBeLessThan(elev(off) - 0.1)
-    expect(elev(more)).toBeLessThan(elev(slight))
-    expect(slight.info.shoulderDeg).toBeGreaterThan(4)
-    // world orientation of the upper arm is unchanged
-    const worldArm = (s) => { const d = new THREE.Quaternion(); for (const n of ['Hips', 'Spine', 'Spine1', 'Spine2', 'Spine3', 'LeftShoulder', 'LeftArm']) d.multiply(new THREE.Quaternion().fromArray(s.rot[idx(n)], 4 * 4)); return d }
-    expect((worldArm(off).angleTo(worldArm(slight)) * 180) / Math.PI).toBeLessThan(0.5)
-  })
-
-  it('leaves relaxed shoulders alone', () => {
-    const fr = Array.from({ length: 12 }, (_, i) => makeFrame(i * 0.1, fk({ l_uparm: E(0, 0, 0.2 * Math.sin(i)) }), { depth: 4 }))
-    const s = solveMotion(fr, { ...base, ground: 'off', shoulders: 'slight' })
-    expect(s.info.shoulderDeg).toBeLessThan(2.1) // only the small constant drop
+    for (const name of ['LeftShoulder', 'LeftArm', 'LeftForeArm', 'LeftHand', 'LeftHandIndex1']) {
+      for (const frame of [0, 4, 11]) {
+        const j = idx(name)
+        const delta = (s) => world(s, j, frame).multiply(world(s, j, -1).invert())
+        expect(delta(corrected).angleTo(delta(off)), name).toBeLessThan(0.001)
+      }
+    }
+    expect(corrected.info.shoulderLowerDeg).toBeGreaterThan(20.36)
+    expect(corrected.info.armLowerDeg).toBeGreaterThan(3.52)
   })
 })
 
@@ -409,7 +443,7 @@ describe('baked foot lock', () => {
     fr.camT[0] += 0.04 * Math.sin(i * 0.6)
     return fr
   })
-  const base = { outFps: 10, smoothing: 'off', footLock: false, levelCamera: false, posture: 'off', limitJoints: false, levelFeet: false, shoulders: 'off', ground: 'strict' }
+  const base = { outFps: 10, smoothing: 'off', footLock: false, levelCamera: false, posture: 'off', limitJoints: false, levelFeet: false, lowerArms: 'off', ground: 'strict' }
   const feet = (sol, side = 'Left') => {
     const { skeleton, clip } = new BVHLoader().parse(writeBVH({ ...sol }))
     const by = Object.fromEntries(skeleton.bones.map((b) => [b.name, b]))

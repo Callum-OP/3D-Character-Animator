@@ -1,12 +1,12 @@
 // Writes the solved motion as BVH text. Every bone's rest orientation is identity (offsets only), channels are
-// Zrotation Xrotation Yrotation. The first frame is a NEUTRAL rest frame: the app's BVH retargeter treats frame 0
+// Zrotation Xrotation Yrotation. The first frame is a reference pose: the app's BVH retargeter treats frame 0
 // as the rest pose, and a video rarely starts in one.
 import * as THREE from 'three'
 import { BVH_JOINTS, restOffsets, endOffset, hasChildren } from './humanoid.js'
 
 const f4 = (v) => (Math.abs(v) < 5e-5 ? '0' : v.toFixed(4))
 
-export function writeBVH({ fps, count, root, rot, restFrame = true }) {
+export function writeBVH({ fps, count, root, rot, restRot, restFrame = true }) {
   const off = restOffsets()
   const lines = ['HIERARCHY']
   const depth = (i) => { let d = 0; for (let p = BVH_JOINTS[i].parent; p >= 0; p = BVH_JOINTS[p].parent) d++; return d }
@@ -33,8 +33,16 @@ export function writeBVH({ fps, count, root, rot, restFrame = true }) {
   lines.push('MOTION', `Frames: ${total}`, `Frame Time: ${(1 / fps).toFixed(6)}`)
   const q = new THREE.Quaternion(), e = new THREE.Euler()
   const deg = 180 / Math.PI
-  const identityRow = (rx, ry, rz) => [f4(rx), f4(ry), f4(rz), ...Array(BVH_JOINTS.length * 3).fill('0')]
-  if (restFrame) lines.push(identityRow(root[0], off[0][1], root[2]).join(' '))
+  if (restFrame) {
+    const row = [f4(root[0]), f4(off[0][1]), f4(root[2])]
+    for (const j of order) {
+      if (restRot) q.fromArray(restRot[j]).normalize()
+      else q.identity()
+      e.setFromQuaternion(q, 'ZXY')
+      row.push(f4(e.z * deg), f4(e.x * deg), f4(e.y * deg))
+    }
+    lines.push(row.join(' '))
+  }
   for (let k = 0; k < count; k++) {
     const row = [f4(root[k * 3]), f4(root[k * 3 + 1]), f4(root[k * 3 + 2])]
     for (const j of order) {

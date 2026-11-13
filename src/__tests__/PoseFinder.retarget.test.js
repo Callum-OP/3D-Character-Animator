@@ -5,6 +5,9 @@ import * as THREE from 'three'
 import { parseBVH, buildSlotMapping, mergeNames, buildNameMatch, retargetParsed } from '../three/bvh.js'
 import { writeBVH } from '../three/poseFinder/bvhWrite.js'
 import { BVH_JOINTS } from '../three/poseFinder/humanoid.js'
+import { solveMotion } from '../three/poseFinder/motion.js'
+import { POSE_PRESETS } from '../three/poseFinder/presets.js'
+import { fk, makeFrame } from './helpers/mhrSynth.js'
 
 function neutralBVH(frames = 3) {
   const rot = BVH_JOINTS.map(() => { const a = new Float32Array(frames * 4); for (let k = 0; k < frames; k++) a[k * 4 + 3] = 1; return a })
@@ -74,6 +77,37 @@ describe('a neutral Pose Finder clip leaves the character in its own rest pose',
     const hips = clip.tracks.find((t) => t.name === 'mixamorig:Hips.position')
     expect(hips.values[1]).toBeCloseTo(0.95, 2)
     expect(hips.values[4]).toBeLessThan(0.4)
+  })
+
+  it('retargets the lower reference and neutral motion to both sides of the character', async () => {
+    const frames = Array.from({ length: 3 }, (_, i) => makeFrame(i * 0.1, fk({})))
+    const opts = { ...POSE_PRESETS.standing.settings, outFps: 10, smoothing: 'off', footLock: false, levelCamera: false, posture: 'off' }
+    const model = character()
+    model.root.rotation.y = 0.7
+    const off = await retarget(model, writeBVH(solveMotion(frames, { ...opts, lowerArms: 'off' })))
+    const lowered = await retarget(model, writeBVH(solveMotion(frames, opts)))
+    const byName = Object.fromEntries(model.bones.map((b) => [b.name, b]))
+    const pose = (clip, frame) => {
+      for (const track of clip.tracks) {
+        if (track.name.endsWith('.quaternion')) byName[track.name.slice(0, -'.quaternion'.length)].quaternion.fromArray(track.values, frame * 4)
+      }
+      model.root.updateMatrixWorld(true)
+      return ['Left', 'Right'].map((side) => {
+        const shoulder = byName[`mixamorig:${side}Shoulder`], arm = byName[`mixamorig:${side}Arm`], forearm = byName[`mixamorig:${side}ForeArm`]
+        return {
+          shoulderDirection: arm.getWorldPosition(new THREE.Vector3()).sub(shoulder.getWorldPosition(new THREE.Vector3())).normalize(),
+          armDirection: forearm.getWorldPosition(new THREE.Vector3()).sub(arm.getWorldPosition(new THREE.Vector3())).normalize(),
+        }
+      })
+    }
+    for (const frame of [0, 1]) {
+      const original = pose(off.clip, frame), corrected = pose(lowered.clip, frame)
+      for (let i = 0; i < 2; i++) {
+        const elevation = (d) => Math.atan2(d.y, Math.hypot(d.x, d.z)) * 180 / Math.PI
+        expect(elevation(original[i].shoulderDirection) - elevation(corrected[i].shoulderDirection)).toBeCloseTo(20.36, 2)
+        expect(elevation(original[i].armDirection) - elevation(corrected[i].armDirection)).toBeCloseTo(3.52, 2)
+      }
+    }
   })
 
   it('preserves character foot and toe rest angles while retaining airborne foot motion', async () => {

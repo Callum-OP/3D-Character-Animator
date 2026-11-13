@@ -23,7 +23,9 @@ Advanced settings expose sampling, smoothing and cleanup controls. The optional 
 the spot, not walking: it is baked into the BVH, but feet can move if the hips travel beyond leg reach. Choosing
 a preset resets these settings. Results are generated from the settings at the time **Find poses** is pressed;
 run it again after changing settings. Both download and character import use that generated BVH. A neutral
-reference frame is included at the start for the app's retargeter.
+reference frame is included at the start for the app's retargeter. All presets use a lower shoulder and upper-arm
+reference pose by default, while preserving the tracked motion relative to that pose. Adjust or disable
+**Lower shoulders and arms** in advanced settings if it changes the intended result.
 
 The model estimates 3D motion from one video, so occluded limbs, floor height, camera movement, and fast rotations
 are approximate. The body-height reference uses tracked points rather than detecting a real floor or bed, and

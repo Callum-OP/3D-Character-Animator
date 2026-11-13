@@ -34,7 +34,7 @@ export default function PoseFinderPanel({ onClose }) {
   const [posture, setPosture] = useState('auto')
   const [levelFeet, setLevelFeet] = useState(true)
   const [limitJoints, setLimitJoints] = useState(true)
-  const [shoulders, setShoulders] = useState('slight')
+  const [lowerArms, setLowerArms] = useState('slight')
   const [ground, setGround] = useState('strict')
   const [groundReference, setGroundReference] = useState('feet')
   const [lockFeet, setLockFeet] = useState(false)
@@ -61,7 +61,7 @@ export default function PoseFinderPanel({ onClose }) {
     setPreset(value)
     setSampleFps(s.sampleFps); setOutFps(s.outFps); setSmoothing(s.smoothing)
     setFootLock(s.footLock); setLevelCamera(s.levelCamera); setPosture(s.posture)
-    setLevelFeet(s.levelFeet); setLimitJoints(s.limitJoints); setShoulders(s.shoulders)
+    setLevelFeet(s.levelFeet); setLimitJoints(s.limitJoints); setLowerArms(s.lowerArms)
     setGround(s.ground); setGroundReference(s.groundReference); setLockFeet(s.lockFeet)
   }
 
@@ -171,7 +171,7 @@ export default function PoseFinderPanel({ onClose }) {
     abortRef.current = ac
     setRunning(true)
     setProgress({ done: 0, total: 1 })
-    diagRef.current = { app: '3D Character Animator Pose Finder', settings: { preset, compute, sampleFps, outFps, smoothing, footLock, levelCamera, posture, levelFeet, limitJoints, shoulders, ground, groundReference, lockFeet, range, video: src && { name: src.name, width: src.width, height: src.height, duration: src.duration }, box }, frames: [], provider: null, error: null }
+    diagRef.current = { app: '3D Character Animator Pose Finder', settings: { preset, compute, sampleFps, outFps, smoothing, footLock, levelCamera, posture, levelFeet, limitJoints, lowerArms, ground, groundReference, lockFeet, range, video: src && { name: src.name, width: src.width, height: src.height, duration: src.duration }, box }, frames: [], provider: null, error: null }
     setHasDiag(true)
     const cropper = makeCropper()
     const source = {
@@ -197,9 +197,9 @@ export default function PoseFinderPanel({ onClose }) {
         try {
           const r = await runPoseFinder({
             source, engine: pose, box, startTime: range[0], endTime: range[1], sampleFps, outFps, smoothing, footLock,
-            signal: ac.signal, onProgress: setProgress, onFrame, clean: { levelCamera, posture, levelFeet, limitJoints, shoulders, ground, groundReference, lockFeet, contactMode: ground === 'strict' ? 'ground' : (POSE_PRESETS[preset].settings.contactMode || 'ground') },
+            signal: ac.signal, onProgress: setProgress, onFrame, clean: { levelCamera, posture, levelFeet, limitJoints, lowerArms, ground, groundReference, lockFeet, contactMode: ground === 'strict' ? 'ground' : (POSE_PRESETS[preset].settings.contactMode || 'ground') },
           })
-          diagRef.current.solved = { shoulderDeg: r.solved.info.shoulderDeg, groundLocked: r.solved.info.groundLocked, tiltDeg: r.solved.info.tiltDeg, slouchDeg: r.solved.info.slouchDeg, limitDeg: r.solved.info.limitDeg, footLevelDeg: r.solved.info.footLevelDeg, variationDeg: r.solved.info.variationDeg, convention: r.solved.info.convention, scale: r.solved.info.scale, warnings: r.solved.info.warnings }
+          diagRef.current.solved = { shoulderLowerDeg: r.solved.info.shoulderLowerDeg, armLowerDeg: r.solved.info.armLowerDeg, groundLocked: r.solved.info.groundLocked, tiltDeg: r.solved.info.tiltDeg, slouchDeg: r.solved.info.slouchDeg, limitDeg: r.solved.info.limitDeg, footLevelDeg: r.solved.info.footLevelDeg, variationDeg: r.solved.info.variationDeg, convention: r.solved.info.convention, scale: r.solved.info.scale, warnings: r.solved.info.warnings }
           setResult({ bvh: r.bvh, name: src.name.replace(/\.[^.]+$/, '') + '-pose', warnings: r.solved.info.warnings, info: r.solved.info, fps: r.solved.fps })
           break
         } catch (err) {
@@ -386,9 +386,9 @@ export default function PoseFinderPanel({ onClose }) {
                     <option value="body">Lowest tracked body point</option>
                   </select>
                 </label>
-                <label className="pf-field">Lower shoulders
-                  <select value={shoulders} disabled={running} onChange={(e) => setShoulders(e.target.value)}>
-                    <option value="off">Off</option><option value="slight">Slight</option><option value="more">More</option>
+                <label className="pf-field">Lower shoulders and arms
+                  <select value={lowerArms} disabled={running} onChange={(e) => setLowerArms(e.target.value)}>
+                    <option value="off">Off</option><option value="slight">Default (reference pose)</option><option value="more">More</option>
                   </select>
                 </label>
                 <label className="pf-check" style={{ alignSelf: 'end' }}>
@@ -445,7 +445,7 @@ export default function PoseFinderPanel({ onClose }) {
                 {result.warnings.map((w) => <div className="pf-warn" key={w}>{w}</div>)}
                 {result.info && (
                   <p className="pf-dim">
-                    Cleaned up: camera tilt {result.info.tiltDeg.toFixed(0)}°, slouch removed {result.info.slouchDeg.toFixed(0)}°, foot levelling up to {result.info.footLevelDeg.toFixed(0)}°, joints pulled back into range by up to {result.info.limitDeg.toFixed(0)}°, shoulders lowered up to {result.info.shoulderDeg.toFixed(0)}°{result.info.groundLocked ? ', lowest foot kept on the ground' : ''}{result.info.feetLocked ? ', both feet held in place' : ''}.
+                    Cleaned up: camera tilt {result.info.tiltDeg.toFixed(0)}°, slouch removed {result.info.slouchDeg.toFixed(0)}°, foot levelling up to {result.info.footLevelDeg.toFixed(0)}°, joints pulled back into range by up to {result.info.limitDeg.toFixed(0)}°, shoulder baseline lowered {result.info.shoulderLowerDeg.toFixed(0)}°, arm baseline lowered {result.info.armLowerDeg.toFixed(0)}°{result.info.groundLocked ? ', lowest foot kept on the ground' : ''}{result.info.feetLocked ? ', both feet held in place' : ''}.
                   </p>
                 )}
                 <div className="pf-grid">

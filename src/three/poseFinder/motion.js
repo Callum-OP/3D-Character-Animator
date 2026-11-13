@@ -469,44 +469,59 @@ function levelFeet(rot, count, planted) {
 }
 
 
-// ---- shoulders and ground ----------------------------------------------------------------------------------
-const SHRUG = { off: null, slight: { keep: 0.5, lowerDeg: 2 }, more: { keep: 0.25, lowerDeg: 5 } }
-export const SHOULDER_LEVELS = Object.keys(SHRUG)
+// ---- arm baseline and ground -------------------------------------------------------------------------------
+const ARM_BASELINE_STRENGTH = { off: 0, slight: 1, more: 1.5 }
+export const ARM_LOWER_LEVELS = Object.keys(ARM_BASELINE_STRENGTH)
+// ShoulderTest's preferred left-side directions in the chest frame; mirror X for the right side.
+const ARM_REFERENCE = { shoulder: [0.814649, -0.273116, -0.511620], arm: [0.595504, -0.780443, 0.190483] }
 
-// The body model often raises the shoulders (a shrug) and pushes them forward. Damp any raise above the neutral
-// height and drop the shoulder a little, keeping the arm itself pointing where it was. Returns the largest change (deg).
-function lowerShoulders(local, count, level) {
-  const cfg = SHRUG[level]
-  if (!cfg) return 0
-  const offs = restOffsets()
-  const lower = (cfg.lowerDeg * Math.PI) / 180
-  const L = new THREE.Quaternion(), R = new THREE.Quaternion(), La = new THREE.Quaternion()
-  const elev = (v) => Math.atan2(v.y, Math.hypot(v.x, v.z))
-  let worst = 0
-  for (const [sh, arm] of [['LeftShoulder', 'LeftArm'], ['RightShoulder', 'RightArm']]) {
-    const j = JOINT_INDEX[sh], ja = JOINT_INDEX[arm]
-    const d0 = new THREE.Vector3(...offs[ja]).normalize()
-    const e0 = elev(d0)
-    for (let k = 0; k < count; k++) {
-      L.set(local[j][k * 4], local[j][k * 4 + 1], local[j][k * 4 + 2], local[j][k * 4 + 3])
-      const dir = d0.clone().applyQuaternion(L)
-      const e = elev(dir) - e0
-      const de = (e > 0 ? -(1 - cfg.keep) * e : 0) - lower
-      const h = new THREE.Vector3(dir.x, 0, dir.z)
-      if (h.lengthSq() < 1e-6) continue
-      h.normalize()
-      R.setFromAxisAngle(h.clone().cross(UP).normalize(), de) // raises a horizontal direction by +de
-      const Rinv = R.clone().invert()
-      La.set(local[ja][k * 4], local[ja][k * 4 + 1], local[ja][k * 4 + 2], local[ja][k * 4 + 3])
-      // shoulder' = R * shoulder ; arm' = shoulder'^-1 * shoulder * arm  (the arm keeps its world orientation)
-      const Lnew = R.clone().multiply(L)
-      const Lanew = L.clone().invert().multiply(Rinv).multiply(L).multiply(La)
-      local[j].set([Lnew.x, Lnew.y, Lnew.z, Lnew.w], k * 4)
-      local[ja].set([Lanew.x, Lanew.y, Lanew.z, Lanew.w], k * 4)
-      worst = Math.max(worst, Math.abs(de))
+// Change the BVH reference pose and conjugate the motion by the same reference orientations. This preserves
+// every tracked world-space rotation delta while changing the reference pose used by the BVH retargeter.
+function applyArmBaseline(rot, count, level) {
+  const strength = ARM_BASELINE_STRENGTH[level]
+  if (strength === undefined) throw new Error(`Unknown arm lowering level: ${level}`)
+  const rest = BVH_JOINTS.map(() => new THREE.Quaternion())
+  const offsets = restOffsets()
+  const rotation = (offset, target, sign) => {
+    const dir = new THREE.Vector3(...offset).normalize()
+    const targetDir = new THREE.Vector3(sign * target[0], target[1], target[2]).normalize()
+    const q = new THREE.Quaternion().setFromUnitVectors(dir, targetDir)
+    const axis = new THREE.Vector3(q.x, q.y, q.z)
+    const angle = 2 * Math.atan2(axis.length(), q.w)
+    return new THREE.Quaternion().setFromAxisAngle(axis.normalize(), angle * strength)
+  }
+  for (const [side, sign] of [['Left', 1], ['Right', -1]]) {
+    const js = JOINT_INDEX[`${side}Shoulder`], ja = JOINT_INDEX[`${side}Arm`], jf = JOINT_INDEX[`${side}ForeArm`]
+    rest[js].copy(rotation(offsets[ja], ARM_REFERENCE.shoulder, sign))
+    const armRest = rotation(offsets[jf], ARM_REFERENCE.arm, sign)
+    for (let j = 0; j < BVH_JOINTS.length; j++) {
+      for (let p = j; p >= 0; p = BVH_JOINTS[p].parent) {
+        if (p === ja) { rest[j].copy(armRest); break }
+      }
     }
   }
-  return (worst * 180) / Math.PI
+  const q = new THREE.Quaternion()
+  for (let j = 0; j < BVH_JOINTS.length; j++) {
+    const parent = BVH_JOINTS[j].parent
+    const invParent = parent < 0 ? new THREE.Quaternion() : rest[parent].clone().invert()
+    for (let k = 0; k < count; k++) {
+      q.fromArray(rot[j], k * 4).premultiply(invParent).multiply(rest[j]).toArray(rot[j], k * 4)
+    }
+  }
+  const localRest = rest.map((q, j) => {
+    const parent = BVH_JOINTS[j].parent
+    return (parent < 0 ? q.clone() : rest[parent].clone().invert().multiply(q)).toArray()
+  })
+  const lowerDeg = (j, q) => {
+    const before = new THREE.Vector3(...offsets[j]).normalize(), after = before.clone().applyQuaternion(q)
+    const elevation = (v) => Math.atan2(v.y, Math.hypot(v.x, v.z))
+    return (elevation(before) - elevation(after)) * 180 / Math.PI
+  }
+  return {
+    restRot: localRest,
+    shoulderLowerDeg: lowerDeg(JOINT_INDEX.LeftArm, rest[JOINT_INDEX.LeftShoulder]),
+    armLowerDeg: lowerDeg(JOINT_INDEX.LeftForeArm, rest[JOINT_INDEX.LeftArm]),
+  }
 }
 
 // Height of the hips above the ground that puts the lowest point of either foot exactly on it, for every frame,
@@ -670,9 +685,9 @@ function lockFeet(rot, root, count, planted, fixed, ground, level, contactFps = 
 // frames: [{ t (s), G: Float32Array(127*9) joint_rotations, jc: Float32Array(127*3) joint_coords,
 //            kp3: Float32Array(70*3) keypoints_3d, camT: [x,y,z] }]
 // Returns { fps, count, root: Float32Array(count*3) in cm, rot: Float32Array(count*4)[] per BVH joint (local),
-//           info: {...} }
+//           restRot: local reference quaternions per BVH joint, info: {...} }
 export function solveMotion(frames, opts = {}) {
-  const o = { outFps: 30, smoothing: 'medium', footLock: true, contactMode: 'ground', levelCamera: true, posture: 'auto', levelFeet: true, limitJoints: true, shoulders: 'slight', ground: 'strict', groundReference: 'feet', lockFeet: false, ...opts }
+  const o = { outFps: 30, smoothing: 'medium', footLock: true, contactMode: 'ground', levelCamera: true, posture: 'auto', levelFeet: true, limitJoints: true, lowerArms: 'slight', ground: 'strict', groundReference: 'feet', lockFeet: false, ...opts }
   if (!frames || frames.length < 2) throw new Error('Need at least two analysed frames.')
   const n = frames.length
   const times = frames.map((f) => f.t)
@@ -717,8 +732,6 @@ export function solveMotion(frames, opts = {}) {
   // 2) anatomical clean-up on the raw samples (before smoothing, so a one-frame spike is not smeared into neighbours)
   let slouchDeg = 0, limitDeg = 0
   if (o.posture !== 'off') slouchDeg = (straightenPosture(local, n, o.posture === 'strong' ? 0 : 0.12) * 180) / Math.PI
-  let shoulderDeg = 0
-  if (o.shoulders !== 'off') shoulderDeg = lowerShoulders(local, n, o.shoulders)
   if (o.limitJoints) limitDeg = (limitTracks(local, n) * 180) / Math.PI
 
   // 3) resample to the output rate, then smooth there (zero-phase)
@@ -806,7 +819,8 @@ export function solveMotion(frames, opts = {}) {
   for (const name of ['LeftArm', 'RightArm', 'LeftUpLeg', 'RightUpLeg', 'Spine2', 'Head']) variationDeg = Math.max(variationDeg, maxAngleFromFirst(rot[JOINT_INDEX[name]], grid.count))
   if (variationDeg < 4) warnings.push('The pose barely changes between frames. The model probably could not see the person — check the box and the "model view" picture.')
 
-  return { fps: o.outFps, count: grid.count, root, rot, info: { convention: conv, scale, groundM: ground, lockSegments, variationDeg, tiltDeg, slouchDeg, limitDeg, footLevelDeg, shoulderDeg, groundLocked, feetLocked: !!o.lockFeet, warnings } }
+  const { restRot, shoulderLowerDeg, armLowerDeg } = applyArmBaseline(rot, grid.count, o.lowerArms)
+  return { fps: o.outFps, count: grid.count, root, rot, restRot, info: { convention: conv, scale, groundM: ground, lockSegments, variationDeg, tiltDeg, slouchDeg, limitDeg, footLevelDeg, shoulderLowerDeg, armLowerDeg, groundLocked, feetLocked: !!o.lockFeet, warnings } }
 }
 
 export { JOINT_INDEX }
