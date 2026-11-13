@@ -4,6 +4,7 @@ import * as THREE from 'three'
 import { useStore } from '../store.js'
 import { getCurrentModel } from '../three/scene.js'
 import { setFacePickHandler } from '../three/meshedit.js'
+import { runAsOneSceneStep } from '../three/sceneHistory.js'
 import CopyFromMesh from './CopyFromMesh.jsx'
 import { editPartRigDraft, getPartRigDraft, resetPartRigDraft, subscribePartRigDraft } from '../three/partRigDraft.js'
 import { addDangleChainUndoable, collectDescendantBoneNames, getDangleChainsForRig, regroupRigChainsUndoable, removeDangleChainUndoable } from '../three/dangle.js'
@@ -48,7 +49,6 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
   const [tolerance, setTolerance] = useState(0.25)
   // The picked faces live in partRigDraft.js so every change to them is an undo / redo step.
   const trisByMesh = useSyncExternalStore(subscribePartRigDraft, getPartRigDraft)
-  const [copyPhysics, setCopyPhysics] = useState(null) // physics settings carried over by Duplicate
   const [picking, setPicking] = useState(false)
   const [message, setMessage] = useState('')
   const [presetId, setPresetId] = useState('hair')
@@ -78,7 +78,6 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
   // another part: drop the half-made selection
   useEffect(() => {
     resetPartRigDraft()
-    setCopyPhysics(null)
     setPicking(false)
     setMessage('')
     setEditingId(null)
@@ -164,7 +163,6 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
   function choosePreset(id) {
     const p = PRESETS.find((x) => x.id === id)
     setPresetId(id)
-    setCopyPhysics(null)
     setLabel(p.name)
     patch(p.o)
   }
@@ -180,12 +178,10 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
           collectDescendantBoneNames(model, root, 64),
           'dangle',
           { id: entry.id, name: entry.label },
-          copyPhysics,
         )
       })
     }
     resetPartRigDraft()
-    setCopyPhysics(null)
     setPicking(false)
     setVersion((v) => v + 1)
     setMessage(`Added ${entry.boneNames.length} bones${addPhysics ? ' with swing physics' : ''}. They show up in Pose mode’s bone list. Ctrl+Z undoes it.`)
@@ -201,46 +197,77 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
     const usesAddedParent = (entry.parentNames || []).some((name) => generatedBoneNames.has(name))
     setOpts({ ...PRESETS[0].o, influence: 1, includeNearbySurfaces: false, nearbySurfaceDistance: 0.02, ...entry.options, allowAddedBoneAttachment: entry.options.allowAddedBoneAttachment || usesAddedParent })
     resetPartRigDraft(Object.fromEntries(targetMeshes.map((item, i) => [item.uuid, fromRanges(savedRanges[i] || [])])))
-    setCopyPhysics(null)
     setPicking(false)
     setMessage(`Editing ${entry.label}. Change the settings, then update the bones.`)
   }
 
-  // Start a NEW rig with this one's name, bone settings and physics, ready to pick its own faces — e.g. the same
-  // hair setup on another part of the same mesh. Nothing is built until Add bones, so the original keeps its bones.
+  // Rebuild this rig over the same faces with a unique name, leaving both rigs available to edit.
   function onDuplicate(entry) {
     const usesAddedParent = (entry.parentNames || []).some((name) => generatedBoneNames.has(name))
-    const source = getDangleChainsForRig(useStore.getState().dangleChains, entry, entries)[0]
-    let physics = null
-    if (source) {
-      // eslint-disable-next-line no-unused-vars
-      const { id, name, boneNames, groupId, groupName, ...settings } = source
-      physics = settings
+    const sources = getDangleChainsForRig(useStore.getState().dangleChains, entry, entries)
+
+    const targetMeshes = (entry.result.meshes || [entry.result]).map((item) => item?.mesh)
+    if (!targetMeshes.length || targetMeshes.some((item) => !item)) return setMessage(`Cannot duplicate ${entry.label}: its mesh is no longer available.`)
+    const savedRanges = entry.trisByMesh?.length ? entry.trisByMesh : [entry.tris || []]
+    const duplicateSelections = targetMeshes.map((targetMesh, i) => ({
+      mesh: targetMesh,
+      tris: fromRanges(savedRanges[i] || []),
+    }))
+    const duplicateOptions = {
+      ...PRESETS[0].o,
+      influence: 1,
+      includeNearbySurfaces: false,
+      nearbySurfaceDistance: 0.02,
+      ...entry.options,
+      allowAddedBoneAttachment: entry.options.allowAddedBoneAttachment || usesAddedParent,
     }
+    const result = runAsOneSceneStep(() => {
+      const added = applyPartRig(model, targetMeshes, duplicateSelections, duplicateOptions, {
+        label: uniqueRigLabel(model, entry.label),
+      })
+      if (!added.ok) return added
+      if (sources.length) {
+        added.entry.rootBoneNames.forEach((root, i) => {
+          // eslint-disable-next-line no-unused-vars
+          const { id, name, boneNames, groupId, groupName, ...physics } = sources[i] || sources[0]
+          addDangleChainUndoable(
+            added.entry.rootBoneNames.length > 1 ? `${added.entry.label} ${i + 1}` : added.entry.label,
+            collectDescendantBoneNames(model, root, 64),
+            physics.type === 'cloth' ? 'cloth' : 'dangle',
+            { id: added.entry.id, name: added.entry.label },
+            physics,
+          )
+        })
+      }
+      return added
+    })
+    if (!result.ok) return setMessage(result.reason)
+
     setEditingId(null)
-    setLabel(uniqueRigLabel(model, entry.label))
-    setOpts({ ...PRESETS[0].o, influence: 1, includeNearbySurfaces: false, nearbySurfaceDistance: 0.02, ...entry.options, allowAddedBoneAttachment: entry.options.allowAddedBoneAttachment || usesAddedParent })
-    setAddPhysics(!!source)
-    setCopyPhysics(physics)
     resetPartRigDraft()
-    setPicking(true)
-    setMessage(`Copied ${entry.label}'s settings. Click the new area on the mesh, then press Add bones.`)
+    setPicking(false)
+    setVersion((v) => v + 1)
+    setMessage(`Duplicated ${entry.label} as ${result.entry.label}. The duplicate controls overlapping faces; edit it to pick a different area. Ctrl+Z undoes it.`)
   }
 
   function onUpdate() {
     const before = { id: editingEntry.id, label: editingEntry.label, boneNames: editingEntry.boneNames, rootBoneNames: editingEntry.rootBoneNames }
     const chainsToGroup = getDangleChainsForRig(useStore.getState().dangleChains, editingEntry, entries)
       .map((chain) => chain.id)
-    const result = updatePartRig(model, editingId, { label: uniqueRigLabel(model, label, editingId), options: opts })
+    const result = runAsOneSceneStep(() => {
+      const updated = updatePartRig(model, editingId, { label: uniqueRigLabel(model, label, editingId), options: opts, selections })
+      if (updated.ok) {
+        regroupRigChainsUndoable(
+          chainsToGroup,
+          { id: updated.entry.id, name: updated.entry.label },
+          before,
+          updated.entry,
+          (root) => collectDescendantBoneNames(model, root, 64),
+        )
+      }
+      return updated
+    })
     if (!result.ok) return setMessage(result.reason)
-    // Only this rig's own chains move into the renamed group, and they follow the rebuilt bones.
-    regroupRigChainsUndoable(
-      chainsToGroup,
-      { id: result.entry.id, name: result.entry.label },
-      before,
-      result.entry,
-      (root) => collectDescendantBoneNames(model, root, 64),
-    )
     setEditingId(null)
     resetPartRigDraft()
     setVersion((v) => v + 1)
@@ -252,8 +279,12 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
     if (dependents.length) return setMessage(`Cannot delete ${entry.label}: ${dependents.map((item) => item.label).join(', ')} ${dependents.length === 1 ? 'is' : 'are'} attached to its bones. Delete those rigs first.`)
     if (!entry.result) return setMessage('That bone rig is no longer available.')
     const rigChains = getDangleChainsForRig(useStore.getState().dangleChains, entry, entries)
-    rigChains.forEach((chain) => removeDangleChainUndoable(chain.id))
-    if (!removePartRig(model, entry.id)) return setMessage('That bone rig is no longer available.')
+    const removed = runAsOneSceneStep(() => {
+      if (!removePartRig(model, entry.id)) return false
+      rigChains.forEach((chain) => removeDangleChainUndoable(chain.id))
+      return true
+    })
+    if (!removed) return setMessage('That bone rig is no longer available.')
     if (editingId === entry.id) setEditingId(null)
     setVersion((v) => v + 1)
     setMessage(`Removed ${entry.label}'s bones. Ctrl+Z restores them.`)
@@ -283,7 +314,7 @@ export default function PartRigSection({ meshUuid, meshUuids, resolveMesh }) {
             return (
               <FxItem key={e.id} title={e.label} pills={[`${e.boneNames.length} bones`, `${partTotal} part${partTotal === 1 ? '' : 's'}`]}>
                 <FxItemActions>
-                  <button className="btn secondary" onClick={() => onDuplicate(e)} title="Start a new rig with this one's settings, then pick a different area for it">Duplicate</button>
+                  <button className="btn secondary" onClick={() => onDuplicate(e)} title="Add another rig over the same area with the same settings">Duplicate</button>
                   <button className="btn secondary" onClick={() => onEdit(e)} title="Change this rig's name, bone count, and settings">Edit</button>
                   <button className="btn secondary danger" onClick={() => onDelete(e)} title="Delete these bones">Delete</button>
                 </FxItemActions>

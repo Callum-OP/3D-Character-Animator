@@ -41,6 +41,13 @@ describe('Add bones groups keep their own chains', () => {
     const sections = groupDangleChainsByRig(chains, [capeRig, shortsRig])
     expect(sections.map((s) => [s.groupId, s.chains.map((c) => c.id)])).toEqual([['rig_a', ['c1']], ['rig_b', ['c2']]])
   })
+
+  it('finds chains with stale group IDs using the same bone matching as the physics panel', () => {
+    const stale = [{ id: 'old', name: 'Cape', groupId: 'old_model_rig', boneNames: ['Cape_1', 'Cape_2'] }]
+    expect(groupDangleChainsByRig(stale, [capeRig, shortsRig])[0].groupId).toBe('rig_a')
+    expect(getDangleChainsForRig(stale, capeRig, [capeRig, shortsRig])).toEqual(stale)
+    expect(getDangleChainsForRig(stale, shortsRig, [capeRig, shortsRig])).toEqual([])
+  })
 })
 
 describe('renaming a rig regroups and retargets only its chains', () => {
@@ -117,6 +124,30 @@ describe('extra dangle feel settings', () => {
     return r
   }
   const swing = (r) => Math.max(...r.bones.slice(1).map((b) => b.quaternion.angleTo(new THREE.Quaternion())))
+
+  it('rebinds a chain when its bones are replaced with new objects of the same names', () => {
+    clearDangle(7)
+    initDangle({ requestRender: () => {} })
+    const r = rig()
+    const config = [{ id: 'k', boneNames: ['c0', 'c1', 'c2', 'c3'], stiffness: 0.1, gravity: 1, damping: 0.4, reaction: 0.8 }]
+    setDangleConfig(7, r, true, config)
+    const old = r.bones.slice(1)
+    old[0].removeFromParent()
+    const newRoot = old[0].clone(true)
+    r.hips.add(newRoot)
+    const replacements = []
+    newRoot.traverse((bone) => { if (bone.isBone) replacements.push(bone) })
+    r.bones = [r.hips, ...replacements]
+    r.root.updateMatrixWorld(true)
+    setDangleConfig(7, r, true, config)
+    for (let f = 0; f < 60; f++) {
+      r.hips.position.x = Math.sin(f / 5) * 0.4
+      r.root.updateMatrixWorld(true)
+      stepDangleLive(1 / 60)
+    }
+    expect(Math.max(...replacements.map((bone) => bone.quaternion.angleTo(new THREE.Quaternion())))).toBeGreaterThan(0.02)
+    clearDangle(7)
+  })
 
   it('swing limit caps how far a bone can turn', () => {
     const free = swing(run({}))

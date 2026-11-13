@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import React from 'react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import * as THREE from 'three'
 import { useStore } from '../store.js'
 import { initObjects } from '../three/objects.js'
@@ -11,6 +13,7 @@ import { applyPartRig, getPartRigEntries, initPartRig } from '../three/partRig.j
 import { performUndo, performRedo } from '../three/undoPriority.js'
 import { clearUndoHistory } from '../three/undoHistory.js'
 import { toRanges } from '../three/regions.js'
+import PartRigSection from '../panels/PartRigSection.jsx'
 import {
   copyAddedBonesFromCharacter,
   copyAddedBonesFromMesh,
@@ -109,6 +112,7 @@ beforeEach(() => {
     selectedObjectIds: [], mode: 'bone', dangleChains: [], meshOverrides: {},
   })
 })
+afterEach(cleanup)
 
 describe('matching and carrying faces over', () => {
   it('pairs same-named meshes in order and reports the ones with no partner', () => {
@@ -161,6 +165,33 @@ describe('matching and carrying faces over', () => {
 })
 
 describe('copy added bones', () => {
+  it('duplicates a copied rig with its real physics chain and undoes both together', () => {
+    seed(new THREE.BoxGeometry(2, 5, 2, 2, 2, 2))
+    copyAddedBonesFromCharacter('source')
+    const model = getCurrentModel()
+    const mesh = model.meshes[0]
+    const original = getPartRigEntries(model)[0]
+    render(React.createElement(PartRigSection, {
+      meshUuid: mesh.uuid,
+      meshUuids: [mesh.uuid],
+      resolveMesh: (uuid) => model.meshes.find((item) => item.uuid === uuid),
+    }))
+    fireEvent.click(screen.getByRole('button', { name: 'Duplicate' }))
+    const rigs = getPartRigEntries(model)
+    const chains = useStore.getState().dangleChains
+    expect(rigs).toHaveLength(2)
+    expect(chains).toHaveLength(2)
+    expect(chains[0].groupId).toBe(original.id)
+    expect(chains[1]).toMatchObject({ groupId: rigs[1].id, stiffness: 0.77, gravity: 3, damping: 0.2 })
+    expect(chains[1].boneNames).toEqual(rigs[1].boneNames)
+    act(() => performUndo(useStore.getState()))
+    expect(getPartRigEntries(model)).toHaveLength(1)
+    expect(useStore.getState().dangleChains).toHaveLength(1)
+    act(() => performRedo(useStore.getState()))
+    expect(getPartRigEntries(model)).toHaveLength(2)
+    expect(useStore.getState().dangleChains).toHaveLength(2)
+  })
+
   it('clears added bones and their dangle chains together, in one undo step', () => {
     seed(new THREE.BoxGeometry(2, 5, 2, 2, 2, 2))
     copyAddedBonesFromCharacter('source')

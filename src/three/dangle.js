@@ -90,13 +90,16 @@ export function setDangleConfig(id, model, enabled, chains) {
   rt.enabled = true
 
   const seen = new Set()
+  const bonesByName = new Map((model.bones || []).map((bone) => [bone.name, bone]))
+  let rebuilt = false
   const chainsBefore = [...rt.chains.keys()].join('|')
   for (const cfg of chains) {
     if (!cfg || !cfg.id || !cfg.boneNames || !cfg.boneNames.length) continue
     seen.add(cfg.id)
     const existing = rt.chains.get(cfg.id)
     const sameBones =
-      existing && existing.boneNamesKey === cfg.boneNames.join('|')
+      existing && existing.boneNamesKey === cfg.boneNames.join('|') &&
+      cfg.boneNames.every((name, i) => existing.resolvedBones[i] === bonesByName.get(name))
     if (sameBones) {
       existing.params = paramsFrom(cfg)
       continue
@@ -104,6 +107,7 @@ export function setDangleConfig(id, model, enabled, chains) {
     const built = buildChain(model, cfg)
     if (built) rt.chains.set(cfg.id, built)
     else rt.chains.delete(cfg.id)
+    rebuilt = true
   }
   for (const existingId of [...rt.chains.keys()]) {
     if (!seen.has(existingId)) rt.chains.delete(existingId)
@@ -111,7 +115,7 @@ export function setDangleConfig(id, model, enabled, chains) {
   // Which bones are "moving cloth" decides which mesh faces and bones count as the body to hit.
   if ([...rt.chains.keys()].join('|') !== chainsBefore || rt.chains.size) {
     const key = [...rt.chains.values()].map((c) => c.boneNamesKey).join('#')
-    if (key !== rt.chainKey) {
+    if (key !== rt.chainKey || rebuilt) {
       rt.chainKey = key
       rt.version = (rt.version || 0) + 1
     }
@@ -211,6 +215,7 @@ function buildChain(model, cfg) {
 
   return {
     boneNamesKey: cfg.boneNames.join('|'),
+    resolvedBones: cfg.boneNames.map((name) => byName.get(name)),
     boneSet: new Set(order.map((node) => node.bone)),
     order,
     params: paramsFrom(cfg),
@@ -858,7 +863,7 @@ export function groupDangleChainsByRig(chains, rigs) {
     }
     if (!rig && !chain.groupId) {
       // Old chains with no group id: match by name, but only when exactly one rig could own the name.
-      const byName = entries.filter((entry) => chain.name === entry.name || chain.name.startsWith(`${entry.name} `))
+      const byName = entries.filter((entry) => chain.name === entry.name || (chain.name || '').startsWith(`${entry.name} `))
       if (byName.length === 1) rig = byName[0]
     }
     if (!rig) {
@@ -876,20 +881,11 @@ export function groupDangleChainsByRig(chains, rigs) {
   return sections
 }
 
-// The chains that belong to one Add bones rig. A chain's group id (or the rig bones it uses) decides this;
-// the name is only a last resort for old chains, and never when another rig could own the same name.
+// Use the same ownership as the physics panel, including bone matching for stale group IDs.
 export function getDangleChainsForRig(chains, rig, allRigs = []) {
   if (!rig?.id) return []
-  const rigBones = new Set(rig.boneNames || [])
-  const others = (allRigs || []).filter((other) => other.id !== rig.id)
-  const usesBones = (chain, bones) => (chain.boneNames || []).some((name) => bones.has(name))
-  return (chains || []).filter((chain) => {
-    if (chain.groupId) return chain.groupId === rig.id
-    if (usesBones(chain, rigBones)) return true
-    if (others.some((other) => usesBones(chain, new Set(other.boneNames || [])))) return false
-    const named = (entry) => chain.name === entry.label || (chain.name || '').startsWith(`${entry.label} `)
-    return named(rig) && !others.some(named)
-  })
+  const rigs = (allRigs || []).some((entry) => entry.id === rig.id) ? allRigs : [...(allRigs || []), rig]
+  return groupDangleChainsByRig(chains, rigs).find((section) => section.groupId === rig.id)?.chains || []
 }
 
 // Recreate one default dangle chain for each rig that already has dangle

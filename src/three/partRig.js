@@ -582,13 +582,35 @@ export function applyPartRig(model, meshOrMeshes, trisOrSelections, options = {}
 function detachEntry(model, entry) {
   const r = entry.result
   if (!r) return
+  // Later overlapping rigs saved this rig's weights as their previous state. Bypass
+  // the removed layer so deleting the remaining rigs eventually restores the base skin.
+  r.overlapRestore = []
+  for (const removed of r.meshes || [r]) {
+    const remaining = new Map(removed.verts.map((vertex, i) => [vertex, i]))
+    for (const later of activeEntries(model)) {
+      if (later === entry || (later.result.startIndex ?? later.result.baseCount) <= (r.startIndex ?? r.baseCount)) continue
+      const target = (later.result.meshes || [later.result]).find((item) => item.mesh === removed.mesh)
+      if (!target) continue
+      let snapshot = null
+      target.verts.forEach((vertex, i) => {
+        const previous = remaining.get(vertex)
+        if (previous == null) return
+        if (!snapshot) snapshot = { target, indices: target.oldIdx.slice(), weights: target.oldW.slice() }
+        const offset = i * 4
+        target.oldIdx.set(removed.oldIdx.subarray(previous * 4, previous * 4 + 4), offset)
+        target.oldW.set(removed.oldW.subarray(previous * 4, previous * 4 + 4), offset)
+        remaining.delete(vertex)
+      })
+      if (snapshot) r.overlapRestore.push(snapshot)
+    }
+  }
   for (const meshResult of r.meshes || [r]) {
     writeSkin(meshResult.mesh, meshResult.verts, meshResult.oldIdx, meshResult.oldW)
   }
-  for (const b of r.created) b.removeFromParent()
-  model.__rigAdds = (model.__rigAdds || []).filter((e) => e !== entry)
   const startIndex = r.startIndex ?? r.baseCount
   reindexRigBones(model, rigSkeletons(entry), startIndex, r.created.length, true, entry)
+  for (const b of r.created) b.removeFromParent()
+  model.__rigAdds = (model.__rigAdds || []).filter((e) => e !== entry)
   for (const skeleton of rigSkeletons(entry)) {
     skeleton.bones.splice(startIndex, r.created.length)
     skeleton.boneInverses.splice(startIndex, r.created.length)
@@ -606,6 +628,11 @@ function attachEntry(model, entry) {
   if (!r) return
   const startIndex = r.startIndex ?? r.baseCount
   reindexRigBones(model, rigSkeletons(entry), startIndex, r.created.length, false, entry)
+  for (const { target, indices, weights } of r.overlapRestore || []) {
+    target.oldIdx.set(indices)
+    target.oldW.set(weights)
+  }
+  r.overlapRestore = []
   // each bone goes back under the parent it had
   r.created.forEach((bone) => {
     const parent = r.parents && r.parents.get(bone)
@@ -645,7 +672,7 @@ export function removePartRig(model, id) {
   return true
 }
 
-export function updatePartRig(model, id, { label, options } = {}) {
+export function updatePartRig(model, id, { label, options, selections: selectedFaces } = {}) {
   const entry = (model.__rigAdds || []).find((item) => item.id === id)
   if (!entry || !entry.result) return { ok: false, reason: 'That bone rig is no longer available.' }
   const dependents = getPartRigDependents(model, id)
@@ -654,7 +681,7 @@ export function updatePartRig(model, id, { label, options } = {}) {
   }
   const meshes = (entry.result.meshes || [entry.result]).map((item) => item.mesh)
   const ranges = entry.trisByMesh || [entry.tris]
-  const selections = meshes.map((mesh, i) => ({ mesh, tris: fromRanges(ranges[i] || []) }))
+  const selections = selectedFaces || meshes.map((mesh, i) => ({ mesh, tris: fromRanges(ranges[i] || []) }))
   const nextLabel = label ?? entry.label
   const nextOptions = options ?? entry.options
   detachEntry(model, entry)

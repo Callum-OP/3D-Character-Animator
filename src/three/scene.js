@@ -1844,6 +1844,11 @@ function refreshRigBones(model) {
   model.info = { ...model.info, boneCount: model.bones.length, bones: classifyBones(model.bones) }
   let owner = null
   for (const [cid, m] of state.characters) if (m === model) owner = cid
+  if (owner) {
+    const store = useStore.getState()
+    const data = store.activeCharacterId === owner ? store : store.characters[owner]
+    if (data) setDangleConfig(owner, model, data.dangleEnabled !== false, data.dangleChains)
+  }
   if (state.currentModel === model) {
     setPoseModel(model)
     useStore.setState({ modelInfo: model.info })

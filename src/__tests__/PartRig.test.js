@@ -275,6 +275,82 @@ describe('adding the bones', () => {
     expect(mesh.skeleton.bones).toHaveLength(3 + 3 + second.boneNames.length)
   })
 
+  it.each([
+    ['first', false],
+    ['second', false],
+    ['first', true],
+  ])('restores original skin after deleting overlapping rigs with %s removed first (body follow: %s)', (order, follow) => {
+    const { model, mesh, capeTris } = build()
+    const indices = Array.from(mesh.geometry.attributes.skinIndex.array)
+    const weights = Array.from(mesh.geometry.attributes.skinWeight.array)
+    const first = applyPartRig(model, mesh, capeTris, { segments: 3, stick: 0.1 }, { label: 'Cape' }).entry
+    if (follow) setPartRigBodyFollow(model, true)
+    const second = applyPartRig(model, mesh, capeTris, { segments: 2, stick: 0.1 }, { label: 'Cape_2' }).entry
+    const duplicatedIndices = Array.from(mesh.geometry.attributes.skinIndex.array)
+    const duplicatedWeights = Array.from(mesh.geometry.attributes.skinWeight.array)
+    const removed = order === 'first' ? [first, second] : [second, first]
+    expect(removePartRig(model, removed[0].id)).toBe(true)
+    expect(removePartRig(model, removed[1].id)).toBe(true)
+    expect(Array.from(mesh.geometry.attributes.skinIndex.array)).toEqual(indices)
+    expect(Array.from(mesh.geometry.attributes.skinWeight.array)).toEqual(weights)
+    expect(() => posed(mesh)).not.toThrow()
+    performUndo(useStore.getState())
+    performUndo(useStore.getState())
+    expect(Array.from(mesh.geometry.attributes.skinIndex.array)).toEqual(duplicatedIndices)
+    expect(Array.from(mesh.geometry.attributes.skinWeight.array)).toEqual(duplicatedWeights)
+    performRedo(useStore.getState())
+    performRedo(useStore.getState())
+    expect(Array.from(mesh.geometry.attributes.skinIndex.array)).toEqual(indices)
+    expect(Array.from(mesh.geometry.attributes.skinWeight.array)).toEqual(weights)
+    expect(() => posed(mesh)).not.toThrow()
+  })
+
+  it('restores the original skin after removing three partially overlapping rigs out of order', () => {
+    const { model, mesh, capeTris } = build()
+    const indices = Array.from(mesh.geometry.attributes.skinIndex.array)
+    const weights = Array.from(mesh.geometry.attributes.skinWeight.array)
+    const first = applyPartRig(model, mesh, capeTris, { segments: 3 }, { label: 'A' }).entry
+    const second = applyPartRig(model, mesh, capeTris.slice(0, 20), { segments: 2 }, { label: 'B' }).entry
+    const third = applyPartRig(model, mesh, capeTris.slice(10, 40), { segments: 2 }, { label: 'C' }).entry
+    for (const entry of [first, third, second]) expect(removePartRig(model, entry.id)).toBe(true)
+    expect(Array.from(mesh.geometry.attributes.skinIndex.array)).toEqual(indices)
+    expect(Array.from(mesh.geometry.attributes.skinWeight.array)).toEqual(weights)
+    expect(() => posed(mesh)).not.toThrow()
+    for (let i = 0; i < 3; i++) performUndo(useStore.getState())
+    for (let i = 0; i < 3; i++) performRedo(useStore.getState())
+    expect(Array.from(mesh.geometry.attributes.skinIndex.array)).toEqual(indices)
+    expect(Array.from(mesh.geometry.attributes.skinWeight.array)).toEqual(weights)
+  })
+
+  it('updates a rig to the newly selected faces and restores the old area', () => {
+    const { model, mesh, capeTris } = build()
+    const initialIndices = Array.from(mesh.geometry.attributes.skinIndex.array)
+    const first = applyPartRig(model, mesh, capeTris, { segments: 3, stick: 0 }, { label: 'Cape' }).entry
+    const updated = updatePartRig(model, first.id, {
+      selections: [{ mesh, tris: [0, 1] }],
+      options: { segments: 3, stick: 0 },
+    })
+    expect(updated.ok).toBe(true)
+    expect(updated.entry.tris).toEqual([[0, 1]])
+    expect(mesh.geometry.attributes.skinIndex.getX(4 + (N - 1) * N)).toBe(initialIndices[(4 + (N - 1) * N) * 4])
+  })
+
+  it('lets a duplicated rig move to another area without taking the original area with it', () => {
+    const { model, mesh, capeTris } = build()
+    const opts = { segments: 2, stick: 0 }
+    const original = applyPartRig(model, mesh, capeTris, opts, { label: 'Cape' }).entry
+    const duplicate = applyPartRig(model, mesh, capeTris, opts, { label: 'Cape_2' }).entry
+    const bottom = 4 + (N - 1) * N
+    const updated = updatePartRig(model, duplicate.id, { selections: [{ mesh, tris: [0, 1] }], options: opts })
+    expect(updated.ok).toBe(true)
+    expect(original.boneNames).toContain(mesh.skeleton.bones[mesh.geometry.attributes.skinIndex.getX(bottom)].name)
+    expect(updated.entry.boneNames).toContain(mesh.skeleton.bones[mesh.geometry.attributes.skinIndex.getX(2)].name)
+    performUndo(useStore.getState())
+    expect(duplicate.boneNames).toContain(mesh.skeleton.bones[mesh.geometry.attributes.skinIndex.getX(bottom)].name)
+    performRedo(useStore.getState())
+    expect(original.boneNames).toContain(mesh.skeleton.bones[mesh.geometry.attributes.skinIndex.getX(bottom)].name)
+  })
+
   it('never removes dependent rigs implicitly and explains the dependency', () => {
     const { model, mesh, capeTris } = build()
     const parent = applyPartRig(model, mesh, capeTris, { segments: 2 }, { label: 'Parent' }).entry
