@@ -7,6 +7,7 @@ import { BVH_JOINTS, JOINT_INDEX } from '../three/poseFinder/humanoid.js'
 import { buildSlotMapping, buildNameMatch } from '../three/bvh.js'
 import { fk, makeFrame, IDX, tiltFk } from './helpers/mhrSynth.js'
 import { limitJoint, toModelFrame, fromModelFrame } from '../three/poseFinder/limits.js'
+import { POSE_PRESETS } from '../three/poseFinder/presets.js'
 
 const E = (x, y, z) => new THREE.Euler(x, y, z)
 // the exact-reproduction tests switch the anatomical clean-ups off
@@ -38,6 +39,58 @@ describe('detectConvention', () => {
       expect(c.score).toBeGreaterThan(0.99)
     })
   }
+  for (const [rotFlip, coordFlip] of [[false, false], [true, true], [false, true], [true, false]]) {
+    it(`recovers conventions for an inverted person (rot=${rotFlip}, coords=${coordFlip})`, () => {
+      const fr = Array.from({ length: 8 }, (_, i) => makeFrame(i * 0.1, tiltFk(fk(poseAt(i)), 180), { rotFlip, coordFlip }))
+      const c = detectConvention(fr)
+      expect(c.coordFlip).toBe(coordFlip)
+      expect(c.rotFlip).toBe(rotFlip)
+      expect(c.score).toBeGreaterThan(0.99)
+    })
+  }
+})
+
+describe('motion presets', () => {
+  it.each([-1, 1])('preserves a full flip (%s direction) and its height changes in the written BVH', (direction) => {
+    const fr = Array.from({ length: 21 }, (_, i) => {
+      const f = makeFrame(i * 0.1, fk({ root: E(direction * Math.PI * 2 * i / 20, 0, 0) }), { depth: 4 })
+      f.camT[1] -= 0.5 * Math.sin(Math.PI * i / 20)
+      return f
+    })
+    const s = solveMotion(fr, { ...POSE_PRESETS.flips.settings, outFps: 10, smoothing: 'off' })
+    const parsed = new BVHLoader().parse(writeBVH(s))
+    const rot = parsed.clip.tracks.find((t) => t.name === 'Hips.quaternion')
+    const position = parsed.clip.tracks.find((t) => t.name === 'Hips.position')
+    const middle = new THREE.Quaternion().fromArray(rot.values, 11 * 4)
+    expect(middle.angleTo(new THREE.Quaternion())).toBeGreaterThan(3)
+    expect(position.values[11 * 3 + 1]).toBeGreaterThan(position.values[1 * 3 + 1] + 20)
+    expect(s.info.groundLocked).toBe(false)
+  })
+
+  it('preserves a transition from standing to lying down in adaptable mode', () => {
+    const fr = Array.from({ length: 20 }, (_, i) => {
+      const t = i / 19
+      const f = makeFrame(i * 0.1, fk({ root: E(0, 0, t * Math.PI / 2) }), { depth: 4 })
+      f.camT[1] += t * 0.65
+      return f
+    })
+    const s = solveMotion(fr, { ...POSE_PRESETS.adaptable.settings, outFps: 10, smoothing: 'off' })
+    const clip = new BVHLoader().parse(writeBVH(s)).clip
+    const position = clip.tracks.find((t) => t.name === 'Hips.position')
+    const rotation = clip.tracks.find((t) => t.name === 'Hips.quaternion')
+    expect(position.values[4] - position.values[s.count * 3 + 1]).toBeGreaterThan(30)
+    expect(new THREE.Quaternion().fromArray(rotation.values, s.count * 4).angleTo(new THREE.Quaternion())).toBeGreaterThan(1.3)
+  })
+
+  it('uses the body rather than raised feet as a reference for lying poses', () => {
+    const fr = Array.from({ length: 10 }, (_, i) => makeFrame(i * 0.1, fk({ root: E(0, 0, Math.PI / 2), l_upleg: E(0, 0, 1.4), r_upleg: E(0, 0, 1.4) }), { depth: 4 }))
+    const opts = { ...POSE_PRESETS.lying.settings, outFps: 10, smoothing: 'off' }
+    const body = solveMotion(fr, opts)
+    const feet = solveMotion(fr, { ...opts, groundReference: 'feet' })
+    expect(body.root[1]).toBeGreaterThan(feet.root[1] + 10)
+    expect(body.info.tiltDeg).toBe(0)
+    expect(body.info.groundLocked).toBe(false)
+  })
 })
 
 describe('humanoid skeleton', () => {
@@ -321,5 +374,46 @@ describe('ground lock and shoulders', () => {
     const fr = Array.from({ length: 12 }, (_, i) => makeFrame(i * 0.1, fk({ l_uparm: E(0, 0, 0.2 * Math.sin(i)) }), { depth: 4 }))
     const s = solveMotion(fr, { ...base, ground: 'off', shoulders: 'slight' })
     expect(s.info.shoulderDeg).toBeLessThan(2.1) // only the small constant drop
+  })
+})
+
+describe('baked foot lock', () => {
+  const idx = (n) => JOINT_INDEX[n]
+  // bent knees, hips swaying 4 cm side to side and dipping, feet planted in the model's own output
+  const frames = () => Array.from({ length: 30 }, (_, i) => {
+    const fr = makeFrame(i * 0.1, fk({ l_upleg: E(-0.4, 0, 0), r_upleg: E(-0.4, 0, 0), l_lowleg: E(0.8, 0, 0), r_lowleg: E(0.8, 0, 0), c_spine1: E(0, 0.05 * Math.sin(i * 0.6), 0) }), { depth: 4 })
+    fr.camT[0] += 0.04 * Math.sin(i * 0.6)
+    return fr
+  })
+  const base = { outFps: 10, smoothing: 'off', footLock: false, levelCamera: false, posture: 'off', limitJoints: false, levelFeet: false, shoulders: 'off', ground: 'strict' }
+  const feet = (sol) => {
+    const { skeleton, clip } = new BVHLoader().parse(writeBVH({ ...sol }))
+    const by = Object.fromEntries(skeleton.bones.map((b) => [b.name, b]))
+    const tr = Object.fromEntries(clip.tracks.map((t) => [t.name, t]))
+    const out = { pos: [], rot: [] }
+    for (let k = 1; k <= sol.count; k++) {
+      for (const b of skeleton.bones) { const t = tr[`${b.name}.quaternion`]; if (t) b.quaternion.fromArray(t.values, k * 4) }
+      by.Hips.position.fromArray(tr['Hips.position'].values, k * 3)
+      by.Hips.updateWorldMatrix(false, true)
+      out.pos.push(by.LeftFoot.getWorldPosition(new THREE.Vector3()))
+      out.rot.push(by.LeftFoot.getWorldQuaternion(new THREE.Quaternion()))
+    }
+    return out
+  }
+  const spread = (pts) => Math.max(...pts.map((p) => p.distanceTo(pts[0])))
+
+  it('keeps the feet at the first frame\'s position and rotation while the hips move', () => {
+    const free = feet(solveMotion(frames(), { ...base, lockFeet: false }))
+    const locked = feet(solveMotion(frames(), { ...base, lockFeet: true }))
+    expect(spread(free.pos)).toBeGreaterThan(1.5) // cm: the hips sway and the feet go with them
+    expect(spread(locked.pos)).toBeLessThan(0.5)
+    expect(Math.max(...locked.rot.map((q) => (q.angleTo(locked.rot[0]) * 180) / Math.PI))).toBeLessThan(1)
+  })
+
+  it('does not change the motion when the lock is off', () => {
+    const a = solveMotion(frames(), { ...base, lockFeet: false })
+    const b = solveMotion(frames(), { ...base })
+    expect(a.info.feetLocked).toBe(false)
+    expect(Array.from(a.rot[idx('LeftLeg')])).toEqual(Array.from(b.rot[idx('LeftLeg')]))
   })
 })

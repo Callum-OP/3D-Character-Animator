@@ -32,9 +32,8 @@ const restVec = (i) => new THREE.Vector3(MHR_REST_POS_CM[i * 3], MHR_REST_POS_CM
 
 // ---- which frame is the model talking in? ------------------------------------------------------------------
 // SAM 3D Body works in an MHR model frame (y up, facing +z) and flips y/z to reach the camera frame. Which of
-// those frames each ONNX output arrives in is not documented, so it is measured: the head must sit above the
-// hips in a y-up frame, and the limb directions implied by the global rotations must agree with the joint
-// positions. Rotations and positions are then both brought into the y-up model frame.
+// those frames each ONNX output arrives in is not documented, so choose the combination whose predicted limb
+// directions agree with the joint positions. This must not assume the person is upright.
 const CHECK_BONES = [
   ['l_upleg', 'l_lowleg'], ['l_lowleg', 'l_foot'], ['r_upleg', 'r_lowleg'], ['r_lowleg', 'r_foot'],
   ['l_uparm', 'l_lowarm'], ['r_uparm', 'r_lowarm'], ['c_neck', 'c_head'],
@@ -43,10 +42,7 @@ const IDX = Object.fromEntries(MHR_NAMES.map((n, i) => [n, i]))
 
 export function detectConvention(frames) {
   const sample = frames.filter((_, i) => i % Math.max(1, Math.floor(frames.length / 12)) === 0).slice(0, 12)
-  let headUp = 0
-  for (const f of sample) headUp += f.jc[IDX.c_head * 3 + 1] - f.jc[IDX.root * 3 + 1]
-  const coordFlip = headUp < 0 // head below hips => joint coordinates are in the y-down camera frame
-  const score = (rotFlip) => {
+  const score = (rotFlip, coordFlip) => {
     let sum = 0, cnt = 0
     const q = new THREE.Quaternion()
     for (const f of sample) {
@@ -68,9 +64,11 @@ export function detectConvention(frames) {
     }
     return cnt ? sum / cnt : -1
   }
-  const s0 = score(false), s1 = score(true)
-  const rotFlip = s1 > s0
-  return { coordFlip, rotFlip, score: Math.max(s0, s1) }
+  const candidates = []
+  for (const coordFlip of [false, true]) {
+    for (const rotFlip of [false, true]) candidates.push({ coordFlip, rotFlip, score: score(rotFlip, coordFlip) })
+  }
+  return candidates.reduce((best, candidate) => candidate.score > best.score ? candidate : best)
 }
 
 // ---- filtering --------------------------------------------------------------------------------------------
@@ -215,6 +213,8 @@ function rootInputs(frames, Rc) {
   const pelvis = new Float32Array(n * 3)
   const soles = [new Float32Array(n * 3), new Float32Array(n * 3)]
   const legCm = []
+  const boneLegCm = []
+  const bodyLow = new Float32Array(n)
   const P = (f, i) => { const w = worldKp(f, i); return new THREE.Vector3(w[0], w[1], w[2]).applyQuaternion(Rc) }
   for (let i = 0; i < n; i++) {
     const f = frames[i]
@@ -223,6 +223,12 @@ function rootInputs(frames, Rc) {
     pelvis.set([pel.x, pel.y, pel.z], i * 3)
     const am = P(f, KP.lAnkle).add(P(f, KP.rAnkle)).multiplyScalar(0.5)
     legCm.push(pel.distanceTo(am) * 100)
+    const joint = (name) => new THREE.Vector3().fromArray(f.jc, IDX[name] * 3)
+    for (const side of ['l', 'r']) {
+      const hip = joint(`${side}_upleg`), knee = joint(`${side}_lowleg`), ankle = joint(`${side}_foot`)
+      boneLegCm.push((hip.distanceTo(knee) + knee.distanceTo(ankle)) * 100)
+    }
+    bodyLow[i] = Math.min(...Object.values(KP).map((id) => P(f, id).y))
     ;[[KP.lToe, KP.lSmallToe, KP.lHeel], [KP.rToe, KP.rSmallToe, KP.rHeel]].forEach((ids, side) => {
       let best = null
       for (const id of ids) { const p = P(f, id); if (!best || p.y < best.y) best = p }
@@ -230,7 +236,8 @@ function rootInputs(frames, Rc) {
     })
   }
   legCm.sort((a, b) => a - b)
-  return { pelvis, soles, legCm: legCm[legCm.length >> 1] }
+  boneLegCm.sort((a, b) => a - b)
+  return { pelvis, soles, bodyLow, legCm: legCm[legCm.length >> 1], boneLegCm: boneLegCm[boneLegCm.length >> 1] }
 }
 
 // Pin planted feet so depth noise cannot make the body glide: while a foot is low and slow, its XZ is held at
@@ -437,13 +444,78 @@ function groundLockHeights(rot, count) {
   return out
 }
 
+
+// Hold both feet exactly where they are on the first output frame — position and rotation — for the whole clip, by
+// re-solving each leg (two-bone IK on the template skeleton, keeping the knee bending the way it did). This is what
+// the in-app "Lock in place" does at runtime, baked into the motion so a downloaded BVH carries it. For clips that
+// stay on the spot; a leg cannot stretch, so if the hips travel out of reach the leg straightens toward the foot.
+function lockFeetToFirstPose(rot, root, count) {
+  const off = restOffsets()
+  const J = JOINT_INDEX
+  const get = (j, k, out) => out.set(rot[j][k * 4], rot[j][k * 4 + 1], rot[j][k * 4 + 2], rot[j][k * 4 + 3])
+  const put = (j, k, q) => { rot[j].set([q.x, q.y, q.z, q.w], k * 4) }
+  const V = (i) => new THREE.Vector3(...off[i])
+  const dH = new THREE.Quaternion(), t = new THREE.Quaternion()
+  for (const S of ['Left', 'Right']) {
+    const ju = J[`${S}UpLeg`], jl = J[`${S}Leg`], jf = J[`${S}Foot`]
+    const offU = V(ju), offL = V(jl), offF = V(jf)
+    const l1 = offL.length(), l2 = offF.length()
+    // the first frame's ankle position and foot rotation are the targets
+    const chain = (k) => {
+      get(0, k, dH)
+      const dU = dH.clone().multiply(get(ju, k, t))
+      const dL = dU.clone().multiply(get(jl, k, t))
+      const dF = dL.clone().multiply(get(jf, k, t))
+      const P0 = new THREE.Vector3(root[k * 3], root[k * 3 + 1], root[k * 3 + 2]).add(offU.clone().applyQuaternion(dH))
+      const K = P0.clone().add(offL.clone().applyQuaternion(dU))
+      const A = K.clone().add(offF.clone().applyQuaternion(dL))
+      return { dH: dH.clone(), dU, dL, dF, P0, K, A }
+    }
+    const first = chain(0)
+    const T = first.A.clone(), Rf = first.dF.clone()
+    for (let k = 1; k < count; k++) {
+      const c = chain(k)
+      const u = T.clone().sub(c.P0)
+      const dist = u.length()
+      if (dist < 1e-6) continue
+      u.multiplyScalar(1 / dist)
+      // keep the knee bending the way the motion had it: its offset from the hip-ankle line
+      const ac = c.A.clone().sub(c.P0).normalize()
+      const pole = c.K.clone().sub(c.P0)
+      pole.addScaledVector(ac, -pole.dot(ac))
+      if (pole.lengthSq() < 1e-8) pole.set(0, 0, 1)
+      pole.addScaledVector(u, -pole.dot(u))
+      if (pole.lengthSq() < 1e-8) pole.set(0, 0, 1).addScaledVector(u, -u.z)
+      pole.normalize()
+      const reach = Math.min(Math.max(dist, Math.abs(l1 - l2) + 1e-4), l1 + l2 - 1e-4)
+      const a = (l1 * l1 - l2 * l2 + reach * reach) / (2 * reach)
+      const h = Math.sqrt(Math.max(0, l1 * l1 - a * a))
+      const K = c.P0.clone().addScaledVector(u, a).addScaledVector(pole, h)
+      const Tc = c.P0.clone().addScaledVector(u, reach)
+      // thigh swings to put the knee at K; shank keeps its bend, then swings to put the ankle on the target
+      const dU = new THREE.Quaternion().setFromUnitVectors(offL.clone().applyQuaternion(c.dU).normalize(), K.clone().sub(c.P0).normalize()).multiply(c.dU)
+      const dLc = dU.clone().multiply(c.dU.clone().invert().multiply(c.dL))
+      const dL = new THREE.Quaternion().setFromUnitVectors(offF.clone().applyQuaternion(dLc).normalize(), Tc.clone().sub(K).normalize()).multiply(dLc)
+      const dHinv = c.dH.clone().invert()
+      const lu = dHinv.clone().multiply(dU)
+      const ll = dU.clone().invert().multiply(dL)
+      const lf = dL.clone().invert().multiply(Rf)
+      for (const [j, q] of [[ju, lu], [jl, ll], [jf, lf]]) {
+        const p = k * 4 - 4
+        if (q.x * rot[j][p] + q.y * rot[j][p + 1] + q.z * rot[j][p + 2] + q.w * rot[j][p + 3] < 0) q.set(-q.x, -q.y, -q.z, -q.w)
+        put(j, k, q)
+      }
+    }
+  }
+}
+
 // ---- main entry ------------------------------------------------------------------------------------------
 // frames: [{ t (s), G: Float32Array(127*9) joint_rotations, jc: Float32Array(127*3) joint_coords,
 //            kp3: Float32Array(70*3) keypoints_3d, camT: [x,y,z] }]
 // Returns { fps, count, root: Float32Array(count*3) in cm, rot: Float32Array(count*4)[] per BVH joint (local),
 //           info: {...} }
 export function solveMotion(frames, opts = {}) {
-  const o = { outFps: 30, smoothing: 'medium', footLock: true, levelCamera: true, posture: 'auto', levelFeet: true, limitJoints: true, shoulders: 'slight', ground: 'strict', ...opts }
+  const o = { outFps: 30, smoothing: 'medium', footLock: true, levelCamera: true, posture: 'auto', levelFeet: true, limitJoints: true, shoulders: 'slight', ground: 'strict', groundReference: 'feet', lockFeet: false, ...opts }
   if (!frames || frames.length < 2) throw new Error('Need at least two analysed frames.')
   const n = frames.length
   const times = frames.map((f) => f.t)
@@ -503,11 +575,13 @@ export function solveMotion(frames, opts = {}) {
 
   // 4) root path
   const raw = rootInputs(frames, Rc)
-  const pelvis = medianFilter(raw.pelvis, 3), soles = raw.soles.map((x) => medianFilter(x, 3)), legCm = raw.legCm
+  const pelvis = medianFilter(raw.pelvis, 3), soles = raw.soles.map((x) => medianFilter(x, 3))
+  const legCm = o.groundReference === 'body' ? raw.boneLegCm : raw.legCm
   const pelvisUp = resampleVec(pelvis, 3, grid)
   const solesUp = soles.map((s) => resampleVec(s, 3, grid))
 
-  const lows = Array.from({ length: grid.count }, (_, i) => Math.min(solesUp[0][i * 3 + 1], solesUp[1][i * 3 + 1])).sort((a, b) => a - b)
+  const bodyLowUp = resampleVec(medianFilter(raw.bodyLow, 1), 1, grid)
+  const lows = Array.from({ length: grid.count }, (_, i) => o.groundReference === 'body' ? bodyLowUp[i] : Math.min(solesUp[0][i * 3 + 1], solesUp[1][i * 3 + 1])).sort((a, b) => a - b)
   const ground = lows[Math.floor(lows.length * 0.03)]
   // Foot lock works on the RAW path (planted feet share the body's depth jitter exactly, so it cancels), and only
   // then is the path smoothed. Depth is the noisy axis, so it gets the longer window.
@@ -552,12 +626,14 @@ export function solveMotion(frames, opts = {}) {
     root[i * 3 + 2] = (path[i * 3 + 2] - z0) * 100 * scale
   }
 
+  if (o.lockFeet) lockFeetToFirstPose(rot, root, grid.count)
+
   // How much did the person actually move? Near zero means the model was not looking at them.
   let variationDeg = 0
   for (const name of ['LeftArm', 'RightArm', 'LeftUpLeg', 'RightUpLeg', 'Spine2', 'Head']) variationDeg = Math.max(variationDeg, maxAngleFromFirst(rot[JOINT_INDEX[name]], grid.count))
   if (variationDeg < 4) warnings.push('The pose barely changes between frames. The model probably could not see the person — check the box and the "model view" picture.')
 
-  return { fps: o.outFps, count: grid.count, root, rot, info: { convention: conv, scale, groundM: ground, lockSegments, variationDeg, tiltDeg, slouchDeg, limitDeg, footLevelDeg, shoulderDeg, groundLocked, warnings } }
+  return { fps: o.outFps, count: grid.count, root, rot, info: { convention: conv, scale, groundM: ground, lockSegments, variationDeg, tiltDeg, slouchDeg, limitDeg, footLevelDeg, shoulderDeg, groundLocked, feetLocked: !!o.lockFeet, warnings } }
 }
 
 export { JOINT_INDEX }

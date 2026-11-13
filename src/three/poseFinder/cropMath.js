@@ -45,14 +45,15 @@ export function boxFromKeypoints(kp2d, width, height, prev) {
     if (y > y2) y2 = y
   }
   const w = x2 - x1, h = y2 - y1
-  if (w < 8 || h < 16) return null
+  if (w < 8 || h < 8) return null
   // The model's keypoints stop at the fingertips/toes; keep the previous box's size from collapsing.
   const box = { x1, y1, x2, y2 }
   if (prev) {
     const pw = prev.x2 - prev.x1, ph = prev.y2 - prev.y1
     if (h < ph * 0.45) { // person curled up or a bad frame: keep the old size around the new centre
       const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2
-      return { x1: cx - pw / 2, y1: cy - ph / 2, x2: cx + pw / 2, y2: cy + ph / 2 }
+      const keepW = Math.max(pw, w), keepH = Math.max(ph, h)
+      return { x1: cx - keepW / 2, y1: cy - keepH / 2, x2: cx + keepW / 2, y2: cy + keepH / 2 }
     }
   }
   // Clamp loosely to the frame (a limb may sit just outside it).

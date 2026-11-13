@@ -65,4 +65,14 @@ describe('a neutral Pose Finder clip leaves the character in its own rest pose',
     const bad = worst.filter(([n, a]) => a > 3 && /Hand(Thumb|Index|Middle|Ring|Pinky)|Neck|Head|Spine/.test(n))
     expect(bad, JSON.stringify(bad)).toEqual([])
   })
+
+  it('retargets a clip that starts near the floor from the neutral standing reference', async () => {
+    const model = character()
+    const rot = BVH_JOINTS.map(() => new Float32Array([0, 0, 0, 1, 0, 0, 0, 1]))
+    const root = new Float32Array([0, 25, 0, 0, 25, 0])
+    const { clip } = await retarget(model, writeBVH({ fps: 30, count: 2, root, rot }))
+    const hips = clip.tracks.find((t) => t.name === 'mixamorig:Hips.position')
+    expect(hips.values[1]).toBeCloseTo(0.95, 2)
+    expect(hips.values[4]).toBeLessThan(0.4)
+  })
 })

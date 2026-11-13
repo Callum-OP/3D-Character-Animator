@@ -7,6 +7,25 @@ Flow: titlebar **Pose Finder** → accept licence + download model once (~1.4 GB
 draw a box round the person → **Find poses** → **Add to active character** (goes through the normal BVH import/retarget) or
 **Download BVH**.
 
+Choose a motion preset before finding poses:
+- **Standing** uses the existing upright cleanup and ground correction.
+- **Lying down** preserves horizontal poses and uses the lowest tracked body point as the height reference.
+- **Flips** samples more frames and preserves airborne height and body rotation.
+- **Adaptable** is for clips mixing standing, falling, rolling and lying down.
+
+The ground toggle grounds the lowest foot and enables planted-foot cleanup; switch it off for airborne or
+non-standing movement (this also turns off the optional fixed-foot pin). Advanced settings can override cleanup.
+Advanced settings expose sampling, smoothing and cleanup controls. The optional fixed-foot pin is for motion on
+the spot, not walking: it is baked into the BVH, but feet can move if the hips travel beyond leg reach. Choosing
+a preset resets these settings. Results are generated from the settings at the time **Find poses** is pressed;
+run it again after changing settings. Both download and character import use that generated BVH. A neutral
+reference frame is included at the start for the app's retargeter.
+
+The model estimates 3D motion from one video, so occluded limbs, floor height, camera movement, and fast rotations
+are approximate. The body-height reference uses tracked points rather than detecting a real floor or bed, and
+interpolation cannot recover a full rotation between samples. Use a clear view and a higher analysis rate for
+fast flips; review the result and adjust the advanced settings if necessary.
+
 Files: `electron/poseEngine.cjs` (download, session, inference, IPC) · `src/three/poseFinder/*` (crop maths, MHR rest
 data, motion solver, BVH writer, pipeline) · `src/panels/PoseFinderPanel.jsx`.
 `mhrRest.js` is generated: `node scripts/gen-mhr-rest.mjs <MHR assets>/lod6.fbx` (Meta's MHR, Apache-2.0).

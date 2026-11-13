@@ -8,11 +8,17 @@ export async function openVideo(file) {
   video.preload = 'auto'
   video.playsInline = true
   video.src = url
-  await new Promise((resolve, reject) => {
-    video.onloadedmetadata = resolve
-    video.onerror = () => reject(new Error('This video could not be opened. Try an MP4 (H.264) or WebM file.'))
-  })
-  if (!video.videoWidth || !video.videoHeight) throw new Error('This video has no picture track.')
+  try {
+    await new Promise((resolve, reject) => {
+      video.onloadedmetadata = resolve
+      video.onerror = () => reject(new Error('This video could not be opened. Try an MP4 (H.264) or WebM file.'))
+    })
+    if (!video.videoWidth || !video.videoHeight) throw new Error('This video has no picture track.')
+    if (!Number.isFinite(video.duration) || video.duration <= 0) throw new Error('This video has no usable duration.')
+  } catch (err) {
+    video.removeAttribute('src'); video.load(); URL.revokeObjectURL(url)
+    throw err
+  }
   return {
     video,
     url,

@@ -19,3 +19,15 @@
 .pf-err { margin-top: 8px; padding: 8px 10px; border-radius: 6px; background: rgba(198, 40, 40, 0.16); border: 1px solid var(--danger); font-size: 12.5px; }
 .pf-ok { color: #6fcf97; font-size: 12.5px; }
 .pf-check { display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px; line-height: 1.45; }
+.pf-primary-settings { display: grid; gap: 8px; max-width: 580px; }
+.pf-primary-settings .pf-dim { margin: 0; }
+.pf-toggle { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border: 1px solid var(--panel-border); border-radius: 8px; background: var(--panel-bg); font-size: 13px; }
+.pf-toggle input { margin-top: 3px; }
+.pf-toggle span { display: grid; gap: 3px; }
+.pf-toggle small { color: var(--text-dim); line-height: 1.4; }
+.pf-details { margin-top: 14px; padding: 10px 12px; border: 1px solid var(--panel-border); border-radius: 8px; }
+.pf-details summary { cursor: pointer; font-size: 13px; font-weight: 600; }
+@media (max-width: 600px) {
+  .pf-backdrop { padding: 8px; }
+  .pf-dialog { max-height: 96vh; padding: 14px; }
+}

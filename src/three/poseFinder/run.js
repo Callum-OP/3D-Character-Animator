@@ -45,14 +45,14 @@ export async function runPoseFinder({ source, engine, box, startTime = 0, endTim
       invalid++
     }
     if (next) { current = next.box; lost = 0 } else lost++
-    if (diag.length < 4 || i % 10 === 0) diag.push({ i, t: +t.toFixed(3), valid: check.ok, reason: check.reason || null, box: { ...current }, crop: { center: crop.center, scale: crop.scale }, kp2d: Array.from(o.keypoints_2d?.slice?.(0, 20) || []), camT: Array.from(o.cam_t?.slice?.(0, 3) || []), focal: o.focal_length ?? null, ms: o.ms ?? null })
-    onFrame && onFrame({ i, t, rgba, box: current, kp2d: o.keypoints_2d, valid: check.ok, reason: check.reason, source: next?.source ?? null })
+    if (diag.length < 4 || i % 10 === 0) diag.push({ i, t: +t.toFixed(3), valid: check.ok, reason: check.reason || null, box: { ...current }, crop: { center: crop.center, scale: crop.scale }, kp2d: Array.from(o?.keypoints_2d?.slice?.(0, 20) || []), camT: Array.from(o?.cam_t?.slice?.(0, 3) || []), focal: o?.focal_length ?? null, ms: o?.ms ?? null })
+    onFrame && onFrame({ i, t, rgba, box: current, kp2d: o?.keypoints_2d, valid: check.ok, reason: check.reason, source: next?.source ?? null })
     if (invalid >= 6 || lost >= 8) {
       throw new Error(`Lost the person around ${t.toFixed(1)}s (${invalid >= 6 ? 'the model stopped returning usable poses' : 'the tracking box could not follow them'}). Draw the box tighter, or start where they are fully in view.`)
     }
     const done = i + 1
     const elapsed = (Date.now() - t0) / 1000
-    onProgress && onProgress({ done, total, etaSec: (elapsed / done) * (total - done), box: current, ms: o.ms })
+    onProgress && onProgress({ done, total, etaSec: (elapsed / done) * (total - done), box: current, ms: o?.ms })
   }
   const solved = solveMotion(frames, { outFps, smoothing, footLock, ...clean })
   const bvh = writeBVH(solved)

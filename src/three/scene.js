@@ -159,7 +159,7 @@ import {
   clearFlattener,
   updateFlattenerGuides,
 } from './flattener.js'
-import { initIk, disposeIk, setIkConfig, clearIk, stepIkPins, writePins as writeIkPins } from './ikpins.js'
+import { initIk, disposeIk, setIkConfig, clearIk, stepIkPins, writePins as writeIkPins, applyFixedPinsForModel, fixedPinBonesForModel, hasFixedPinsForModel } from './ikpins.js'
 import {
   initAnimation,
   setAnimationModel,
@@ -188,6 +188,7 @@ import {
   restoreImportedClips,
   beginBVHImport,
   applyBVHRetarget,
+  setPinBaker,
 } from './animation.js'
 import {
   initMeshEdit,
@@ -700,6 +701,8 @@ export function initScene(container) {
     requestRender,
     getSceneScale: () => state.modelRadius,
   })
+  // Saved clips and exported BVH bake locked / pinned limbs in (see animation.js).
+  setPinBaker({ apply: applyFixedPinsForModel, bones: fixedPinBonesForModel, any: hasFixedPinsForModel })
 
   // --- Placeable point lights (add and move light sources around the scene) ---
   initLights({
@@ -1844,6 +1847,11 @@ function refreshRigBones(model) {
   model.info = { ...model.info, boneCount: model.bones.length, bones: classifyBones(model.bones) }
   let owner = null
   for (const [cid, m] of state.characters) if (m === model) owner = cid
+  if (owner) {
+    const store = useStore.getState()
+    const data = store.activeCharacterId === owner ? store : store.characters[owner]
+    if (data) setDangleConfig(owner, model, data.dangleEnabled !== false, data.dangleChains)
+  }
   if (state.currentModel === model) {
     setPoseModel(model)
     useStore.setState({ modelInfo: model.info })

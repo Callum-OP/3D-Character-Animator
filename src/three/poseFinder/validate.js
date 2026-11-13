@@ -8,8 +8,8 @@ function allFinite(a) {
 }
 
 export function checkFrameOutput(o) {
-  if (!o || !o.joint_rotations || !o.keypoints_3d || !o.cam_t || !o.keypoints_2d) return { ok: false, reason: 'incomplete output' }
-  if (!allFinite(o.joint_rotations) || !allFinite(o.keypoints_3d) || !allFinite(o.cam_t) || !allFinite(o.keypoints_2d)) return { ok: false, reason: 'NaN/infinite values (a GPU driver problem is likely)' }
+  if (!o || o.joint_rotations?.length !== 127 * 9 || o.joint_coords?.length !== 127 * 3 || o.keypoints_3d?.length !== 70 * 3 || o.cam_t?.length !== 3 || o.keypoints_2d?.length !== 70 * 2) return { ok: false, reason: 'incomplete output' }
+  if (!allFinite(o.joint_rotations) || !allFinite(o.joint_coords) || !allFinite(o.keypoints_3d) || !allFinite(o.cam_t) || !allFinite(o.keypoints_2d)) return { ok: false, reason: 'NaN/infinite values (a GPU driver problem is likely)' }
   const R = o.joint_rotations
   for (const j of J_CHECK) {
     const m = R.slice(j * 9, j * 9 + 9)
@@ -24,9 +24,8 @@ export function checkFrameOutput(o) {
   const z = o.cam_t[2]
   if (!(z > 0.2 && z < 100)) return { ok: false, reason: `implausible distance (${z.toFixed(1)} m)` }
   const k = o.keypoints_3d
-  const top = k[0 * 3 + 1], bottom = (k[13 * 3 + 1] + k[14 * 3 + 1]) / 2
-  const personH = Math.abs(bottom - top)
-  if (!(personH > 0.25 && personH < 4)) return { ok: false, reason: `implausible body size (${personH.toFixed(2)} m)` }
+  const personSize = Math.max(...[13, 14].map((ankle) => Math.hypot(k[ankle * 3] - k[0], k[ankle * 3 + 1] - k[1], k[ankle * 3 + 2] - k[2])))
+  if (!(personSize > 0.25 && personSize < 4)) return { ok: false, reason: `implausible body size (${personSize.toFixed(2)} m)` }
   return { ok: true }
 }
 

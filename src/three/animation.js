@@ -353,10 +353,72 @@ function unwrapClipJSON(json) {
 
 // Serialize a clip (baked or imported) to a plain JSON object, for downloading
 // or stashing in the persistent clip library. Returns null if not found.
-export function exportClipJSON(name) {
+//
+// Locked / pinned limbs (ikpins.js) only exist at runtime, on top of the animation. Exports have to bake them in, or
+// a saved clip or BVH would come out with the feet sliding again. ikpins registers itself here (via scene.js) so this
+// module needs no import of it: apply(model) solves every world-fixed pin on the model's CURRENT pose; bones(model)
+// names the bones those pins move; any(model) says whether there is anything to bake.
+let pinBaker = null
+export function setPinBaker(baker) {
+  pinBaker = baker
+}
+
+// A copy of `clip` whose rotation tracks for the pinned limbs are re-sampled with the pins applied, so the locks
+// travel with the saved clip. Everything else in the clip (other bones, root motion, mesh/shape-key data) is
+// untouched. Returns null when there is nothing to bake.
+function bakePinsIntoClip(clip, fps) {
+  if (!pinBaker || !a.model || !pinBaker.any(a.model)) return null
+  const names = pinBaker.bones(a.model)
+  const bones = a.model.bones.filter((b) => names.has(b.name))
+  if (!bones.length || !(clip.duration > 0)) return null
+  const frames = Math.max(2, Math.round(clip.duration * fps) + 1)
+  const mixer = new THREE.AnimationMixer(a.model.root)
+  const act = mixer.clipAction(clip)
+  act.loop = THREE.LoopOnce
+  act.clampWhenFinished = true
+  act.play()
+  const savedPos = a.model.root.position.clone()
+  const savedQuat = a.model.root.quaternion.clone()
+  const times = []
+  const values = new Map(bones.map((b) => [b, []]))
+  for (let f = 0; f < frames; f++) {
+    const t = (f / (frames - 1)) * clip.duration
+    mixer.setTime(t)
+    a.model.root.updateWorldMatrix(true, true)
+    pinBaker.apply(a.model)
+    times.push(t)
+    for (const b of bones) {
+      const arr = values.get(b)
+      const n = arr.length
+      let { x, y, z, w } = b.quaternion
+      if (n >= 4 && x * arr[n - 4] + y * arr[n - 3] + z * arr[n - 2] + w * arr[n - 1] < 0) { x = -x; y = -y; z = -z; w = -w }
+      arr.push(x, y, z, w)
+    }
+  }
+  mixer.stopAllAction()
+  mixer.uncacheClip(clip)
+  restoreRest()
+  a.model.root.position.copy(savedPos)
+  a.model.root.quaternion.copy(savedQuat)
+  a.model.root.updateWorldMatrix(true, true)
+  a.refs.requestRender()
+
+  const baked = clip.clone()
+  baked.tracks = baked.tracks.filter((tr) => !(tr.name.endsWith('.quaternion') && names.has(trackNodeName(tr.name))))
+  for (const b of bones) baked.tracks.push(new THREE.QuaternionKeyframeTrack(`${b.name}.quaternion`, times, values.get(b)))
+  baked.name = clip.name
+  baked.charMeshTracks = clip.charMeshTracks
+  baked.charMorphTracks = clip.charMorphTracks
+  baked.editKeys = clip.editKeys
+  baked.rootFromKeys = clip.rootFromKeys
+  return baked
+}
+
+// opts.fps: sample rate used when locks have to be baked in (default 30).
+export function exportClipJSON(name, { fps = 30 } = {}) {
   const clip = findClip(name)
   if (!clip) return null
-  return wrapClipJSON(clip)
+  return wrapClipJSON(bakePinsIntoClip(clip, fps) || clip)
 }
 
 // Every IMPORTED/GENERATED clip (BVH imports, ragdoll bakes, combined/trimmed
@@ -1627,6 +1689,10 @@ export function exportAnimationBVH(animData, fps, duration, clipName, playbackSo
     mixer.setTime(t)
     if (rootKeys.length) applyRootAt(rootKeys, t, a.model.root)
     a.model.root.updateWorldMatrix(true, true)
+    if (pinBaker) {
+      pinBaker.apply(a.model) // locked / pinned limbs are part of what is exported
+      a.model.root.updateWorldMatrix(true, true)
+    }
     const rot = new Map()
     for (const b of bones) {
       // Rotation is taken relative to the bone's WORLD orientation (not its

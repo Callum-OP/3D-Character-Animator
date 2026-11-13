@@ -18,7 +18,7 @@ export function writeBVH({ fps, count, root, rot, restFrame = true }) {
   const emit = (i) => {
     const d = depth(i), j = BVH_JOINTS[i]
     lines.push(`${ind(d)}${i === 0 ? 'ROOT' : 'JOINT'} ${j.name}`, `${ind(d)}{`)
-    lines.push(`${ind(d + 1)}OFFSET ${off[i].map(f4).join(' ')}`)
+    lines.push(`${ind(d + 1)}OFFSET ${(i === 0 ? [0, 0, 0] : off[i]).map(f4).join(' ')}`)
     lines.push(`${ind(d + 1)}CHANNELS ${i === 0 ? '6 Xposition Yposition Zposition' : '3'} Zrotation Xrotation Yrotation`)
     BVH_JOINTS.forEach((c, k) => { if (c.parent === i) emit(k) })
     if (!hasChildren(i)) {
@@ -34,7 +34,7 @@ export function writeBVH({ fps, count, root, rot, restFrame = true }) {
   const q = new THREE.Quaternion(), e = new THREE.Euler()
   const deg = 180 / Math.PI
   const identityRow = (rx, ry, rz) => [f4(rx), f4(ry), f4(rz), ...Array(BVH_JOINTS.length * 3).fill('0')]
-  if (restFrame) lines.push(identityRow(root[0], root[1], root[2]).join(' '))
+  if (restFrame) lines.push(identityRow(root[0], off[0][1], root[2]).join(' '))
   for (let k = 0; k < count; k++) {
     const row = [f4(root[k * 3]), f4(root[k * 3 + 1]), f4(root[k * 3 + 2])]
     for (const j of order) {

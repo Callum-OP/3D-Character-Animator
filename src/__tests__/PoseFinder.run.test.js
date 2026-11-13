@@ -4,6 +4,7 @@ import { BVHLoader } from 'three/examples/jsm/loaders/BVHLoader.js'
 import { runPoseFinder, BadOutputError } from '../three/poseFinder/run.js'
 import { makeCrop, boxFromKeypoints, defaultCamera, projectKeypoints, pickNextBox } from '../three/poseFinder/cropMath.js'
 import { fk, makeFrame } from './helpers/mhrSynth.js'
+import { JOINT_INDEX } from '../three/poseFinder/humanoid.js'
 
 const E = (x, y, z) => new THREE.Euler(x, y, z)
 
@@ -32,6 +33,13 @@ describe('cropMath', () => {
     expect(boxFromKeypoints(new Float32Array([1, 1, 2, 2]), 1000, 1000, null)).toBeNull()
     expect(boxFromKeypoints(new Float32Array([NaN, 1, 2, 2]), 1000, 1000, null)).toBeNull()
   })
+  it('keeps a wider person in view when they move from standing to lying down', () => {
+    const prev = { x1: 100, y1: 100, x2: 300, y2: 500 }
+    const box = boxFromKeypoints(new Float32Array([10, 250, 450, 262, 220, 256]), 1000, 1000, prev)
+    expect(box.x1).toBeLessThanOrEqual(10)
+    expect(box.x2).toBeGreaterThanOrEqual(450)
+    expect(box.y2 - box.y1).toBeGreaterThanOrEqual(400)
+  })
 })
 
 describe('tracking gate and validation', () => {
@@ -48,6 +56,18 @@ describe('tracking gate and validation', () => {
     expect(checkFrameOutput({ ...out, joint_rotations: new Float32Array(1143).fill(0.3) }).ok).toBe(false)
     expect(checkFrameOutput({ ...out, cam_t: [0, 0, NaN] }).reason).toMatch(/NaN/)
     expect(checkFrameOutput({ ...out, cam_t: [0, 0, 0.01] }).ok).toBe(false)
+    expect(checkFrameOutput({ ...out, joint_coords: undefined }).reason).toMatch(/incomplete/)
+  })
+  it('accepts a horizontal person without mistaking their height for their body size', async () => {
+    const { checkFrameOutput } = await import('../three/poseFinder/validate.js')
+    const fr = makeFrame(0, fk({}), { depth: 6 })
+    const kp = fr.kp3.slice()
+    for (const ankle of [13, 14]) {
+      kp[ankle * 3] = kp[0] + 1
+      kp[ankle * 3 + 1] = kp[1]
+      kp[ankle * 3 + 2] = kp[2]
+    }
+    expect(checkFrameOutput({ joint_rotations: fr.G, joint_coords: fr.jc, keypoints_3d: kp, cam_t: fr.camT, keypoints_2d: new Float32Array(140) }).ok).toBe(true)
   })
 })
 
@@ -97,6 +117,21 @@ describe('runPoseFinder with a fake video and a fake engine', () => {
     expect(r.solved.info.convention.score).toBeGreaterThan(0.99)
     expect(r.solved.info.variationDeg).toBeGreaterThan(10)
     expect(r.diagnostics.length).toBeGreaterThan(0)
+  })
+
+  it('writes the selected ground and fixed-foot settings into the BVH', async () => {
+    const { engine, source } = rig({ moveX: 0.02 })
+    const r = await runPoseFinder({ source, engine, box: START_BOX, sampleFps: 5, outFps: 10, footLock: false, clean: { ground: 'natural', groundReference: 'body', lockFeet: true } })
+    expect(r.solved.info.groundLocked).toBe(false)
+    expect(r.solved.info.feetLocked).toBe(true)
+    const clip = new BVHLoader().parse(r.bvh).clip
+    const hips = clip.tracks.find((t) => t.name === 'Hips.position')
+    const foot = clip.tracks.find((t) => t.name === 'LeftFoot.quaternion')
+    const i = Math.floor(r.solved.count / 2)
+    expect(hips.values[(i + 1) * 3 + 1]).toBeCloseTo(r.solved.root[i * 3 + 1], 3)
+    const written = new THREE.Quaternion().fromArray(foot.values, (i + 1) * 4)
+    const solved = new THREE.Quaternion().fromArray(r.solved.rot[JOINT_INDEX.LeftFoot], i * 4)
+    expect(written.angleTo(solved)).toBeLessThan(0.01)
   })
 
   it('follows a person who walks across the frame', async () => {

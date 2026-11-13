@@ -2,8 +2,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
 
 vi.mock('../three/scene.js', () => ({ importBVHAuto: vi.fn(), scrubTimeline: vi.fn() }))
+vi.mock('../three/ikpins.js', () => ({ lockBonesInPlace: vi.fn(() => ({ locked: 2, relocked: 0 })), limbBoneNames: vi.fn(() => ['LeftFoot', 'RightFoot']) }))
+vi.mock('../three/poseFinder/videoFrames.js', () => ({ openVideo: vi.fn(), seekTo: vi.fn().mockResolvedValue(), makeCropper: vi.fn(() => vi.fn()) }))
+vi.mock('../three/poseFinder/run.js', () => ({ runPoseFinder: vi.fn() }))
 
 import PoseFinderPanel from '../panels/PoseFinderPanel.jsx'
+import { useStore } from '../store.js'
+import { openVideo } from '../three/poseFinder/videoFrames.js'
+import { runPoseFinder } from '../three/poseFinder/run.js'
+import { importBVHAuto } from '../three/scene.js'
+import { lockBonesInPlace } from '../three/ikpins.js'
 
 const baseStatus = { ortOk: true, ortError: null, modelReady: false, modelBytes: 0, expectedBytes: 1424013951, modelPath: '/x', licenseUrl: 'https://example.com/LICENSE', loaded: false, provider: null, platform: 'win32', arch: 'arm64' }
 
@@ -20,8 +28,8 @@ function mockPose(status) {
 }
 
 describe('PoseFinderPanel', () => {
-  beforeEach(() => { delete window.animare })
-  afterEach(() => { cleanup(); delete window.animare })
+  beforeEach(() => { delete window.animare; vi.clearAllMocks(); useStore.setState({ modelInfo: null }) })
+  afterEach(() => { cleanup(); delete window.animare; useStore.setState({ modelInfo: null }) })
 
   it('explains itself on the web build', () => {
     render(<PoseFinderPanel onClose={() => {}} />)
@@ -52,5 +60,53 @@ describe('PoseFinderPanel', () => {
     mockPose({ ...baseStatus, ortOk: false, ortError: 'DLL load failed' })
     render(<PoseFinderPanel onClose={() => {}} />)
     expect(await screen.findByText(/DLL load failed/)).toBeTruthy()
+  })
+
+  it('applies and resets presets while keeping advanced settings collapsed', async () => {
+    mockPose({ ...baseStatus, modelReady: true })
+    render(<PoseFinderPanel onClose={() => {}} />)
+    await screen.findByText(/model ready/i)
+    const advanced = screen.getByText('Advanced settings').closest('details')
+    expect(advanced.open).toBe(false)
+    const preset = screen.getByLabelText('Motion preset')
+    const ground = screen.getByLabelText(/keep feet on the ground/i)
+    expect(ground.checked).toBe(true)
+    fireEvent.change(preset, { target: { value: 'flips' } })
+    expect(ground.checked).toBe(false)
+    expect(screen.getByLabelText('Analyse frames at').value).toBe('30')
+    fireEvent.change(screen.getByLabelText('Analyse frames at'), { target: { value: '5' } })
+    fireEvent.click(screen.getByText('Reset to Flips'))
+    expect(screen.getByLabelText('Analyse frames at').value).toBe('30')
+    fireEvent.change(preset, { target: { value: 'lying' } })
+    expect(screen.getByLabelText('Ground reference').value).toBe('body')
+    fireEvent.change(preset, { target: { value: 'adaptable' } })
+    expect(screen.getByLabelText('Analyse frames at').value).toBe('15')
+    fireEvent.change(preset, { target: { value: 'standing' } })
+    expect(ground.checked).toBe(true)
+    fireEvent.click(ground)
+    expect(screen.getByLabelText(/foot lock \(stops/i).checked).toBe(false)
+    expect(screen.getByLabelText(/level planted feet/i).checked).toBe(false)
+  })
+
+  it('uses the completed run settings when adding a result after settings change', async () => {
+    const pose = mockPose({ ...baseStatus, modelReady: true })
+    pose.load.mockResolvedValue({ ok: true, provider: 'cpu' })
+    openVideo.mockResolvedValue({ video: document.createElement('video'), width: 640, height: 480, duration: 2, close: vi.fn() })
+    runPoseFinder.mockResolvedValue({ bvh: 'bvh from run', solved: { fps: 30, info: { warnings: [], feetLocked: true, tiltDeg: 0, slouchDeg: 0, footLevelDeg: 0, limitDeg: 0, shoulderDeg: 0 } } })
+    importBVHAuto.mockResolvedValue({ name: 'clip', matched: 20, total: 20 })
+    useStore.setState({ modelInfo: { name: 'character' } })
+    render(<PoseFinderPanel onClose={() => {}} />)
+    await screen.findByText(/model ready/i)
+    fireEvent.change(screen.getByLabelText('Motion preset'), { target: { value: 'flips' } })
+    fireEvent.click(screen.getByLabelText(/pin both feet/i))
+    fireEvent.change(document.querySelector('input[type="file"]'), { target: { files: [new File(['video'], 'test.mp4', { type: 'video/mp4' })] } })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Find poses' }).disabled).toBe(false))
+    fireEvent.click(screen.getByRole('button', { name: 'Find poses' }))
+    await screen.findByRole('button', { name: 'Download BVH' })
+    expect(runPoseFinder.mock.calls[0][0]).toMatchObject({ sampleFps: 30, footLock: false, clean: { ground: 'natural', groundReference: 'body', lockFeet: true } })
+    fireEvent.click(screen.getByLabelText(/pin both feet/i))
+    fireEvent.click(screen.getByRole('button', { name: 'Add to active character' }))
+    await waitFor(() => expect(lockBonesInPlace).toHaveBeenCalled())
+    expect(importBVHAuto.mock.calls[0][0].name).toBe('test-pose.bvh')
   })
 })

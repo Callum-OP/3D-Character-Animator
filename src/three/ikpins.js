@@ -867,3 +867,41 @@ export function unlockAll({ characterId = useStore.getState().activeCharacterId 
   const names = readPins(characterId).filter(isLockPin).map((p) => p.boneName)
   return unlockBones(names, { characterId })
 }
+
+// ---------------------------------------------------------------------------
+// Baking for exports
+//
+// Saved clips and exported BVH are sampled offline (animation.js), without the live render loop. These let it apply the
+// pins whose markers are fixed in the world (locks, and any pin not attached to a moving object) to the pose it has
+// just set, exactly as the viewport would, and ask which bones that touches.
+// ---------------------------------------------------------------------------
+
+function fixedEntriesFor(model) {
+  const out = []
+  for (const rt of runtimes.values()) {
+    if (rt.model !== model || !rt.enabled) continue
+    for (const e of rt.entries.values()) {
+      if (e.cfg.enabled && e.cfg.weight > 0 && (e.cfg.attachObjectId ?? null) == null) out.push([e, rt])
+    }
+  }
+  return out
+}
+
+export function hasFixedPinsForModel(model) {
+  return fixedEntriesFor(model).length > 0
+}
+
+export function applyFixedPinsForModel(model) {
+  for (const [e, rt] of fixedEntriesFor(model)) solveEntry(e, rt)
+}
+
+export function fixedPinBonesForModel(model) {
+  const names = new Set()
+  for (const [e, rt] of fixedEntriesFor(model)) {
+    const tip = findBone(rt.model, e.cfg.boneName)
+    if (!tip) continue
+    names.add(tip.name)
+    for (const j of chainOf(tip, e.cfg.chainLength)) names.add(j.name)
+  }
+  return names
+}
