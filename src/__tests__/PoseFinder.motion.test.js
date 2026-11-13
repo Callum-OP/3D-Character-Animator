@@ -102,9 +102,15 @@ describe('solveMotion + writeBVH round trip', () => {
       b.getWorldQuaternion(q)
       expect(q.angleTo(truth.deltas[mhr]), `${name} rotation`).toBeLessThan(0.02)
     }
+    const s3 = byName.Spine3.getWorldPosition(new THREE.Vector3())
+    const fa = byName.LeftForeArm.getWorldPosition(new THREE.Vector3()).sub(s3)
+    const i3 = IDX.c_spine3, ia = IDX.l_lowarm
+    const armTruth = new THREE.Vector3(truth.pos[ia * 3] - truth.pos[i3 * 3], truth.pos[ia * 3 + 1] - truth.pos[i3 * 3 + 1], truth.pos[ia * 3 + 2] - truth.pos[i3 * 3 + 2]).multiplyScalar(100)
+    expect(fa.distanceTo(armTruth), 'LeftForeArm relative to Spine3').toBeLessThan(1.5)
     // positions: compare bone positions relative to the hips (cm), for joints whose chain has no skipped joints
     const hips = byName.Hips.getWorldPosition(new THREE.Vector3())
-    for (const [name, mhrName] of [['LeftLeg', 'l_lowleg'], ['LeftFoot', 'l_foot'], ['RightLeg', 'r_lowleg'], ['LeftForeArm', 'l_lowarm']]) {
+    // (the spine/neck/head rest is deliberately straightened, so the arm is compared relative to Spine3)
+    for (const [name, mhrName] of [['LeftLeg', 'l_lowleg'], ['LeftFoot', 'l_foot'], ['RightLeg', 'r_lowleg']]) {
       const w = byName[name].getWorldPosition(p).sub(hips)
       const i = IDX[mhrName]
       const t = new THREE.Vector3(truth.pos[i * 3], truth.pos[i * 3 + 1], truth.pos[i * 3 + 2]).multiplyScalar(100)

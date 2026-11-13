@@ -761,10 +761,18 @@ export function retargetParsed(parsed, model, names, hip, clipName) {
       if (/^(shoulder|upperArm)\./.test(slot)) return 1
       return 2
     }
+    const fingerRank = (n) => {
+      const f = (fingerSlot(n.name) || '').split('.')[0]
+      const i = ['middle', 'ring', 'index', 'pinky', 'little', 'thumb'].indexOf(f)
+      return i < 0 ? 9 : i
+    }
     for (const b of mapped) {
       const branches = collectBranches(b)
       if (branches.length === 0) continue
-      branches.sort((a, c) => branchRank(a) - branchRank(c))
+      // A hand has several finger branches. Anchor it on the middle finger (it runs along the hand), never the
+      // thumb, which points a different way and would twist the whole hand.
+      const isHand = /^hand\./.test(classifyBone(b.name) || '')
+      branches.sort((a, c) => (isHand ? fingerRank(a) - fingerRank(c) : branchRank(a) - branchRank(c)))
       const childT = branches[0]
       const srcBone = srcByName.get(names[b.name])
       const childS = srcByName.get(names[childT.name])
@@ -773,6 +781,19 @@ export function retargetParsed(parsed, model, names, hip, clipName) {
       sDir.copy(restSrcP.get(childS)).sub(restSrcP.get(srcBone)).applyQuaternion(faceQ)
       if (tDir.lengthSq() < 1e-10 || sDir.lengthSq() < 1e-10) continue
       align.set(b, new THREE.Quaternion().setFromUnitVectors(tDir.normalize(), sDir.normalize()))
+    }
+    // Fingers move with their hand: every finger bone (tips and thumbs included) takes the HAND's alignment instead
+    // of its own. Aligning each segment on its own swings it towards the source's finger shape by a different
+    // amount than its parent, which bent fingertips (leaf bones had no alignment at all) and hooked the thumb away
+    // from the hand even for a perfectly neutral clip. Sharing the hand's swing keeps the character's own finger
+    // shape relative to its hand and lets the mocap's world-space deltas do the moving.
+    for (const b of mapped) {
+      if (!fingerSlot(b.name)) continue
+      let p = b.parent
+      while (p && !(mappedSet.has(p) && !fingerSlot(p.name))) p = p.parent
+      const A = p && align.get(p)
+      if (A) align.set(b, A.clone())
+      else align.delete(b)
     }
   }
 

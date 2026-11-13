@@ -58,12 +58,20 @@ const restPos = (mhrIndex) => [MHR_REST_POS_CM[mhrIndex * 3], MHR_REST_POS_CM[mh
 
 // Rest-pose OFFSET of each bone from its parent, in world axes (centimetres). The BVH is authored so that every
 // bone's rest orientation is identity — the offsets alone describe the rest skeleton.
+//
+// The spine, neck and head are authored STRAIGHT UP (front-to-back offsets zeroed). Meta's neutral pose has a natural
+// forward curve (neck ~25 deg, head ~17 deg), and the app's BVH importer makes the character copy the source's rest
+// shape, which gave every character a permanently hunched, forward-poking neck. Rotations are relative to the
+// neutral pose either way, so only the rest geometry changes.
+const STRAIGHT = new Set(['Spine', 'Spine1', 'Spine2', 'Spine3', 'Neck', 'Head'])
 export function restOffsets() {
   return BVH_JOINTS.map((j) => {
     const p = restPos(j.mhr)
     if (j.parent < 0) return p
     const q = restPos(BVH_JOINTS[j.parent].mhr)
-    return [p[0] - q[0], p[1] - q[1], p[2] - q[2]]
+    const o = [p[0] - q[0], p[1] - q[1], p[2] - q[2]]
+    if (STRAIGHT.has(j.name)) o[2] = 0
+    return o
   })
 }
 
@@ -74,7 +82,7 @@ export function endOffset(i) {
   if (Array.isArray(j.end)) return j.end
   const e = restPos(MHR_NAMES.indexOf(j.end))
   const p = restPos(j.mhr)
-  return [e[0] - p[0], e[1] - p[1], e[2] - p[2]]
+  return [e[0] - p[0], e[1] - p[1], STRAIGHT.has(j.name) ? 0 : e[2] - p[2]]
 }
 
 export const hasChildren = (i) => BVH_JOINTS.some((j) => j.parent === i)
