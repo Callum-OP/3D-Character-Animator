@@ -265,3 +265,61 @@ describe('anatomical clean-up', () => {
     expect(on.info.footLevelDeg).toBeGreaterThan(15)
   })
 })
+
+describe('ground lock and shoulders', () => {
+  const idx = (n) => JOINT_INDEX[n]
+  const base = { outFps: 10, smoothing: 'off', footLock: false, levelCamera: false, posture: 'off', limitJoints: false, levelFeet: false, shoulders: 'off' }
+
+  it('strict mode keeps the feet on the ground: hip height ignores bobbing in the model\'s depth/height estimate', () => {
+    // standing still, but the model's pelvis height wobbles by +-12 cm
+    let seed = 11
+    const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5)
+    const fr = Array.from({ length: 30 }, (_, i) => {
+      const f = makeFrame(i * 0.1, fk({}), { depth: 4 })
+      f.camT[1] += rnd() * 0.24 // shifts every keypoint, incl. the feet, up and down
+      return f
+    })
+    const natural = solveMotion(fr, { ...base, ground: 'natural' })
+    const strict = solveMotion(fr, { ...base, ground: 'strict' })
+    const spread = (s) => { let lo = Infinity, hi = -Infinity; for (let k = 0; k < s.count; k++) { lo = Math.min(lo, s.root[k * 3 + 1]); hi = Math.max(hi, s.root[k * 3 + 1]) } return hi - lo }
+    expect(strict.info.groundLocked).toBe(true)
+    expect(spread(strict)).toBeLessThan(1)
+    expect(strict.root[1]).toBeGreaterThan(88) // template hip height when the sole is flat on the ground
+    expect(strict.root[1]).toBeLessThan(97)
+    void natural
+  })
+
+  it('strict mode still lowers the hips when the knees bend', () => {
+    const fr = Array.from({ length: 20 }, (_, i) => {
+      const b = i < 10 ? 0 : 1.0
+      return makeFrame(i * 0.1, fk({ l_upleg: E(-b * 0.6, 0, 0), r_upleg: E(-b * 0.6, 0, 0), l_lowleg: E(b * 1.1, 0, 0), r_lowleg: E(b * 1.1, 0, 0) }), { depth: 4 })
+    })
+    const s = solveMotion(fr, { ...base, ground: 'strict' })
+    expect(s.root[1]).toBeGreaterThan(s.root[(s.count - 1) * 3 + 1] + 4) // crouching lowers the hips (the tipped-down foot limits how far)
+  })
+
+  it('lowers a shrugged shoulder but keeps the arm pointing where it was', () => {
+    const fr = Array.from({ length: 12 }, (_, i) => makeFrame(i * 0.1, fk({ l_clavicle: E(0, 0, 0.35), l_uparm: E(0, 0, -0.35 + 0.1 * Math.sin(i)) }), { depth: 4 }))
+    const run = (shoulders) => solveMotion(fr, { ...base, ground: 'off', shoulders })
+    const off = run('off'), slight = run('slight'), more = run('more')
+    const elev = (s) => {
+      const q = new THREE.Quaternion().fromArray(s.rot[idx('LeftShoulder')], 4 * 4)
+      const d0 = new THREE.Vector3(14.8, 1.3, -9.6).normalize()
+      const d = d0.clone().applyQuaternion(q)
+      return Math.atan2(d.y, Math.hypot(d.x, d.z)) - Math.atan2(d0.y, Math.hypot(d0.x, d0.z))
+    }
+    expect(elev(off)).toBeGreaterThan(0.25)
+    expect(elev(slight)).toBeLessThan(elev(off) - 0.1)
+    expect(elev(more)).toBeLessThan(elev(slight))
+    expect(slight.info.shoulderDeg).toBeGreaterThan(4)
+    // world orientation of the upper arm is unchanged
+    const worldArm = (s) => { const d = new THREE.Quaternion(); for (const n of ['Hips', 'Spine', 'Spine1', 'Spine2', 'Spine3', 'LeftShoulder', 'LeftArm']) d.multiply(new THREE.Quaternion().fromArray(s.rot[idx(n)], 4 * 4)); return d }
+    expect((worldArm(off).angleTo(worldArm(slight)) * 180) / Math.PI).toBeLessThan(0.5)
+  })
+
+  it('leaves relaxed shoulders alone', () => {
+    const fr = Array.from({ length: 12 }, (_, i) => makeFrame(i * 0.1, fk({ l_uparm: E(0, 0, 0.2 * Math.sin(i)) }), { depth: 4 }))
+    const s = solveMotion(fr, { ...base, ground: 'off', shoulders: 'slight' })
+    expect(s.info.shoulderDeg).toBeLessThan(2.1) // only the small constant drop
+  })
+})

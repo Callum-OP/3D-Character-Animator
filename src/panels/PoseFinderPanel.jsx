@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import './PoseFinder.css'
 import { useStore } from '../store.js'
-import { importBVHAuto } from '../three/scene.js'
+import { importBVHAuto, scrubTimeline } from '../three/scene.js'
+import { lockBonesInPlace, limbBoneNames } from '../three/ikpins.js'
 import { openVideo, seekTo, makeCropper } from '../three/poseFinder/videoFrames.js'
 import { runPoseFinder } from '../three/poseFinder/run.js'
 import { defaultBox } from '../three/poseFinder/cropMath.js'
@@ -31,6 +32,9 @@ export default function PoseFinderPanel({ onClose }) {
   const [posture, setPosture] = useState('auto')
   const [levelFeet, setLevelFeet] = useState(true)
   const [limitJoints, setLimitJoints] = useState(true)
+  const [shoulders, setShoulders] = useState('slight')
+  const [ground, setGround] = useState('strict')
+  const [lockFeet, setLockFeet] = useState(false)
 
   const [running, setRunning] = useState(false)
   const [progress, setProgress] = useState(null)
@@ -141,7 +145,7 @@ export default function PoseFinderPanel({ onClose }) {
     abortRef.current = ac
     setRunning(true)
     setProgress({ done: 0, total: 1 })
-    diagRef.current = { app: '3D Character Animator Pose Finder', settings: { compute, sampleFps, outFps, smoothing, footLock, levelCamera, posture, levelFeet, limitJoints, range, video: src && { name: src.name, width: src.width, height: src.height, duration: src.duration }, box }, frames: [], provider: null, error: null }
+    diagRef.current = { app: '3D Character Animator Pose Finder', settings: { compute, sampleFps, outFps, smoothing, footLock, levelCamera, posture, levelFeet, limitJoints, shoulders, ground, range, video: src && { name: src.name, width: src.width, height: src.height, duration: src.duration }, box }, frames: [], provider: null, error: null }
     setHasDiag(true)
     const cropper = makeCropper()
     const source = {
@@ -167,10 +171,10 @@ export default function PoseFinderPanel({ onClose }) {
         try {
           const r = await runPoseFinder({
             source, engine: pose, box, startTime: range[0], endTime: range[1], sampleFps, outFps, smoothing, footLock,
-            signal: ac.signal, onProgress: setProgress, onFrame, clean: { levelCamera, posture, levelFeet, limitJoints },
+            signal: ac.signal, onProgress: setProgress, onFrame, clean: { levelCamera, posture, levelFeet, limitJoints, shoulders, ground },
           })
-          diagRef.current.solved = { tiltDeg: r.solved.info.tiltDeg, slouchDeg: r.solved.info.slouchDeg, limitDeg: r.solved.info.limitDeg, footLevelDeg: r.solved.info.footLevelDeg, variationDeg: r.solved.info.variationDeg, convention: r.solved.info.convention, scale: r.solved.info.scale, warnings: r.solved.info.warnings }
-          setResult({ bvh: r.bvh, name: src.name.replace(/\.[^.]+$/, '') + '-pose', warnings: r.solved.info.warnings, info: r.solved.info })
+          diagRef.current.solved = { shoulderDeg: r.solved.info.shoulderDeg, groundLocked: r.solved.info.groundLocked, tiltDeg: r.solved.info.tiltDeg, slouchDeg: r.solved.info.slouchDeg, limitDeg: r.solved.info.limitDeg, footLevelDeg: r.solved.info.footLevelDeg, variationDeg: r.solved.info.variationDeg, convention: r.solved.info.convention, scale: r.solved.info.scale, warnings: r.solved.info.warnings }
+          setResult({ bvh: r.bvh, name: src.name.replace(/\.[^.]+$/, '') + '-pose', warnings: r.solved.info.warnings, info: r.solved.info, fps: r.solved.fps })
           break
         } catch (err) {
           // The very first frame was garbage on the GPU: Adreno/DirectML drivers can do that. Retry once on the CPU.
@@ -203,7 +207,14 @@ export default function PoseFinderPanel({ onClose }) {
     setError(''); setNotice('')
     try {
       const { name, matched, total } = await importBVHAuto(fileFor())
-      setNotice(`Added "${name}" to the active character (${matched}/${total} bones matched) and selected it as the active clip.`)
+      let lockNote = ''
+      if (lockFeet) {
+        // frame 0 is the neutral reference frame, so the first real pose is one frame in
+        scrubTimeline(1 / (result.fps || 30))
+        const r = lockBonesInPlace(limbBoneNames('foot'), { rotation: true })
+        lockNote = r.locked + r.relocked ? ' Both feet are locked at their first-pose position and rotation (Animate > More character tools > Lock in place).' : ' No feet were found to lock.'
+      }
+      setNotice(`Added "${name}" to the active character (${matched}/${total} bones matched) and selected it as the active clip.${lockNote}`)
     } catch (err) { setError(err.message || String(err)) }
   }
   function onDownloadBVH() {
@@ -322,6 +333,17 @@ export default function PoseFinderPanel({ onClose }) {
                     <option value="off">Off</option><option value="auto">Auto (keeps natural curve)</option><option value="strong">Strong (fully upright)</option>
                   </select>
                 </label>
+                <label className="pf-field">Feet and ground
+                  <select value={ground} disabled={running} onChange={(e) => setGround(e.target.value)}>
+                    <option value="strict">Locked to the ground (no floating)</option>
+                    <option value="natural">Natural (keeps jumps)</option>
+                  </select>
+                </label>
+                <label className="pf-field">Lower shoulders
+                  <select value={shoulders} disabled={running} onChange={(e) => setShoulders(e.target.value)}>
+                    <option value="off">Off</option><option value="slight">Slight</option><option value="more">More</option>
+                  </select>
+                </label>
                 <label className="pf-check" style={{ alignSelf: 'end' }}>
                   <input type="checkbox" checked={footLock} disabled={running} onChange={(e) => setFootLock(e.target.checked)} />
                   <span>Foot lock (stops planted feet sliding)</span>
@@ -370,7 +392,7 @@ export default function PoseFinderPanel({ onClose }) {
                 {result.warnings.map((w) => <div className="pf-warn" key={w}>{w}</div>)}
                 {result.info && (
                   <p className="pf-dim">
-                    Cleaned up: camera tilt {result.info.tiltDeg.toFixed(0)}°, slouch removed {result.info.slouchDeg.toFixed(0)}°, foot levelling up to {result.info.footLevelDeg.toFixed(0)}°, joints pulled back into range by up to {result.info.limitDeg.toFixed(0)}°.
+                    Cleaned up: camera tilt {result.info.tiltDeg.toFixed(0)}°, slouch removed {result.info.slouchDeg.toFixed(0)}°, foot levelling up to {result.info.footLevelDeg.toFixed(0)}°, joints pulled back into range by up to {result.info.limitDeg.toFixed(0)}°, shoulders lowered up to {result.info.shoulderDeg.toFixed(0)}°{result.info.groundLocked ? ', feet locked to the ground' : ''}.
                   </p>
                 )}
                 <div className="pf-grid">
@@ -378,6 +400,10 @@ export default function PoseFinderPanel({ onClose }) {
                     <input type="text" value={result.name} onChange={(e) => setResult({ ...result, name: e.target.value })} />
                   </label>
                 </div>
+                <label className="pf-check" style={{ marginTop: 8 }}>
+                  <input type="checkbox" checked={lockFeet} onChange={(e) => setLockFeet(e.target.checked)} />
+                  <span>Lock both feet at their first-pose position and rotation when adding (for clips that stay on the spot — not for walking)</span>
+                </label>
                 <div className="pf-row">
                   <button className="btn" disabled={!hasCharacter} onClick={onAdd} title={hasCharacter ? '' : 'Load a character first'}>Add to active character</button>
                   <button className="btn secondary" onClick={onDownloadBVH}>Download BVH</button>

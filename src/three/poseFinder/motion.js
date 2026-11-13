@@ -2,7 +2,7 @@
 // zero-phase One-Euro filter, plus a root path that is steadied by foot contact. Pure maths — no DOM, no Electron.
 import * as THREE from 'three'
 import { MHR_NAMES, MHR_REST_POS_CM, MHR_REST_QUAT } from './mhrRest.js'
-import { BVH_JOINTS, JOINT_INDEX } from './humanoid.js'
+import { BVH_JOINTS, JOINT_INDEX, restOffsets } from './humanoid.js'
 import { maxAngleFromFirst } from './validate.js'
 import { limitTracks, toModelFrame, fromModelFrame } from './limits.js'
 
@@ -363,13 +363,87 @@ function levelFeet(rot, count, planted, maxDeg = 40) {
   return applied
 }
 
+
+// ---- shoulders and ground ----------------------------------------------------------------------------------
+const SHRUG = { off: null, slight: { keep: 0.5, lowerDeg: 2 }, more: { keep: 0.25, lowerDeg: 5 } }
+export const SHOULDER_LEVELS = Object.keys(SHRUG)
+
+// The body model often raises the shoulders (a shrug) and pushes them forward. Damp any raise above the neutral
+// height and drop the shoulder a little, keeping the arm itself pointing where it was. Returns the largest change (deg).
+function lowerShoulders(local, count, level) {
+  const cfg = SHRUG[level]
+  if (!cfg) return 0
+  const offs = restOffsets()
+  const lower = (cfg.lowerDeg * Math.PI) / 180
+  const L = new THREE.Quaternion(), R = new THREE.Quaternion(), La = new THREE.Quaternion()
+  const elev = (v) => Math.atan2(v.y, Math.hypot(v.x, v.z))
+  let worst = 0
+  for (const [sh, arm] of [['LeftShoulder', 'LeftArm'], ['RightShoulder', 'RightArm']]) {
+    const j = JOINT_INDEX[sh], ja = JOINT_INDEX[arm]
+    const d0 = new THREE.Vector3(...offs[ja]).normalize()
+    const e0 = elev(d0)
+    for (let k = 0; k < count; k++) {
+      L.set(local[j][k * 4], local[j][k * 4 + 1], local[j][k * 4 + 2], local[j][k * 4 + 3])
+      const dir = d0.clone().applyQuaternion(L)
+      const e = elev(dir) - e0
+      const de = (e > 0 ? -(1 - cfg.keep) * e : 0) - lower
+      const h = new THREE.Vector3(dir.x, 0, dir.z)
+      if (h.lengthSq() < 1e-6) continue
+      h.normalize()
+      R.setFromAxisAngle(h.clone().cross(UP).normalize(), de) // raises a horizontal direction by +de
+      const Rinv = R.clone().invert()
+      La.set(local[ja][k * 4], local[ja][k * 4 + 1], local[ja][k * 4 + 2], local[ja][k * 4 + 3])
+      // shoulder' = R * shoulder ; arm' = shoulder'^-1 * shoulder * arm  (the arm keeps its world orientation)
+      const Lnew = R.clone().multiply(L)
+      const Lanew = L.clone().invert().multiply(Rinv).multiply(L).multiply(La)
+      local[j].set([Lnew.x, Lnew.y, Lnew.z, Lnew.w], k * 4)
+      local[ja].set([Lanew.x, Lanew.y, Lanew.z, Lanew.w], k * 4)
+      worst = Math.max(worst, Math.abs(de))
+    }
+  }
+  return (worst * 180) / Math.PI
+}
+
+// Height of the hips above the ground that puts the lowest point of either foot exactly on it, for every frame,
+// computed on the FINAL skeleton (template bone lengths + the finished rotations). cm.
+// Heel = 7.4 cm below the ankle joint and 6 cm behind it; toe tip = 2.1 cm below the ball joint and 5 cm ahead
+// (the template's own flat-foot proportions).
+function groundLockHeights(rot, count) {
+  const off = restOffsets()
+  const J = JOINT_INDEX
+  const ang = (j, k, out) => out.set(rot[j][k * 4], rot[j][k * 4 + 1], rot[j][k * 4 + 2], rot[j][k * 4 + 3])
+  const out = new Float32Array(count)
+  const dH = new THREE.Quaternion(), dU = new THREE.Quaternion(), dL = new THREE.Quaternion(), dF = new THREE.Quaternion(), dT = new THREE.Quaternion(), t = new THREE.Quaternion()
+  const v = new THREE.Vector3()
+  for (let k = 0; k < count; k++) {
+    ang(0, k, dH)
+    let lowest = Infinity
+    for (const S of ['Left', 'Right']) {
+      const ju = J[`${S}UpLeg`], jl = J[`${S}Leg`], jf = J[`${S}Foot`], jt = J[`${S}ToeBase`]
+      dU.copy(dH).multiply(ang(ju, k, t))
+      dL.copy(dU).multiply(ang(jl, k, t))
+      dF.copy(dL).multiply(ang(jf, k, t))
+      dT.copy(dF).multiply(ang(jt, k, t))
+      const p = new THREE.Vector3(...off[ju]).applyQuaternion(dH) // hip joint
+        .add(v.set(...off[jl]).applyQuaternion(dU))               // knee
+        .add(v.set(...off[jf]).applyQuaternion(dL))               // ankle
+      const toeJoint = p.clone().add(v.set(...off[jt]).applyQuaternion(dF)) // ball
+      const heel = p.clone().add(v.set(0, -7.4, -6).applyQuaternion(dF))
+      const toe = toeJoint.clone().add(v.set(0, -2.1, 5).applyQuaternion(dT))
+      lowest = Math.min(lowest, heel.y, toe.y)
+    }
+    out[k] = -lowest
+  }
+  return out
+}
+
 // ---- main entry ------------------------------------------------------------------------------------------
 // frames: [{ t (s), G: Float32Array(127*9) joint_rotations, jc: Float32Array(127*3) joint_coords,
 //            kp3: Float32Array(70*3) keypoints_3d, camT: [x,y,z] }]
 // Returns { fps, count, root: Float32Array(count*3) in cm, rot: Float32Array(count*4)[] per BVH joint (local),
 //           info: {...} }
 export function solveMotion(frames, opts = {}) {
-  const o = { outFps: 30, smoothing: 'medium', footLock: true, levelCamera: true, posture: 'auto', levelFeet: true, limitJoints: true, ...opts }
+  const o = { outFps: 30, smoothing: 'medium', footLock: true, levelCamera: true, posture: 'auto', levelFeet: true, limitJoints: true, shoulders: 'slight', ground: 'strict', ...opts }
   if (!frames || frames.length < 2) throw new Error('Need at least two analysed frames.')
   const n = frames.length
   const times = frames.map((f) => f.t)
@@ -414,6 +488,8 @@ export function solveMotion(frames, opts = {}) {
   // 2) anatomical clean-up on the raw samples (before smoothing, so a one-frame spike is not smeared into neighbours)
   let slouchDeg = 0, limitDeg = 0
   if (o.posture !== 'off') slouchDeg = (straightenPosture(local, n, o.posture === 'strong' ? 0 : 0.12) * 180) / Math.PI
+  let shoulderDeg = 0
+  if (o.shoulders !== 'off') shoulderDeg = lowerShoulders(local, n, o.shoulders)
   if (o.limitJoints) limitDeg = (limitTracks(local, n) * 180) / Math.PI
 
   // 3) resample to the output rate, then smooth there (zero-phase)
@@ -455,6 +531,16 @@ export function solveMotion(frames, opts = {}) {
   let footLevelDeg = 0
   if (o.levelFeet && o.footLock) footLevelDeg = levelFeet(rot, grid.count, planted)
 
+  // 5b) strict ground lock: the lowest foot is on the ground on every frame (no floating, no bobbing). Applied to
+  // the template skeleton, so it also fixes the hip height the importer later scales the whole root motion by.
+  let groundLocked = false
+  let lockedY = null
+  if (o.ground === 'strict') {
+    const hs = groundLockHeights(rot, grid.count)
+    lockedY = movingAverage(hs, Math.max(1, Math.round(o.outFps * 0.08)) | 1)
+    groundLocked = true
+  }
+
   // 6) into the template skeleton's units: ground at 0, start at the origin, scaled to the template's leg length
   const templateLeg = Math.abs(MHR_REST_POS_CM[IDX.root * 3 + 1] - MHR_REST_POS_CM[IDX.l_foot * 3 + 1])
   const scale = Math.min(2, Math.max(0.5, templateLeg / Math.max(1, legCm)))
@@ -462,7 +548,7 @@ export function solveMotion(frames, opts = {}) {
   const x0 = path[0], z0 = path[2]
   for (let i = 0; i < grid.count; i++) {
     root[i * 3] = (path[i * 3] - x0) * 100 * scale
-    root[i * 3 + 1] = (path[i * 3 + 1] - ground) * 100 * scale
+    root[i * 3 + 1] = lockedY ? lockedY[i] : (path[i * 3 + 1] - ground) * 100 * scale
     root[i * 3 + 2] = (path[i * 3 + 2] - z0) * 100 * scale
   }
 
@@ -471,7 +557,7 @@ export function solveMotion(frames, opts = {}) {
   for (const name of ['LeftArm', 'RightArm', 'LeftUpLeg', 'RightUpLeg', 'Spine2', 'Head']) variationDeg = Math.max(variationDeg, maxAngleFromFirst(rot[JOINT_INDEX[name]], grid.count))
   if (variationDeg < 4) warnings.push('The pose barely changes between frames. The model probably could not see the person — check the box and the "model view" picture.')
 
-  return { fps: o.outFps, count: grid.count, root, rot, info: { convention: conv, scale, groundM: ground, lockSegments, variationDeg, tiltDeg, slouchDeg, limitDeg, footLevelDeg, warnings } }
+  return { fps: o.outFps, count: grid.count, root, rot, info: { convention: conv, scale, groundM: ground, lockSegments, variationDeg, tiltDeg, slouchDeg, limitDeg, footLevelDeg, shoulderDeg, groundLocked, warnings } }
 }
 
 export { JOINT_INDEX }

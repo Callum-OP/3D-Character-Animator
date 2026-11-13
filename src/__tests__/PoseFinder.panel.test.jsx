@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
 
-vi.mock('../three/scene.js', () => ({ importBVHAuto: vi.fn() }))
+vi.mock('../three/scene.js', () => ({ importBVHAuto: vi.fn(), scrubTimeline: vi.fn() }))
 
 import PoseFinderPanel from '../panels/PoseFinderPanel.jsx'
 

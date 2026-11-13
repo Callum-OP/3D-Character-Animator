@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { confirmDialog } from '../dialogs.js'
 import { useStore } from '../store.js'
 import EditableValue from './EditableValue.jsx'
+import LockInPlaceSection from './LockInPlaceSection.jsx'
 import ShapeKeyPicker from './ShapeKeyPicker.jsx'
 import { applyKeyClick, isTimeSelected, pruneSelection, timesToDelete } from './keySelection.js'
 import {
@@ -2350,6 +2351,7 @@ export default function AnimationPanel() {
         <details className="anim-disclosure" style={{ marginTop: 8 }}>
           <summary>More character tools</summary>
           <div className="anim-disclosure-content">
+            <LockInPlaceSection />
             <section className="wind-controls" aria-label="Character tools">
               <div className="wind-heading">
                 <div>

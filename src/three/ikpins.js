@@ -777,3 +777,93 @@ export function hasActiveIkPins() {
   }
   return false
 }
+
+// ---------------------------------------------------------------------------
+// Lock in place
+//
+// A one-step way to use the pins: take a bone's position AND rotation in the pose on screen and hold it there for
+// the whole animation (feet that stop sliding or floating, a hand that stays on a rail). Each lock is an ordinary
+// pin (marker fixed in the world, rotation matched, full strength) flagged `lock: true`, so it saves with the project,
+// shows in the IK pins list, goes through undo/redo and plays back like any other pin.
+// ---------------------------------------------------------------------------
+
+export const isLockPin = (pin) => !!(pin && pin.lock)
+
+// Fingers and toes hinge on one parent joint; everything else (feet, hands, any other bone) uses the two-bone limb.
+function lockChainLength(boneName) {
+  const slot = classifyBone(boneName || '') || ''
+  const role = slot.split('.')[0]
+  if (role === 'toe') return 1
+  if (!role && /thumb|index|middle|ring|pinky|little|finger/i.test(boneName || '')) return 1
+  return 2
+}
+
+// Bone names for a limb role ('foot' | 'hand') of the active character: the rig's first bone in each left/right slot.
+export function limbBoneNames(role) {
+  const bones = useStore.getState().modelInfo?.bones || []
+  const seen = {}
+  for (const b of bones) {
+    const slot = classifyBone(b.name)
+    if (slot && slot.split('.')[0] === role && !seen[slot]) seen[slot] = b.name
+  }
+  return Object.values(seen)
+}
+
+// Lock the named bones where they are now. Bones that already have a lock are re-locked to the current pose.
+// One undo step. Returns { locked, relocked, missing }.
+export function lockBonesInPlace(boneNames, { characterId = useStore.getState().activeCharacterId, rotation = true } = {}) {
+  const result = { locked: 0, relocked: 0, missing: [] }
+  const rt = runtimes.get(characterId)
+  if (!rt) return { ...result, missing: [...new Set(boneNames || [])] }
+  const poses = new Map()
+  for (const name of new Set(boneNames || [])) {
+    const bone = findBone(rt.model, name)
+    if (!bone) { result.missing.push(name); continue }
+    bone.updateWorldMatrix(true, false)
+    bone.matrixWorld.decompose(_p, _q, _s)
+    poses.set(name, { position: _p.toArray(), quaternion: _q.toArray() })
+  }
+  if (!poses.size) return result
+  if (useStore.getState().ikEnabled === false) useStore.getState().setIkEnabled(true)
+  editPins(characterId, (pins) => {
+    const next = [...pins]
+    for (const [name, pose] of poses) {
+      const i = next.findIndex((p) => p.boneName === name)
+      if (i >= 0) {
+        // keep the pin's own settings, but it is now a world-space, full-strength lock at this pose
+        next[i] = { ...next[i], enabled: true, weight: 1, lock: true, matchRotation: rotation, attachObjectId: null, ...pose }
+        result.relocked++
+      } else {
+        next.push({
+          id: newPinId(),
+          name: `Lock · ${name}`,
+          boneName: name,
+          chainLength: lockChainLength(name),
+          enabled: true,
+          weight: 1,
+          matchRotation: rotation,
+          attachObjectId: null,
+          lock: true,
+          ...pose,
+        })
+        result.locked++
+      }
+    }
+    return next
+  })
+  return result
+}
+
+// Remove the locks on these bones (other kinds of pin are left alone). One undo step.
+export function unlockBones(boneNames, { characterId = useStore.getState().activeCharacterId } = {}) {
+  const names = new Set(boneNames || [])
+  const before = readPins(characterId).filter((p) => isLockPin(p) && names.has(p.boneName)).length
+  if (!before) return 0
+  editPins(characterId, (pins) => pins.filter((p) => !(isLockPin(p) && names.has(p.boneName))))
+  return before
+}
+
+export function unlockAll({ characterId = useStore.getState().activeCharacterId } = {}) {
+  const names = readPins(characterId).filter(isLockPin).map((p) => p.boneName)
+  return unlockBones(names, { characterId })
+}
