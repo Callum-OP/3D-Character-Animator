@@ -276,11 +276,11 @@ export async function beginBVHImport(file) {
 
 // Step 2: retarget the pending BVH using the (possibly hand-edited) slot mapping
 // and add the resulting clip to the playable list. Returns { name, matched, total }.
-export async function applyBVHRetarget(slots) {
+export async function applyBVHRetarget(slots, options) {
   if (!a.pendingBVH) throw new Error('No BVH is being imported.')
   const { names, hip } = mergeNames(a.pendingBVH.autoNames, slots)
   restoreRest() // the retarget measures the rig's rest pose — make sure it's in it
-  const { clip, matched, total } = await retargetParsed(a.pendingBVH, a.model, names, hip)
+  const { clip, matched, total } = await retargetParsed(a.pendingBVH, a.model, names, hip, undefined, options)
   a.importedClips.push(clip)
   a.pendingBVH = null
   a.refs.requestRender() // the retarget touched the rig; redraw the reset pose

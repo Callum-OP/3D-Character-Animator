@@ -15,7 +15,9 @@ Choose a motion preset before finding poses:
 
 The ground toggle grounds the lowest foot and enables planted-foot cleanup. During detected contacts, the solver
 levels and holds each foot in place on the output skeleton, releasing it for steps; this reduces sliding even when
-the tracked leg rotations are noisy. Switch the toggle off for airborne or non-standing movement (this also turns
+the tracked leg rotations are noisy. When adding a result to a character, retargeting preserves the character's
+own foot and toe rest angles rather than forcing them to match the output skeleton. Downloaded BVH files use their
+own skeleton and other BVH imports retain their usual retargeting. Switch the toggle off for airborne or non-standing movement (this also turns
 off the optional fixed-foot pin). Advanced settings can override cleanup.
 Advanced settings expose sampling, smoothing and cleanup controls. The optional fixed-foot pin is for motion on
 the spot, not walking: it is baked into the BVH, but feet can move if the hips travel beyond leg reach. Choosing
@@ -28,8 +30,10 @@ are approximate. The body-height reference uses tracked points rather than detec
 interpolation cannot recover a full rotation between samples. Use a clear view and a higher analysis rate for
 fast flips or steps; review the result and adjust the advanced settings if necessary. Contact detection is
 approximate, and feet may move when a target is beyond the leg's reach or the model cannot see them clearly.
-The Flips preset uses projected foot motion to detect contacts, so camera motion, occlusion, or movement towards
-the camera can be mistaken for contact or release. Turn off Foot lock in advanced settings if it alters the motion.
+The Flips preset uses projected foot motion to detect contacts and releases both feet when they and the hips rise.
+It retains accumulated horizontal tracking corrections when a foot lifts, rather than snapping back to the
+uncorrected path. Camera motion, occlusion, or movement towards the camera can still be mistaken for contact or release.
+Turn off Foot lock in advanced settings if it alters the motion.
 
 Files: `electron/poseEngine.cjs` (download, session, inference, IPC) · `src/three/poseFinder/*` (crop maths, MHR rest
 data, motion solver, BVH writer, pipeline) · `src/panels/PoseFinderPanel.jsx`.

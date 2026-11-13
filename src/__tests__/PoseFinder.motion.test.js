@@ -410,7 +410,7 @@ describe('baked foot lock', () => {
     return fr
   })
   const base = { outFps: 10, smoothing: 'off', footLock: false, levelCamera: false, posture: 'off', limitJoints: false, levelFeet: false, shoulders: 'off', ground: 'strict' }
-  const feet = (sol) => {
+  const feet = (sol, side = 'Left') => {
     const { skeleton, clip } = new BVHLoader().parse(writeBVH({ ...sol }))
     const by = Object.fromEntries(skeleton.bones.map((b) => [b.name, b]))
     const tr = Object.fromEntries(clip.tracks.map((t) => [t.name, t]))
@@ -419,8 +419,8 @@ describe('baked foot lock', () => {
       for (const b of skeleton.bones) { const t = tr[`${b.name}.quaternion`]; if (t) b.quaternion.fromArray(t.values, k * 4) }
       by.Hips.position.fromArray(tr['Hips.position'].values, k * 3)
       by.Hips.updateWorldMatrix(false, true)
-      out.pos.push(by.LeftFoot.getWorldPosition(new THREE.Vector3()))
-      out.rot.push(by.LeftFoot.getWorldQuaternion(new THREE.Quaternion()))
+      out.pos.push(by[`${side}Foot`].getWorldPosition(new THREE.Vector3()))
+      out.rot.push(by[`${side}Foot`].getWorldQuaternion(new THREE.Quaternion()))
     }
     return out
   }
@@ -530,6 +530,106 @@ describe('baked foot lock', () => {
         expect(new THREE.Quaternion().fromArray(locked.rot[idx(name)], k * 4).angleTo(new THREE.Quaternion().fromArray(free.rot[idx(name)], k * 4))).toBeLessThan(0.001)
       }
     }
+  })
+
+  it('releases both feet during a low upright jump while keeping standing contacts steady', () => {
+    const fr = Array.from({ length: 120 }, (_, i) => {
+      const phase = Math.max(0, Math.min(1, (i - 35) / 45))
+      const lift = 0.18 * Math.sin(Math.PI * phase)
+      const f = makeFrame(i / 30, fk({ l_upleg: E(-0.4, 0, 0), r_upleg: E(-0.4, 0, 0), l_lowleg: E(0.8, 0, 0), r_lowleg: E(0.8, 0, 0) }), { depth: 4 + 0.004 * i })
+      f.camT[1] -= lift
+      f.kp2 = new Float32Array(140)
+      for (const id of [5, 6]) f.kp2.set([100, 100 - lift * 85], id * 2)
+      for (const id of [9, 10]) f.kp2.set([100, 150 - lift * 85], id * 2)
+      for (const id of [13, 14]) f.kp2.set([100, 200 - lift * 85], id * 2)
+      for (const id of [15, 16, 17, 18, 19, 20]) f.kp2.set([100, 205 - lift * 85], id * 2)
+      return f
+    })
+    const opts = { ...POSE_PRESETS.flips.settings, smoothing: 'off', limitJoints: false }
+    const free = solveMotion(fr, { ...opts, footLock: false })
+    const locked = solveMotion(fr, opts)
+    const freeFeet = feet(free).pos, lockedFeet = feet(locked).pos
+    expect(spread(freeFeet.slice(5, 25))).toBeGreaterThan(3)
+    expect(spread(lockedFeet.slice(5, 25))).toBeLessThan(1)
+    expect(free.root[57 * 3 + 1] - free.root[15 * 3 + 1]).toBeGreaterThan(12)
+    expect(locked.root[57 * 3 + 1] - locked.root[15 * 3 + 1]).toBeGreaterThan(12)
+    for (const k of [45, 50, 57, 65, 70]) {
+      const freeRise = free.root[k * 3 + 1] - free.root[15 * 3 + 1]
+      const lockedRise = locked.root[k * 3 + 1] - locked.root[15 * 3 + 1]
+      expect(Math.abs(lockedRise - freeRise), `jump frame ${k}`).toBeLessThan(3)
+    }
+    for (const name of ['Hips', 'LeftUpLeg', 'LeftLeg', 'LeftFoot']) {
+      expect(new THREE.Quaternion().fromArray(locked.rot[idx(name)], 57 * 4).angleTo(new THREE.Quaternion().fromArray(free.rot[idx(name)], 57 * 4))).toBeLessThan(0.001)
+    }
+  })
+
+  it('keeps the supporting foot locked when only the other foot lifts', () => {
+    const fr = Array.from({ length: 90 }, (_, i) => {
+      const phase = Math.max(0, Math.min(1, (i - 25) / 35))
+      const lift = 15 * Math.sin(Math.PI * phase)
+      const f = makeFrame(i / 30, fk({ l_upleg: E(-0.4, 0, 0), r_upleg: E(-0.4, 0, 0), l_lowleg: E(0.8, 0, 0), r_lowleg: E(0.8, 0, 0) }), { depth: 4 + 0.004 * i })
+      f.kp2 = new Float32Array(140)
+      for (const id of [5, 6]) f.kp2.set([100, 100], id * 2)
+      for (const id of [13, 14]) f.kp2.set([100, 200], id * 2)
+      for (const id of [15, 16, 17]) f.kp2.set([100, 205 - lift], id * 2)
+      for (const id of [18, 19, 20]) f.kp2.set([100, 205], id * 2)
+      return f
+    })
+    const opts = { ...POSE_PRESETS.flips.settings, smoothing: 'off', limitJoints: false }
+    const free = feet(solveMotion(fr, { ...opts, footLock: false }), 'Right').pos
+    const locked = feet(solveMotion(fr, opts), 'Right').pos
+    expect(spread(free.slice(30, 55))).toBeGreaterThan(4)
+    expect(spread(locked.slice(30, 55))).toBeLessThan(1)
+  })
+
+  it('retains the depth correction after contact ends without suppressing subsequent travel', () => {
+    const make = (travel) => Array.from({ length: 120 }, (_, i) => {
+      const drift = Math.min(i, 65) * 0.015
+      const step = Math.max(0, i - 80) * 4
+      const move = Math.max(0, Math.min(1, (i - 98) / 10))
+      const f = makeFrame(i / 30, fk({ l_upleg: E(-0.4, 0, 0), r_upleg: E(-0.4, 0, 0), l_lowleg: E(0.8, 0, 0), r_lowleg: E(0.8, 0, 0) }), { depth: 4 + drift + travel * move })
+      f.kp2 = new Float32Array(140)
+      for (const id of [5, 6]) f.kp2.set([100 + step, 100], id * 2)
+      for (const id of [13, 14]) f.kp2.set([100 + step, 200], id * 2)
+      for (const id of [15, 16, 17, 18, 19, 20]) f.kp2.set([100 + step, 205], id * 2)
+      return f
+    })
+    const opts = { ...POSE_PRESETS.flips.settings, smoothing: 'off', limitJoints: false }
+    const still = solveMotion(make(0), opts)
+    const travelled = solveMotion(make(0.3), opts)
+    expect(Math.abs(still.root[110 * 3 + 2] - still.root[65 * 3 + 2])).toBeLessThan(5)
+    expect(Math.abs(travelled.root[110 * 3 + 2] - still.root[110 * 3 + 2])).toBeGreaterThan(20)
+  })
+
+  it('retains the accumulated correction when support switches between feet', () => {
+    const fr = Array.from({ length: 110 }, (_, i) => {
+      const f = makeFrame(i / 30, fk({ l_upleg: E(-0.4, 0, 0), r_upleg: E(-0.4, 0, 0), l_lowleg: E(0.8, 0, 0), r_lowleg: E(0.8, 0, 0) }), { depth: 4 + i * 0.012 })
+      f.kp2 = new Float32Array(140)
+      for (const id of [5, 6]) f.kp2.set([100, 100], id * 2)
+      for (const id of [13, 14]) f.kp2.set([100, 200], id * 2)
+      for (const id of [15, 16, 17]) f.kp2.set([100 + Math.max(0, i - 75) * 4, 205], id * 2)
+      for (const id of [18, 19, 20]) f.kp2.set([100 + Math.max(0, 30 - i) * 4, 205], id * 2)
+      return f
+    })
+    const result = solveMotion(fr, { ...POSE_PRESETS.flips.settings, smoothing: 'off', limitJoints: false })
+    const depths = Array.from({ length: 85 }, (_, i) => result.root[(i + 15) * 3 + 2])
+    expect(Math.max(...depths) - Math.min(...depths)).toBeLessThan(5)
+  })
+
+  it('does not mistake rising projected feet for a jump when the hips stay down', () => {
+    const fr = Array.from({ length: 100 }, (_, i) => {
+      const drift = Math.max(0, i - 60) * 0.02
+      const rise = Math.min(12, Math.max(0, i - 60) * 0.4)
+      const f = makeFrame(i / 30, fk({ l_upleg: E(-0.4, 0, 0), r_upleg: E(-0.4, 0, 0), l_lowleg: E(0.8, 0, 0), r_lowleg: E(0.8, 0, 0) }), { depth: 4 + drift })
+      f.kp2 = new Float32Array(140)
+      for (const id of [5, 6]) f.kp2.set([100, 100], id * 2)
+      for (const id of [9, 10]) f.kp2.set([100, 150], id * 2)
+      for (const id of [13, 14]) f.kp2.set([100, 200 - rise], id * 2)
+      for (const id of [15, 16, 17, 18, 19, 20]) f.kp2.set([100, 205 - rise], id * 2)
+      return f
+    })
+    const result = solveMotion(fr, { ...POSE_PRESETS.flips.settings, smoothing: 'off', limitJoints: false })
+    expect(Math.abs(result.root[95 * 3 + 2] - result.root[55 * 3 + 2])).toBeLessThan(5)
   })
 
   it('does not pin feet moving across the image in the flips preset', () => {

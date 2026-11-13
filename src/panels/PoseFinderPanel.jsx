@@ -232,7 +232,7 @@ export default function PoseFinderPanel({ onClose }) {
   async function onAdd() {
     setError(''); setNotice('')
     try {
-      const { name, matched, total } = await importBVHAuto(fileFor())
+      const { name, matched, total } = await importBVHAuto(fileFor(), { preserveFootRest: true })
       let lockNote = ''
       if (result.info.feetLocked) {
         // frame 0 is the neutral reference frame, so the first real pose is one frame in

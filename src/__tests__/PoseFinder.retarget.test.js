@@ -13,7 +13,7 @@ function neutralBVH(frames = 3) {
 }
 
 // T-pose character, left on +X, facing +Z, straight spine/neck, hands along the arms with 3 finger segments.
-function character() {
+function character(toeHeight = -0.05) {
   const P = 'mixamorig:'
   const root = new THREE.Group()
   const mk = (n, x, y, z, parent) => { const b = new THREE.Bone(); b.name = P + n; b.position.set(x, y, z); parent.add(b); return b }
@@ -31,7 +31,7 @@ function character() {
         bones.push(b); parent = b
       }
     }
-    const up = mk(`${S}UpLeg`, sign * 0.09, -0.05, 0, hips), leg = mk(`${S}Leg`, 0, -0.42, 0, up), foot = mk(`${S}Foot`, 0, -0.42, 0, leg), toe = mk(`${S}ToeBase`, 0, -0.05, 0.12, foot)
+    const up = mk(`${S}UpLeg`, sign * 0.09, -0.05, 0, hips), leg = mk(`${S}Leg`, 0, -0.42, 0, up), foot = mk(`${S}Foot`, 0, -0.42, 0, leg), toe = mk(`${S}ToeBase`, 0, toeHeight, 0.12, foot)
     bones.push(up, leg, foot, toe)
   }
   const mesh = new THREE.SkinnedMesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial())
@@ -40,13 +40,13 @@ function character() {
   return { root, skinnedMeshes: [mesh], meshes: [], skeleton: mesh.skeleton, bones }
 }
 
-async function retarget(model, bvhText) {
+async function retarget(model, bvhText, options) {
   const parsed = await parseBVH({ name: 'pose.bvh', text: async () => bvhText })
   const names = model.bones.map((b) => b.name)
   parsed.autoNames = buildNameMatch(names, parsed.bones)
   const slots = buildSlotMapping(names, parsed.bones, model.bones, parsed.skeleton.bones)
   const { names: map, hip } = mergeNames(parsed.autoNames, slots)
-  return retargetParsed(parsed, model, map, hip)
+  return retargetParsed(parsed, model, map, hip, undefined, options)
 }
 
 describe('a neutral Pose Finder clip leaves the character in its own rest pose', () => {
@@ -74,5 +74,43 @@ describe('a neutral Pose Finder clip leaves the character in its own rest pose',
     const hips = clip.tracks.find((t) => t.name === 'mixamorig:Hips.position')
     expect(hips.values[1]).toBeCloseTo(0.95, 2)
     expect(hips.values[4]).toBeLessThan(0.4)
+  })
+
+  it('preserves character foot and toe rest angles while retaining airborne foot motion', async () => {
+    const rot = BVH_JOINTS.map(() => new Float32Array([0, 0, 0, 1, 0, 0, 0, 1]))
+    const foot = BVH_JOINTS.findIndex((j) => j.name === 'LeftFoot')
+    const toe = BVH_JOINTS.findIndex((j) => j.name === 'LeftToeBase')
+    new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), 0.4).toArray(rot[foot], 4)
+    new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), 0.25).toArray(rot[toe], 4)
+    const bvh = writeBVH({ fps: 30, count: 2, root: new Float32Array([0, 92, 0, 0, 92, 0]), rot })
+    const model = character(-0.1)
+    model.root.rotation.y = 0.7
+    for (const side of ['Left', 'Right']) model.bones.find((b) => b.name === `mixamorig:${side}ToeBase`).rotation.x = 0.15
+    const { clip } = await retarget(model, bvh, { preserveFootRest: true })
+    const ordinary = await retarget(character(-0.1), bvh)
+    const byName = Object.fromEntries(model.bones.map((b) => [b.name, b]))
+    const pose = (frame) => {
+      for (const track of clip.tracks) {
+        if (!track.name.endsWith('.quaternion')) continue
+        byName[track.name.slice(0, -'.quaternion'.length)].quaternion.fromArray(track.values, frame * 4)
+      }
+      model.root.updateMatrixWorld(true)
+    }
+    pose(1)
+    let plantedFoot
+    for (const side of ['Left', 'Right']) {
+      const f = byName[`mixamorig:${side}Foot`], t = byName[`mixamorig:${side}ToeBase`]
+      const world = f.getWorldQuaternion(new THREE.Quaternion())
+      expect(new THREE.Vector3(0, 1, 0).applyQuaternion(world).angleTo(new THREE.Vector3(0, 1, 0))).toBeLessThan(0.001)
+      expect(t.quaternion.angleTo(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), 0.15))).toBeLessThan(0.001)
+      if (side === 'Left') plantedFoot = world
+    }
+    const ordinaryFoot = ordinary.clip.tracks.find((t) => t.name === 'mixamorig:LeftFoot.quaternion')
+    const ordinaryToe = ordinary.clip.tracks.find((t) => t.name === 'mixamorig:LeftToeBase.quaternion')
+    expect(new THREE.Quaternion().fromArray(ordinaryFoot.values, 4).angleTo(new THREE.Quaternion())).toBeGreaterThan(0.3)
+    expect(new THREE.Quaternion().fromArray(ordinaryToe.values, 4).angleTo(new THREE.Quaternion())).toBeGreaterThan(0.3)
+    pose(2)
+    expect(byName['mixamorig:LeftFoot'].getWorldQuaternion(new THREE.Quaternion()).angleTo(plantedFoot)).toBeCloseTo(0.4, 3)
+    expect(byName['mixamorig:LeftToeBase'].quaternion.angleTo(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), 0.15))).toBeCloseTo(0.25, 3)
   })
 })

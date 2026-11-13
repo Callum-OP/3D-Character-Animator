@@ -244,7 +244,7 @@ function rootInputs(frames, Rc) {
 // low and slow foot; the screen position cannot distinguish movement directly towards the camera.
 function screenFootContacts(frames, grid, rot, fps) {
   const ids = [[KP.lToe, KP.lSmallToe, KP.lHeel], [KP.rToe, KP.rSmallToe, KP.rHeel]]
-  const required = [KP.lShoulder, KP.rShoulder, KP.lAnkle, KP.rAnkle, ...ids.flat()]
+  const required = [KP.lShoulder, KP.rShoulder, KP.lHip, KP.rHip, KP.lAnkle, KP.rAnkle, ...ids.flat()]
   if (frames.some((f) => !f.kp2 || required.some((id) => !Number.isFinite(f.kp2[id * 2]) || !Number.isFinite(f.kp2[id * 2 + 1])))) return null
   const sizes = frames.map((f) => {
     const mid = (a, b, d) => (f.kp2[a * 2 + d] + f.kp2[b * 2 + d]) / 2
@@ -258,7 +258,7 @@ function screenFootContacts(frames, grid, rot, fps) {
     q.fromArray(rot[0], k * 4)
     upright[k] = up.set(0, 1, 0).applyQuaternion(q).y > 0.7 ? 1 : 0
   }
-  return ids.map((points) => {
+  const feet = ids.map((points) => {
     const source = new Float32Array(frames.length * 2)
     frames.forEach((f, i) => {
       for (let d = 0; d < 2; d++) source[i * 2 + d] = points.reduce((sum, id) => sum + f.kp2[id * 2 + d], 0) / points.length
@@ -267,8 +267,25 @@ function screenFootContacts(frames, grid, rot, fps) {
     const x = movingAverage(Float32Array.from({ length: grid.count }, (_, i) => pos[i * 2]), 3)
     const y = movingAverage(Float32Array.from({ length: grid.count }, (_, i) => pos[i * 2 + 1]), 3)
     const floor = Array.from(y).filter((_, i) => upright[i]).sort((a, b) => a - b)
-    if (!floor.length) return { stance: new Uint8Array(grid.count), blend: new Float32Array(grid.count) }
-    const floorY = floor[Math.floor((floor.length - 1) * 0.9)]
+    return { x, y, floorY: floor.length ? floor[Math.floor((floor.length - 1) * 0.9)] : null }
+  })
+  const hipSource = Float32Array.from(frames, (f) => (f.kp2[KP.lHip * 2 + 1] + f.kp2[KP.rHip * 2 + 1]) / 2)
+  const hipY = movingAverage(resampleVec(medianFilter(hipSource, 1), 1, grid), 3)
+  const airborne = new Uint8Array(grid.count)
+  if (feet.every((foot) => foot.floorY !== null)) {
+    for (let i = 0; i < grid.count;) {
+      if (!feet.every((foot) => foot.y[i] < foot.floorY - size * 0.06)) { i++; continue }
+      let j = i
+      while (j + 1 < grid.count && feet.every((foot) => foot.y[j + 1] < foot.floorY - size * 0.06)) j++
+      // Feet can appear higher just because estimated camera depth changed; takeoff also raises the hips.
+      const lookback = Math.max(1, Math.round(0.3 * fps))
+      const before = Math.max(...hipY.slice(Math.max(0, i - lookback), i + 1))
+      const after = Math.min(...hipY.slice(i, Math.min(j + 1, i + lookback + 1)))
+      if (j - i + 1 >= Math.max(2, Math.round(0.1 * fps)) && before - after > size * 0.025) airborne.fill(1, i, j + 1)
+      i = j + 1
+    }
+  }
+  return feet.map(({ x, y, floorY }) => {
     const stance = new Uint8Array(grid.count)
     const allowed = new Uint8Array(grid.count)
     const radius = Math.max(1, Math.round(0.2 * fps))
@@ -276,7 +293,7 @@ function screenFootContacts(frames, grid, rot, fps) {
     for (let i = 0; i < grid.count; i++) {
       const lo = Math.max(0, i - radius), hi = Math.min(grid.count - 1, i + radius)
       const motion = Math.min(speed(lo, i), speed(i, hi))
-      allowed[i] = upright[i] && y[i] >= floorY - size * 0.22 ? 1 : 0
+      allowed[i] = floorY !== null && upright[i] && !airborne[i] && y[i] >= floorY - size * 0.22 ? 1 : 0
       stance[i] = allowed[i] && motion < size * 0.4 ? 1 : 0
     }
     const blend = new Float32Array(grid.count)
@@ -305,6 +322,7 @@ function footLock(rootXYZ, soles, ground, fps, screenContacts = null) {
   const corr = new Float32Array(n * 3)
   const weightSum = new Float32Array(n)
   const planted = [new Float32Array(n), new Float32Array(n)]
+  const tracked = []
   const ramp = Math.max(1, Math.round(0.1 * fps))
   const minLen = Math.max(2, Math.round((screenContacts ? 0.25 : 0.12) * fps))
   const trendRadius = Math.max(1, Math.round(0.3 * fps))
@@ -313,6 +331,7 @@ function footLock(rootXYZ, soles, ground, fps, screenContacts = null) {
     const sx = movingAverage(Float32Array.from({ length: n }, (_, i) => sole[i * 3]), 3)
     const sy = movingAverage(Float32Array.from({ length: n }, (_, i) => sole[i * 3 + 1]), 3)
     const sz = movingAverage(Float32Array.from({ length: n }, (_, i) => sole[i * 3 + 2]), 3)
+    if (screenContacts) tracked.push([sx, sy, sz])
     const stance = new Uint8Array(n)
     for (let i = 0; i < n; i++) {
       const a = Math.max(0, i - 1), b = Math.min(n - 1, i + 1)
@@ -348,6 +367,20 @@ function footLock(rootXYZ, soles, ground, fps, screenContacts = null) {
     }
   })
   const out = Float32Array.from(rootXYZ)
+  if (screenContacts) {
+    // Keep accumulated tracking corrections after release; only new planted-foot motion changes the offset.
+    const offset = [0, 0, 0]
+    for (let k = 1; k < n; k++) {
+      const weights = planted.map((p) => Math.min(p[k - 1], p[k]))
+      const total = Math.max(1, weights[0] + weights[1])
+      for (const d of [0, 2]) {
+        for (let side = 0; side < 2; side++) offset[d] += weights[side] * (tracked[side][d][k] - tracked[side][d][k - 1]) / total
+        out[k * 3 + d] -= offset[d]
+      }
+    }
+    for (let k = 0; k < n; k++) out[k * 3 + 1] -= corr[k * 3 + 1] / Math.max(1, weightSum[k])
+    return { path: out, segments, planted }
+  }
   for (let k = 0; k < n; k++) {
     const d = Math.max(1, weightSum[k])
     out[k * 3] -= corr[k * 3] / d
@@ -725,12 +758,12 @@ export function solveMotion(frames, opts = {}) {
   const winZ = Math.max(1, Math.round(o.outFps * 0.4)) | 1
   const col = (d) => Float32Array.from({ length: grid.count }, (_, i) => path[i * 3 + d])
   const px = movingAverage(col(0), winXY), py = movingAverage(col(1), winXY), pz = movingAverage(col(2), winZ)
-  const baseline = o.footLock && o.contactMode === 'screen' ? [0, 1, 2].map((d) =>
-    movingAverage(Float32Array.from({ length: grid.count }, (_, i) => pelvisUp[i * 3 + d]), d === 2 ? winZ : winXY)) : null
+  const baselineY = o.footLock && o.contactMode === 'screen' ?
+    movingAverage(Float32Array.from({ length: grid.count }, (_, i) => pelvisUp[i * 3 + 1]), winXY) : null
   path = new Float32Array(grid.count * 3)
   for (let i = 0; i < grid.count; i++) {
-    const w = baseline ? Math.max(planted[0][i], planted[1][i]) : 1
-    for (const [d, value] of [px[i], py[i], pz[i]].entries()) path[i * 3 + d] = baseline ? baseline[d][i] + w * (value - baseline[d][i]) : value
+    const w = baselineY ? Math.max(planted[0][i], planted[1][i]) : 1
+    path.set([px[i], baselineY ? baselineY[i] + w * (py[i] - baselineY[i]) : py[i], pz[i]], i * 3)
   }
 
   // 5) planted feet lie flat on the ground

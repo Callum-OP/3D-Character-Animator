@@ -611,7 +611,7 @@ export function detectFacingYaw(tgtBones, restP, preferred = null) {
 // also turned to the direction the character itself faces (see detectFacingYaw),
 // so characters authored facing -Z or turned around still swing their limbs to
 // their FRONT.
-export function retargetParsed(parsed, model, names, hip, clipName) {
+export function retargetParsed(parsed, model, names, hip, clipName, { preserveFootRest = false } = {}) {
   const target = model.skinnedMeshes && model.skinnedMeshes[0]
   if (!target) throw new Error('This model has no skinned mesh to retarget mocap onto.')
   if (Object.keys(names).length === 0) {
@@ -779,6 +779,10 @@ export function retargetParsed(parsed, model, names, hip, clipName) {
       if (!childS || childS === srcBone) continue
       tDir.copy(restTgtP.get(childT)).sub(restTgtP.get(b))
       sDir.copy(restSrcP.get(childS)).sub(restSrcP.get(srcBone)).applyQuaternion(faceQ)
+      if (preserveFootRest && /^foot\./.test(classifyBone(b.name) || '')) {
+        tDir.y = 0
+        sDir.y = 0
+      }
       if (tDir.lengthSq() < 1e-10 || sDir.lengthSq() < 1e-10) continue
       align.set(b, new THREE.Quaternion().setFromUnitVectors(tDir.normalize(), sDir.normalize()))
     }
@@ -794,6 +798,17 @@ export function retargetParsed(parsed, model, names, hip, clipName) {
       const A = p && align.get(p)
       if (A) align.set(b, A.clone())
       else align.delete(b)
+    }
+    if (preserveFootRest) {
+      // Keep the character's toe rest pose relative to the foot, just as fingers follow the hand.
+      for (const b of mapped) {
+        if (!/^toe\./.test(classifyBone(b.name) || '')) continue
+        let p = b.parent
+        while (p && !(mappedSet.has(p) && /^foot\./.test(classifyBone(p.name) || ''))) p = p.parent
+        const A = p && align.get(p)
+        if (A) align.set(b, A.clone())
+        else align.delete(b)
+      }
     }
   }
 

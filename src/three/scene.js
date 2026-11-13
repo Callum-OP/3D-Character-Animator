@@ -2234,9 +2234,9 @@ export async function addObjectFile(file, { animationKey, recordHistory = true }
 // This one shared function is what both the title bar and any future
 // "quick BVH import" entry point should call, so that bookkeeping can't be
 // forgotten again — see Titlebar.bvhimport.test.js.
-export async function importBVHAuto(file) {
+export async function importBVHAuto(file, options) {
   const guess = await beginBVHImport(file)
-  const { name, matched, total } = await applyBVHRetarget(guess.slots)
+  const { name, matched, total } = await applyBVHRetarget(guess.slots, options)
   const s = useStore.getState()
   s.addImportedClipName(name)
   s.setPlaybackSource('clip')
