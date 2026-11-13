@@ -11,8 +11,8 @@ export const POSE_PRESETS = {
   },
   flips: {
     label: 'Flips',
-    description: 'For front flips and back flips. Samples more frames and keeps airborne motion.',
-    settings: { sampleFps: 30, outFps: 30, smoothing: 'low', footLock: false, levelCamera: false, posture: 'off', levelFeet: false, limitJoints: true, shoulders: 'off', ground: 'natural', groundReference: 'body', lockFeet: false },
+    description: 'For front flips and back flips. Keeps airborne motion and steadies detected planted feet.',
+    settings: { sampleFps: 30, outFps: 30, smoothing: 'low', footLock: true, contactMode: 'screen', levelCamera: false, posture: 'off', levelFeet: true, limitJoints: true, shoulders: 'off', ground: 'natural', groundReference: 'body', lockFeet: false },
   },
   adaptable: {
     label: 'Adaptable',

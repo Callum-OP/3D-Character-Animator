@@ -230,9 +230,9 @@ function rootInputs(frames, Rc) {
     }
     bodyLow[i] = Math.min(...Object.values(KP).map((id) => P(f, id).y))
     ;[[KP.lToe, KP.lSmallToe, KP.lHeel], [KP.rToe, KP.rSmallToe, KP.rHeel]].forEach((ids, side) => {
-      let best = null
-      for (const id of ids) { const p = P(f, id); if (!best || p.y < best.y) best = p }
-      soles[side].set([best.x, best.y, best.z], i * 3)
+      const points = ids.map((id) => P(f, id))
+      const center = points.reduce((sum, p) => sum.add(p), new THREE.Vector3()).multiplyScalar(1 / points.length)
+      soles[side].set([center.x, Math.min(...points.map((p) => p.y)), center.z], i * 3)
     })
   }
   legCm.sort((a, b) => a - b)
@@ -240,16 +240,74 @@ function rootInputs(frames, Rc) {
   return { pelvis, soles, bodyLow, legCm: legCm[legCm.length >> 1], boneLegCm: boneLegCm[boneLegCm.length >> 1] }
 }
 
+// Screen-space contacts are useful when depth estimates drift during jumps. Require a sustained, upright,
+// low and slow foot; the screen position cannot distinguish movement directly towards the camera.
+function screenFootContacts(frames, grid, rot, fps) {
+  const ids = [[KP.lToe, KP.lSmallToe, KP.lHeel], [KP.rToe, KP.rSmallToe, KP.rHeel]]
+  const required = [KP.lShoulder, KP.rShoulder, KP.lAnkle, KP.rAnkle, ...ids.flat()]
+  if (frames.some((f) => !f.kp2 || required.some((id) => !Number.isFinite(f.kp2[id * 2]) || !Number.isFinite(f.kp2[id * 2 + 1])))) return null
+  const sizes = frames.map((f) => {
+    const mid = (a, b, d) => (f.kp2[a * 2 + d] + f.kp2[b * 2 + d]) / 2
+    return Math.hypot(mid(KP.lShoulder, KP.rShoulder, 0) - mid(KP.lAnkle, KP.rAnkle, 0), mid(KP.lShoulder, KP.rShoulder, 1) - mid(KP.lAnkle, KP.rAnkle, 1))
+  })
+  const size = median(sizes)
+  if (size < 8) return null
+  const upright = new Uint8Array(grid.count)
+  const q = new THREE.Quaternion(), up = new THREE.Vector3()
+  for (let k = 0; k < grid.count; k++) {
+    q.fromArray(rot[0], k * 4)
+    upright[k] = up.set(0, 1, 0).applyQuaternion(q).y > 0.7 ? 1 : 0
+  }
+  return ids.map((points) => {
+    const source = new Float32Array(frames.length * 2)
+    frames.forEach((f, i) => {
+      for (let d = 0; d < 2; d++) source[i * 2 + d] = points.reduce((sum, id) => sum + f.kp2[id * 2 + d], 0) / points.length
+    })
+    const pos = resampleVec(medianFilter(source, 2), 2, grid)
+    const x = movingAverage(Float32Array.from({ length: grid.count }, (_, i) => pos[i * 2]), 3)
+    const y = movingAverage(Float32Array.from({ length: grid.count }, (_, i) => pos[i * 2 + 1]), 3)
+    const floor = Array.from(y).filter((_, i) => upright[i]).sort((a, b) => a - b)
+    if (!floor.length) return { stance: new Uint8Array(grid.count), blend: new Float32Array(grid.count) }
+    const floorY = floor[Math.floor((floor.length - 1) * 0.9)]
+    const stance = new Uint8Array(grid.count)
+    const allowed = new Uint8Array(grid.count)
+    const radius = Math.max(1, Math.round(0.2 * fps))
+    const speed = (a, b) => b > a ? Math.hypot(x[b] - x[a], y[b] - y[a]) / ((b - a) / fps) : Infinity
+    for (let i = 0; i < grid.count; i++) {
+      const lo = Math.max(0, i - radius), hi = Math.min(grid.count - 1, i + radius)
+      const motion = Math.min(speed(lo, i), speed(i, hi))
+      allowed[i] = upright[i] && y[i] >= floorY - size * 0.22 ? 1 : 0
+      stance[i] = allowed[i] && motion < size * 0.4 ? 1 : 0
+    }
+    const blend = new Float32Array(grid.count)
+    const ramp = Math.max(1, Math.round(0.15 * fps))
+    for (let i = 0; i < grid.count;) {
+      if (!allowed[i]) { i++; continue }
+      let j = i
+      while (j + 1 < grid.count && allowed[j + 1]) j++
+      for (let k = i; k <= j; k++) {
+        const inWeight = i === 0 ? 1 : Math.min(1, (k - i + 1) / (ramp + 1))
+        const outWeight = j === grid.count - 1 ? 1 : Math.min(1, (j - k + 1) / (ramp + 1))
+        const w = Math.min(inWeight, outWeight)
+        blend[k] = 0.5 - 0.5 * Math.cos(Math.PI * w)
+      }
+      i = j + 1
+    }
+    return { stance, blend }
+  })
+}
+
 // Pin planted feet so depth noise cannot make the body glide: while a foot is low and slow, its XZ is held at
 // the segment's median and its sole is held on the ground. The correction is spread over the root path.
 // Also returns, per foot, how "planted" it is on each frame (0..1) so the foot can be levelled too.
-function footLock(rootXYZ, soles, ground, fps) {
+function footLock(rootXYZ, soles, ground, fps, screenContacts = null) {
   const n = rootXYZ.length / 3
   const corr = new Float32Array(n * 3)
   const weightSum = new Float32Array(n)
   const planted = [new Float32Array(n), new Float32Array(n)]
   const ramp = Math.max(1, Math.round(0.1 * fps))
-  const minLen = Math.max(2, Math.round(0.12 * fps))
+  const minLen = Math.max(2, Math.round((screenContacts ? 0.25 : 0.12) * fps))
+  const trendRadius = Math.max(1, Math.round(0.3 * fps))
   let segments = 0
   soles.forEach((sole, side) => {
     const sx = movingAverage(Float32Array.from({ length: n }, (_, i) => sole[i * 3]), 3)
@@ -258,22 +316,29 @@ function footLock(rootXYZ, soles, ground, fps) {
     const stance = new Uint8Array(n)
     for (let i = 0; i < n; i++) {
       const a = Math.max(0, i - 1), b = Math.min(n - 1, i + 1)
-      const speed = Math.hypot(sx[b] - sx[a], sz[b] - sz[a]) / ((b - a) / fps)
-      stance[i] = sy[i] - ground < 0.07 && speed < 0.45 ? 1 : 0
+      const speed = Math.hypot(sx[b] - sx[a], sy[b] - sy[a], sz[b] - sz[a]) / ((b - a) / fps)
+      const lo = Math.max(0, i - trendRadius), hi = Math.min(n - 1, i + trendRadius)
+      const trend = Math.hypot(sx[hi] - sx[lo], sz[hi] - sz[lo]) / ((hi - lo) / fps)
+      stance[i] = screenContacts ? screenContacts[side].stance[i] : (sy[i] - ground < 0.07 && speed < 0.45 && trend < 0.16 ? 1 : 0)
     }
     for (let i = 0; i < n;) {
       if (!stance[i]) { i++; continue }
       let j = i
       while (j + 1 < n && stance[j + 1]) j++
-      if (j - i + 1 >= minLen) {
+      const hasAnchor = !screenContacts || screenContacts[side].blend.subarray(i, j + 1).some((w) => w >= 0.999)
+      if (j - i + 1 >= minLen && hasAnchor) {
         segments++
-        const xs = Array.from(sx.slice(i, j + 1)).sort((p, q) => p - q)
-        const zs = Array.from(sz.slice(i, j + 1)).sort((p, q) => p - q)
+        const anchorEnd = screenContacts ? Math.min(j + 1, i + Math.max(2, Math.round(0.15 * fps))) : j + 1
+        const xs = Array.from(sx.slice(i, anchorEnd)).sort((p, q) => p - q)
+        const zs = Array.from(sz.slice(i, anchorEnd)).sort((p, q) => p - q)
         const ax = xs[xs.length >> 1], az = zs[zs.length >> 1]
+        const ay = screenContacts ? median(sy.slice(i, anchorEnd)) : ground
         for (let k = Math.max(0, i - ramp); k <= Math.min(n - 1, j + ramp); k++) {
-          const w = k < i ? 0.5 - 0.5 * Math.cos(Math.PI * (1 - (i - k) / (ramp + 1))) : k > j ? 0.5 - 0.5 * Math.cos(Math.PI * (1 - (k - j) / (ramp + 1))) : 1
+          let w = k < i ? 0.5 - 0.5 * Math.cos(Math.PI * (1 - (i - k) / (ramp + 1))) : k > j ? 0.5 - 0.5 * Math.cos(Math.PI * (1 - (k - j) / (ramp + 1))) : 1
+          if (screenContacts) w *= screenContacts[side].blend[k]
+          if (!w) continue
           corr[k * 3] += w * (sx[k] - ax)
-          corr[k * 3 + 1] += w * (sy[k] - ground)
+          corr[k * 3 + 1] += w * (sy[k] - ay)
           corr[k * 3 + 2] += w * (sz[k] - az)
           weightSum[k] += w
           planted[side][k] = Math.max(planted[side][k], w)
@@ -342,7 +407,7 @@ function straightenPosture(local, count, allowance) {
 
 // While a foot is planted, make its sole level with the ground (removes toes-up / on-a-slope feet). Works on the
 // foot's world orientation and only ever swings the sole's up vector back to vertical (no twist, so heading is kept).
-function levelFeet(rot, count, planted, maxDeg = 40) {
+function levelFeet(rot, count, planted) {
   const sides = [['LeftUpLeg', 'LeftLeg', 'LeftFoot'], ['RightUpLeg', 'RightLeg', 'RightFoot']]
   const a = new THREE.Quaternion(), b = new THREE.Quaternion(), dLeg = new THREE.Quaternion(), dFoot = new THREE.Quaternion(), r = new THREE.Quaternion(), rw = new THREE.Quaternion(), id = new THREE.Quaternion()
   const get = (j, k, out) => out.set(rot[j][k * 4], rot[j][k * 4 + 1], rot[j][k * 4 + 2], rot[j][k * 4 + 3])
@@ -358,7 +423,7 @@ function levelFeet(rot, count, planted, maxDeg = 40) {
       get(jf, k, b); dFoot.copy(dLeg).multiply(b)          // ... * foot
       u.set(0, 1, 0).applyQuaternion(dFoot)
       const tilt = (u.angleTo(UP) * 180) / Math.PI
-      if (tilt > maxDeg || tilt < 0.5) continue
+      if (tilt < 0.5) continue
       r.setFromUnitVectors(u, UP)
       rw.copy(id).slerp(r, w)
       dFoot.premultiply(rw)
@@ -445,22 +510,20 @@ function groundLockHeights(rot, count) {
 }
 
 
-// Hold both feet exactly where they are on the first output frame — position and rotation — for the whole clip, by
-// re-solving each leg (two-bone IK on the template skeleton, keeping the knee bending the way it did). This is what
-// the in-app "Lock in place" does at runtime, baked into the motion so a downloaded BVH carries it. For clips that
-// stay on the spot; a leg cannot stretch, so if the hips travel out of reach the leg straightens toward the foot.
-function lockFeetToFirstPose(rot, root, count) {
+// Re-solve each leg towards its contact target, retaining the original knee bend direction.
+// A target outside leg reach is clamped rather than stretching the skeleton.
+function lockFeet(rot, root, count, planted, fixed, ground, level, contactFps = 0) {
   const off = restOffsets()
   const J = JOINT_INDEX
   const get = (j, k, out) => out.set(rot[j][k * 4], rot[j][k * 4 + 1], rot[j][k * 4 + 2], rot[j][k * 4 + 3])
   const put = (j, k, q) => { rot[j].set([q.x, q.y, q.z, q.w], k * 4) }
   const V = (i) => new THREE.Vector3(...off[i])
   const dH = new THREE.Quaternion(), t = new THREE.Quaternion()
+  const legs = []
   for (const S of ['Left', 'Right']) {
     const ju = J[`${S}UpLeg`], jl = J[`${S}Leg`], jf = J[`${S}Foot`]
     const offU = V(ju), offL = V(jl), offF = V(jf)
     const l1 = offL.length(), l2 = offF.length()
-    // the first frame's ankle position and foot rotation are the targets
     const chain = (k) => {
       get(0, k, dH)
       const dU = dH.clone().multiply(get(ju, k, t))
@@ -471,10 +534,68 @@ function lockFeetToFirstPose(rot, root, count) {
       const A = K.clone().add(offF.clone().applyQuaternion(dL))
       return { dH: dH.clone(), dU, dL, dF, P0, K, A }
     }
-    const first = chain(0)
-    const T = first.A.clone(), Rf = first.dF.clone()
-    for (let k = 1; k < count; k++) {
+    const side = S === 'Left' ? 0 : 1
+    const targets = new Array(count)
+    if (fixed) {
+      const first = chain(0)
+      for (let k = 1; k < count; k++) targets[k] = { T: first.A, R: first.dF, w: 1 }
+    } else {
+      for (let i = 0; i < count;) {
+        if (planted[side][i] < 0.999) { i++; continue }
+        let j = i
+        while (j + 1 < count && planted[side][j + 1] >= 0.999) j++
+        const sampleCount = contactFps ? Math.min(j - i + 1, Math.max(2, Math.round(0.15 * contactFps))) : j - i + 1
+        const samples = Array.from({ length: sampleCount }, (_, k) => chain(i + k))
+        const T = new THREE.Vector3(...['x', 'y', 'z'].map((d) => median(samples.map((c) => c.A[d]))))
+        const R = samples[Math.floor(samples.length / 2)].dF
+        if (ground) {
+          const jt = J[`${S}ToeBase`]
+          const heel = new THREE.Vector3(0, -7.4, -6).applyQuaternion(R)
+          const toe = V(jt).add(new THREE.Vector3(0, -2.1, 5)).applyQuaternion(R)
+          T.y = -Math.min(heel.y, toe.y)
+        }
+        let start = i, end = j
+        while (start > 0 && planted[side][start - 1] > 0 && !targets[start - 1]) start--
+        while (end + 1 < count && planted[side][end + 1] > 0 && planted[side][end + 1] < 0.999) end++
+        for (let k = start; k <= end; k++) targets[k] = { T, R, w: planted[side][k] }
+        i = j + 1
+      }
+    }
+    legs.push({ S, ju, jl, jf, offL, offF, l1, l2, chain, targets })
+  }
+  if (contactFps && !fixed) {
+    // Keep the hips inside both planted legs' reach before solving either leg.
+    for (let k = 0; k < count; k++) {
+      for (let iteration = 0; iteration < 8; iteration++) {
+        for (const leg of legs) {
+          const target = leg.targets[k]
+          if (!target) continue
+          const c = leg.chain(k)
+          const toTarget = c.A.clone().lerp(target.T, target.w).sub(c.P0)
+          const distance = toTarget.length()
+          const excess = distance - (leg.l1 + leg.l2 - 1e-4)
+          if (excess > 0) {
+            toTarget.multiplyScalar(target.w * excess / distance)
+            root[k * 3] += toTarget.x
+            root[k * 3 + 1] += toTarget.y
+            root[k * 3 + 2] += toTarget.z
+          }
+        }
+      }
+    }
+  }
+  for (const { S, ju, jl, jf, offL, offF, l1, l2, chain, targets } of legs) {
+    for (let k = 0; k < count; k++) {
+      const target = targets[k]
+      if (!target) continue
       const c = chain(k)
+      if (!fixed && level) {
+        const jt = J[`${S}ToeBase`]
+        const toe = get(jt, k, new THREE.Quaternion()).slerp(new THREE.Quaternion(), target.w)
+        put(jt, k, toe)
+      }
+      const T = c.A.clone().lerp(target.T, target.w)
+      const Rf = c.dF.clone().slerp(target.R, target.w)
       const u = T.clone().sub(c.P0)
       const dist = u.length()
       if (dist < 1e-6) continue
@@ -485,7 +606,10 @@ function lockFeetToFirstPose(rot, root, count) {
       pole.addScaledVector(ac, -pole.dot(ac))
       if (pole.lengthSq() < 1e-8) pole.set(0, 0, 1)
       pole.addScaledVector(u, -pole.dot(u))
-      if (pole.lengthSq() < 1e-8) pole.set(0, 0, 1).addScaledVector(u, -u.z)
+      if (pole.lengthSq() < 1e-8) {
+        pole.set(Math.abs(u.x) < 0.9 ? 1 : 0, Math.abs(u.x) < 0.9 ? 0 : 1, 0)
+        pole.addScaledVector(u, -pole.dot(u))
+      }
       pole.normalize()
       const reach = Math.min(Math.max(dist, Math.abs(l1 - l2) + 1e-4), l1 + l2 - 1e-4)
       const a = (l1 * l1 - l2 * l2 + reach * reach) / (2 * reach)
@@ -501,7 +625,7 @@ function lockFeetToFirstPose(rot, root, count) {
       const ll = dU.clone().invert().multiply(dL)
       const lf = dL.clone().invert().multiply(Rf)
       for (const [j, q] of [[ju, lu], [jl, ll], [jf, lf]]) {
-        const p = k * 4 - 4
+        const p = k * 4
         if (q.x * rot[j][p] + q.y * rot[j][p + 1] + q.z * rot[j][p + 2] + q.w * rot[j][p + 3] < 0) q.set(-q.x, -q.y, -q.z, -q.w)
         put(j, k, q)
       }
@@ -515,7 +639,7 @@ function lockFeetToFirstPose(rot, root, count) {
 // Returns { fps, count, root: Float32Array(count*3) in cm, rot: Float32Array(count*4)[] per BVH joint (local),
 //           info: {...} }
 export function solveMotion(frames, opts = {}) {
-  const o = { outFps: 30, smoothing: 'medium', footLock: true, levelCamera: true, posture: 'auto', levelFeet: true, limitJoints: true, shoulders: 'slight', ground: 'strict', groundReference: 'feet', lockFeet: false, ...opts }
+  const o = { outFps: 30, smoothing: 'medium', footLock: true, contactMode: 'ground', levelCamera: true, posture: 'auto', levelFeet: true, limitJoints: true, shoulders: 'slight', ground: 'strict', groundReference: 'feet', lockFeet: false, ...opts }
   if (!frames || frames.length < 2) throw new Error('Need at least two analysed frames.')
   const n = frames.length
   const times = frames.map((f) => f.t)
@@ -589,7 +713,10 @@ export function solveMotion(frames, opts = {}) {
   let lockSegments = 0
   let planted = [new Float32Array(grid.count), new Float32Array(grid.count)]
   if (o.footLock) {
-    const r = footLock(pelvisUp, solesUp, ground, o.outFps)
+    const screenContacts = o.contactMode === 'screen' ? screenFootContacts(frames, grid, rot, o.outFps) : null
+    if (o.contactMode === 'screen' && !screenContacts) warnings.push('Could not estimate image-space foot contacts; planted-foot cleanup was skipped.')
+    const noContacts = planted.map((stance) => ({ stance, blend: stance }))
+    const r = footLock(pelvisUp, solesUp, ground, o.outFps, o.contactMode === 'screen' ? (screenContacts || noContacts) : null)
     path = r.path
     lockSegments = r.segments
     planted = r.planted
@@ -598,8 +725,13 @@ export function solveMotion(frames, opts = {}) {
   const winZ = Math.max(1, Math.round(o.outFps * 0.4)) | 1
   const col = (d) => Float32Array.from({ length: grid.count }, (_, i) => path[i * 3 + d])
   const px = movingAverage(col(0), winXY), py = movingAverage(col(1), winXY), pz = movingAverage(col(2), winZ)
+  const baseline = o.footLock && o.contactMode === 'screen' ? [0, 1, 2].map((d) =>
+    movingAverage(Float32Array.from({ length: grid.count }, (_, i) => pelvisUp[i * 3 + d]), d === 2 ? winZ : winXY)) : null
   path = new Float32Array(grid.count * 3)
-  for (let i = 0; i < grid.count; i++) path.set([px[i], py[i], pz[i]], i * 3)
+  for (let i = 0; i < grid.count; i++) {
+    const w = baseline ? Math.max(planted[0][i], planted[1][i]) : 1
+    for (const [d, value] of [px[i], py[i], pz[i]].entries()) path[i * 3 + d] = baseline ? baseline[d][i] + w * (value - baseline[d][i]) : value
+  }
 
   // 5) planted feet lie flat on the ground
   let footLevelDeg = 0
@@ -611,7 +743,7 @@ export function solveMotion(frames, opts = {}) {
   let lockedY = null
   if (o.ground === 'strict') {
     const hs = groundLockHeights(rot, grid.count)
-    lockedY = movingAverage(hs, Math.max(1, Math.round(o.outFps * 0.08)) | 1)
+    lockedY = hs
     groundLocked = true
   }
 
@@ -626,7 +758,15 @@ export function solveMotion(frames, opts = {}) {
     root[i * 3 + 2] = (path[i * 3 + 2] - z0) * 100 * scale
   }
 
-  if (o.lockFeet) lockFeetToFirstPose(rot, root, grid.count)
+  if (o.lockFeet || o.footLock) lockFeet(rot, root, grid.count, planted, o.lockFeet, o.ground === 'strict' && o.levelFeet, o.levelFeet, o.contactMode === 'screen' ? o.outFps : 0)
+  if (o.ground === 'strict') {
+    const heights = groundLockHeights(rot, grid.count)
+    for (let i = 0; i < grid.count; i++) root[i * 3 + 1] = heights[i]
+  }
+  if (o.footLock && o.contactMode === 'screen' && !o.lockFeet) {
+    const x = root[0], z = root[2]
+    for (let i = 0; i < grid.count; i++) { root[i * 3] -= x; root[i * 3 + 2] -= z }
+  }
 
   // How much did the person actually move? Near zero means the model was not looking at them.
   let variationDeg = 0

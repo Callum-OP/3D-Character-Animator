@@ -10,11 +10,13 @@ draw a box round the person → **Find poses** → **Add to active character** (
 Choose a motion preset before finding poses:
 - **Standing** uses the existing upright cleanup and ground correction.
 - **Lying down** preserves horizontal poses and uses the lowest tracked body point as the height reference.
-- **Flips** samples more frames and preserves airborne height and body rotation.
+- **Flips** samples more frames, preserves airborne motion and steadies detected foot contacts before and after a jump.
 - **Adaptable** is for clips mixing standing, falling, rolling and lying down.
 
-The ground toggle grounds the lowest foot and enables planted-foot cleanup; switch it off for airborne or
-non-standing movement (this also turns off the optional fixed-foot pin). Advanced settings can override cleanup.
+The ground toggle grounds the lowest foot and enables planted-foot cleanup. During detected contacts, the solver
+levels and holds each foot in place on the output skeleton, releasing it for steps; this reduces sliding even when
+the tracked leg rotations are noisy. Switch the toggle off for airborne or non-standing movement (this also turns
+off the optional fixed-foot pin). Advanced settings can override cleanup.
 Advanced settings expose sampling, smoothing and cleanup controls. The optional fixed-foot pin is for motion on
 the spot, not walking: it is baked into the BVH, but feet can move if the hips travel beyond leg reach. Choosing
 a preset resets these settings. Results are generated from the settings at the time **Find poses** is pressed;
@@ -24,7 +26,10 @@ reference frame is included at the start for the app's retargeter.
 The model estimates 3D motion from one video, so occluded limbs, floor height, camera movement, and fast rotations
 are approximate. The body-height reference uses tracked points rather than detecting a real floor or bed, and
 interpolation cannot recover a full rotation between samples. Use a clear view and a higher analysis rate for
-fast flips; review the result and adjust the advanced settings if necessary.
+fast flips or steps; review the result and adjust the advanced settings if necessary. Contact detection is
+approximate, and feet may move when a target is beyond the leg's reach or the model cannot see them clearly.
+The Flips preset uses projected foot motion to detect contacts, so camera motion, occlusion, or movement towards
+the camera can be mistaken for contact or release. Turn off Foot lock in advanced settings if it alters the motion.
 
 Files: `electron/poseEngine.cjs` (download, session, inference, IPC) · `src/three/poseFinder/*` (crop maths, MHR rest
 data, motion solver, BVH writer, pipeline) · `src/panels/PoseFinderPanel.jsx`.

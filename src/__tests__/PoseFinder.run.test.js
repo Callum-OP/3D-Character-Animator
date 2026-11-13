@@ -146,6 +146,13 @@ describe('runPoseFinder with a fake video and a fake engine', () => {
     expect(calls.at(-1).center[0]).toBeGreaterThan(calls[0].center[0] + 300)
   })
 
+  it('uses image-space projections for flip contacts when model 2D output is in crop space', async () => {
+    const { engine, source } = rig({ still: true, kp2dSpace: 'crop' })
+    const r = await runPoseFinder({ source, engine, box: START_BOX, sampleFps: 5, outFps: 30, footLock: true, clean: { contactMode: 'screen', ground: 'natural', groundReference: 'body', levelCamera: false, levelFeet: true } })
+    expect(r.solved.info.lockSegments).toBe(2)
+    expect(r.solved.info.warnings.join(' ')).not.toMatch(/image-space foot contacts/)
+  })
+
   it('fails clearly when the very first frame is garbage (so the app can retry on CPU)', async () => {
     const { engine, source } = rig({ garbage: () => true })
     await expect(runPoseFinder({ source, engine, box: START_BOX, sampleFps: 5 })).rejects.toBeInstanceOf(BadOutputError)

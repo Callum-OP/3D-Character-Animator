@@ -197,7 +197,7 @@ export default function PoseFinderPanel({ onClose }) {
         try {
           const r = await runPoseFinder({
             source, engine: pose, box, startTime: range[0], endTime: range[1], sampleFps, outFps, smoothing, footLock,
-            signal: ac.signal, onProgress: setProgress, onFrame, clean: { levelCamera, posture, levelFeet, limitJoints, shoulders, ground, groundReference, lockFeet },
+            signal: ac.signal, onProgress: setProgress, onFrame, clean: { levelCamera, posture, levelFeet, limitJoints, shoulders, ground, groundReference, lockFeet, contactMode: ground === 'strict' ? 'ground' : (POSE_PRESETS[preset].settings.contactMode || 'ground') },
           })
           diagRef.current.solved = { shoulderDeg: r.solved.info.shoulderDeg, groundLocked: r.solved.info.groundLocked, tiltDeg: r.solved.info.tiltDeg, slouchDeg: r.solved.info.slouchDeg, limitDeg: r.solved.info.limitDeg, footLevelDeg: r.solved.info.footLevelDeg, variationDeg: r.solved.info.variationDeg, convention: r.solved.info.convention, scale: r.solved.info.scale, warnings: r.solved.info.warnings }
           setResult({ bvh: r.bvh, name: src.name.replace(/\.[^.]+$/, '') + '-pose', warnings: r.solved.info.warnings, info: r.solved.info, fps: r.solved.fps })
@@ -342,7 +342,7 @@ export default function PoseFinderPanel({ onClose }) {
                     setGround(on ? 'strict' : 'natural'); setFootLock(on); setLevelFeet(on)
                     if (!on) setLockFeet(false)
                   }} />
-                  <span><strong>Keep feet on the ground</strong><small>Grounds the lowest foot and reduces sliding. Turn off for jumps, flips, falling or lying down.</small></span>
+                  <span><strong>Keep feet on the ground</strong><small>Grounds the lowest foot and holds detected planted feet level and still. Turn off for jumps, flips, falling or lying down.</small></span>
                 </label>
               </div>
               <details className="pf-details">

@@ -103,7 +103,7 @@ describe('PoseFinderPanel', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Find poses' }).disabled).toBe(false))
     fireEvent.click(screen.getByRole('button', { name: 'Find poses' }))
     await screen.findByRole('button', { name: 'Download BVH' })
-    expect(runPoseFinder.mock.calls[0][0]).toMatchObject({ sampleFps: 30, footLock: false, clean: { ground: 'natural', groundReference: 'body', lockFeet: true } })
+    expect(runPoseFinder.mock.calls[0][0]).toMatchObject({ sampleFps: 30, footLock: true, clean: { ground: 'natural', groundReference: 'body', lockFeet: true, contactMode: 'screen' } })
     fireEvent.click(screen.getByLabelText(/pin both feet/i))
     fireEvent.click(screen.getByRole('button', { name: 'Add to active character' }))
     await waitFor(() => expect(lockBonesInPlace).toHaveBeenCalled())

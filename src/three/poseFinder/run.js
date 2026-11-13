@@ -1,6 +1,6 @@
 // The Pose Finder pipeline: video frames -> SAM 3D Body (via the engine) -> cleaned motion -> BVH text.
 // `source` and `engine` are injected so the whole thing can be tested without a video or the model.
-import { makeCrop, defaultCamera, pickNextBox } from './cropMath.js'
+import { makeCrop, defaultCamera, pickNextBox, projectKeypoints } from './cropMath.js'
 import { checkFrameOutput } from './validate.js'
 import { solveMotion } from './motion.js'
 import { writeBVH } from './bvhWrite.js'
@@ -36,7 +36,7 @@ export async function runPoseFinder({ source, engine, box, startTime = 0, endTim
     if (check.ok) {
       const focal = o.focal_length || camera[0]
       next = pickNextBox({ kp2d: o.keypoints_2d, kp3: o.keypoints_3d, camT: o.cam_t, focal }, source.width, source.height, current)
-      lastGood = { G: o.joint_rotations, jc: o.joint_coords, kp3: o.keypoints_3d, camT: [o.cam_t[0], o.cam_t[1], o.cam_t[2]] }
+      lastGood = { G: o.joint_rotations, jc: o.joint_coords, kp3: o.keypoints_3d, camT: [o.cam_t[0], o.cam_t[1], o.cam_t[2]], kp2: projectKeypoints(o.keypoints_3d, o.cam_t, focal, source.width, source.height) }
       frames.push({ t: t - startTime, ...lastGood })
       invalid = 0
     } else {
