@@ -136,10 +136,13 @@ describe('motion presets', () => {
     expect(new THREE.Quaternion().fromArray(mixed.rot[0], 42 * 4).angleTo(new THREE.Quaternion())).toBeGreaterThan(1.3)
   })
 
-  it('releases standing foot contacts when the torso falls despite upright hips', () => {
+  it('releases foot contacts when the torso and hips fall near the feet despite upright hips', () => {
     const fr = Array.from({ length: 100 }, (_, i) => {
       const bend = Math.max(0, Math.min(1, (i - 38) / 8))
       const f = makeFrame(i / 30, fk({ c_spine1: E(bend * 1.5, 0, 0), l_upleg: E(-0.4, 0, 0), r_upleg: E(-0.4, 0, 0), l_lowleg: E(0.8, 0, 0), r_lowleg: E(0.8, 0, 0) }), { depth: 4 + i * 0.01 })
+      for (const [hip, ankle] of [[9, 13], [10, 14]]) {
+        f.kp3[ankle * 3 + 1] += bend * (f.kp3[hip * 3 + 1] - f.kp3[ankle * 3 + 1])
+      }
       f.kp2 = new Float32Array(140)
       for (const id of [5, 6]) f.kp2.set([100, 100], id * 2)
       for (const id of [9, 10]) f.kp2.set([100, 150], id * 2)
@@ -641,6 +644,36 @@ describe('baked foot lock', () => {
     }
   })
 
+  it('keeps bent-over standing and landing feet planted like Flips while releasing the backflip', () => {
+    const fr = Array.from({ length: 98 }, (_, i) => {
+      const flip = i < 30 ? 0 : i > 50 ? Math.PI * 2 : (i - 30) * Math.PI * 2 / 20
+      const noise = 0.05 * Math.sin(i * 0.7)
+      const f = makeFrame(i / 30, fk({ root: E(flip, 0, 0), c_spine1: E(1.25 + 0.06 * Math.sin(i * 0.4), 0, 0), l_upleg: E(-0.4 + noise, 0, 0), r_upleg: E(-0.4 - noise, 0, 0), l_lowleg: E(0.8, 0, 0), r_lowleg: E(0.8, 0, 0) }), { depth: 4 + 0.012 * i })
+      f.kp2 = new Float32Array(140)
+      for (const id of [5, 6]) f.kp2.set([100, 100], id * 2)
+      for (const id of [9, 10]) f.kp2.set([100, i >= 30 && i <= 50 ? 130 : 150], id * 2)
+      for (const id of [13, 14]) f.kp2.set([100, 200], id * 2)
+      for (const id of [15, 16, 17, 18, 19, 20]) f.kp2.set([100, i >= 30 && i <= 50 ? 150 : 205], id * 2)
+      return f
+    })
+    const opts = { smoothing: 'off', limitJoints: false }
+    const free = solveMotion(fr, { ...POSE_PRESETS.adaptable.settings, ...opts, footLock: false })
+    const adaptable = solveMotion(fr, { ...POSE_PRESETS.adaptable.settings, ...opts })
+    const flips = solveMotion(fr, { ...POSE_PRESETS.flips.settings, ...opts })
+    for (const side of ['Left', 'Right']) {
+      const p = feet(adaptable, side).pos, f = feet(flips, side).pos
+      for (const [start, end] of [[0, 20], [60, 90]]) {
+        expect(spread(p.slice(start, end))).toBeLessThan(1)
+        expect(spread(p.slice(start, end))).toBeLessThan(spread(f.slice(start, end)) + 0.5)
+      }
+    }
+    for (const name of ['Hips', 'LeftUpLeg', 'LeftLeg', 'LeftFoot']) {
+      const a = new THREE.Quaternion().fromArray(adaptable.rot[idx(name)], 40 * 4)
+      const b = new THREE.Quaternion().fromArray(free.rot[idx(name)], 40 * 4)
+      expect(a.angleTo(b)).toBeLessThan(0.001)
+    }
+  })
+
   it('releases both feet during a low upright jump while keeping standing contacts steady', () => {
     const fr = Array.from({ length: 120 }, (_, i) => {
       const phase = Math.max(0, Math.min(1, (i - 35) / 45))
@@ -741,7 +774,7 @@ describe('baked foot lock', () => {
     expect(Math.abs(result.root[95 * 3 + 2] - result.root[55 * 3 + 2])).toBeLessThan(5)
   })
 
-  it('does not pin feet moving across the image in the flips preset', () => {
+  it.each(['flips', 'adaptable'])('does not pin feet moving across the image in the %s preset', (preset) => {
     const fr = Array.from({ length: 30 }, (_, i) => {
       const f = makeFrame(i / 30, fk({ l_upleg: E(-0.3 + i * 0.02, 0, 0), l_lowleg: E(0.7, 0, 0) }), { depth: 4, x: i * 0.02 })
       f.kp2 = new Float32Array(140)
@@ -750,7 +783,7 @@ describe('baked foot lock', () => {
       for (const id of [15, 16, 17, 18, 19, 20]) f.kp2.set([100 + i * 2, 205], id * 2)
       return f
     })
-    const s = solveMotion(fr, { ...POSE_PRESETS.flips.settings, smoothing: 'off', limitJoints: false })
+    const s = solveMotion(fr, { ...POSE_PRESETS[preset].settings, smoothing: 'off', limitJoints: false })
     expect(s.info.lockSegments).toBe(0)
     expect(spread(feet(s).pos)).toBeGreaterThan(15)
   })

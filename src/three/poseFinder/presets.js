@@ -16,7 +16,7 @@ export const POSE_PRESETS = {
   },
   adaptable: {
     label: 'Adaptable',
-    description: 'For mixed movement, such as walking, falling, rolling and lying down. Releases foot contacts when the body tilts.',
+    description: 'For mixed movement, such as walking, falling, rolling and lying down. Keeps standing feet steady and releases them near the floor.',
     settings: { sampleFps: 30, outFps: 30, smoothing: 'low', footLock: true, contactMode: 'screen', motionProfile: 'mixed', levelCamera: false, posture: 'off', levelFeet: true, limitJoints: true, lowerArms: 'slight', ground: 'natural', groundReference: 'body', lockFeet: false },
   },
 }

@@ -242,7 +242,7 @@ function rootInputs(frames, Rc) {
 
 // Screen-space contacts are useful when depth estimates drift during jumps. Require a sustained, upright,
 // low and slow foot; the screen position cannot distinguish movement directly towards the camera.
-function screenFootContacts(frames, grid, rot, fps, mixed, Rc) {
+function screenFootContacts(frames, grid, rot, fps, mixed, Rc, legLength) {
   const ids = [[KP.lToe, KP.lSmallToe, KP.lHeel], [KP.rToe, KP.rSmallToe, KP.rHeel]]
   const required = [KP.lShoulder, KP.rShoulder, KP.lHip, KP.rHip, KP.lAnkle, KP.rAnkle, ...ids.flat()]
   if (frames.some((f) => !f.kp2 || required.some((id) => !Number.isFinite(f.kp2[id * 2]) || !Number.isFinite(f.kp2[id * 2 + 1])))) return null
@@ -254,16 +254,22 @@ function screenFootContacts(frames, grid, rot, fps, mixed, Rc) {
   if (size < 8) return null
   const upright = new Uint8Array(grid.count)
   const q = new THREE.Quaternion(), up = new THREE.Vector3()
-  // The hips can remain upright while the torso falls or rests on the floor.
-  const torsoUp = mixed ? resampleVec(Float32Array.from(frames, (f) => {
-    const shoulder = new THREE.Vector3(...worldKp(f, KP.lShoulder)).add(new THREE.Vector3(...worldKp(f, KP.rShoulder)))
-    const hip = new THREE.Vector3(...worldKp(f, KP.lHip)).add(new THREE.Vector3(...worldKp(f, KP.rHip)))
-    const torso = shoulder.sub(hip).applyQuaternion(Rc)
-    return torso.lengthSq() > 1e-8 ? torso.normalize().y : 0
-  }), 1, grid) : null
+  // A bent torso can still have planted feet; release it only when the hips are also near foot level.
+  const torsoUp = mixed ? new Float32Array(frames.length) : null
+  const hipClearance = mixed ? new Float32Array(frames.length) : null
+  if (mixed) frames.forEach((f, i) => {
+    const point = (id) => new THREE.Vector3(...worldKp(f, id)).applyQuaternion(Rc)
+    const shoulder = point(KP.lShoulder).add(point(KP.rShoulder)).multiplyScalar(0.5)
+    const hip = point(KP.lHip).add(point(KP.rHip)).multiplyScalar(0.5)
+    const torso = shoulder.sub(hip)
+    torsoUp[i] = torso.lengthSq() > 1e-8 ? torso.normalize().y : 0
+    hipClearance[i] = hip.y - Math.min(point(KP.lAnkle).y, point(KP.rAnkle).y)
+  })
+  const torsoGrid = mixed ? resampleVec(medianFilter(torsoUp, 1, 3), 1, grid) : null
+  const clearanceGrid = mixed ? resampleVec(medianFilter(hipClearance, 1, 3), 1, grid) : null
   for (let k = 0; k < grid.count; k++) {
     q.fromArray(rot[0], k * 4)
-    upright[k] = up.set(0, 1, 0).applyQuaternion(q).y > 0.7 && (!torsoUp || torsoUp[k] > 0.7) ? 1 : 0
+    upright[k] = up.set(0, 1, 0).applyQuaternion(q).y > 0.7 && (!mixed || torsoGrid[k] > 0.7 || clearanceGrid[k] > legLength * 0.25) ? 1 : 0
   }
   const feet = ids.map((points) => {
     const source = new Float32Array(frames.length * 2)
@@ -768,7 +774,7 @@ export function solveMotion(frames, opts = {}) {
   let lockSegments = 0
   let planted = [new Float32Array(grid.count), new Float32Array(grid.count)]
   if (o.footLock) {
-    const screenContacts = o.contactMode === 'screen' ? screenFootContacts(frames, grid, rot, o.outFps, mixed, Rc) : null
+    const screenContacts = o.contactMode === 'screen' ? screenFootContacts(frames, grid, rot, o.outFps, mixed, Rc, raw.boneLegCm / 100) : null
     if (o.contactMode === 'screen' && !screenContacts) warnings.push('Could not estimate image-space foot contacts; planted-foot cleanup was skipped.')
     const noContacts = planted.map((stance) => ({ stance, blend: stance }))
     const r = footLock(pelvisUp, solesUp, ground, o.outFps, o.contactMode === 'screen' ? (screenContacts || noContacts) : null)

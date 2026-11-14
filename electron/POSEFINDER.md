@@ -12,7 +12,12 @@ Choose a motion preset before finding poses:
 - **Lying down** preserves horizontal poses and uses the lowest tracked body point as the height reference.
 - **Flips** samples more frames, preserves airborne motion and steadies detected foot contacts before and after a jump.
 - **Adaptable** builds on Flips for clips mixing standing, falling, rolling and lying down. It analyses at 30 fps,
-  releases foot contacts when the hips or torso tilt, and uses shorter root-motion filters to retain quick falls and bounces.
+  releases foot contacts when the hips tilt or the torso and hips are close to foot level, and uses shorter root-motion
+  filters to retain quick falls and bounces. Bending over with the hips above the feet can still retain foot contacts.
+
+At their default settings, Adaptable and Flips analyse the same number of frames. Standing and Lying down analyse
+10 frames per second versus 30 for Adaptable, so inference for a clip is approximately three times as much work
+(model loading and other fixed overhead are unchanged). Processing time also depends on the computer and video.
 
 The ground toggle grounds the lowest foot and enables planted-foot cleanup. During detected contacts, the solver
 levels and holds each foot in place on the output skeleton, releasing it for steps; this reduces sliding even when
