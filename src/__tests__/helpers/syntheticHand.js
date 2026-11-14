@@ -40,6 +40,7 @@ export function makeHandRig({
   names = 'mixamo', // 'mixamo' | 'blender' | 'plain'
   seed = 1,
   extraFingerSegment = true,
+  thumbDirection = THUMB_DIR,
 } = {}) {
   const rand = rng(seed)
   const mirror = side === 'L' ? -1 : 1
@@ -101,7 +102,7 @@ export function makeHandRig({
     const chain = []
     let parent = hand
     let pos = handPos.clone().add(toWorld(FINGER_BASES[finger]))
-    const dir = finger === 'thumb' ? toWorld(THUMB_DIR.toArray()) : A.ey.clone()
+    const dir = finger === 'thumb' ? toWorld(thumbDirection.clone().normalize().toArray()) : A.ey.clone()
     const lens = SEG_LEN[finger]
     for (let i = 0; i < 3; i++) {
       const bone = make(fingerName(finger, i), pos.clone(), parent)

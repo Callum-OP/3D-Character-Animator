@@ -9,9 +9,11 @@ import {
   handPoseToBoneQuats,
   handPosesFromBVH,
   handSegments,
+  isHandBone,
   BASIC_HANDS,
 } from '../three/handPose.js'
 import { makeHandRig, makeHandBVH, tipPos } from './helpers/syntheticHand.js'
+import { fingerInfo } from '../three/fingers.js'
 
 function setup(opts) {
   const rig = makeHandRig(opts)
@@ -52,6 +54,34 @@ describe('hand rigs', () => {
     analyseHands(rig.bones, rig.restQuatOf)
     rig.bones.forEach((b, i) => expect(b.quaternion.equals(before[i])).toBe(true))
   })
+
+  for (const nested of [false, true]) {
+    it(`recognises control bones with ${nested ? 'nested' : 'sibling'} same-named skin joints`, () => {
+      const h = makeHandRig({ side: 'L' })
+      const tip = h.fingers.index[2].children.find((b) => b.isBone)
+      for (const bone of [h.hand, ...Object.values(h.fingers).flat()]) {
+        const duplicate = new THREE.Bone()
+        duplicate.name = bone.name
+        if (nested) {
+          for (const child of [...bone.children]) duplicate.add(child)
+          bone.add(duplicate)
+        } else {
+          bone.add(duplicate)
+          bone.children.unshift(bone.children.pop())
+        }
+      }
+      h.hips.updateWorldMatrix(false, true)
+      const [rig] = analyseHands(h.bones, h.restQuatOf)
+      expect(rig.hand).toBe(h.hand)
+      for (const finger of Object.keys(h.fingers)) expect(rig.fingers[finger]).toEqual(h.fingers[finger])
+      expect(fingerInfo(h.fingers.index[2], isHandBone)).toMatchObject({ segment: 3, tip: false })
+      expect(fingerInfo(tip, isHandBone)).toMatchObject({ segment: 4, tip: true })
+      const before = tip.getWorldPosition(new THREE.Vector3())
+      pose(h, handPoseToBoneQuats(rig, analyticHandPose(rig, fist)))
+      expect(tip.getWorldPosition(new THREE.Vector3()).distanceTo(before)).toBeGreaterThan(0.03)
+      expect(handSegments(rig)).toHaveLength(20)
+    })
+  }
 })
 
 describe('curling is toward the palm, whatever the rig does with its bone axes', () => {
@@ -100,6 +130,19 @@ describe('curling is toward the palm, whatever the rig does with its bone axes',
     pose(h, handPoseToBoneQuats(h.handRig, analyticHandPose(h.handRig, fist)))
     expect(outOfPalm(h.tip('index')) - before).toBeGreaterThan(0.015)
   })
+
+  for (const side of ['L', 'R']) {
+    it(`${side} thumb folds across the fingers without bending back toward the wrist`, () => {
+      const h = setup({ side, thumbDirection: new THREE.Vector3(-0.45, 0.77, 0.45) })
+      const base = h.anat(h.fingers.thumb[0].getWorldPosition(new THREE.Vector3()))
+      pose(h, handPoseToBoneQuats(h.handRig, analyticHandPose(h.handRig, fist)))
+      const middle = h.anat(h.fingers.thumb[1].getWorldPosition(new THREE.Vector3()))
+      const tip = h.anat(h.tip('thumb'))
+      expect(middle.x).toBeGreaterThan(base.x)
+      expect(tip.x).toBeGreaterThan(0)
+      expect(tip.y).toBeGreaterThan(base.y + 0.03)
+    })
+  }
 })
 
 describe('amount and round trips', () => {

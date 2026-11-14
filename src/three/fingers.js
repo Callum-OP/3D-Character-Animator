@@ -69,12 +69,14 @@ export function fingerInfo(bone, isHand) {
   if (!finger) return null
   let segment = 1
   let underHand = false
+  let child = bone
   for (let p = bone.parent; p && p.isBone; p = p.parent) {
     if (isHand(p)) {
       underHand = true
       break
     }
-    if (fingerNameOf(p.name) === finger) segment++
+    if (p.name !== child.name && fingerNameOf(p.name) === finger) segment++
+    child = p
   }
   if (!underHand) return null
   const leaf = boneChildren(bone).length === 0

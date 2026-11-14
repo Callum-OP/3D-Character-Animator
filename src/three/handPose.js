@@ -36,7 +36,7 @@ const IDENTITY = new THREE.Quaternion()
 // How far each segment bends at a full fist, in degrees, by number of segments in the chain.
 const FIST_DEG = {
   finger: { 1: [90], 2: [90, 100], 3: [80, 100, 70] },
-  thumb: { 1: [60], 2: [45, 65], 3: [35, 50, 65] },
+  thumb: { 1: [60], 2: [45, 45], 3: [40, 35, 25] },
 }
 // How far each finger fans out for spread = 1 (degrees about the palm normal; + turns toward the thumb side).
 const FAN_DEG = { index: 14, middle: 4, ring: -6, pinky: -16 }
@@ -49,9 +49,15 @@ function isPalmOnly(bone) {
   return META_RE.test(bone.name)
 }
 
+function distinctBoneChildren(bone) {
+  return (bone.children || []).flatMap((child) =>
+    child.isBone && child.name === bone.name ? distinctBoneChildren(child) : child.isBone ? [child] : [],
+  )
+}
+
 function nextFingerBone(bone, finger) {
-  return (bone.children || []).find(
-    (c) => c.isBone && fingerNameOf(c.name) === finger && !isPalmOnly(c) && fingerInfo(c, isHandBone)?.tip !== true,
+  return distinctBoneChildren(bone).find(
+    (c) => fingerNameOf(c.name) === finger && !isPalmOnly(c) && fingerInfo(c, isHandBone)?.tip !== true,
   )
 }
 
@@ -61,6 +67,7 @@ function nextFingerBone(bone, finger) {
 // metacarpal / palm bones are left out. `bones` is any list of Bone objects (a model's or a parsed BVH's).
 export function findHandRigs(bones) {
   const hands = new Map()
+  const boneSet = new Set(bones || [])
   for (const bone of bones || []) {
     if (!bone || !bone.isBone) continue
     const info = fingerInfo(bone, isHandBone)
@@ -75,7 +82,7 @@ export function findHandRigs(bones) {
       chain.push(next)
     }
     let hand = parent
-    while (hand && !(hand.isBone && isHandBone(hand) && fingerNameOf(hand.name) === null)) hand = hand.parent
+    while (hand && !(boneSet.has(hand) && hand.isBone && isHandBone(hand) && fingerNameOf(hand.name) === null)) hand = hand.parent
     if (!hand || !hand.isBone) hand = parent && parent.isBone ? parent : null
     if (!hand) continue
     let rig = hands.get(hand)
@@ -185,14 +192,14 @@ function measureFrame(rig, restQuatOf) {
       })
     }
   }
-  // Curl axis per bone, in palm coordinates: bends the bone toward the palm (toward the palm and across it for the thumb).
+  // The thumb folds across the fingers, rather than curling back toward the wrist like the other fingers.
   // (the pinky side is +x on a left hand and -x on a right hand)
-  const thumbAcross = isLeft(rig) ? 0.6 : -0.6
+  const thumbAcross = isLeft(rig) ? 1 : -1
   const toward = (finger) =>
-    finger === 'thumb' ? new THREE.Vector3(thumbAcross, 0, 1).normalize() : new THREE.Vector3(0, 0, 1)
+    finger === 'thumb' ? new THREE.Vector3(thumbAcross, 0, 0.2).normalize() : new THREE.Vector3(0, 0, 1)
   for (const [finger, chain] of Object.entries(rig.fingers)) {
     chain.forEach((bone, i) => {
-      const next = chain[i + 1] || (bone.children || []).find((c) => c.isBone)
+      const next = chain[i + 1] || distinctBoneChildren(bone)[0]
       let t
       if (next) t = pos(next).sub(pos(bone))
       else t = pos(bone).sub(i > 0 ? pos(chain[i - 1]) : handPos)
@@ -357,7 +364,7 @@ export function handSegments(rig) {
   for (const chain of Object.values(rig.fingers)) {
     const pts = chain.map((b) => b.getWorldPosition(new THREE.Vector3()))
     const last = chain[chain.length - 1]
-    const tipBone = (last.children || []).find((c) => c.isBone)
+    const tipBone = distinctBoneChildren(last)[0]
     if (tipBone) pts.push(tipBone.getWorldPosition(new THREE.Vector3()))
     else if (pts.length > 1) pts.push(pts[pts.length - 1].clone().add(pts[pts.length - 1].clone().sub(pts[pts.length - 2])))
     link(handPos, pts[0])
