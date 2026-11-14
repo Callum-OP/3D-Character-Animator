@@ -3860,3 +3860,41 @@ body {
 .obj-del.neutral:hover {
   color: inherit;
 }
+
+/* --- Pose Library --- */
+.pl-panel { position: fixed; left: 16px; top: 51px; bottom: 16px; width: min(430px, 46vw); z-index: 60; display: flex; flex-direction: column; gap: 8px; padding: 12px; background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 12px; box-shadow: 0 8px 28px rgba(0,0,0,.45); }
+.pl-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pl-tools { display: grid; gap: 6px; }
+.pl-search { width: 100%; box-sizing: border-box; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--panel-border); background: rgba(255,255,255,.05); color: inherit; }
+.pl-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.pl-chip { padding: 2px 9px; border-radius: 99px; border: 1px solid var(--panel-border); background: transparent; color: inherit; font-size: 12px; cursor: pointer; }
+.pl-chip.active { background: #e8863a; border-color: #e8863a; color: #fff; }
+.pl-check { font-size: 12px; display: flex; gap: 6px; align-items: center; }
+.pl-hand-apply { display: grid; gap: 6px; }
+.pl-grid { flex: 1; min-height: 0; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; align-content: start; }
+.pl-card { position: relative; }
+.pl-card-main { width: 100%; display: grid; gap: 2px; padding: 6px; text-align: center; border-radius: 8px; border: 1px solid var(--panel-border); background: rgba(255,255,255,.04); color: inherit; cursor: pointer; }
+.pl-card-main:hover { border-color: #e8863a; background: rgba(232,134,58,.1); }
+.pl-thumb { width: 100%; aspect-ratio: 1; color: #cfd6df; }
+.pl-thumb-empty { display: flex; align-items: center; justify-content: center; opacity: .5; }
+.pl-name { font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pl-sub { font-size: 10.5px; opacity: .65; }
+.pl-rename { width: 100%; box-sizing: border-box; font-size: 12px; }
+.pl-card-tools { position: absolute; top: 3px; right: 3px; display: none; gap: 2px; }
+.pl-card:hover .pl-card-tools { display: flex; }
+.pl-card-tools button { width: 20px; height: 20px; line-height: 1; border-radius: 4px; border: 0; background: rgba(0,0,0,.6); color: #fff; cursor: pointer; }
+.pl-card-tools button.danger { color: #ff6b6b; }
+.pl-empty { grid-column: 1 / -1; padding: 18px 8px; text-align: center; font-size: 12.5px; opacity: .7; }
+.pl-sliders { border: 1px solid var(--panel-border); border-radius: 8px; padding: 6px 8px; }
+.pl-sliders summary { cursor: pointer; font-weight: 600; font-size: 13px; }
+.pl-foot { display: flex; flex-wrap: wrap; gap: 6px; }
+.pl-foot .pl-search { flex: 1 1 100%; }
+.pl-msg { font-size: 12px; opacity: .85; }
+.hand-controls { display: grid; gap: 6px; margin-top: 6px; }
+.hand-slider { display: grid; grid-template-columns: 64px 1fr 40px; align-items: center; gap: 6px; font-size: 12px; }
+.hand-slider-main span { font-weight: 600; }
+.hand-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.pl-manage { display: grid; gap: 6px; padding: 8px; border: 1px dashed var(--panel-border); border-radius: 8px; font-size: 12px; }
+.icon-btn.active { background: #e8863a; color: #fff; }
+.pl-dots { margin-left: auto; width: 24px; height: 24px; line-height: 1; border: 0; border-radius: 6px; background: transparent; color: inherit; opacity: .35; cursor: pointer; }
+.pl-dots:hover, .pl-dots.active { opacity: 1; }

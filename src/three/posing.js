@@ -247,6 +247,7 @@ const p = {
   redoStack: [],
   dragBefore: null, // selected bone's quaternion at drag start
   adjustBefore: null, // { bone, quat } captured by beginBoneAdjust (slider drags)
+  adjustBatchBefore: null, // [{ bone, quat }] captured by beginBonesAdjust (hand sliders)
   pointerDown: null, // { x, y, axis } for click-vs-drag discrimination
   marquee: null, // { x0, y0 } screen-space start point while Ctrl/Cmd-dragging a box-select
   gizmoMovedDuringDrag: false, // true once an axis-grab actually rotates/moves something (see onPointerDown/Up)
@@ -500,6 +501,7 @@ export function clearPoseModel() {
   p.pivotBoneStarts = null
   p.dragBefore = null
   p.adjustBefore = null
+  p.adjustBatchBefore = null
   p.ikChain = []
   p.ikTipRef = null
   p.ikDragBefore = null
@@ -887,6 +889,54 @@ export function endBoneAdjust() {
   p.adjustBefore = null
   if (!adj || adj.bone.quaternion.equals(adj.quat)) return
   pushUndo([{ bone: adj.bone, before: adj.quat, after: adj.bone.quaternion.clone() }])
+}
+
+// --- Pose library / hand tools ---------------------------------------------
+// Read access for handPose.js (which works out each hand's palm frame from the rest pose) plus a live,
+// bracketed way to rotate several bones at once - the hand sliders - that still lands as ONE undo entry.
+
+// The active character's bones (a copy of the list, same Bone objects).
+export function getPoseBones() {
+  return p.bones.slice()
+}
+
+// A bone's TRUE rest rotation (a copy), or null for an unknown bone.
+export function getBoneRestQuaternion(bone) {
+  const q = bone && p.restQuats.get(bone)
+  return q ? q.clone() : null
+}
+
+// Set several bones' local rotations without touching undo: { boneName: [x, y, z, w] }.
+// Call beginBonesAdjust(names) before the first change and endBonesAdjust() when the drag ends.
+export function setBonesLive(map) {
+  for (const [name, q] of Object.entries(map)) {
+    const bone = p.boneMap.get(name)
+    if (bone) bone.quaternion.set(q[0], q[1], q[2], q[3])
+  }
+  updateBoneHelpers()
+  notifyPoseChange()
+  p.requestRender()
+}
+
+export function beginBonesAdjust(names) {
+  const before = []
+  for (const name of names) {
+    const bone = p.boneMap.get(name)
+    if (bone) before.push({ bone, quat: bone.quaternion.clone() })
+  }
+  p.adjustBatchBefore = before
+}
+
+export function endBonesAdjust() {
+  const before = p.adjustBatchBefore
+  p.adjustBatchBefore = null
+  if (!before) return 0
+  const changes = []
+  for (const { bone, quat } of before) {
+    if (!bone.quaternion.equals(quat)) changes.push({ bone, before: quat, after: bone.quaternion.clone() })
+  }
+  if (changes.length) pushUndo(changes)
+  return changes.length
 }
 
 // Restore a single bone to its rest rotation (undoable).

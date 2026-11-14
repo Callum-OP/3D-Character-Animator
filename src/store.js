@@ -436,6 +436,9 @@ export const useStore = create((set) => ({
   performanceResolution: 0.5, // viewport scale used by lower resolution mode
   performanceEffects: false, // disable expensive outline and shadow passes
   showHelp: false, // help & shortcuts overlay
+  poseLibraryTab: null, // 'body' | 'hand' | 'animation' while the Pose Library panel is open, else null
+  lastPoseLibraryTab: 'body', // the tab the Pose Library opens on next time
+  adoptClipRequest: null, // clip name the Animate panel should load the remembered keyframes of (set by the Pose Library)
 
   setShowGrid: (showGrid) => set({ showGrid }),
   setShowGround: (showGround) => set({ showGround }),
@@ -474,6 +477,9 @@ export const useStore = create((set) => ({
   setPerformanceEffects: (performanceEffects) => set({ performanceEffects }),
   setShowHelp: (showHelp) => set({ showHelp }),
   toggleHelp: () => set((s) => ({ showHelp: !s.showHelp })),
+  openPoseLibrary: (poseLibraryTab = 'body') => set({ poseLibraryTab, lastPoseLibraryTab: poseLibraryTab }),
+  closePoseLibrary: () => set({ poseLibraryTab: null }),
+  requestAdoptClipKeys: (adoptClipRequest) => set({ adoptClipRequest }),
 
   // Import-time decimation only affects static meshes; skinned meshes are
   // preserved because Three's SimplifyModifier does not retain skin weights.

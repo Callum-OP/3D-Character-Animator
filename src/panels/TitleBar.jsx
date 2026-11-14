@@ -76,6 +76,10 @@ export default function TitleBar({ onOpenSettings }) {
   const setCurrent = useStore((s) => s.setCurrentProject)
   const setLastProjectSave = useStore((s) => s.setLastProjectSave)
   const toggleHelp = useStore((s) => s.toggleHelp)
+  const openPoseLibrary = useStore((s) => s.openPoseLibrary)
+  const closePoseLibrary = useStore((s) => s.closePoseLibrary)
+  const poseLibraryTab = useStore((s) => s.poseLibraryTab)
+  const lastPoseLibraryTab = useStore((s) => s.lastPoseLibraryTab)
   const hasCharacter = useStore((s) => !!s.modelInfo)
   const sceneObjects = useStore((s) => s.sceneObjects)
   const hasObjectAnimation = useStore(
@@ -646,6 +650,15 @@ export default function TitleBar({ onOpenSettings }) {
               <button role="menuitem" onClick={onStopAll} disabled={!hasCharacter && !hasObjectAnimation}>Stop All</button>
             </div>
           )}
+        </div>
+
+        <div className="titlebar-menu-item">
+          <button
+            className={'titlebar-menu-btn' + (poseLibraryTab ? ' active' : '')}
+            onClick={() => { setOpenMenu(null); if (poseLibraryTab) closePoseLibrary(); else openPoseLibrary(lastPoseLibraryTab) }}
+          >
+            Pose Library
+          </button>
         </div>
 
         <div className="titlebar-menu-item">

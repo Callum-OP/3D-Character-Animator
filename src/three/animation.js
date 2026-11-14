@@ -287,6 +287,53 @@ export async function applyBVHRetarget(slots) {
   return { name: clip.name, matched, total }
 }
 
+// Work out ONE pose from the first frame of a BVH, as it would look on the active character, without adding a clip
+// or changing the pose on screen. Uses the same automatic bone mapping as File > Import Animation. Resolves with
+// { boneName: [x, y, z, w] } for the bones the BVH actually drives (everything else is left out, so hair, cloth and
+// other bones the mocap doesn't know about are never reset).
+export async function poseFromBVHText(text, name = 'pose') {
+  if (!a.model) throw new Error('Load a model first.')
+  const parsed = await parseBVH({ name: `${name}.bvh`, text: async () => text })
+  const targetBoneObjs = a.model.bones || []
+  const targetBones = targetBoneObjs.map((b) => b.name)
+  parsed.autoNames = buildNameMatch(targetBones, parsed.bones)
+  const slots = buildSlotMapping(targetBones, parsed.bones, targetBoneObjs, parsed.skeleton.bones)
+  const { names, hip } = mergeNames(parsed.autoNames, slots)
+
+  // The retarget measures the rig at rest; put every bone back exactly as it was afterwards.
+  const keepQuat = new Map(targetBoneObjs.map((b) => [b, b.quaternion.clone()]))
+  const keepPos = new Map(targetBoneObjs.map((b) => [b, b.position.clone()]))
+  const out = {}
+  try {
+    restoreRest()
+    const { clip } = await retargetParsed(parsed, a.model, names, hip)
+    const driven = new Set()
+    for (const tr of clip.tracks) {
+      const m = /^(.+)\.quaternion$/.exec(tr.name)
+      if (m) driven.add(m[1])
+    }
+    const mixer = new THREE.AnimationMixer(a.model.root)
+    const action = mixer.clipAction(clip)
+    action.setLoop(THREE.LoopOnce, 1)
+    action.clampWhenFinished = true
+    action.play()
+    mixer.setTime(0)
+    for (const b of targetBoneObjs) {
+      if (!driven.has(b.name)) continue
+      const q = b.quaternion
+      out[b.name] = [q.x, q.y, q.z, q.w]
+    }
+    mixer.stopAllAction()
+    mixer.uncacheClip(clip)
+  } finally {
+    for (const [b, q] of keepQuat) b.quaternion.copy(q)
+    for (const [b, p] of keepPos) b.position.copy(p)
+    a.model.root.updateMatrixWorld(true)
+    a.refs.requestRender()
+  }
+  return out
+}
+
 export function cancelBVHImport() {
   a.pendingBVH = null
 }
