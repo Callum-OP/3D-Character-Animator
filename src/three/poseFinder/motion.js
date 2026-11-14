@@ -127,7 +127,7 @@ function movingAverage(series, win) {
   return out
 }
 
-// 5-point running median over interleaved vectors: removes single-frame depth/pose outliers before smoothing.
+// Running median over interleaved vectors: removes single-frame depth/pose outliers before smoothing.
 function medianFilter(values, dim, win = 5) {
   const n = values.length / dim, h = win >> 1, out = new Float32Array(values.length), buf = []
   for (let i = 0; i < n; i++) {
@@ -242,7 +242,7 @@ function rootInputs(frames, Rc) {
 
 // Screen-space contacts are useful when depth estimates drift during jumps. Require a sustained, upright,
 // low and slow foot; the screen position cannot distinguish movement directly towards the camera.
-function screenFootContacts(frames, grid, rot, fps) {
+function screenFootContacts(frames, grid, rot, fps, mixed, Rc) {
   const ids = [[KP.lToe, KP.lSmallToe, KP.lHeel], [KP.rToe, KP.rSmallToe, KP.rHeel]]
   const required = [KP.lShoulder, KP.rShoulder, KP.lHip, KP.rHip, KP.lAnkle, KP.rAnkle, ...ids.flat()]
   if (frames.some((f) => !f.kp2 || required.some((id) => !Number.isFinite(f.kp2[id * 2]) || !Number.isFinite(f.kp2[id * 2 + 1])))) return null
@@ -254,9 +254,16 @@ function screenFootContacts(frames, grid, rot, fps) {
   if (size < 8) return null
   const upright = new Uint8Array(grid.count)
   const q = new THREE.Quaternion(), up = new THREE.Vector3()
+  // The hips can remain upright while the torso falls or rests on the floor.
+  const torsoUp = mixed ? resampleVec(Float32Array.from(frames, (f) => {
+    const shoulder = new THREE.Vector3(...worldKp(f, KP.lShoulder)).add(new THREE.Vector3(...worldKp(f, KP.rShoulder)))
+    const hip = new THREE.Vector3(...worldKp(f, KP.lHip)).add(new THREE.Vector3(...worldKp(f, KP.rHip)))
+    const torso = shoulder.sub(hip).applyQuaternion(Rc)
+    return torso.lengthSq() > 1e-8 ? torso.normalize().y : 0
+  }), 1, grid) : null
   for (let k = 0; k < grid.count; k++) {
     q.fromArray(rot[0], k * 4)
-    upright[k] = up.set(0, 1, 0).applyQuaternion(q).y > 0.7 ? 1 : 0
+    upright[k] = up.set(0, 1, 0).applyQuaternion(q).y > 0.7 && (!torsoUp || torsoUp[k] > 0.7) ? 1 : 0
   }
   const feet = ids.map((points) => {
     const source = new Float32Array(frames.length * 2)
@@ -745,12 +752,14 @@ export function solveMotion(frames, opts = {}) {
 
   // 4) root path
   const raw = rootInputs(frames, Rc)
-  const pelvis = medianFilter(raw.pelvis, 3), soles = raw.soles.map((x) => medianFilter(x, 3))
+  const mixed = o.motionProfile === 'mixed'
+  const filterWindow = mixed ? 3 : 5
+  const pelvis = medianFilter(raw.pelvis, 3, filterWindow), soles = raw.soles.map((x) => medianFilter(x, 3, filterWindow))
   const legCm = o.groundReference === 'body' ? raw.boneLegCm : raw.legCm
   const pelvisUp = resampleVec(pelvis, 3, grid)
   const solesUp = soles.map((s) => resampleVec(s, 3, grid))
 
-  const bodyLowUp = resampleVec(medianFilter(raw.bodyLow, 1), 1, grid)
+  const bodyLowUp = resampleVec(medianFilter(raw.bodyLow, 1, filterWindow), 1, grid)
   const lows = Array.from({ length: grid.count }, (_, i) => o.groundReference === 'body' ? bodyLowUp[i] : Math.min(solesUp[0][i * 3 + 1], solesUp[1][i * 3 + 1])).sort((a, b) => a - b)
   const ground = lows[Math.floor(lows.length * 0.03)]
   // Foot lock works on the RAW path (planted feet share the body's depth jitter exactly, so it cancels), and only
@@ -759,7 +768,7 @@ export function solveMotion(frames, opts = {}) {
   let lockSegments = 0
   let planted = [new Float32Array(grid.count), new Float32Array(grid.count)]
   if (o.footLock) {
-    const screenContacts = o.contactMode === 'screen' ? screenFootContacts(frames, grid, rot, o.outFps) : null
+    const screenContacts = o.contactMode === 'screen' ? screenFootContacts(frames, grid, rot, o.outFps, mixed, Rc) : null
     if (o.contactMode === 'screen' && !screenContacts) warnings.push('Could not estimate image-space foot contacts; planted-foot cleanup was skipped.')
     const noContacts = planted.map((stance) => ({ stance, blend: stance }))
     const r = footLock(pelvisUp, solesUp, ground, o.outFps, o.contactMode === 'screen' ? (screenContacts || noContacts) : null)
@@ -767,8 +776,8 @@ export function solveMotion(frames, opts = {}) {
     lockSegments = r.segments
     planted = r.planted
   }
-  const winXY = Math.max(1, Math.round(o.outFps * 0.15)) | 1
-  const winZ = Math.max(1, Math.round(o.outFps * 0.4)) | 1
+  const winXY = Math.max(1, Math.round(o.outFps * (mixed ? 0.08 : 0.15))) | 1
+  const winZ = Math.max(1, Math.round(o.outFps * (mixed ? 0.15 : 0.4))) | 1
   const col = (d) => Float32Array.from({ length: grid.count }, (_, i) => path[i * 3 + d])
   const px = movingAverage(col(0), winXY), py = movingAverage(col(1), winXY), pz = movingAverage(col(2), winZ)
   const baselineY = o.footLock && o.contactMode === 'screen' ?

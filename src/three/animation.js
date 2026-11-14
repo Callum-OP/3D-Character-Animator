@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { makeClipNamesUnique, uniqueClipName } from './clipNames.js'
 import { parseBVH, retargetParsed, buildSlotMapping, buildNameMatch, mergeNames } from './bvh.js'
 import {
   sampleMeshTracks,
@@ -281,10 +282,10 @@ export async function applyBVHRetarget(slots, options) {
   const { names, hip } = mergeNames(a.pendingBVH.autoNames, slots)
   restoreRest() // the retarget measures the rig's rest pose — make sure it's in it
   const { clip, matched, total } = await retargetParsed(a.pendingBVH, a.model, names, hip, undefined, options)
-  a.importedClips.push(clip)
+  const name = addGeneratedClip(clip)
   a.pendingBVH = null
   a.refs.requestRender() // the retarget touched the rig; redraw the reset pose
-  return { name: clip.name, matched, total }
+  return { name, matched, total }
 }
 
 export function cancelBVHImport() {
@@ -296,9 +297,7 @@ export function cancelBVHImport() {
 // don't collide. Returns the final name (null if no model is loaded).
 export function addGeneratedClip(clip) {
   if (!a.model) return null
-  const base = clip.name || 'Clip'
-  let name = base
-  for (let n = 2; findClip(name); n++) name = `${base} ${n}`
+  const name = uniqueClipName(clip.name, new Set([...a.bakedClips, ...a.importedClips].map((c) => c.name)))
   clip.name = name
   a.importedClips.push(clip)
   return name
@@ -312,8 +311,7 @@ export function renameClip(name, newName) {
   if (!clip) return null
   const base = (newName || '').trim() || 'Clip'
   if (base === name) return name
-  let final = base
-  for (let n = 2; findClip(final); n++) final = `${base} ${n}`
+  const final = uniqueClipName(base, new Set([...a.bakedClips, ...a.importedClips].map((c) => c.name)))
   clip.name = final
   return final
 }
@@ -435,14 +433,19 @@ export function getImportedClipsData(id) {
 // setAnimationModel has created its entry, i.e. after the model has loaded).
 export function restoreImportedClips(id, clipsJSON) {
   const entry = perChar.get(id)
-  if (!entry || !clipsJSON || !clipsJSON.length) return
+  if (!entry || !clipsJSON || !clipsJSON.length) return []
+  const restored = []
   for (const json of clipsJSON) {
     try {
-      entry.importedClips.push(unwrapClipJSON(json))
-    } catch {
-      /* a clip that fails to parse is skipped rather than aborting the load */
+      const clip = unwrapClipJSON(json)
+      restored.push({ originalName: clip.name, clip })
+    } catch (error) {
+      console.warn('Could not restore an imported animation clip:', error)
     }
   }
+  makeClipNamesUnique(restored.map((item) => item.clip), [...entry.bakedClips, ...entry.importedClips])
+  entry.importedClips.push(...restored.map((item) => item.clip))
+  return restored.map(({ originalName, clip }) => ({ originalName, name: clip.name }))
 }
 
 // Parse a previously-exported clip and register it as playable, same as any

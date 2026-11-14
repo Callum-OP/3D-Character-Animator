@@ -11,7 +11,8 @@ Choose a motion preset before finding poses:
 - **Standing** uses the existing upright cleanup and ground correction.
 - **Lying down** preserves horizontal poses and uses the lowest tracked body point as the height reference.
 - **Flips** samples more frames, preserves airborne motion and steadies detected foot contacts before and after a jump.
-- **Adaptable** is for clips mixing standing, falling, rolling and lying down.
+- **Adaptable** builds on Flips for clips mixing standing, falling, rolling and lying down. It analyses at 30 fps,
+  releases foot contacts when the hips or torso tilt, and uses shorter root-motion filters to retain quick falls and bounces.
 
 The ground toggle grounds the lowest foot and enables planted-foot cleanup. During detected contacts, the solver
 levels and holds each foot in place on the output skeleton, releasing it for steps; this reduces sliding even when
@@ -35,6 +36,8 @@ approximate, and feet may move when a target is beyond the leg's reach or the mo
 The Flips preset uses projected foot motion to detect contacts and releases both feet when they and the hips rise.
 It retains accumulated horizontal tracking corrections when a foot lifts, rather than snapping back to the
 uncorrected path. Camera motion, occlusion, or movement towards the camera can still be mistaken for contact or release.
+Adaptable uses the same contact detection, with an additional torso check; its shorter filtering can also retain more
+tracking noise. Neither preset detects actual floor contact.
 Turn off Foot lock in advanced settings if it alters the motion.
 
 Files: `electron/poseEngine.cjs` (download, session, inference, IPC) · `src/three/poseFinder/*` (crop maths, MHR rest

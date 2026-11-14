@@ -1796,9 +1796,10 @@ export function pasteCopiedCharacter() {
     ),
   }))
   setActiveCharacter(id, model, { isNewLoad: true })
-  restoreImportedClips(id, characterClipboard.importedClips)
+  const restoredClips = restoreImportedClips(id, characterClipboard.importedClips)
 
   const fields = structuredClone(characterClipboard.fields)
+  fields.importedClipNames = restoredClips.map((clip) => clip.name)
   fields.meshOverrides = remapMeshOverrides(fields.meshOverrides, characterClipboard.model, model)
   useStore.setState({
     ...fields,
@@ -4108,10 +4109,14 @@ async function restoreCharacterRecord(c, { addNew, legacyAnimData = null, skippe
   // trimmed) — these live on the model's mixer entry, not in animData, so
   // they need their own restore step — then bring back which clip/tab was
   // selected so the panel looks exactly like it did when saved.
-  restoreImportedClips(id, c.importedClips)
+  const restoredClips = restoreImportedClips(id, c.importedClips)
+  // Legacy selection looked up baked clips first, before their names were deduplicated.
+  const activeImportedClip = !(model.originalClipNames || model.info.clipNames).includes(c.activeClipName)
+    ? restoredClips.find((clip) => clip.originalName === c.activeClipName)
+    : null
   useStore.setState({
-    importedClipNames: c.importedClipNames || (c.importedClips || []).map((j) => j.name),
-    activeClipName: c.activeClipName ?? null,
+    importedClipNames: restoredClips.map((clip) => clip.name),
+    activeClipName: activeImportedClip?.name ?? c.activeClipName ?? null,
     playbackSource: c.playbackSource || 'edit',
     dangleEnabled: c.dangleEnabled ?? true,
     dangleChains: c.dangleChains || [],

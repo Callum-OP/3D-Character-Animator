@@ -6,6 +6,7 @@ import { SimplifyModifier } from 'three/examples/jsm/modifiers/SimplifyModifier.
 import { convertBlendToGlb } from './blendImport.js'
 import { sanitizeLoadedMaterials } from './materialUserData.js'
 import { fingerInfo, looksLikeHand } from './fingers.js'
+import { makeClipNamesUnique } from './clipNames.js'
 import {
   readArchive,
   pickMainModelPath,
@@ -531,6 +532,8 @@ function parseRoot(root, animations, fileName, format, source) {
 
   const bones = collapseNestedBoneDuplicates(Array.from(boneSet))
   const clips = animations || []
+  const originalClipNames = clips.map((c) => c.name)
+  makeClipNamesUnique(clips)
 
   const info = {
     name: cleanName(fileName),
@@ -546,7 +549,7 @@ function parseRoot(root, animations, fileName, format, source) {
     bones: classifyBones(bones),
   }
 
-  return { source, root, skinnedMeshes, meshes, skeleton, bones, clips, info }
+  return { source, root, skinnedMeshes, meshes, skeleton, bones, clips, originalClipNames, info }
 }
 
 // Some FBX exports nest same-named skin joints below the bones that control

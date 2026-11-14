@@ -118,6 +118,81 @@ describe('motion presets', () => {
     expect(new THREE.Quaternion().fromArray(rotation.values, s.count * 4).angleTo(new THREE.Quaternion())).toBeGreaterThan(1.3)
   })
 
+  it('retains a short fall and bounce in adaptable root motion', () => {
+    const fr = Array.from({ length: 60 }, (_, i) => {
+      const fall = Math.max(0, Math.min(1, (i - 22) / 6))
+      const bounce = i >= 30 && i <= 36 ? 0.3 * (1 - Math.abs(i - 33) / 4) : 0
+      const f = makeFrame(i / 30, fk({ root: E(fall * Math.PI / 2, 0, 0) }), { depth: 4 })
+      f.camT[1] += fall * 0.65 - bounce
+      return f
+    })
+    const opts = { ...POSE_PRESETS.adaptable.settings, smoothing: 'off', footLock: false }
+    const mixed = solveMotion(fr, opts)
+    const flips = solveMotion(fr, { ...POSE_PRESETS.flips.settings, smoothing: 'off', footLock: false })
+    const rise = (s) => s.root[33 * 3 + 1] - s.root[28 * 3 + 1]
+    expect(rise(mixed)).toBeGreaterThan(15)
+    expect(rise(mixed)).toBeGreaterThan(rise(flips) + 5)
+    expect(mixed.root[33 * 3 + 1] - mixed.root[42 * 3 + 1]).toBeGreaterThan(15)
+    expect(new THREE.Quaternion().fromArray(mixed.rot[0], 42 * 4).angleTo(new THREE.Quaternion())).toBeGreaterThan(1.3)
+  })
+
+  it('releases standing foot contacts when the torso falls despite upright hips', () => {
+    const fr = Array.from({ length: 100 }, (_, i) => {
+      const bend = Math.max(0, Math.min(1, (i - 38) / 8))
+      const f = makeFrame(i / 30, fk({ c_spine1: E(bend * 1.5, 0, 0), l_upleg: E(-0.4, 0, 0), r_upleg: E(-0.4, 0, 0), l_lowleg: E(0.8, 0, 0), r_lowleg: E(0.8, 0, 0) }), { depth: 4 + i * 0.01 })
+      f.kp2 = new Float32Array(140)
+      for (const id of [5, 6]) f.kp2.set([100, 100], id * 2)
+      for (const id of [9, 10]) f.kp2.set([100, 150], id * 2)
+      for (const id of [13, 14]) f.kp2.set([100, 200], id * 2)
+      for (const id of [15, 16, 17, 18, 19, 20]) f.kp2.set([100, 205], id * 2)
+      return f
+    })
+    const opts = { ...POSE_PRESETS.adaptable.settings, smoothing: 'off', limitJoints: false, lowerArms: 'off' }
+    const locked = solveMotion(fr, opts)
+    const free = solveMotion(fr, { ...opts, footLock: false })
+    expect(locked.info.lockSegments).toBeGreaterThan(0)
+    expect(Math.abs(locked.root[30 * 3 + 2] - locked.root[5 * 3 + 2])).toBeLessThan(Math.abs(free.root[30 * 3 + 2] - free.root[5 * 3 + 2]) * 0.3)
+    for (const name of ['Hips', 'LeftUpLeg', 'LeftLeg', 'LeftFoot']) {
+      expect(new THREE.Quaternion().fromArray(locked.rot[JOINT_INDEX[name]], 70 * 4).angleTo(new THREE.Quaternion().fromArray(free.rot[JOINT_INDEX[name]], 70 * 4))).toBeLessThan(0.001)
+    }
+    const movement = (s) => s.root[85 * 3 + 2] - s.root[60 * 3 + 2]
+    expect(Math.abs(movement(locked) - movement(free))).toBeLessThan(0.01)
+  })
+
+  it('preserves a forward fall, bounce and roll onto the back in the BVH', () => {
+    const fr = Array.from({ length: 90 }, (_, i) => {
+      const fall = Math.max(0, Math.min(1, (i - 25) / 8))
+      const roll = Math.max(0, Math.min(1, (i - 42) / 12))
+      const rotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), roll * Math.PI)
+        .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), fall * Math.PI / 2))
+      const bounce = i >= 36 && i <= 42 ? 0.3 * (1 - Math.abs(i - 39) / 4) : 0
+      const f = makeFrame(i / 30, fk({ root: rotation }), { depth: 4 + i * 0.005 })
+      f.camT[1] += fall * 0.65 - bounce
+      f.kp2 = new Float32Array(140)
+      for (const id of [5, 6]) f.kp2.set([100, 100], id * 2)
+      for (const id of [9, 10]) f.kp2.set([100, 150], id * 2)
+      for (const id of [13, 14]) f.kp2.set([100, 200], id * 2)
+      for (const id of [15, 16, 17, 18, 19, 20]) f.kp2.set([100, 205], id * 2)
+      return f
+    })
+    const opts = { ...POSE_PRESETS.adaptable.settings, smoothing: 'off', limitJoints: false }
+    const solved = solveMotion(fr, opts)
+    const free = solveMotion(fr, { ...opts, footLock: false })
+    const clip = new BVHLoader().parse(writeBVH(solved)).clip
+    const position = clip.tracks.find((t) => t.name === 'Hips.position')
+    const rotation = clip.tracks.find((t) => t.name === 'Hips.quaternion')
+    const height = (i) => position.values[(i + 1) * 3 + 1]
+    expect(solved.info.lockSegments).toBeGreaterThan(0)
+    expect(height(39) - height(34)).toBeGreaterThan(15)
+    expect(height(39) - height(47)).toBeGreaterThan(15)
+    const faceDown = new THREE.Quaternion().fromArray(rotation.values, 35 * 4)
+    const faceUp = new THREE.Quaternion().fromArray(rotation.values, 61 * 4)
+    expect(faceDown.angleTo(faceUp)).toBeGreaterThan(3)
+    for (const name of ['LeftUpLeg', 'LeftLeg', 'LeftFoot']) {
+      expect(new THREE.Quaternion().fromArray(solved.rot[JOINT_INDEX[name]], 60 * 4).angleTo(new THREE.Quaternion().fromArray(free.rot[JOINT_INDEX[name]], 60 * 4))).toBeLessThan(0.001)
+    }
+  })
+
   it('uses the body rather than raised feet as a reference for lying poses', () => {
     const fr = Array.from({ length: 10 }, (_, i) => makeFrame(i * 0.1, fk({ root: E(0, 0, Math.PI / 2), l_upleg: E(0, 0, 1.4), r_upleg: E(0, 0, 1.4) }), { depth: 4 }))
     const opts = { ...POSE_PRESETS.lying.settings, outFps: 10, smoothing: 'off' }

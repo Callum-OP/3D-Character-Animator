@@ -197,7 +197,7 @@ export default function PoseFinderPanel({ onClose }) {
         try {
           const r = await runPoseFinder({
             source, engine: pose, box, startTime: range[0], endTime: range[1], sampleFps, outFps, smoothing, footLock,
-            signal: ac.signal, onProgress: setProgress, onFrame, clean: { levelCamera, posture, levelFeet, limitJoints, lowerArms, ground, groundReference, lockFeet, contactMode: ground === 'strict' ? 'ground' : (POSE_PRESETS[preset].settings.contactMode || 'ground') },
+            signal: ac.signal, onProgress: setProgress, onFrame, clean: { levelCamera, posture, levelFeet, limitJoints, lowerArms, ground, groundReference, lockFeet, contactMode: ground === 'strict' ? 'ground' : (POSE_PRESETS[preset].settings.contactMode || 'ground'), motionProfile: POSE_PRESETS[preset].settings.motionProfile },
           })
           diagRef.current.solved = { shoulderLowerDeg: r.solved.info.shoulderLowerDeg, armLowerDeg: r.solved.info.armLowerDeg, groundLocked: r.solved.info.groundLocked, tiltDeg: r.solved.info.tiltDeg, slouchDeg: r.solved.info.slouchDeg, limitDeg: r.solved.info.limitDeg, footLevelDeg: r.solved.info.footLevelDeg, variationDeg: r.solved.info.variationDeg, convention: r.solved.info.convention, scale: r.solved.info.scale, warnings: r.solved.info.warnings }
           setResult({ bvh: r.bvh, name: src.name.replace(/\.[^.]+$/, '') + '-pose', warnings: r.solved.info.warnings, info: r.solved.info, fps: r.solved.fps })
