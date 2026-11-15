@@ -258,7 +258,7 @@ export default function TitleBar({ onOpenSettings, onOpenPoseFinder }) {
     if (playbackSource === 'edit') {
       s.setDuration(selectEdit(s.animData, s.animDuration, { loop, speed }))
     } else if (playback === 'stopped' && activeClipName) {
-      s.setDuration(selectClip(activeClipName, { loop, speed }, s.animData))
+      s.setDuration(selectClip(activeClipName, { loop, speed, inPlace: s.removeClipMovement }, s.animData))
     }
     play()
     s.setPlayback('playing')

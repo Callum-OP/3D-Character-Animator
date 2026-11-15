@@ -1522,7 +1522,7 @@ export function playAllCharacters({ loop, speed, stopAtFirstClipEnd = false } = 
     if (c.playbackSource === 'edit') {
       durSec = selectEdit(c.animData, store.animDuration, opts)
     } else if (c.activeClipName) {
-      durSec = selectClip(c.activeClipName, opts, c.animData)
+      durSec = selectClip(c.activeClipName, { ...opts, inPlace: c.removeClipMovement }, c.animData)
     }
     if (durSec > 0) {
       play()
@@ -1614,7 +1614,7 @@ export function scrubAllTimeline(t) {
     if (!hasActiveAction()) {
       let durSec = 0
       if (c.playbackSource === 'edit') durSec = hasKeys(c.animData) ? selectEdit(c.animData, store.animDuration, opts) : 0
-      else if (c.activeClipName) durSec = selectClip(c.activeClipName, opts, c.animData)
+      else if (c.activeClipName) durSec = selectClip(c.activeClipName, { ...opts, inPlace: c.removeClipMovement }, c.animData)
       if (!(durSec > 0)) continue
     }
     pause()
@@ -2242,7 +2242,7 @@ export async function importBVHAuto(file, options) {
   s.addImportedClipName(name)
   s.setPlaybackSource('clip')
   s.setActiveClipName(name)
-  const duration = selectClip(name, { loop: s.loop, speed: s.speed }, s.animData)
+  const duration = selectClip(name, { loop: s.loop, speed: s.speed, inPlace: s.removeClipMovement }, s.animData)
   s.setDuration(duration)
   s.setCurrentTime(0)
   s.setPlayback('paused')

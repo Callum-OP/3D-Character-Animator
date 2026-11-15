@@ -906,6 +906,7 @@ export default function AnimationPanel() {
   const playback = useStore((s) => s.playback)
   const source = useStore((s) => s.playbackSource)
   const activeClipName = useStore((s) => s.activeClipName)
+  const removeClipMovement = useStore((s) => s.removeClipMovement)
   const loop = useStore((s) => s.loop)
   const speed = useStore((s) => s.speed)
   const duration = useStore((s) => s.duration)
@@ -942,6 +943,9 @@ export default function AnimationPanel() {
   const globalDuration = characterOrder.length > 0 || hasObjectAnimation ? getAllTimelineDuration() : 0
 
   const st = useStore.getState // for imperative setters inside handlers
+  function selectActiveClip(name, opts, data = st().animData, inPlace = removeClipMovement) {
+    return selectClip(name, { ...opts, inPlace }, data)
+  }
   const model = getCurrentModel()
   const meshPhysicsZones = (model?.meshes || [])
     .flatMap((mesh) => meshOverrides[mesh.uuid]?.softZones || [])
@@ -1289,7 +1293,7 @@ export default function AnimationPanel() {
     st().setPlaybackSource(next)
     if (next === 'clip' && activeClipName) {
       adoptClipKeys(activeClipName)
-      const d = selectClip(activeClipName, { loop, speed }, st().animData)
+      const d = selectActiveClip(activeClipName, { loop, speed }, st().animData)
       st().setDuration(d)
       st().setPlayback('paused')
       setClipBoneWarning(describeClipBoneMismatch(activeClipName))
@@ -1323,7 +1327,7 @@ export default function AnimationPanel() {
     stop()
     st().setPlaybackSource('clip')
     adoptClipKeys(name)
-    const d = selectClip(name, { loop, speed }, st().animData)
+    const d = selectActiveClip(name, { loop, speed }, st().animData)
     st().setDuration(d)
     st().setCurrentTime(0)
     st().setPlayback('paused')
@@ -1339,8 +1343,27 @@ export default function AnimationPanel() {
       stop()
       st().setPlayback('stopped')
       st().setCurrentTime(0)
-      const d = selectClip(activeClipName, { loop, speed }, st().animData)
+      const d = selectActiveClip(activeClipName, { loop, speed }, st().animData)
       st().setDuration(d)
+      st().setPlayback('paused')
+    }
+  }
+
+  function onRemoveClipMovementToggle(on) {
+    const wasPlaying = st().playback === 'playing'
+    const time = st().currentTime
+    st().setRemoveClipMovement(on)
+    if (source !== 'clip' || !activeClipName) return
+    stop()
+    st().setPlayback('stopped')
+    const d = selectActiveClip(activeClipName, { loop, speed }, st().animData, on)
+    st().setDuration(d)
+    scrubTimeline(time)
+    st().setCurrentTime(time)
+    if (wasPlaying) {
+      play()
+      st().setPlayback('playing')
+    } else {
       st().setPlayback('paused')
     }
   }
@@ -1352,7 +1375,7 @@ export default function AnimationPanel() {
     } else if (!activeClipName) {
       return
     } else if (playback === 'stopped') {
-      const d = selectClip(activeClipName, { loop, speed }, animData)
+      const d = selectActiveClip(activeClipName, { loop, speed }, animData)
       st().setDuration(d)
     }
     play()
@@ -1442,7 +1465,7 @@ export default function AnimationPanel() {
         const d = selectEdit(animData, animDuration, { loop, speed })
         st().setDuration(d)
       } else if (activeClipName) {
-        selectClip(activeClipName, { loop, speed }, animData)
+        selectActiveClip(activeClipName, { loop, speed }, animData)
       }
       st().setPlayback('paused')
     } else if (playback === 'playing') {
@@ -1459,7 +1482,7 @@ export default function AnimationPanel() {
     if (source === 'edit') {
       selectEdit(store.animData, store.animDuration, { loop, speed })
     } else if (activeClipName) {
-      selectClip(activeClipName, { loop, speed }, store.animData)
+      selectActiveClip(activeClipName, { loop, speed }, store.animData)
     } else {
       return
     }
@@ -1519,7 +1542,7 @@ export default function AnimationPanel() {
       // be rebuilt from the edited keys — re-selecting the old one would keep
       // the deleted pose.
       rebakeAdoptedClip()
-      selectClip(activeClipName, { loop, speed }, st().animData)
+      selectActiveClip(activeClipName, { loop, speed }, st().animData)
     }
     store.setPlayback('paused')
     updateRootMotionTrack(st().animData.root)
@@ -1644,7 +1667,7 @@ export default function AnimationPanel() {
       st().addImportedClipName(name)
       st().setPlaybackSource('clip')
       st().setActiveClipName(name)
-      const d = selectClip(name, { loop, speed }, animData)
+      const d = selectActiveClip(name, { loop, speed }, animData)
       st().setDuration(d)
       st().setCurrentTime(0)
       st().setPlayback('paused')
@@ -1703,7 +1726,7 @@ export default function AnimationPanel() {
     st().addImportedClipName(name)
     st().setPlaybackSource('clip')
     st().setActiveClipName(name)
-    const d = selectClip(name, { loop, speed }, animData)
+    const d = selectActiveClip(name, { loop, speed }, animData)
     st().setDuration(d)
     st().setCurrentTime(0)
     play()
@@ -1857,7 +1880,7 @@ export default function AnimationPanel() {
     st().setPlaybackSource('clip')
     st().setActiveClipName(name)
     adoptClipKeys(name)
-    const d = selectClip(name, { loop, speed }, st().animData)
+    const d = selectActiveClip(name, { loop, speed }, st().animData)
     st().setDuration(d)
     st().setCurrentTime(0)
     st().setPlayback('paused')
@@ -2067,6 +2090,21 @@ export default function AnimationPanel() {
           onChange={onImportClipFile}
         />
       </div>
+
+      {source === 'clip' && activeClipName && (
+        <label
+          className="slider-row"
+          style={{ marginTop: 8 }}
+          title="Keeps the clip's poses and turning, but removes its built-in horizontal travel so the character stays in place. The original clip is unchanged."
+        >
+          <input
+            type="checkbox"
+            checked={!!removeClipMovement}
+            onChange={(e) => onRemoveClipMovementToggle(e.target.checked)}
+          />
+          <span className="slider-label">Remove built-in movement (in place)</span>
+        </label>
+      )}
 
       {source === 'edit' && hasBones && (
         <div className="kf-numbers" style={{ marginTop: 8 }}>

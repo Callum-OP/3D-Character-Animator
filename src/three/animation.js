@@ -61,6 +61,8 @@ function newEntry(model) {
     restPos: null,
     action: null,
     clip: null,
+    sourceClip: null,
+    inPlace: false,
     editClip: null,
     editRoot: null,
     editMeshes: null,
@@ -82,6 +84,7 @@ function newEntry(model) {
 const perChar = new Map() // id -> entry (same shape the old singleton `a` had)
 let activeId = null // which character AnimationPanel.jsx is currently editing
 let globalRefs = null // shared across all characters — renderer/store callbacks don't change per-character
+const inPlaceClipCache = new WeakMap()
 // Normal Play in the Animate panel only follows camera cuts/keys when the
 // user opts in (see store.followCameraCuts) — otherwise a work-in-progress
 // clip wouldn't keep yanking the view around while posing. Recording/
@@ -249,9 +252,27 @@ export function updateAnimation(delta) {
 export function selectClip(name, opts = {}, animData = null) {
   const clip = findClip(name)
   if (!clip) return 0
+  const playbackClip = opts.inPlace ? getInPlaceClip(clip) : clip
   setupOverlayTracks(withClipOverlay(overlayForClip(animData, name), clip))
-  activate(clip, opts)
-  return clip.duration
+  activate(playbackClip, opts, clip)
+  return playbackClip.duration
+}
+
+function getInPlaceClip(clip) {
+  const cached = inPlaceClipCache.get(clip)
+  if (cached) return cached
+  const res = sampleClipRange(clip, 30, 0, clip.duration, false, { captureHip: true })
+  if (!res) return clip
+  if (res.hip) {
+    restitchHip(res, { anchor: null, endYaw: 0 }, { inPlace: true, matchGround: false }, true)
+  }
+  const inPlace = res.hip
+    ? buildEditClip(res.tracks, res.duration, {})
+    : clip.clone()
+  if (!res.hip) inPlace.tracks = inPlace.tracks.filter((track) => track.name !== '.position')
+  inPlace.name = clip.name
+  inPlaceClipCache.set(clip, inPlace)
+  return inPlace
 }
 
 // --- Mocap (BVH) -------------------------------------------------------------
@@ -1016,6 +1037,7 @@ export function rebakeClipFromKeys(name, keys) {
   if (a.adoptedClip !== name) return false
   const duration = Math.max(0.1, Number(keys.duration) || clip.editKeys.duration || 0.1)
   const root = keys.root || []
+  inPlaceClipCache.delete(clip)
   const fresh = buildEditClip(keys.tracks || {}, duration, {}, root)
   clip.tracks = fresh.tracks
   clip.duration = duration
@@ -1025,8 +1047,8 @@ export function rebakeClipFromKeys(name, keys) {
   // The live placement overlay mirrors the position keys too (see
   // updateRootMotionTrack); keep it in step so nothing keeps following a
   // deleted key no matter which caller remembers to refresh it.
-  if (a.clip === clip) a.editRoot = root.length ? [...root].sort((x, y) => x.time - y.time) : null
-  const live = a.clip === clip && a.action
+  if (a.sourceClip === clip) a.editRoot = root.length ? [...root].sort((x, y) => x.time - y.time) : null
+  const live = a.sourceClip === clip && a.action
   const saved = live
     ? {
         time: a.action.time,
@@ -1036,9 +1058,11 @@ export function rebakeClipFromKeys(name, keys) {
         loop: a.action.loop,
       }
     : null
-  a.mixer.uncacheClip(clip) // drop the old bindings (and the old action with them)
+  if (live && a.clip && a.clip !== clip) a.mixer.uncacheClip(a.clip)
+  a.mixer.uncacheClip(clip)
   if (saved) {
-    const action = a.mixer.clipAction(clip)
+    const playbackClip = a.inPlace ? getInPlaceClip(clip) : clip
+    const action = a.mixer.clipAction(playbackClip)
     action.reset()
     action.setLoop(saved.loop, Infinity)
     action.clampWhenFinished = saved.clampWhenFinished
@@ -1047,6 +1071,8 @@ export function rebakeClipFromKeys(name, keys) {
     action.time = Math.min(saved.time, duration)
     action.paused = saved.paused
     a.action = action
+    a.clip = playbackClip
+    a.sourceClip = clip
     a.mixer.update(0)
     a.refs.requestRender()
   }
@@ -1289,13 +1315,16 @@ function makeRootTracks(root) {
 // and playback kept following the deleted keys. Keep the baked copy in step
 // with the keys instead (and keep the playhead/loop/speed untouched).
 function rebakeClipRoot(keys) {
-  const clip = a.clip
+  const clip = a.sourceClip || a.clip
   if (!clip || !clip.rootFromKeys || !a.mixer || !a.action) return
+  inPlaceClipCache.delete(clip)
   const { time, paused, timeScale, clampWhenFinished, loop } = a.action
   clip.tracks = clip.tracks.filter((t) => t.name !== '.position' && t.name !== '.quaternion')
   if (keys && keys.length) clip.tracks.push(...makeRootTracks(keys))
-  a.mixer.uncacheClip(clip) // drop the old bindings (and the old action with them)
-  const action = a.mixer.clipAction(clip)
+  const playbackClip = a.inPlace ? getInPlaceClip(clip) : clip
+  if (a.clip !== clip) a.mixer.uncacheClip(a.clip)
+  a.mixer.uncacheClip(clip)
+  const action = a.mixer.clipAction(playbackClip)
   action.reset()
   action.setLoop(loop, Infinity)
   action.clampWhenFinished = clampWhenFinished
@@ -1304,6 +1333,8 @@ function rebakeClipRoot(keys) {
   action.time = time
   action.paused = paused
   a.action = action
+  a.clip = playbackClip
+  a.sourceClip = clip
   a.mixer.update(0)
 }
 
@@ -1514,6 +1545,8 @@ export function stop() {
   if (a.mixer) a.mixer.stopAllAction()
   a.action = null
   a.clip = null
+  a.sourceClip = null
+  a.inPlace = false
   if (!anyPlaying()) a.refs.setContinuousRender(false)
   restoreRest()
   restoreRootRest()
@@ -1913,10 +1946,12 @@ function restoreRootRest() {
   a.rootRest = null
 }
 
-function activate(clip, opts) {
+function activate(clip, opts, sourceClip = clip) {
   if (!a.mixer) return
   a.mixer.stopAllAction()
   a.clip = clip
+  a.sourceClip = sourceClip
+  a.inPlace = !!opts.inPlace
   // Keep the original placement when rebuilding/reselecting an active
   // timeline; otherwise a scrubbed root key becomes the new "rest" position.
   if (a.model && !a.rootRest) {
