@@ -1,4 +1,4 @@
-// Reads frames from a video file in the renderer and warps them into the 512px person crop the model wants.
+// Reads image/video frames in the renderer and warps them into the 512px person crop the model wants.
 import { CROP_SIZE } from './cropMath.js'
 
 export async function openVideo(file) {
@@ -26,6 +26,32 @@ export async function openVideo(file) {
     height: video.videoHeight,
     duration: video.duration,
     close() { video.removeAttribute('src'); video.load(); URL.revokeObjectURL(url) },
+  }
+}
+
+export async function openImage(file) {
+  const url = URL.createObjectURL(file)
+  const image = new Image()
+  image.decoding = 'async'
+  try {
+    await new Promise((resolve, reject) => {
+      image.onload = resolve
+      image.onerror = () => reject(new Error('This image could not be opened. Try a PNG, JPEG, or WebP file.'))
+      image.src = url
+    })
+    if (!image.naturalWidth || !image.naturalHeight) throw new Error('This image has no usable dimensions.')
+  } catch (err) {
+    image.removeAttribute('src')
+    URL.revokeObjectURL(url)
+    throw err
+  }
+  return {
+    image,
+    url,
+    width: image.naturalWidth,
+    height: image.naturalHeight,
+    duration: 1 / 30,
+    close() { image.removeAttribute('src'); URL.revokeObjectURL(url) },
   }
 }
 
@@ -75,12 +101,12 @@ export function makeCropper() {
   const ctx = canvas.getContext('2d', { willReadFrequently: true })
   ctx.imageSmoothingEnabled = true
   ctx.imageSmoothingQuality = 'high'
-  return (video, crop) => {
+  return (media, crop) => {
     ctx.setTransform(1, 0, 0, 1, 0, 0)
     ctx.clearRect(0, 0, CROP_SIZE, CROP_SIZE)
     const [a, , c, , e, f] = crop.affine
     ctx.setTransform(a, 0, 0, e, c, f) // x' = a*x + c, y' = e*y + f
-    ctx.drawImage(video, 0, 0)
+    ctx.drawImage(media, 0, 0)
     ctx.setTransform(1, 0, 0, 1, 0, 0)
     return new Uint8Array(ctx.getImageData(0, 0, CROP_SIZE, CROP_SIZE).data.buffer.slice(0))
   }

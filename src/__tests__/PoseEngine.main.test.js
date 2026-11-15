@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest'
 import { createRequire } from 'node:module'
 import http from 'node:http'
 import crypto from 'node:crypto'
@@ -8,9 +8,15 @@ import os from 'node:os'
 import path from 'node:path'
 
 const require = createRequire(import.meta.url)
-const { downloadFile, rgbaToChw, createPoseEngine, MODEL } = require('../../electron/poseEngine.cjs')
+const { downloadFile, rgbaToChw, createPoseEngine, registerPoseEngineIpc, MODEL } = require('../../electron/poseEngine.cjs')
 
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'pose-'))
+const tempDirs = []
+const tmp = () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pose-'))
+  tempDirs.push(dir)
+  return dir
+}
+afterAll(() => { for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true }) })
 
 function serve(handler) {
   return new Promise((resolve) => {
@@ -73,7 +79,11 @@ describe('rgbaToChw', () => {
 })
 
 describe('engine session handling (mocked onnxruntime)', () => {
-  function fakeOrt({ failDml = false } = {}) {
+  let originalBytes
+  beforeAll(() => { originalBytes = MODEL.bytes; MODEL.bytes = 1024 })
+  afterAll(() => { MODEL.bytes = originalBytes })
+
+  function fakeOrt({ failDml = false, failRelease = false } = {}) {
     const calls = { created: [], feeds: [] }
     class Tensor { constructor(type, data, dims) { this.type = type; this.data = data; this.dims = dims } }
     const ort = {
@@ -94,7 +104,7 @@ describe('engine session handling (mocked onnxruntime)', () => {
                 joint_rotations: new Tensor('float32', new Float32Array(1143), [1, 127, 3, 3]),
               }
             },
-            async release() {},
+            async release() { if (failRelease) throw new Error('release failed') },
           }
         },
       },
@@ -103,8 +113,7 @@ describe('engine session handling (mocked onnxruntime)', () => {
   }
   const withModel = () => {
     const dir = tmp()
-    fs.writeFileSync(path.join(dir, MODEL.file), '')
-    fs.truncateSync(path.join(dir, MODEL.file), MODEL.bytes) // sparse file of the right size
+    fs.writeFileSync(path.join(dir, MODEL.file), Buffer.alloc(MODEL.bytes))
     return dir
   }
 
@@ -113,6 +122,78 @@ describe('engine session handling (mocked onnxruntime)', () => {
     const st = await e.status()
     expect(st.modelReady).toBe(false)
     await expect(e.load('auto')).rejects.toThrow(/not been downloaded/)
+  })
+
+  describe('model uninstall IPC', () => {
+    function setup() {
+      const dir = tmp()
+      const modelDir = path.join(dir, 'pose-engine')
+      fs.mkdirSync(modelDir)
+      const modelPath = path.join(modelDir, MODEL.file)
+      const otherPath = path.join(modelDir, 'other-file')
+      fs.writeFileSync(modelPath, 'model')
+      fs.writeFileSync(otherPath, 'keep')
+      const handlers = {}
+      const engine = registerPoseEngineIpc({
+        ipcMain: { handle: (name, handler) => { handlers[name] = handler } },
+        app: { getPath: () => dir, on: () => {} },
+      })
+      engine.status = vi.fn().mockResolvedValue({ loaded: false })
+      return { dir, modelPath, otherPath, engine, handlers }
+    }
+
+    it('deletes only the model and reports deletion errors', async () => {
+      const { dir, modelPath, otherPath, handlers } = setup()
+      try {
+        expect(await handlers['animare:pose-uninstall']()).toEqual({ ok: true })
+        expect(fs.existsSync(modelPath)).toBe(false)
+        expect(fs.readFileSync(otherPath, 'utf8')).toBe('keep')
+        expect(await handlers['animare:pose-uninstall']()).toMatchObject({ ok: false, error: expect.any(String) })
+      } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+    })
+
+    it('refuses to delete a loaded model or one being loaded', async () => {
+      const { dir, modelPath, engine, handlers } = setup()
+      try {
+        engine.status.mockResolvedValueOnce({ loaded: true })
+        expect(await handlers['animare:pose-uninstall']()).toMatchObject({ ok: false, error: expect.stringMatching(/in use/i) })
+        let finish
+        engine.load = vi.fn(() => new Promise((resolve) => { finish = resolve }))
+        const load = handlers['animare:pose-load'](null, 'cpu')
+        expect(await handlers['animare:pose-uninstall']()).toMatchObject({ ok: false })
+        expect(fs.existsSync(modelPath)).toBe(true)
+        finish({ provider: 'cpu' })
+        await load
+      } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+    })
+
+    it('prevents downloads and loads racing with uninstall', async () => {
+      const { dir, engine, handlers } = setup()
+      try {
+        let finish
+        engine.uninstall = vi.fn(() => new Promise((resolve) => { finish = resolve }))
+        const uninstall = handlers['animare:pose-uninstall']()
+        await vi.waitFor(() => expect(engine.uninstall).toHaveBeenCalled())
+        expect(await handlers['animare:pose-download']({})).toMatchObject({ ok: false })
+        expect(await handlers['animare:pose-load'](null, 'cpu')).toMatchObject({ ok: false })
+        finish()
+        expect(await uninstall).toEqual({ ok: true })
+      } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+    })
+
+    it('refuses uninstall during a download', async () => {
+      const { dir, modelPath, engine, handlers } = setup()
+      try {
+        let finish
+        engine.downloadModel = vi.fn(() => new Promise((resolve) => { finish = resolve }))
+        const download = handlers['animare:pose-download']({ sender: { send() {} } })
+        await vi.waitFor(() => expect(engine.downloadModel).toHaveBeenCalled())
+        expect(await handlers['animare:pose-uninstall']()).toMatchObject({ ok: false })
+        expect(fs.existsSync(modelPath)).toBe(true)
+        finish()
+        await download
+      } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+    })
   })
 
   it('falls back from DirectML to CPU on Windows', async () => {
@@ -161,5 +242,12 @@ describe('engine session handling (mocked onnxruntime)', () => {
   it('rejects inference before the model is loaded', async () => {
     const e = createPoseEngine({ modelDir: withModel(), ort: fakeOrt() })
     await expect(e.infer({})).rejects.toThrow(/not loaded/)
+  })
+
+  it('keeps a failed-to-release session marked as loaded', async () => {
+    const e = createPoseEngine({ modelDir: withModel(), ort: fakeOrt({ failRelease: true }) })
+    await e.load('cpu')
+    await expect(e.unload()).rejects.toThrow('release failed')
+    expect((await e.status()).loaded).toBe(true)
   })
 })

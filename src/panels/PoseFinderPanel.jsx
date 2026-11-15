@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import './PoseFinder.css'
 import { useStore } from '../store.js'
+import { confirmDialog } from '../dialogs.js'
 import { importBVHAuto, scrubTimeline } from '../three/scene.js'
 import { lockBonesInPlace, limbBoneNames } from '../three/ikpins.js'
-import { openVideo, seekTo, makeCropper } from '../three/poseFinder/videoFrames.js'
+import { openVideo, openImage, seekTo, makeCropper } from '../three/poseFinder/videoFrames.js'
 import { runPoseFinder } from '../three/poseFinder/run.js'
 import { defaultBox } from '../three/poseFinder/cropMath.js'
 import { POSE_PRESETS } from '../three/poseFinder/presets.js'
@@ -19,11 +20,13 @@ export default function PoseFinderPanel({ onClose }) {
   const [status, setStatus] = useState(null)
   const [accepted, setAccepted] = useState(false)
   const [dl, setDl] = useState(null) // { received, total }
+  const [uninstalling, setUninstalling] = useState(false)
+  const [modelError, setModelError] = useState('')
   const [engineMsg, setEngineMsg] = useState('')
   const [compute, setCompute] = useState('auto')
   const [preset, setPreset] = useState('standing')
 
-  const [src, setSrc] = useState(null) // { video, width, height, duration, name, close }
+  const [src, setSrc] = useState(null) // { kind, video | image, width, height, duration, name, close }
   const [box, setBox] = useState(null)
   const [range, setRange] = useState([0, 0])
   const [sampleFps, setSampleFps] = useState(10)
@@ -54,7 +57,7 @@ export default function PoseFinderPanel({ onClose }) {
   const overlayRef = useRef(null)
   const dragRef = useRef(null)
   const abortRef = useRef(null)
-  const videoHostRef = useRef(null)
+  const mediaHostRef = useRef(null)
 
   function choosePreset(value) {
     const s = POSE_PRESETS[value].settings
@@ -76,14 +79,15 @@ export default function PoseFinderPanel({ onClose }) {
   useEffect(() => () => { abortRef.current?.abort() }, [])
   useEffect(() => () => { src?.close?.() }, [src])
 
-  // mount the <video> element into the stage
+  // mount the video or image into the stage
   useEffect(() => {
-    const host = videoHostRef.current
+    const host = mediaHostRef.current
     if (!host || !src) return
     host.innerHTML = ''
-    src.video.controls = false
-    src.video.style.cssText = 'width:100%;max-height:52vh;object-fit:contain;display:block'
-    host.appendChild(src.video)
+    const media = src.kind === 'image' ? src.image : src.video
+    if (src.kind === 'video') media.controls = false
+    media.style.cssText = 'width:100%;max-height:52vh;object-fit:contain;display:block'
+    host.appendChild(media)
   }, [src])
   useEffect(() => {
     const overlay = overlayRef.current
@@ -108,24 +112,42 @@ export default function PoseFinderPanel({ onClose }) {
     await refresh()
   }
 
-  // ---- video + box ----
-  async function onPickVideo(e) {
+  async function onUninstall() {
+    if (!confirmDialog('Uninstall the Pose Finder model? You will need to download it again to analyse videos or images. Existing animations and videos will not be deleted.')) return
+    setModelError('')
+    setUninstalling(true)
+    try {
+      const r = await pose.uninstall()
+      if (!r.ok) throw new Error(r.error)
+      setAccepted(false)
+      setStatus((s) => s && { ...s, modelReady: false, modelBytes: 0, loaded: false, provider: null })
+      await refresh()
+    } catch (err) {
+      setModelError(err.message || String(err))
+    } finally {
+      setUninstalling(false)
+    }
+  }
+
+  // ---- video/image + box ----
+  async function onPickMedia(e) {
     const file = e.target.files?.[0]
     e.target.value = ''
     if (!file) return
     setError(''); setResult(null)
     try {
-      const v = await openVideo(file)
-      setSrc({ ...v, name: file.name })
-      setBox(defaultBox(v.width, v.height))
-      setRange([0, v.duration])
-      await seekTo(v.video, 0)
+      const kind = file.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(file.name) ? 'image' : 'video'
+      const media = kind === 'image' ? await openImage(file) : await openVideo(file)
+      setSrc({ ...media, kind, name: file.name })
+      setBox(defaultBox(media.width, media.height))
+      setRange([0, media.duration])
+      if (kind === 'video') await seekTo(media.video, 0)
     } catch (err) { setError(err.message || String(err)) }
   }
 
   const toImage = (ev) => {
     const r = overlayRef.current.getBoundingClientRect()
-    // the video is letterboxed (object-fit: contain): map through the displayed picture rectangle
+    // The preview is letterboxed (object-fit: contain): map through the displayed picture rectangle.
     const scale = Math.min(r.width / src.width, r.height / src.height)
     const dw = src.width * scale, dh = src.height * scale
     const ox = (r.width - dw) / 2, oy = (r.height - dh) / 2
@@ -155,7 +177,7 @@ export default function PoseFinderPanel({ onClose }) {
     return { left: ox + box.x1 * scale, top: oy + box.y1 * scale, width: (box.x2 - box.x1) * scale, height: (box.y2 - box.y1) * scale }
   }, [src, box, stageSize])
 
-  async function previewAt(t) { if (src && !running) { try { await seekTo(src.video, t) } catch (_) { /* ignore */ } } }
+  async function previewAt(t) { if (src?.kind === 'video' && !running) { try { await seekTo(src.video, t) } catch (_) { /* ignore */ } } }
 
   // ---- run ----
   const showModelView = (rgba, kp2d, box, crop) => {
@@ -171,12 +193,17 @@ export default function PoseFinderPanel({ onClose }) {
     abortRef.current = ac
     setRunning(true)
     setProgress({ done: 0, total: 1 })
-    diagRef.current = { app: '3D Character Animator Pose Finder', settings: { preset, compute, sampleFps, outFps, smoothing, footLock, levelCamera, posture, levelFeet, limitJoints, lowerArms, ground, groundReference, lockFeet, range, video: src && { name: src.name, width: src.width, height: src.height, duration: src.duration }, box }, frames: [], provider: null, error: null }
+    diagRef.current = { app: '3D Character Animator Pose Finder', settings: { preset, compute, sampleFps, outFps, smoothing, footLock, levelCamera, posture, levelFeet, limitJoints, lowerArms, ground, groundReference, lockFeet, range, source: src && { kind: src.kind, name: src.name, width: src.width, height: src.height, duration: src.duration }, box }, frames: [], provider: null, error: null }
     setHasDiag(true)
     const cropper = makeCropper()
     const source = {
       width: src.width, height: src.height, duration: src.duration,
-      frameAt: async (t, crop) => { await seekTo(src.video, t); return cropper(src.video, crop) },
+      staticPose: src.kind === 'image',
+      frameAt: async (t, crop) => {
+        const media = src.kind === 'image' ? src.image : src.video
+        if (src.kind === 'video') await seekTo(media, t)
+        return cropper(media, crop)
+      },
     }
     const onFrame = (f) => {
       showModelView(f.rgba)
@@ -187,11 +214,13 @@ export default function PoseFinderPanel({ onClose }) {
         d.frames.push({ i: f.i, t: +f.t.toFixed(3), valid: f.valid, reason: f.reason || null, trackedVia: f.source, box: f.box, kp2dHead: Array.from(f.kp2d?.slice(0, 16) || []), crop: cv ? cv.toDataURL('image/jpeg', 0.7) : null })
       }
     }
+    let loaded = false
     try {
       let pref = compute
       for (let attemptNo = 0; attemptNo < 2; attemptNo++) {
         const lr = await pose.load(pref)
         if (!lr.ok) throw new Error(lr.error)
+        loaded = true
         diagRef.current.provider = lr.provider
         await refresh()
         try {
@@ -216,8 +245,16 @@ export default function PoseFinderPanel({ onClose }) {
       if (diagRef.current) diagRef.current.error = err.message || String(err)
       if (!/Cancelled/.test(err.message)) setError(err.message || String(err))
     } finally {
-      setRunning(false); setProgress(null); abortRef.current = null
-      pose.unload() // frees the ~GBs the model holds
+      try {
+        if (loaded) {
+          await pose.unload()
+          await refresh()
+        }
+      } catch (err) {
+        setError((previous) => `${previous ? `${previous} ` : ''}Could not unload the pose model: ${err.message || String(err)}`)
+      } finally {
+        setRunning(false); setProgress(null); abortRef.current = null
+      }
     }
   }
 
@@ -260,7 +297,7 @@ export default function PoseFinderPanel({ onClose }) {
       <div className="pf-dialog" role="dialog" aria-modal="true" aria-label="Pose Finder" onClick={(e) => e.stopPropagation()}>
         <div className="pf-head">
           <div>
-            <span className="pf-eyebrow">Video to mocap</span>
+            <span className="pf-eyebrow">Video/image to mocap</span>
             <h2>Pose Finder</h2>
           </div>
           <button className="icon-btn danger" title="Close (Esc)" aria-label="Close Pose Finder" disabled={running} onClick={onClose}>×</button>
@@ -272,47 +309,56 @@ export default function PoseFinderPanel({ onClose }) {
           <>
             <div className="pf-card">
               <h3>1. Pose model</h3>
+              <p className="pf-dim">Pose Finder uses Meta’s SAM 3D Body (the ViT-H body decoder, ONNX conversion by gok11). The model runs locally on your device and videos and images are processed there. Analysing frames can use a lot of RAM and, when using the GPU, GPU memory.</p>
+              {status && <p className="pf-dim">The model takes {gb(status.expectedBytes)} GB of disk space. It is downloaded once and kept on this device.</p>}
               {!status && <p className="pf-dim">Checking…</p>}
               {status && !status.ortOk && <div className="pf-err">The model runtime could not start: {status.ortError || 'onnxruntime-node is missing'}</div>}
               {status?.ortOk && !status.modelReady && (
                 <>
-                  <p className="pf-dim">Pose Finder uses Meta’s SAM 3D Body (an ONNX conversion by gok11). It is a one-time {gb(status.expectedBytes)} GB download that stays on this computer; videos never leave it.</p>
                   <label className="pf-check">
                     <input type="checkbox" checked={accepted} onChange={(e) => setAccepted(e.target.checked)} />
                     <span>I accept the <a href={status.licenseUrl} target="_blank" rel="noreferrer">SAM License</a> (commercial use allowed; no military or weapons use; trade controls apply).</span>
                   </label>
                   <div className="pf-row">
-                    <button className="btn" disabled={!accepted || !!dl} onClick={onDownload}>Download model</button>
+                    <button className="btn" disabled={!accepted || !!dl || uninstalling} onClick={onDownload}>Download model</button>
                     {dl && <button className="btn secondary" onClick={() => pose.cancelDownload()}>Cancel</button>}
                     {dl && <span className="pf-dim">{gb(dl.received)} / {gb(dl.total || status.expectedBytes)} GB</span>}
                   </div>
                   {dl && <div className="pf-bar"><div style={{ width: `${Math.round((dl.received / (dl.total || status.expectedBytes)) * 100)}%` }} /></div>}
                 </>
               )}
-              {ready && (
+              {status?.modelReady && (
                 <div className="pf-row">
                   <span className="pf-ok">Model ready</span>
                   {status.provider && <span className="pf-dim">last used: {status.provider}</span>}
                 </div>
               )}
+              {(status?.modelReady || status?.modelBytes > 0) && (
+                <div className="pf-row">
+                  <button className="btn secondary" disabled={running || !!dl || uninstalling} onClick={onUninstall}>
+                    {uninstalling ? 'Uninstalling…' : 'Uninstall model'}
+                  </button>
+                </div>
+              )}
+              {modelError && <div className="pf-err" role="alert">{modelError}</div>}
             </div>
 
             <div className="pf-card">
-              <h3>2. Video and person</h3>
+              <h3>2. Video or image and person</h3>
               <div className="pf-row">
-                <input type="file" accept="video/*" disabled={running} onChange={onPickVideo} />
-                {src && <span className="pf-dim">{src.width}×{src.height}, {src.duration.toFixed(1)} s</span>}
+                <input type="file" accept="video/*,image/*" disabled={running} onChange={onPickMedia} />
+                {src && <span className="pf-dim">{src.width}×{src.height}{src.kind === 'video' ? `, ${src.duration.toFixed(1)} s` : ', still image'}</span>}
               </div>
               {src && (
                 <>
-                  <p className="pf-dim">Drag on the picture to draw a box around the person. The box then follows them. Pick a frame where they are fully in view.</p>
+                  <p className="pf-dim">Drag on the picture to draw a box around the person. The box then follows them in a video. For an image, Pose Finder makes a static pose clip.</p>
                   <div className="pf-stage" ref={stageRef}>
-                    <div ref={videoHostRef} />
+                    <div ref={mediaHostRef} />
                     <div className="pf-overlay" ref={overlayRef} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp}>
                       {boxStyle && <div style={{ position: 'absolute', ...boxStyle, border: '2px solid var(--accent)', boxShadow: '0 0 0 9999px rgba(0,0,0,0.35)', pointerEvents: 'none' }} />}
                     </div>
                   </div>
-                  <div className="pf-grid">
+                  {src.kind === 'video' && <div className="pf-grid">
                     <label className="pf-field">Start: {range[0].toFixed(1)} s
                       <input type="range" min="0" max={src.duration} step="0.1" value={range[0]} disabled={running}
                         onChange={(e) => { const v = Math.max(0, Math.min(+e.target.value, range[1] - 0.2)); setRange([v, range[1]]); previewAt(v) }} />
@@ -321,7 +367,7 @@ export default function PoseFinderPanel({ onClose }) {
                       <input type="range" min="0" max={src.duration} step="0.1" value={range[1]} disabled={running}
                         onChange={(e) => { const v = Math.min(src.duration, Math.max(+e.target.value, range[0] + 0.2)); setRange([range[0], v]) }} />
                     </label>
-                  </div>
+                  </div>}
                   <div className="pf-row"><button className="btn secondary" disabled={running} onClick={() => setBox(defaultBox(src.width, src.height))}>Reset box</button></div>
                 </>
               )}
@@ -413,9 +459,9 @@ export default function PoseFinderPanel({ onClose }) {
                 </label>
               </div>
               </details>
-              <p className="pf-dim">Each analysed frame takes a few seconds on a laptop CPU. {src ? `This will analyse about ${estFrames} frames.` : ''} Frames in between are interpolated.</p>
+              <p className="pf-dim">Each analysed frame takes a few seconds on a laptop CPU. {src ? `This will analyse about ${src.kind === 'image' ? 2 : estFrames} frames.` : ''} Frames in between are interpolated.</p>
               <div className="pf-row">
-                {!running && <button className="btn" disabled={!ready || !src || !validBox} onClick={onRun}>Find poses</button>}
+                {!running && <button className="btn" disabled={!ready || !src || !validBox || uninstalling || !!dl} onClick={onRun}>Find poses</button>}
                 {running && <button className="btn secondary" onClick={() => abortRef.current?.abort()}>Cancel</button>}
                 {running && progress && <span className="pf-dim">{progress.done} / {progress.total} frames {fmtEta(progress.etaSec)}</span>}
               </div>

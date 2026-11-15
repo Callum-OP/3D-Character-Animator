@@ -4,6 +4,7 @@
 //
 //   status   -> what's installed / loaded
 //   download -> fetch the ~1.4 GB model once into userData (SHA-256 checked, resumable by restarting)
+//   uninstall -> remove the downloaded model when it is not in use
 //   load     -> create the ONNX Runtime session
 //   infer    -> one person crop in, MHR pose out
 //
@@ -170,9 +171,9 @@ function createPoseEngine({ modelDir, ort: ortInjected, platform = process.platf
 
   async function unload() {
     const s = session
+    if (s && typeof s.release === 'function') await s.release()
     session = null
     provider = null
-    if (s && typeof s.release === 'function') { try { await s.release() } catch (_) { /* ignore */ } }
   }
 
   // payload: { rgba: Uint8Array(512*512*4), center:[cx,cy], scale:[s,s], affine:[a,b,c,d,e,f], imageSize:[w,h], camera:[9] }
@@ -205,7 +206,7 @@ function createPoseEngine({ modelDir, ort: ortInjected, platform = process.platf
     return p
   }
 
-  return { status, load, unload, infer, downloadModel: (opts) => downloadFile(MODEL.url, modelPath, { sha256: MODEL.sha256, bytes: MODEL.bytes, ...opts }), modelPath }
+  return { status, load, unload, infer, uninstall: () => fsp.unlink(modelPath), downloadModel: (opts) => downloadFile(MODEL.url, modelPath, { sha256: MODEL.sha256, bytes: MODEL.bytes, ...opts }), modelPath }
 }
 
 // ---- IPC ---------------------------------------------------------------------------------------------------
@@ -213,13 +214,18 @@ function createPoseEngine({ modelDir, ort: ortInjected, platform = process.platf
 function registerPoseEngineIpc({ ipcMain, app, BrowserWindow }) {
   const engine = createPoseEngine({ modelDir: path.join(app.getPath('userData'), 'pose-engine') })
   let dl = null // AbortController of the running download
+  let loading = false
+  let unloading = false
+  let uninstalling = false
 
   ipcMain.handle('animare:pose-status', () => engine.status())
 
   ipcMain.handle('animare:pose-download', async (event) => {
     if (dl) return { ok: false, error: 'A download is already running' }
+    if (loading || unloading || uninstalling) return { ok: false, error: 'Another model operation is in progress' }
     dl = new AbortController()
     try {
+      if ((await engine.status()).loaded) throw new Error('The model is in use. Stop analysing frames before downloading.')
       await engine.downloadModel({
         signal: dl.signal,
         onProgress: (p) => { try { event.sender.send('animare:pose-download-progress', p) } catch (_) { /* window closed */ } },
@@ -231,14 +237,32 @@ function registerPoseEngineIpc({ ipcMain, app, BrowserWindow }) {
   })
   ipcMain.handle('animare:pose-download-cancel', () => { if (dl) dl.abort(); return true })
 
-  ipcMain.handle('animare:pose-load', async (_e, pref) => {
-    try { return { ok: true, ...(await engine.load(pref)) } } catch (e) { return { ok: false, error: e.message || String(e) } }
+  ipcMain.handle('animare:pose-uninstall', async () => {
+    if (dl || loading || unloading || uninstalling) return { ok: false, error: 'Wait for the current model operation to finish before uninstalling' }
+    uninstalling = true
+    try {
+      if ((await engine.status()).loaded) throw new Error('The model is in use. Stop analysing frames before uninstalling it.')
+      await engine.uninstall()
+      return { ok: true }
+    } catch (e) {
+      return { ok: false, error: e.message || String(e) }
+    } finally { uninstalling = false }
   })
-  ipcMain.handle('animare:pose-unload', async () => { await engine.unload(); return true })
+
+  ipcMain.handle('animare:pose-load', async (_e, pref) => {
+    if (dl || loading || unloading || uninstalling) return { ok: false, error: 'Another model operation is in progress' }
+    loading = true
+    try { return { ok: true, ...(await engine.load(pref)) } } catch (e) { return { ok: false, error: e.message || String(e) } } finally { loading = false }
+  })
+  ipcMain.handle('animare:pose-unload', async () => {
+    if (loading || unloading || uninstalling) throw new Error('Another model operation is in progress')
+    unloading = true
+    try { await engine.unload(); return true } finally { unloading = false }
+  })
   ipcMain.handle('animare:pose-infer', async (_e, payload) => {
     try { return { ok: true, out: await engine.infer(payload) } } catch (e) { return { ok: false, error: e.message || String(e) } }
   })
-  app.on('before-quit', () => { engine.unload() })
+  app.on('before-quit', () => { engine.unload().catch((e) => console.error('Could not unload the pose model:', e)) })
   return engine
 }
 

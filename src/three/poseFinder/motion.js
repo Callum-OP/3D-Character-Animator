@@ -284,6 +284,17 @@ function screenFootContacts(frames, grid, rot, fps, mixed, Rc, legLength) {
   })
   const hipSource = Float32Array.from(frames, (f) => (f.kp2[KP.lHip * 2 + 1] + f.kp2[KP.rHip * 2 + 1]) / 2)
   const hipY = movingAverage(resampleVec(medianFilter(hipSource, 1), 1, grid), 3)
+  const nearFloorTorso = new Uint8Array(grid.count)
+  if (mixed) {
+    // Keep a recent upright scale while the projected body shortens during a fall or roll.
+    const poseSize = resampleVec(medianFilter(Float32Array.from(sizes), 1, 3), 1, grid)
+    let uprightSize = poseSize[0]
+    const lookback = Math.max(1, Math.round(0.5 * fps))
+    for (let i = 0; i < grid.count; i++) {
+      if (torsoGrid[i] > 0.7) uprightSize = Math.max(...poseSize.slice(Math.max(0, i - lookback), i + 1))
+      else if (hipY[i] >= Math.max(feet[0].y[i], feet[1].y[i]) - uprightSize * 0.18) nearFloorTorso[i] = 1
+    }
+  }
   const airborne = new Uint8Array(grid.count)
   if (feet.every((foot) => foot.floorY !== null)) {
     for (let i = 0; i < grid.count;) {
@@ -306,7 +317,7 @@ function screenFootContacts(frames, grid, rot, fps, mixed, Rc, legLength) {
     for (let i = 0; i < grid.count; i++) {
       const lo = Math.max(0, i - radius), hi = Math.min(grid.count - 1, i + radius)
       const motion = Math.min(speed(lo, i), speed(i, hi))
-      allowed[i] = floorY !== null && upright[i] && !airborne[i] && y[i] >= floorY - size * 0.22 ? 1 : 0
+      allowed[i] = floorY !== null && upright[i] && !nearFloorTorso[i] && !airborne[i] && y[i] >= floorY - size * 0.22 ? 1 : 0
       stance[i] = allowed[i] && motion < size * 0.4 ? 1 : 0
     }
     const blend = new Float32Array(grid.count)
@@ -821,7 +832,7 @@ export function solveMotion(frames, opts = {}) {
   // How much did the person actually move? Near zero means the model was not looking at them.
   let variationDeg = 0
   for (const name of ['LeftArm', 'RightArm', 'LeftUpLeg', 'RightUpLeg', 'Spine2', 'Head']) variationDeg = Math.max(variationDeg, maxAngleFromFirst(rot[JOINT_INDEX[name]], grid.count))
-  if (variationDeg < 4) warnings.push('The pose barely changes between frames. The model probably could not see the person — check the box and the "model view" picture.')
+  if (!o.staticPose && variationDeg < 4) warnings.push('The pose barely changes between frames. The model probably could not see the person — check the box and the "model view" picture.')
 
   const { restRot, shoulderLowerDeg, armLowerDeg } = applyArmBaseline(rot, grid.count, o.lowerArms)
   return { fps: o.outFps, count: grid.count, root, rot, restRot, info: { convention: conv, scale, groundM: ground, lockSegments, variationDeg, tiltDeg, slouchDeg, limitDeg, footLevelDeg, shoulderLowerDeg, armLowerDeg, groundLocked, feetLocked: !!o.lockFeet, warnings } }

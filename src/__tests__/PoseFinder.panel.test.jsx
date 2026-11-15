@@ -3,12 +3,12 @@ import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/re
 
 vi.mock('../three/scene.js', () => ({ importBVHAuto: vi.fn(), scrubTimeline: vi.fn() }))
 vi.mock('../three/ikpins.js', () => ({ lockBonesInPlace: vi.fn(() => ({ locked: 2, relocked: 0 })), limbBoneNames: vi.fn(() => ['LeftFoot', 'RightFoot']) }))
-vi.mock('../three/poseFinder/videoFrames.js', () => ({ openVideo: vi.fn(), seekTo: vi.fn().mockResolvedValue(), makeCropper: vi.fn(() => vi.fn()) }))
+vi.mock('../three/poseFinder/videoFrames.js', () => ({ openVideo: vi.fn(), openImage: vi.fn(), seekTo: vi.fn().mockResolvedValue(), makeCropper: vi.fn(() => vi.fn()) }))
 vi.mock('../three/poseFinder/run.js', () => ({ runPoseFinder: vi.fn() }))
 
 import PoseFinderPanel from '../panels/PoseFinderPanel.jsx'
 import { useStore } from '../store.js'
-import { openVideo } from '../three/poseFinder/videoFrames.js'
+import { openVideo, openImage, makeCropper, seekTo } from '../three/poseFinder/videoFrames.js'
 import { runPoseFinder } from '../three/poseFinder/run.js'
 import { importBVHAuto } from '../three/scene.js'
 import { lockBonesInPlace } from '../three/ikpins.js'
@@ -19,11 +19,12 @@ function mockPose(status) {
   const pose = {
     status: vi.fn().mockResolvedValue(status),
     download: vi.fn().mockResolvedValue({ ok: true }),
+    uninstall: vi.fn().mockResolvedValue({ ok: true }),
     cancelDownload: vi.fn(),
     onDownloadProgress: vi.fn(() => () => {}),
     load: vi.fn(), unload: vi.fn(), infer: vi.fn(),
   }
-  window.animare = { pose }
+  window.animare = { pose, confirm: vi.fn(() => true) }
   return pose
 }
 
@@ -51,15 +52,92 @@ describe('PoseFinderPanel', () => {
     mockPose({ ...baseStatus, modelReady: true })
     render(<PoseFinderPanel onClose={() => {}} />)
     expect(await screen.findByText(/model ready/i)).toBeTruthy()
+    expect(screen.getByText(/SAM 3D Body.*runs locally.*a lot of RAM/i)).toBeTruthy()
+    expect(screen.getByText(/1\.42 GB of disk space/i)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /download model/i })).toBeNull()
     expect(screen.getByRole('option', { name: /DirectML/i })).toBeTruthy()
     const run = screen.getByRole('button', { name: /find poses/i })
     expect(run.disabled).toBe(true) // no video yet
   })
 
+  it('accepts a still image and runs it as a static pose clip', async () => {
+    const pose = mockPose({ ...baseStatus, modelReady: true })
+    pose.load.mockResolvedValue({ ok: true, provider: 'cpu' })
+    const image = document.createElement('img')
+    openImage.mockResolvedValue({ image, width: 640, height: 480, duration: 1 / 30, close: vi.fn() })
+    runPoseFinder.mockResolvedValue({ bvh: 'bvh', solved: { fps: 30, info: { warnings: [], feetLocked: false, tiltDeg: 0, slouchDeg: 0, footLevelDeg: 0, limitDeg: 0, shoulderLowerDeg: 0, armLowerDeg: 0 } } })
+    render(<PoseFinderPanel onClose={() => {}} />)
+    await screen.findByText(/model ready/i)
+    const picker = document.querySelector('input[type="file"]')
+    expect(picker.accept).toContain('image/*')
+    fireEvent.change(picker, { target: { files: [new File(['image'], 'pose.png', { type: 'image/png' })] } })
+    expect(await screen.findByText(/still image/i)).toBeTruthy()
+    expect(document.querySelector('.pf-stage img')).toBeTruthy()
+    expect(screen.queryByLabelText(/start:/i)).toBeNull()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Find poses' }).disabled).toBe(false))
+    fireEvent.click(screen.getByRole('button', { name: 'Find poses' }))
+    await screen.findByRole('button', { name: 'Download BVH' })
+
+    const { source } = runPoseFinder.mock.calls[0][0]
+    expect(source).toMatchObject({ duration: 1 / 30, staticPose: true })
+    const crop = {}
+    await source.frameAt(0, crop)
+    expect(makeCropper.mock.results.at(-1).value).toHaveBeenCalledWith(image, crop)
+    expect(seekTo).not.toHaveBeenCalled()
+  })
+
   it('reports a runtime that failed to load', async () => {
-    mockPose({ ...baseStatus, ortOk: false, ortError: 'DLL load failed' })
+    mockPose({ ...baseStatus, modelReady: true, ortOk: false, ortError: 'DLL load failed' })
     render(<PoseFinderPanel onClose={() => {}} />)
     expect(await screen.findByText(/DLL load failed/)).toBeTruthy()
+    expect(screen.getByText(/model ready/i)).toBeTruthy()
+    expect(screen.getByRole('button', { name: /find poses/i }).disabled).toBe(true)
+  })
+
+  it('confirms uninstall and returns to the download step', async () => {
+    const pose = mockPose({ ...baseStatus, modelReady: true })
+    pose.status.mockResolvedValueOnce({ ...baseStatus, modelReady: true }).mockResolvedValue(baseStatus)
+    render(<PoseFinderPanel onClose={() => {}} />)
+    fireEvent.click(await screen.findByRole('button', { name: /uninstall model/i }))
+    await screen.findByRole('button', { name: /download model/i })
+    expect(window.animare.confirm).toHaveBeenCalledWith(expect.stringMatching(/Existing animations and videos will not be deleted/))
+    expect(pose.uninstall).toHaveBeenCalledOnce()
+    expect(screen.getByRole('button', { name: /download model/i }).disabled).toBe(true)
+  })
+
+  it('keeps the model when uninstall is cancelled or fails', async () => {
+    const pose = mockPose({ ...baseStatus, modelReady: true })
+    window.animare.confirm.mockReturnValueOnce(false)
+    render(<PoseFinderPanel onClose={() => {}} />)
+    const button = await screen.findByRole('button', { name: /uninstall model/i })
+    fireEvent.click(button)
+    expect(pose.uninstall).not.toHaveBeenCalled()
+    pose.uninstall.mockResolvedValueOnce({ ok: false, error: 'Access denied' })
+    fireEvent.click(button)
+    expect((await screen.findByRole('alert')).textContent).toContain('Access denied')
+    expect(screen.getByText(/model ready/i)).toBeTruthy()
+    expect(button.disabled).toBe(false)
+  })
+
+  it('prevents uninstall while frames are being analysed', async () => {
+    const pose = mockPose({ ...baseStatus, modelReady: true })
+    pose.load.mockResolvedValue({ ok: true, provider: 'cpu' })
+    openVideo.mockResolvedValue({ video: document.createElement('video'), width: 640, height: 480, duration: 2, close: vi.fn() })
+    let finish
+    runPoseFinder.mockReturnValue(new Promise((resolve) => { finish = resolve }))
+    render(<PoseFinderPanel onClose={() => {}} />)
+    await screen.findByText(/model ready/i)
+    fireEvent.change(document.querySelector('input[type="file"]'), { target: { files: [new File(['video'], 'test.mp4', { type: 'video/mp4' })] } })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Find poses' }).disabled).toBe(false))
+    fireEvent.click(screen.getByRole('button', { name: 'Find poses' }))
+    await waitFor(() => expect(runPoseFinder).toHaveBeenCalled())
+    expect(screen.getByRole('button', { name: /uninstall model/i }).disabled).toBe(true)
+    finish({ bvh: 'bvh', solved: { fps: 30, info: { warnings: [], tiltDeg: 0, slouchDeg: 0, footLevelDeg: 0, limitDeg: 0, shoulderLowerDeg: 0, armLowerDeg: 0 } } })
+    await waitFor(() => expect(screen.getByRole('button', { name: /uninstall model/i }).disabled).toBe(false))
+    pose.status.mockResolvedValue(baseStatus)
+    fireEvent.click(screen.getByRole('button', { name: /uninstall model/i }))
+    await screen.findByRole('button', { name: /download model/i })
+    expect(screen.getByRole('button', { name: 'Download BVH' })).toBeTruthy()
   })
 
   it('applies and resets presets while keeping advanced settings collapsed', async () => {

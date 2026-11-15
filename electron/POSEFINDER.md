@@ -3,9 +3,19 @@
 Desktop-only. Runs Meta's **SAM 3D Body** locally via `onnxruntime-node` (ONNX conversion by gok11, ViT-H body decoder,
 SAM License). No Python, no CUDA: CPU everywhere, DirectML (GPU) on Windows including ARM64.
 
-Flow: titlebar **Pose Finder** → accept licence + download model once (~1.4 GB into `userData/pose-engine`) → pick video →
+Flow: titlebar **Pose Finder** → accept licence + download model once (~1.4 GB into `userData/pose-engine`) → pick a video or image →
 draw a box round the person → **Find poses** → **Add to active character** (goes through the normal BVH import/retarget) or
 **Download BVH**.
+
+The model and video/image processing run locally. An image produces a static pose clip. Analysing frames can use substantial RAM and, with DirectML, GPU memory.
+On opening Pose Finder, the app checks its own model file in `userData/pose-engine` and shows **Model ready** if its
+size matches the expected download; it does not search for other installations or recheck the checksum at startup.
+The download itself is SHA-256 verified. **Uninstall model** removes the downloaded model from this device; it
+does not delete videos or generated animations. Stop analysis first. A future analysis requires a new download.
+
+To edit a result, add it to a character, then use **Animate → Edit keyframes** to convert the clip to editable
+keyframes. **Animate → More character tools → Lock in place** can hold feet, hands or selected bones for the whole
+animation; it is not a per-frame lock. Pose Finder itself does not yet have a frame-by-frame skeleton editor.
 
 Choose a motion preset before finding poses:
 - **Standing** uses the existing upright cleanup and ground correction.
@@ -13,7 +23,8 @@ Choose a motion preset before finding poses:
 - **Flips** samples more frames, preserves airborne motion and steadies detected foot contacts before and after a jump.
 - **Adaptable** builds on Flips for clips mixing standing, falling, rolling and lying down. It analyses at 30 fps,
   releases foot contacts when the hips tilt or the torso and hips are close to foot level, and uses shorter root-motion
-  filters to retain quick falls and bounces. Bending over with the hips above the feet can still retain foot contacts.
+  filters to retain quick falls and bounces. It also checks projected hip and foot heights when the 3D estimate
+  places the hips too high during a horizontal pose. Bending over with the hips above the feet can still retain foot contacts.
 
 At their default settings, Adaptable and Flips analyse the same number of frames. Standing and Lying down analyse
 10 frames per second versus 30 for Adaptable, so inference for a clip is approximately three times as much work
@@ -40,6 +51,9 @@ are approximate. The body-height reference uses tracked points rather than detec
 the estimated plane and template feet cannot guarantee that a retargeted character's body or feet touch a real
 surface. Raised surfaces such as walls are not detected. Draw the box tightly around the intended person, especially
 when multiple people are visible; a person occupying very few source pixels may not be tracked accurately.
+If the initial detection cannot be followed, start the range where the person is clearer and redraw the box there.
+Frames whose detections cannot be followed hold the last tracked pose and produce a warning; a prolonged loss stops
+the run instead of generating a misleading clip. A plausible detection can still be the wrong person or pose.
 Video seeks are serialized between preview and analysis so a pending preview does not supply the wrong frame.
 Interpolation cannot recover a full rotation between samples. Use a clear view and a higher analysis rate for
 fast flips or steps; review the result and adjust the advanced settings if necessary. Contact detection is

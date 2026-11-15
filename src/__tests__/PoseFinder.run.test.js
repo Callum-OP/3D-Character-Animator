@@ -136,7 +136,7 @@ describe('runPoseFinder with a fake video and a fake engine', () => {
   const START_BOX = { x1: 540, y1: 140, x2: 740, y2: 580 }
 
   // opts: moveX (m per frame), kp2dSpace 'image' | 'crop', garbage(i) -> bool, still (constant pose)
-  function rig({ moveX = 0, kp2dSpace = 'image', garbage = () => false, still = false } = {}) {
+  function rig({ moveX = 0, kp2dSpace = 'image', garbage = () => false, lost = () => false, still = false } = {}) {
     const calls = []
     let i = 0
     const engine = {
@@ -146,7 +146,7 @@ describe('runPoseFinder with a fake video and a fake engine', () => {
         if (garbage(k)) {
           return { ok: true, out: { joint_rotations: new Float32Array(1143).fill(NaN), joint_coords: new Float32Array(381), keypoints_3d: new Float32Array(210), cam_t: [0, 0, 0], keypoints_2d: new Float32Array(140), ms: 1 } }
         }
-        const fr = makeFrame(0, fk(still ? {} : synth(k).deltas ? poseFor(k) : {}), { depth: 6, x: k * moveX })
+        const fr = makeFrame(0, fk(still ? {} : synth(k).deltas ? poseFor(k) : {}), { depth: 6, x: k * moveX + (lost(k) ? 15 : 0) })
         fr.camT[1] = 0.85
         const kp2 = projectKeypoints(fr.kp3, fr.camT, F, W, H)
         if (kp2dSpace === 'crop') { // simulate keypoints reported in the 512px crop instead of image pixels
@@ -216,6 +216,33 @@ describe('runPoseFinder with a fake video and a fake engine', () => {
     await expect(runPoseFinder({ source, engine, box: START_BOX, sampleFps: 5 })).rejects.toBeInstanceOf(BadOutputError)
   })
 
+  it('rejects a plausible first pose outside the selected tracking area', async () => {
+    const { engine, source, calls } = rig({ lost: (k) => k === 0 })
+    await expect(runPoseFinder({ source, engine, box: START_BOX, sampleFps: 5 })).rejects.toThrow(/first frame.*box/i)
+    expect(calls).toHaveLength(1)
+  })
+
+  it('holds a previous pose when tracking rejects otherwise valid model output', async () => {
+    const { engine, source } = rig({ lost: (k) => k === 4 })
+    const shown = []
+    const r = await runPoseFinder({
+      source, engine, box: START_BOX, sampleFps: 5, outFps: 5, smoothing: 'off', footLock: false,
+      clean: { levelCamera: false, posture: 'off', limitJoints: false, lowerArms: 'off' },
+      onFrame: (frame) => shown.push(frame),
+    })
+    expect(shown[4].valid).toBe(false)
+    expect(shown[4].reason).toMatch(/tracking box/)
+    expect(r.solved.info.warnings.join(' ')).toMatch(/1 frame/)
+    const arm = r.solved.rot[JOINT_INDEX.LeftArm]
+    expect(new THREE.Quaternion().fromArray(arm, 4 * 4).angleTo(new THREE.Quaternion().fromArray(arm, 3 * 4))).toBeLessThan(0.001)
+    expect(shown[5].valid).toBe(true)
+  })
+
+  it('stops rather than producing a clip when tracking cannot recover', async () => {
+    const { engine, source } = rig({ lost: (k) => k >= 2 })
+    await expect(runPoseFinder({ source, engine, box: START_BOX, sampleFps: 5 })).rejects.toThrow(/Lost the person.*tracking box/)
+  })
+
   it('holds the last good pose through a few bad frames, and gives up on a long run of them', async () => {
     const some = rig({ garbage: (k) => k === 4 || k === 5 })
     const r = await runPoseFinder({ source: some.source, engine: some.engine, box: START_BOX, sampleFps: 5 })
@@ -228,6 +255,13 @@ describe('runPoseFinder with a fake video and a fake engine', () => {
     const { engine, source } = rig({ still: true })
     const r = await runPoseFinder({ source, engine, box: START_BOX, sampleFps: 5 })
     expect(r.solved.info.warnings.join(' ')).toMatch(/barely changes/)
+  })
+
+  it('does not warn that an intentionally static image pose barely changes', async () => {
+    const { engine, source, calls } = rig({ still: true })
+    const r = await runPoseFinder({ source: { ...source, staticPose: true }, engine, box: START_BOX, sampleFps: 5 })
+    expect(calls).toHaveLength(1)
+    expect(r.solved.info.warnings.join(' ')).not.toMatch(/barely changes/)
   })
 
   it('cancels cleanly', async () => {

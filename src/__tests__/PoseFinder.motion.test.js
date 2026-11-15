@@ -8,6 +8,7 @@ import { buildSlotMapping, buildNameMatch } from '../three/bvh.js'
 import { fk, makeFrame, IDX, tiltFk } from './helpers/mhrSynth.js'
 import { limitJoint, toModelFrame, fromModelFrame } from '../three/poseFinder/limits.js'
 import { POSE_PRESETS } from '../three/poseFinder/presets.js'
+import { projectKeypoints } from '../three/poseFinder/cropMath.js'
 
 const E = (x, y, z) => new THREE.Euler(x, y, z)
 // the exact-reproduction tests switch the anatomical clean-ups off
@@ -160,6 +161,25 @@ describe('motion presets', () => {
     }
     const movement = (s) => s.root[85 * 3 + 2] - s.root[60 * 3 + 2]
     expect(Math.abs(movement(locked) - movement(free))).toBeLessThan(0.01)
+  })
+
+  it('releases a near-floor horizontal torso when estimated 3D hip clearance is too high', () => {
+    const fr = Array.from({ length: 100 }, (_, i) => {
+      const fall = Math.max(0, Math.min(1, (i - 35) / 8))
+      const f = makeFrame(i / 30, fk({ c_spine1: E(fall * 1.5, 0, 0), l_upleg: E(-0.4, 0, 0), r_upleg: E(-0.4, 0, 0), l_lowleg: E(0.8, 0, 0), r_lowleg: E(0.8, 0, 0) }), { depth: 4 + Math.max(0, i - 55) * 0.01 })
+      for (const id of [13, 14, 15, 16, 17, 18, 19, 20]) f.kp3[id * 3 + 2] += fall * 2.3
+      f.camT[1] = 0.35 * (f.camT[2] + f.kp3[15 * 3 + 2]) - f.kp3[15 * 3 + 1]
+      f.kp2 = projectKeypoints(f.kp3, f.camT, 600, 472, 1080)
+      return f
+    })
+    const opts = { ...POSE_PRESETS.adaptable.settings, smoothing: 'off', limitJoints: false, lowerArms: 'off' }
+    const locked = solveMotion(fr, opts)
+    const free = solveMotion(fr, { ...opts, footLock: false })
+    expect(locked.info.lockSegments).toBeGreaterThan(0)
+    expect(Math.abs((locked.root[85 * 3 + 2] - locked.root[60 * 3 + 2]) - (free.root[85 * 3 + 2] - free.root[60 * 3 + 2]))).toBeLessThan(0.01)
+    for (const name of ['Hips', 'LeftUpLeg', 'LeftLeg', 'LeftFoot']) {
+      expect(new THREE.Quaternion().fromArray(locked.rot[JOINT_INDEX[name]], 70 * 4).angleTo(new THREE.Quaternion().fromArray(free.rot[JOINT_INDEX[name]], 70 * 4)), name).toBeLessThan(0.001)
+    }
   })
 
   it('preserves a forward fall, bounce and roll onto the back in the BVH', () => {

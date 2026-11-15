@@ -80,6 +80,8 @@ contextBridge.exposeInMainWorld('animare', {
     // One-time ~1.4 GB model download. → { ok } | { ok:false, error }
     download: () => ipcRenderer.invoke('animare:pose-download'),
     cancelDownload: () => ipcRenderer.invoke('animare:pose-download-cancel'),
+    // Remove the downloaded model when it is not in use. → { ok } | { ok:false, error }
+    uninstall: () => ipcRenderer.invoke('animare:pose-uninstall'),
     onDownloadProgress: (cb) => {
       const handler = (_e, p) => cb(p)
       ipcRenderer.on('animare:pose-download-progress', handler)
