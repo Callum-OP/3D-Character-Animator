@@ -46,6 +46,10 @@ reference frame is included at the start for the app's retargeter. All presets u
 reference pose by default, while preserving the tracked motion relative to that pose. Adjust or disable
 **Lower shoulders and arms** in advanced settings if it changes the intended result.
 
+**Analyse frames at** controls model inference, while **Clip frame rate** controls the generated BVH's frame rate.
+Both offer a 12 fps option. Lower analysis rates require less inference work
+but can miss fast motion. Lower clip rates produce fewer output frames.
+
 The model estimates 3D motion from one video, so occluded limbs, floor height, camera movement, and fast rotations
 are approximate. The body-height reference uses tracked points rather than detecting a real floor or bed, and
 the estimated plane and template feet cannot guarantee that a retargeted character's body or feet touch a real

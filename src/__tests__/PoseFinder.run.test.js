@@ -177,6 +177,17 @@ describe('runPoseFinder with a fake video and a fake engine', () => {
     expect(r.diagnostics.length).toBeGreaterThan(0)
   })
 
+  it('samples and writes a clip at 12 fps', async () => {
+    const { engine, source, calls } = rig()
+    const r = await runPoseFinder({ source, engine, box: START_BOX, sampleFps: 12, outFps: 12 })
+    expect(calls.length).toBe(25)
+    expect(r.solved.fps).toBe(12)
+    expect(r.solved.count).toBe(25)
+    const hips = new BVHLoader().parse(r.bvh).clip.tracks.find((t) => t.name === 'Hips.position')
+    expect(hips.times.length).toBe(26)
+    expect(hips.times[1] - hips.times[0]).toBeCloseTo(1 / 12, 5)
+  })
+
   it('writes the selected ground and fixed-foot settings into the BVH', async () => {
     const { engine, source } = rig({ moveX: 0.02 })
     const r = await runPoseFinder({ source, engine, box: START_BOX, sampleFps: 5, outFps: 10, footLock: false, clean: { ground: 'natural', groundReference: 'body', lockFeet: true } })

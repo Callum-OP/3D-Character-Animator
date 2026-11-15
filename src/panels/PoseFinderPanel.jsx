@@ -407,13 +407,14 @@ export default function PoseFinderPanel({ onClose }) {
                   <select value={sampleFps} disabled={running} onChange={(e) => setSampleFps(+e.target.value)}>
                     <option value={5}>5 per second (fastest)</option>
                     <option value={10}>10 per second</option>
+                    <option value={12}>12 per second</option>
                     <option value={15}>15 per second</option>
                     <option value={30}>30 per second (slowest, most detail)</option>
                   </select>
                 </label>
                 <label className="pf-field">Clip frame rate
                   <select value={outFps} disabled={running} onChange={(e) => setOutFps(+e.target.value)}>
-                    <option value={24}>24</option><option value={30}>30</option><option value={60}>60</option>
+                    <option value={12}>12</option><option value={24}>24</option><option value={30}>30</option><option value={60}>60</option>
                   </select>
                 </label>
                 <label className="pf-field">Smoothing
