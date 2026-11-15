@@ -2,7 +2,7 @@
 // (src/three/bvh.js) against a real GLB + BVH in Node and prints posture
 // metrics, so retarget changes can be verified without clicking through the UI.
 //
-//   node scripts/retarget-check.mjs references/<model>.glb references/<clip>.bvh
+//   node scripts/retarget-check.mjs <model.glb> <clip.bvh>
 //
 // Textures are stripped from the GLB before parsing (no DOM in Node); geometry,
 // skins and the node hierarchy are untouched, which is all retargeting needs.

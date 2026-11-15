@@ -15,6 +15,7 @@ const fs = require('node:fs')
 const fsp = require('node:fs/promises')
 const { pathToFileURL } = require('node:url')
 const { registerBlenderIpc } = require('./blender.cjs')
+const { registerPoseEngineIpc } = require('./poseEngine.cjs')
 const { writeFileSafely } = require('./safeWrite.cjs')
 const { isOwnOrigin: matchesOwnOrigin } = require('./origin.cjs')
 
@@ -197,6 +198,7 @@ function registerFileIpc() {
 
   // Opening .blend files by running the user's own Blender (see blender.cjs).
   registerBlenderIpc({ ipcMain, dialog, app })
+  registerPoseEngineIpc({ ipcMain, app })
 }
 
 // --- Closing the window --------------------------------------------------------

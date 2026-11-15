@@ -159,7 +159,7 @@ import {
   clearFlattener,
   updateFlattenerGuides,
 } from './flattener.js'
-import { initIk, disposeIk, setIkConfig, clearIk, stepIkPins, writePins as writeIkPins } from './ikpins.js'
+import { initIk, disposeIk, setIkConfig, clearIk, stepIkPins, writePins as writeIkPins, applyFixedPinsForModel, fixedPinBonesForModel, hasFixedPinsForModel } from './ikpins.js'
 import {
   initAnimation,
   setAnimationModel,
@@ -188,6 +188,7 @@ import {
   restoreImportedClips,
   beginBVHImport,
   applyBVHRetarget,
+  setPinBaker,
 } from './animation.js'
 import {
   initMeshEdit,
@@ -700,6 +701,8 @@ export function initScene(container) {
     requestRender,
     getSceneScale: () => state.modelRadius,
   })
+  // Saved clips and exported BVH bake locked / pinned limbs in (see animation.js).
+  setPinBaker({ apply: applyFixedPinsForModel, bones: fixedPinBonesForModel, any: hasFixedPinsForModel })
 
   // --- Placeable point lights (add and move light sources around the scene) ---
   initLights({
@@ -1519,7 +1522,7 @@ export function playAllCharacters({ loop, speed, stopAtFirstClipEnd = false } = 
     if (c.playbackSource === 'edit') {
       durSec = selectEdit(c.animData, store.animDuration, opts)
     } else if (c.activeClipName) {
-      durSec = selectClip(c.activeClipName, opts, c.animData)
+      durSec = selectClip(c.activeClipName, { ...opts, inPlace: c.removeClipMovement }, c.animData)
     }
     if (durSec > 0) {
       play()
@@ -1611,7 +1614,7 @@ export function scrubAllTimeline(t) {
     if (!hasActiveAction()) {
       let durSec = 0
       if (c.playbackSource === 'edit') durSec = hasKeys(c.animData) ? selectEdit(c.animData, store.animDuration, opts) : 0
-      else if (c.activeClipName) durSec = selectClip(c.activeClipName, opts, c.animData)
+      else if (c.activeClipName) durSec = selectClip(c.activeClipName, { ...opts, inPlace: c.removeClipMovement }, c.animData)
       if (!(durSec > 0)) continue
     }
     pause()
@@ -1793,9 +1796,10 @@ export function pasteCopiedCharacter() {
     ),
   }))
   setActiveCharacter(id, model, { isNewLoad: true })
-  restoreImportedClips(id, characterClipboard.importedClips)
+  const restoredClips = restoreImportedClips(id, characterClipboard.importedClips)
 
   const fields = structuredClone(characterClipboard.fields)
+  fields.importedClipNames = restoredClips.map((clip) => clip.name)
   fields.meshOverrides = remapMeshOverrides(fields.meshOverrides, characterClipboard.model, model)
   useStore.setState({
     ...fields,
@@ -2231,14 +2235,14 @@ export async function addObjectFile(file, { animationKey, recordHistory = true }
 // This one shared function is what both the title bar and any future
 // "quick BVH import" entry point should call, so that bookkeeping can't be
 // forgotten again — see Titlebar.bvhimport.test.js.
-export async function importBVHAuto(file) {
+export async function importBVHAuto(file, options) {
   const guess = await beginBVHImport(file)
-  const { name, matched, total } = await applyBVHRetarget(guess.slots)
+  const { name, matched, total } = await applyBVHRetarget(guess.slots, options)
   const s = useStore.getState()
   s.addImportedClipName(name)
   s.setPlaybackSource('clip')
   s.setActiveClipName(name)
-  const duration = selectClip(name, { loop: s.loop, speed: s.speed }, s.animData)
+  const duration = selectClip(name, { loop: s.loop, speed: s.speed, inPlace: s.removeClipMovement }, s.animData)
   s.setDuration(duration)
   s.setCurrentTime(0)
   s.setPlayback('paused')
@@ -4105,10 +4109,14 @@ async function restoreCharacterRecord(c, { addNew, legacyAnimData = null, skippe
   // trimmed) — these live on the model's mixer entry, not in animData, so
   // they need their own restore step — then bring back which clip/tab was
   // selected so the panel looks exactly like it did when saved.
-  restoreImportedClips(id, c.importedClips)
+  const restoredClips = restoreImportedClips(id, c.importedClips)
+  // Legacy selection looked up baked clips first, before their names were deduplicated.
+  const activeImportedClip = !(model.originalClipNames || model.info.clipNames).includes(c.activeClipName)
+    ? restoredClips.find((clip) => clip.originalName === c.activeClipName)
+    : null
   useStore.setState({
-    importedClipNames: c.importedClipNames || (c.importedClips || []).map((j) => j.name),
-    activeClipName: c.activeClipName ?? null,
+    importedClipNames: restoredClips.map((clip) => clip.name),
+    activeClipName: activeImportedClip?.name ?? c.activeClipName ?? null,
     playbackSource: c.playbackSource || 'edit',
     dangleEnabled: c.dangleEnabled ?? true,
     dangleChains: c.dangleChains || [],

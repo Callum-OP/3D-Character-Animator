@@ -83,6 +83,7 @@ const CHARACTER_FIELDS = [
   'playback',
   'playbackSource',
   'activeClipName',
+  'removeClipMovement',
   'importedClipNames',
   'duration',
   'currentTime',
@@ -139,6 +140,7 @@ function defaultCharacterFields(modelInfo) {
     playback: 'stopped',
     playbackSource: 'edit', // every character starts on its own editable default clip — keying works straight away
     activeClipName: null,
+    removeClipMovement: false,
     importedClipNames: [],
     duration: 0,
     currentTime: 0,
@@ -1439,6 +1441,8 @@ export const useStore = create((set) => ({
   // part and shape-key edits stay layered on top of whichever clip is chosen.
   carryKeysAcrossClips: false,
   setCarryKeysAcrossClips: (carryKeysAcrossClips) => set({ carryKeysAcrossClips }),
+  removeClipMovement: false,
+  setRemoveClipMovement: (removeClipMovement) => set({ removeClipMovement }),
   playbackSource: 'edit', // 'clip' (baked) | 'edit' (in-app keyframes)
   activeClipName: null, // selected clip (baked or imported)
   importedClipNames: [], // names of retargeted BVH mocap clips
