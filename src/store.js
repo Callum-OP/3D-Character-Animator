@@ -436,6 +436,7 @@ export const useStore = create((set) => ({
   performanceResolution: 0.5, // viewport scale used by lower resolution mode
   performanceEffects: false, // disable expensive outline and shadow passes
   showHelp: false, // help & shortcuts overlay
+  autoRiggerOpen: false, // Auto Rigger dialog (desktop only)
 
   setShowGrid: (showGrid) => set({ showGrid }),
   setShowGround: (showGround) => set({ showGround }),
@@ -473,6 +474,7 @@ export const useStore = create((set) => ({
   setPerformanceResolution: (performanceResolution) => set({ performanceResolution }),
   setPerformanceEffects: (performanceEffects) => set({ performanceEffects }),
   setShowHelp: (showHelp) => set({ showHelp }),
+  setAutoRiggerOpen: (autoRiggerOpen) => set({ autoRiggerOpen }),
   toggleHelp: () => set((s) => ({ showHelp: !s.showHelp })),
 
   // Import-time decimation only affects static meshes; skinned meshes are

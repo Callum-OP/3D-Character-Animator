@@ -1648,6 +1648,13 @@ export function getAllRootsForExport() {
   return props.concat(chars)
 }
 
+// Everything the Auto Rigger can take as its source: loaded characters and prop models (not flat images).
+export function getRigSources() {
+  const chars = [...o.characterRoots.entries()].map(([id, e]) => ({ id, name: e.name || 'Character', kind: 'character' }))
+  const props = o.objects.filter((e) => e.kind === 'model').map((e) => ({ id: e.id, name: e.name || 'Object', kind: 'object' }))
+  return chars.concat(props)
+}
+
 // Lightweight per-part listing for every loaded prop (Mesh mode's Parts panel
 // uses this to offer props' parts alongside the character's, since — unlike
 // the character — every prop's parts are pickable at once with no separate

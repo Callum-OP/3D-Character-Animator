@@ -72,4 +72,16 @@ contextBridge.exposeInMainWorld('animare', {
     // payload: { main, files: [{ path, data }] } → { ok, glb, warnings } | { ok:false, error, code }
     convert: (payload) => ipcRenderer.invoke('animare:blender-convert', payload),
   },
+
+  // Auto Rigger: runs the pipeline in the user's Blender.
+  // payload: { input: { name, data }, landmarks, options } → { ok, glb, report } | { ok:false, error, code }
+  autoRig: {
+    run: (payload) => ipcRenderer.invoke('animare:autorig-run', payload),
+    // live progress while a rig runs: cb({ frac 0-1, label }); returns an unsubscribe function
+    onProgress: (cb) => {
+      const handler = (_e, p) => cb(p)
+      ipcRenderer.on('animare:autorig-progress', handler)
+      return () => ipcRenderer.removeListener('animare:autorig-progress', handler)
+    },
+  },
 })

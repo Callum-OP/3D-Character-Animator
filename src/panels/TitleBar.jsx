@@ -1,4 +1,5 @@
 import { PRIVACY_POLICY_URL } from '../links.js'
+import { autoRigAvailable } from '../three/autoRig.js'
 import SaveErrorDialog from './SaveErrorDialog.jsx'
 import { confirmDiscardUnsaved, markProjectSaveFailed } from '../three/projectDirty.js'
 import { useEffect, useRef, useState } from 'react'
@@ -76,6 +77,7 @@ export default function TitleBar({ onOpenSettings }) {
   const setCurrent = useStore((s) => s.setCurrentProject)
   const setLastProjectSave = useStore((s) => s.setLastProjectSave)
   const toggleHelp = useStore((s) => s.toggleHelp)
+  const setAutoRiggerOpen = useStore((s) => s.setAutoRiggerOpen)
   const hasCharacter = useStore((s) => !!s.modelInfo)
   const sceneObjects = useStore((s) => s.sceneObjects)
   const hasObjectAnimation = useStore(
@@ -644,6 +646,21 @@ export default function TitleBar({ onOpenSettings }) {
               <button role="menuitem" onClick={onStop} disabled={!hasCharacter}>Stop</button>
               <div className="titlebar-dropdown-sep" />
               <button role="menuitem" onClick={onStopAll} disabled={!hasCharacter && !hasObjectAnimation}>Stop All</button>
+            </div>
+          )}
+        </div>
+
+        <div className="titlebar-menu-item">
+          <button
+            className={'titlebar-menu-btn' + (openMenu === 'autorig' ? ' active' : '')}
+            onClick={() => toggleMenu('autorig')}
+          >
+            Auto Rigger
+          </button>
+          {openMenu === 'autorig' && (
+            <div className="titlebar-dropdown" role="menu">
+              <button role="menuitem" onClick={() => { setOpenMenu(null); setAutoRiggerOpen(true) }}>Rig a character…</button>
+              {!autoRigAvailable() && <div className="titlebar-dropdown-label">Desktop app + Blender needed</div>}
             </div>
           )}
         </div>

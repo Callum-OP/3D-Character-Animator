@@ -261,6 +261,7 @@ import {
   getObjectAnimationKeyForRoot,
   getObjectRoots,
   getAllRootsForExport,
+  getRigSources,
   stepObjectAnimation,
   getObjectAnimationDuration,
   stopObjectAnimation,
@@ -5493,4 +5494,24 @@ export function setCameraToTarget(kind, id) {
       : getObjectRootById(id)
   if (!target) return
   commitFramingChange(() => frameCameraToObject(target))
+}
+
+// Auto Rigger source: one scene character/object as plain geometry in its REST pose (the shape a rig
+// should be built on), baked to world space, as a PLY plus a ready-to-show preview group. The live
+// scene is not touched: everything works on an export copy.
+export async function exportRigSource(id) {
+  const root = getObjectRootById(id)
+  if (!root) throw new Error('That object is no longer in the scene.')
+  const { cloneForExport } = await import('./exportPose.js')
+  root.updateWorldMatrix(true, false)
+  const model = [...state.characters.values()].find((c) => c.root === root)
+  const dup = cloneForExport(root, { pose: 'rest', restQuats: model?.__poseRestQuats || null })
+  root.matrixWorld.decompose(dup.position, dup.quaternion, dup.scale)
+  const wrapper = new THREE.Group()
+  wrapper.add(dup)
+  const { group, meshes } = bakeStaticMeshes(wrapper, { merge: false })
+  if (!meshes) throw new Error('That object has no visible meshes to rig.')
+  const blob = await writeStaticModel('ply', group)
+  const box = new THREE.Box3().setFromObject(group)
+  return { name: 'scene-object.ply', data: new Uint8Array(await blob.arrayBuffer()), group, box: { min: box.min.toArray(), max: box.max.toArray() } }
 }

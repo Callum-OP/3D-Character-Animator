@@ -13,6 +13,7 @@ import ProjectPanel from './panels/ProjectPanel.jsx'
 import ExportPanel from './panels/ExportPanel.jsx'
 import ViewPanel from './panels/ViewPanel.jsx'
 import HelpOverlay from './panels/HelpOverlay.jsx'
+import AutoRiggerDialog from './panels/AutoRiggerDialog.jsx'
 import CloseGuard from './panels/CloseGuard.jsx'
 import Accordion from './panels/Accordion.jsx'
 import TabGroup from './panels/TabGroup.jsx'
@@ -205,6 +206,7 @@ function AppInner() {
         </div>
       )}
       <HelpOverlay />
+      <AutoRiggerDialog />
       </div>
     </div>
   )
