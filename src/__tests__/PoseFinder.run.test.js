@@ -5,8 +5,66 @@ import { runPoseFinder, BadOutputError } from '../three/poseFinder/run.js'
 import { makeCrop, boxFromKeypoints, defaultCamera, projectKeypoints, pickNextBox } from '../three/poseFinder/cropMath.js'
 import { fk, makeFrame } from './helpers/mhrSynth.js'
 import { JOINT_INDEX } from '../three/poseFinder/humanoid.js'
+import { seekTo } from '../three/poseFinder/videoFrames.js'
 
 const E = (x, y, z) => new THREE.Euler(x, y, z)
+
+describe('video seeking', () => {
+  function video() {
+    const v = new EventTarget()
+    v.duration = 10
+    v.readyState = 2
+    v.seeking = false
+    let time = 0
+    Object.defineProperty(v, 'currentTime', {
+      get: () => time,
+      set: (value) => { time = value; v.seeking = true },
+    })
+    v.finishSeek = () => { v.seeking = false; v.dispatchEvent(new Event('seeked')) }
+    return v
+  }
+
+  it('serializes preview and analysis seeks and waits for each decoded target', async () => {
+    const v = video()
+    const first = seekTo(v, 1)
+    const second = seekTo(v, 2)
+    expect(v.currentTime).toBe(1)
+    v.finishSeek()
+    await first
+    await Promise.resolve()
+    expect(v.currentTime).toBe(2)
+    let finished = false
+    second.then(() => { finished = true })
+    v.dispatchEvent(new Event('seeked'))
+    await Promise.resolve()
+    expect(finished).toBe(false)
+    v.finishSeek()
+    await second
+    expect(finished).toBe(true)
+  })
+
+  it('waits for initial video data at the current time without starting a no-op seek', async () => {
+    const v = video()
+    v.readyState = 1
+    const result = seekTo(v, 0)
+    expect(v.seeking).toBe(false)
+    v.readyState = 2
+    v.dispatchEvent(new Event('loadeddata'))
+    await expect(result).resolves.toBeUndefined()
+  })
+
+  it('reports a failed seek and allows the next seek to proceed', async () => {
+    const v = video()
+    const first = seekTo(v, 1)
+    const second = seekTo(v, 2)
+    v.dispatchEvent(new Event('error'))
+    await expect(first).rejects.toThrow(/Seeking the video failed/)
+    await Promise.resolve()
+    expect(v.currentTime).toBe(2)
+    v.finishSeek()
+    await expect(second).resolves.toBeUndefined()
+  })
+})
 
 describe('cropMath', () => {
   it('maps the box centre to the crop centre with a square 0.75-aspect-derived window', () => {

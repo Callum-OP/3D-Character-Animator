@@ -29,16 +29,42 @@ export async function openVideo(file) {
   }
 }
 
+const pendingSeeks = new WeakMap()
+
 export function seekTo(video, t) {
-  return new Promise((resolve, reject) => {
+  const seek = () => new Promise((resolve, reject) => {
     const target = Math.max(0, Math.min(t, (video.duration || t) - 0.001))
-    if (Math.abs(video.currentTime - target) < 1e-4 && video.readyState >= 2) return resolve()
-    const done = () => { video.removeEventListener('seeked', done); video.removeEventListener('error', fail); resolve() }
-    const fail = () => { video.removeEventListener('seeked', done); video.removeEventListener('error', fail); reject(new Error('Seeking the video failed.')) }
+    const atTarget = () => !video.seeking && Math.abs(video.currentTime - target) < 1e-4 && video.readyState >= 2
+    if (atTarget()) return resolve()
+    const cleanup = () => {
+      video.removeEventListener('seeked', done)
+      video.removeEventListener('loadeddata', done)
+      video.removeEventListener('canplay', done)
+      video.removeEventListener('error', fail)
+      video.removeEventListener('emptied', fail)
+    }
+    const done = () => { if (atTarget()) { cleanup(); resolve() } }
+    const fail = () => { cleanup(); reject(new Error('Seeking the video failed.')) }
     video.addEventListener('seeked', done)
+    video.addEventListener('loadeddata', done)
+    video.addEventListener('canplay', done)
     video.addEventListener('error', fail)
-    video.currentTime = target
+    video.addEventListener('emptied', fail)
+    try {
+      if (Math.abs(video.currentTime - target) >= 1e-4) video.currentTime = target
+    } catch (err) {
+      cleanup()
+      reject(err)
+    }
   })
+  const previous = pendingSeeks.get(video)
+  const result = previous ? previous.then(seek, seek) : seek()
+  pendingSeeks.set(video, result)
+  result.then(
+    () => { if (pendingSeeks.get(video) === result) pendingSeeks.delete(video) },
+    () => { if (pendingSeeks.get(video) === result) pendingSeeks.delete(video) },
+  )
+  return result
 }
 
 // Draw the current frame through crop.affine into a CROP_SIZE x CROP_SIZE RGBA buffer (bilinear, zero border).

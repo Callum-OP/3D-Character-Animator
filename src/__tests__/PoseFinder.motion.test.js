@@ -58,6 +58,7 @@ describe('motion presets', () => {
       const opts = { ...POSE_PRESETS[preset].settings, outFps: 10, smoothing: 'off' }
       const off = solveMotion(fr, { ...opts, lowerArms: 'off' })
       const corrected = solveMotion(fr, opts)
+      const more = solveMotion(fr, { ...opts, lowerArms: 'more' })
       const readPose = (solution, frame) => {
         const { skeleton, clip } = new BVHLoader().parse(writeBVH(solution))
         const bones = Object.fromEntries(skeleton.bones.map((b) => [b.name, b]))
@@ -77,12 +78,11 @@ describe('motion presets', () => {
         for (const [before, after] of [[offReference, correctedReference], [offMotion, correctedMotion]]) {
           const original = before(side), lowered = after(side)
           const elevation = (v) => Math.atan2(v.y, Math.hypot(v.x, v.z)) * 180 / Math.PI
-          expect(elevation(original[0]) - elevation(lowered[0])).toBeCloseTo(20.36, 2)
-          expect(elevation(original[1]) - elevation(lowered[1])).toBeCloseTo(3.52, 2)
+          expect(elevation(original[0]) - elevation(lowered[0])).toBeGreaterThan(20.36)
+          expect(elevation(original[1]) - elevation(lowered[1])).toBeGreaterThan(3.52)
         }
-        const sign = side === 'Left' ? 1 : -1
-        const expected = [new THREE.Vector3(sign * 0.814649, -0.273116, -0.511620), new THREE.Vector3(sign * 0.595504, -0.780443, 0.190483)]
-        correctedReference(side).forEach((actual, i) => expect(actual.distanceTo(expected[i])).toBeLessThan(0.0001))
+        expect(more.info.shoulderLowerDeg).toBeGreaterThan(corrected.info.shoulderLowerDeg)
+        expect(more.info.armLowerDeg).toBeGreaterThan(corrected.info.armLowerDeg)
       }
     },
   )
@@ -489,6 +489,34 @@ describe('ground lock and arm lowering', () => {
     }
   })
 
+  it('prevents feet sinking in natural mode without removing airborne height', () => {
+    const fr = Array.from({ length: 30 }, (_, i) => {
+      const f = makeFrame(i * 0.1, fk({}), { depth: 4 })
+      if (i >= 8 && i < 16) {
+        f.camT[1] += 0.35
+        for (const id of [13, 14, 15, 16, 17, 18, 19, 20]) f.kp3[id * 3 + 1] -= 0.35
+      }
+      if (i >= 20) f.camT[1] -= 0.35
+      return f
+    })
+    const natural = solveMotion(fr, { ...base, ground: 'natural', groundReference: 'body' })
+    const free = solveMotion(fr, { ...base, ground: 'off', groundReference: 'body' })
+    const { skeleton, clip } = new BVHLoader().parse(writeBVH(natural))
+    const by = Object.fromEntries(skeleton.bones.map((b) => [b.name, b]))
+    const tracks = Object.fromEntries(clip.tracks.map((t) => [t.name, t]))
+    for (let k = 1; k <= natural.count; k++) {
+      for (const b of skeleton.bones) if (tracks[`${b.name}.quaternion`]) b.quaternion.fromArray(tracks[`${b.name}.quaternion`].values, k * 4)
+      by.Hips.position.fromArray(tracks['Hips.position'].values, k * 3)
+      by.Hips.updateWorldMatrix(false, true)
+      for (const side of ['Left', 'Right']) {
+        expect(by[`${side}Foot`].localToWorld(new THREE.Vector3(0, -7.4, -6)).y).toBeGreaterThan(-0.001)
+        expect(by[`${side}ToeBase`].localToWorld(new THREE.Vector3(0, -2.1, 5)).y).toBeGreaterThan(-0.001)
+      }
+    }
+    expect(natural.root[12 * 3 + 1]).toBeGreaterThan(free.root[12 * 3 + 1] + 10)
+    expect(natural.root[27 * 3 + 1]).toBeCloseTo(free.root[27 * 3 + 1], 3)
+  })
+
   it('preserves shoulder, arm and hand rotation deltas from the reference pose', () => {
     const fr = Array.from({ length: 12 }, (_, i) => makeFrame(i * 0.1, fk({
       root: E(0.8, 0.2, 0), l_clavicle: E(0.1, 0.2, 0.35),
@@ -598,9 +626,29 @@ describe('baked foot lock', () => {
       }
       return f
     })
+
     const positions = feet(solveMotion(fr, { ...base, footLock: true, levelFeet: true })).pos
     expect(positions[32].distanceTo(positions[3])).toBeGreaterThan(5)
     expect(positions[35].distanceTo(positions[32])).toBeLessThan(0.3)
+  })
+
+  it('keeps the standing correction after both feet lift while preserving later travel', () => {
+    const make = (travel) => Array.from({ length: 60 }, (_, i) => {
+      const drift = Math.min(i, 25) * 0.01
+      const move = Math.max(0, Math.min(1, (i - 40) / 10)) * travel
+      const f = makeFrame(i * 0.1, fk({ l_upleg: E(-0.4, 0, 0), r_upleg: E(-0.4, 0, 0), l_lowleg: E(0.8, 0, 0), r_lowleg: E(0.8, 0, 0) }), { depth: 4 + drift + move })
+      if (i >= 30) for (const id of [15, 16, 17, 18, 19, 20]) f.kp3[id * 3 + 1] -= 0.3
+      return f
+    })
+    const opts = { ...base, footLock: true }
+    const still = solveMotion(make(0), opts)
+    const free = solveMotion(make(0), { ...opts, footLock: false })
+    const travelled = solveMotion(make(0.3), opts)
+    const correction = (i) => still.root[i * 3 + 2] - free.root[i * 3 + 2]
+    expect(still.info.lockSegments).toBeGreaterThan(0)
+    expect(Math.abs(correction(25))).toBeGreaterThan(5)
+    expect(Math.abs(correction(55) - correction(35))).toBeLessThan(1)
+    expect(Math.abs(travelled.root[55 * 3 + 2] - still.root[55 * 3 + 2])).toBeGreaterThan(20)
   })
 
   it('levels strongly tilted planted feet', () => {

@@ -19,7 +19,9 @@ At their default settings, Adaptable and Flips analyse the same number of frames
 10 frames per second versus 30 for Adaptable, so inference for a clip is approximately three times as much work
 (model loading and other fixed overhead are unchanged). Processing time also depends on the computer and video.
 
-The ground toggle grounds the lowest foot and enables planted-foot cleanup. During detected contacts, the solver
+The ground toggle grounds the lowest foot and enables planted-foot cleanup. With the toggle off, the natural
+ground setting preserves airborne height while keeping the output skeleton's heels and toes above the estimated
+ground plane. During detected contacts, the solver
 levels and holds each foot in place on the output skeleton, releasing it for steps; this reduces sliding even when
 the tracked leg rotations are noisy. When adding a result to a character, retargeting preserves the character's
 own foot and toe rest angles rather than forcing them to match the output skeleton. Downloaded BVH files use their
@@ -35,12 +37,17 @@ reference pose by default, while preserving the tracked motion relative to that 
 
 The model estimates 3D motion from one video, so occluded limbs, floor height, camera movement, and fast rotations
 are approximate. The body-height reference uses tracked points rather than detecting a real floor or bed, and
-interpolation cannot recover a full rotation between samples. Use a clear view and a higher analysis rate for
+the estimated plane and template feet cannot guarantee that a retargeted character's body or feet touch a real
+surface. Raised surfaces such as walls are not detected. Draw the box tightly around the intended person, especially
+when multiple people are visible; a person occupying very few source pixels may not be tracked accurately.
+Video seeks are serialized between preview and analysis so a pending preview does not supply the wrong frame.
+Interpolation cannot recover a full rotation between samples. Use a clear view and a higher analysis rate for
 fast flips or steps; review the result and adjust the advanced settings if necessary. Contact detection is
 approximate, and feet may move when a target is beyond the leg's reach or the model cannot see them clearly.
 The Flips preset uses projected foot motion to detect contacts and releases both feet when they and the hips rise.
-It retains accumulated horizontal tracking corrections when a foot lifts, rather than snapping back to the
-uncorrected path. Camera motion, occlusion, or movement towards the camera can still be mistaken for contact or release.
+Standing, Flips and Adaptable retain accumulated horizontal tracking corrections when a foot lifts, rather than
+snapping back to the uncorrected path. Camera motion, occlusion, or movement towards the camera can still be
+mistaken for contact or release.
 Adaptable uses the same contact detection, with an additional torso check; its shorter filtering can also retain more
 tracking noise. Neither preset detects actual floor contact.
 Turn off Foot lock in advanced settings if it alters the motion.

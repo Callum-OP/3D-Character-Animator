@@ -327,12 +327,11 @@ function screenFootContacts(frames, grid, rot, fps, mixed, Rc, legLength) {
   })
 }
 
-// Pin planted feet so depth noise cannot make the body glide: while a foot is low and slow, its XZ is held at
-// the segment's median and its sole is held on the ground. The correction is spread over the root path.
+// Pin planted feet so depth noise cannot make the body glide, retaining horizontal corrections after release.
 // Also returns, per foot, how "planted" it is on each frame (0..1) so the foot can be levelled too.
 function footLock(rootXYZ, soles, ground, fps, screenContacts = null) {
   const n = rootXYZ.length / 3
-  const corr = new Float32Array(n * 3)
+  const corr = new Float32Array(n)
   const weightSum = new Float32Array(n)
   const planted = [new Float32Array(n), new Float32Array(n)]
   const tracked = []
@@ -344,7 +343,7 @@ function footLock(rootXYZ, soles, ground, fps, screenContacts = null) {
     const sx = movingAverage(Float32Array.from({ length: n }, (_, i) => sole[i * 3]), 3)
     const sy = movingAverage(Float32Array.from({ length: n }, (_, i) => sole[i * 3 + 1]), 3)
     const sz = movingAverage(Float32Array.from({ length: n }, (_, i) => sole[i * 3 + 2]), 3)
-    if (screenContacts) tracked.push([sx, sy, sz])
+    tracked.push([sx, sy, sz])
     const stance = new Uint8Array(n)
     for (let i = 0; i < n; i++) {
       const a = Math.max(0, i - 1), b = Math.min(n - 1, i + 1)
@@ -361,17 +360,12 @@ function footLock(rootXYZ, soles, ground, fps, screenContacts = null) {
       if (j - i + 1 >= minLen && hasAnchor) {
         segments++
         const anchorEnd = screenContacts ? Math.min(j + 1, i + Math.max(2, Math.round(0.15 * fps))) : j + 1
-        const xs = Array.from(sx.slice(i, anchorEnd)).sort((p, q) => p - q)
-        const zs = Array.from(sz.slice(i, anchorEnd)).sort((p, q) => p - q)
-        const ax = xs[xs.length >> 1], az = zs[zs.length >> 1]
         const ay = screenContacts ? median(sy.slice(i, anchorEnd)) : ground
         for (let k = Math.max(0, i - ramp); k <= Math.min(n - 1, j + ramp); k++) {
           let w = k < i ? 0.5 - 0.5 * Math.cos(Math.PI * (1 - (i - k) / (ramp + 1))) : k > j ? 0.5 - 0.5 * Math.cos(Math.PI * (1 - (k - j) / (ramp + 1))) : 1
           if (screenContacts) w *= screenContacts[side].blend[k]
           if (!w) continue
-          corr[k * 3] += w * (sx[k] - ax)
-          corr[k * 3 + 1] += w * (sy[k] - ay)
-          corr[k * 3 + 2] += w * (sz[k] - az)
+          corr[k] += w * (sy[k] - ay)
           weightSum[k] += w
           planted[side][k] = Math.max(planted[side][k], w)
         }
@@ -380,26 +374,17 @@ function footLock(rootXYZ, soles, ground, fps, screenContacts = null) {
     }
   })
   const out = Float32Array.from(rootXYZ)
-  if (screenContacts) {
-    // Keep accumulated tracking corrections after release; only new planted-foot motion changes the offset.
-    const offset = [0, 0, 0]
-    for (let k = 1; k < n; k++) {
-      const weights = planted.map((p) => Math.min(p[k - 1], p[k]))
-      const total = Math.max(1, weights[0] + weights[1])
-      for (const d of [0, 2]) {
-        for (let side = 0; side < 2; side++) offset[d] += weights[side] * (tracked[side][d][k] - tracked[side][d][k - 1]) / total
-        out[k * 3 + d] -= offset[d]
-      }
+  // Keep the accumulated horizontal correction when a foot lifts or support switches.
+  const offset = [0, 0, 0]
+  for (let k = 1; k < n; k++) {
+    const weights = planted.map((p) => Math.min(p[k - 1], p[k]))
+    const total = Math.max(1, weights[0] + weights[1])
+    for (const d of [0, 2]) {
+      for (let side = 0; side < 2; side++) offset[d] += weights[side] * (tracked[side][d][k] - tracked[side][d][k - 1]) / total
+      out[k * 3 + d] -= offset[d]
     }
-    for (let k = 0; k < n; k++) out[k * 3 + 1] -= corr[k * 3 + 1] / Math.max(1, weightSum[k])
-    return { path: out, segments, planted }
   }
-  for (let k = 0; k < n; k++) {
-    const d = Math.max(1, weightSum[k])
-    out[k * 3] -= corr[k * 3] / d
-    out[k * 3 + 1] -= corr[k * 3 + 1] / d
-    out[k * 3 + 2] -= corr[k * 3 + 2] / d
-  }
+  for (let k = 0; k < n; k++) out[k * 3 + 1] -= corr[k] / Math.max(1, weightSum[k])
   return { path: out, segments, planted }
 }
 
@@ -483,9 +468,9 @@ function levelFeet(rot, count, planted) {
 
 
 // ---- arm baseline and ground -------------------------------------------------------------------------------
-const ARM_BASELINE_STRENGTH = { off: 0, slight: 1, more: 1.5 }
+const ARM_BASELINE_STRENGTH = { off: 0, slight: 1.1, more: 1.5 }
 export const ARM_LOWER_LEVELS = Object.keys(ARM_BASELINE_STRENGTH)
-// ShoulderTest's preferred left-side directions in the chest frame; mirror X for the right side.
+// ShoulderTest's left-side directions in the chest frame; mirror X for the right side.
 const ARM_REFERENCE = { shoulder: [0.814649, -0.273116, -0.511620], arm: [0.595504, -0.780443, 0.190483] }
 
 // Change the BVH reference pose and conjugate the motion by the same reference orientations. This preserves
@@ -823,6 +808,10 @@ export function solveMotion(frames, opts = {}) {
   if (o.ground === 'strict') {
     const heights = groundLockHeights(rot, grid.count)
     for (let i = 0; i < grid.count; i++) root[i * 3 + 1] = heights[i]
+  } else if (o.ground === 'natural') {
+    // Preserve airborne height, but keep the template's heels and toes above the estimated floor.
+    const heights = groundLockHeights(rot, grid.count)
+    for (let i = 0; i < grid.count; i++) root[i * 3 + 1] = Math.max(root[i * 3 + 1], heights[i])
   }
   if (o.footLock && o.contactMode === 'screen' && !o.lockFeet) {
     const x = root[0], z = root[2]
