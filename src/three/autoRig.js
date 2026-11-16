@@ -16,6 +16,7 @@ export function summariseRigReport(report) {
   const w = report.weights
   const lines = []
   lines.push(`Rigged: ${report.bones} bones, ${report.components?.length ?? '?'} parts (${report.rigid_bindings?.length ?? 0} bound rigidly).`)
+  if (report.fingers?.bones_added) lines.push(`Fingers: ${report.fingers.bones_added} finger bones added (five per hand, Mixamo names).`)
   lines.push(`Weights: ${w.unweighted_vertices} unweighted vertices, at most ${w.max_influences} influences per vertex.`)
   if (report.symmetry) lines.push(`Symmetry: ${report.symmetry.applied ? 'applied' : 'not applied'} (${Math.round(report.symmetry.coverage * 100)}% of the mesh matched its mirror).`)
   if (report.pose_check) {
@@ -80,4 +81,26 @@ export function countVertices(root) {
     if (p) n += p.count
   })
   return n
+}
+
+// World-space positions of every visible mesh vertex (skinned meshes as they are posed right now), flat
+// [x,y,z,...]. What the landmark detector reads. Large models are fine: one pass, no allocation per vertex.
+export function collectWorldPositions(root, THREE) {
+  const out = []
+  const v = new THREE.Vector3()
+  root.updateMatrixWorld(true)
+  root.traverse((o) => {
+    if (!o.isMesh || o.visible === false) return
+    const geo = o.geometry
+    const attr = geo?.getAttribute?.('position')
+    if (!attr) return
+    const skinned = o.isSkinnedMesh && o.skeleton && typeof o.getVertexPosition === 'function'
+    for (let i = 0; i < attr.count; i++) {
+      if (skinned) o.getVertexPosition(i, v)
+      else v.fromBufferAttribute(attr, i)
+      v.applyMatrix4(o.matrixWorld)
+      out.push(v.x, v.y, v.z)
+    }
+  })
+  return new Float32Array(out)
 }

@@ -55,7 +55,7 @@ def side_bones(S):
     s = S  # 'Left' / 'Right'
     k = 'l' if S == 'Left' else 'r'
     return [
-        (s + 'Shoulder', 'Spine2', 'upper_chest', k + '_shoulder'),
+        (s + 'Shoulder', 'Spine2', k + '_clavicle', k + '_shoulder'),
         (s + 'Arm', s + 'Shoulder', k + '_shoulder', k + '_elbow'),
         (s + 'ForeArm', s + 'Arm', k + '_elbow', k + '_wrist'),
         (s + 'Hand', s + 'ForeArm', k + '_wrist', k + '_fingertip'),
@@ -81,6 +81,10 @@ DEFAULTS = {
     'rigid_thin_fraction': 0.03,   # PCA thickness below this fraction of height -> rigid
     'rigid_small_fraction': 0.07,  # whole component smaller than this (diagonal) -> rigid
     'head_lock': True,
+    'fingers': True,            # five fingers per hand, Mixamo names and axes
+    'limb_cap': True,           # limb bones cannot claim the body next to them
+    'cap_lo': 1.7,
+    'cap_hi': 2.7,
     'side_coherence': True,     # stop the voxel proxy leaking weights between left and right limbs
     'run_self_check': True,
     'force_envelope': False,    # skip the heat solver (tests / emergency)
@@ -143,6 +147,9 @@ def import_mesh(path):
     for o in new:
         if o.type == 'ARMATURE':
             shapes.update(pb.custom_shape for pb in o.pose.bones if pb.custom_shape)
+    for o in list(new):
+        if o.type == 'MESH' and any(c.name.lower().startswith(('gltf_not_exported', 'bone_shape', 'wgt')) for c in o.users_collection):
+            shapes.add(o)
     for o in list(new):
         if o in shapes:
             bpy.data.objects.remove(o, do_unlink=True)
@@ -294,7 +301,7 @@ def blender_bbox_as_gltf(co):
     return {'min': [mn[0], mn[2], -mx[1]], 'max': [mx[0], mx[2], -mn[1]]}
 
 
-def map_landmarks(raw, three_box, mesh_box):
+def map_landmarks(raw, three_box, mesh_box, detail=''):
     """The preview (three.js) and Blender can disagree about units, origin and scale (FBX centimetres,
     parent transforms...). Landmarks are re-expressed relative to the model's own bounding box: ONE uniform
     scale from the heights, feet on the floor, and centred in X/Z. Uniform means a slightly different box
@@ -313,8 +320,8 @@ def map_landmarks(raw, three_box, mesh_box):
         # thin axes are noisy: only compare axes that are a meaningful fraction of the height
         if et[i] > 0.15 * et[1] and not (0.7 <= (eb[i] / et[i]) / s <= 1.43):
             fail('The model looks different in Blender than in the preview (%s differs: preview %.3g, Blender %.3g, '
-                 'relative to height). It is probably rotated or scaled differently in the file. Try exporting it as .glb first.'
-                 % (name, et[i] / et[1], eb[i] / eb[1]), 'frame')
+                 'relative to height). It is probably rotated or scaled differently in the file. Try exporting it as .glb first.%s'
+                 % (name, et[i] / et[1], eb[i] / eb[1], detail), 'frame')
     tc = [(tmin[i] + tmax[i]) / 2 for i in range(3)]
     bc = [(bmin[i] + bmax[i]) / 2 for i in range(3)]
     out = {}
@@ -359,6 +366,10 @@ def fit_landmarks(raw):
     missing = [k for k in REQUIRED if k not in L]
     if missing:
         fail('Missing landmarks: ' + ', '.join(missing), 'landmarks')
+    # The clavicle starts a third of the way from the neck base to the shoulder joint, as in Mixamo rigs.
+    # (Starting it at the chest centre makes the bone run through the chest and claim it.)
+    for k in ('l', 'r'):
+        L[k + '_clavicle'] = L['neck'] + (L[k + '_shoulder'] - L['neck']) * 0.33
     return L
 
 
@@ -393,6 +404,138 @@ def build_armature(L):
                 made[name].use_connect = True
     bpy.ops.object.mode_set(mode='OBJECT')
     return arm
+
+
+# ----------------------------------------------------------------------------------------------
+# fingers (Mixamo layout, measured from a real Mixamo character)
+# ----------------------------------------------------------------------------------------------
+FINGERS = ('Thumb', 'Index', 'Middle', 'Ring', 'Pinky')
+# joint 1..4 of each finger in HAND coordinates: (u along the hand, s sideways [thumb negative], w up), all
+# divided by L = wrist -> middle fingertip distance. Joint 4 is the fingertip.
+FINGER_TEMPLATE = {
+    'Thumb': [(0.23, -0.12, -0.03), (0.42, -0.21, -0.05), (0.53, -0.33, -0.06), (0.60, -0.44, -0.07)],
+    'Index': [(0.57, -0.12, -0.03), (0.72, -0.11, -0.02), (0.85, -0.11, -0.02), (0.97, -0.10, -0.02)],
+    'Middle': [(0.57, -0.02, -0.02), (0.73, -0.02, -0.02), (0.87, -0.01, -0.01), (1.00, 0.00, 0.00)],
+    'Ring': [(0.56, 0.07, -0.03), (0.70, 0.08, -0.03), (0.84, 0.09, -0.02), (0.95, 0.10, -0.01)],
+    'Pinky': [(0.54, 0.17, -0.06), (0.66, 0.17, -0.05), (0.76, 0.17, -0.05), (0.85, 0.18, -0.05)],
+}
+
+
+def hand_frame(wrist, tip, side):
+    """a = along the hand, ex = Mixamo's sideways axis (backward for the left hand, forward for the right),
+    up = a x ex. Blender space (Z up, -Y forward)."""
+    a = tip - wrist
+    L = a.length
+    a.normalize()
+    ex = Vector((0, 1, 0)) if side == 'Left' else Vector((0, -1, 0))
+    ex = ex - a * ex.dot(a)
+    if ex.length < 1e-4:
+        ex = Vector((0, 0, 1)) - a * a.z
+    ex.normalize()
+    return a, ex, a.cross(ex), L
+
+
+def finger_layout(wrist, tip, side, pts):
+    """Finger joint positions for one hand: the Mixamo template, stretched/shifted to the real palm width and
+    finger-zone height measured from the mesh vertices near the hand. -> {finger: [4 Vectors]}"""
+    a, ex, up, L = hand_frame(wrist, tip, side)
+    sg = 1.0 if side == 'Left' else -1.0
+    scale, shift, wshift = 1.0, 0.0, 0.0
+    if len(pts):
+        rel = np.asarray(pts) - np.array(wrist[:])
+        u = rel @ np.array(a[:]) / L
+        sm = (rel @ np.array(ex[:])) * sg / L
+        wm = rel @ np.array(up[:]) / L
+        zone = (u > 0.6) & (u < 1.02) & (np.abs(wm) < 0.3) & (np.abs(sm) < 0.6)
+        if zone.sum() >= 60:
+            p5, p95 = np.percentile(sm[zone], [5, 95])
+            scale = float(np.clip((p95 - p5) / 0.43, 0.6, 1.6))
+            shift = float((p5 + p95) / 2 - 0.025 * scale)
+            wshift = float(np.clip(np.median(wm[zone]) + 0.02, -0.08, 0.08))
+    out = {}
+    for f, joints in FINGER_TEMPLATE.items():
+        out[f] = [wrist + (a * u_ + ex * ((s_ * scale + shift) * sg) + up * (w_ + wshift)) * L for (u_, s_, w_) in joints]
+    return out, (a, ex, up, L)
+
+
+def add_fingers(arm, L, body_objs, report):
+    """Adds Mixamo-named finger bones (1-3 deform, 4 is the tip) to both hands. -> layout per side"""
+    cos = np.concatenate([world_vertices(o) for o in body_objs])
+    layouts = {}
+    bpy.context.view_layer.objects.active = arm
+    bpy.ops.object.mode_set(mode='EDIT')
+    eb = arm.data.edit_bones
+    for side, k in (('Left', 'l'), ('Right', 'r')):
+        wrist, tip = L[k + '_wrist'].copy(), L[k + '_fingertip'].copy()
+        a0 = tip - wrist
+        d = np.linalg.norm(cos - np.array(wrist[:]), axis=1)
+        near = cos[(d < 1.4 * a0.length) & (((cos - np.array(wrist[:])) @ np.array(a0.normalized()[:])) > -0.1 * a0.length)]
+        layout, (a, ex, up, hl) = finger_layout(wrist, tip, side, near)
+        layouts[side] = {'joints': layout, 'frame': (a, ex, up, hl), 'wrist': np.array(wrist[:])}
+        hand = eb['mixamorig:%sHand' % side]
+        for f in FINGERS:
+            J = layout[f]
+            parent = hand
+            for kk in range(4):
+                b = eb.new('mixamorig:%sHand%s%d' % (side, f, kk + 1))
+                b.head = J[kk].copy()
+                if kk < 3:
+                    b.tail = J[kk + 1].copy()
+                else:
+                    b.tail = J[3] + (J[3] - J[2]).normalized() * (J[3] - J[2]).length * 0.35
+                y = (b.tail - b.head).normalized()
+                # roll: fingers share the hand's sideways axis; the thumb is turned ~45 degrees (Mixamo)
+                if f == 'Thumb':
+                    want = (a * 0.66 + ex * 0.75) if side == 'Left' else (a * -0.62 + ex * 0.78)
+                else:
+                    want = ex
+                x = want - y * want.dot(y)
+                if x.length > 1e-4:
+                    x.normalize()
+                    b.align_roll(x.cross(y))
+                b.parent = parent
+                if kk > 0:
+                    b.use_connect = True
+                parent = b
+    bpy.ops.object.mode_set(mode='OBJECT')
+    report['fingers'] = {'bones_added': 2 * 5 * 4, 'scale': {s: round(float(np.linalg.norm(np.array(layouts[s]['joints']['Pinky'][0][:]) - np.array(layouts[s]['joints']['Index'][0][:]))), 4) for s in layouts}}
+    return layouts
+
+
+def finger_redistribute(co, W, names, layouts, height):
+    """Split each vertex's existing HAND weight between the palm (Hand bone) and the finger bones by distance
+    to the finger segments (nearest finger wins; webbing and knuckles blend). Heat weights at 1 cm cannot
+    resolve fingers, so this is analytic and local to the hand."""
+    eps = 0.004 * height
+    done = 0
+    for side, lay in layouts.items():
+        hi = names.index('mixamorig:%sHand' % side)
+        sel = np.where(W[:, hi] > 1e-4)[0]
+        if not len(sel):
+            continue
+        P = co[sel]
+        segs = []
+        for f in FINGERS:
+            J = [np.array(j[:]) for j in lay['joints'][f]]
+            segs.append((hi, lay['wrist'], J[0]))
+            for k in range(3):
+                segs.append((names.index('mixamorig:%sHand%s%d' % (side, f, k + 1)), J[k], J[k + 1]))
+        D = np.empty((len(P), len(segs)))
+        for j, (_, p0, p1) in enumerate(segs):
+            ab = p1 - p0
+            t = np.clip(((P - p0) @ ab) / max(float(ab @ ab), 1e-12), 0.0, 1.0)
+            D[:, j] = np.linalg.norm(P - (p0 + t[:, None] * ab), axis=1)
+        Wseg = 1.0 / (D + eps) ** 6
+        bones = sorted(set(b for b, _, _ in segs))
+        Wb = np.zeros((len(P), len(names)))
+        for j, (b, _, _) in enumerate(segs):
+            Wb[:, b] = np.maximum(Wb[:, b], Wseg[:, j])  # the palm is five segments: take the nearest, never the sum
+        Wb /= np.maximum(Wb.sum(axis=1, keepdims=True), 1e-18)
+        h = W[sel, hi].copy()
+        W[sel, hi] = 0.0
+        W[sel] += (Wb * h[:, None]).astype(W.dtype)
+        done += len(sel)
+    return done
 
 
 # ----------------------------------------------------------------------------------------------
@@ -679,7 +822,7 @@ def mirror_names(names):
 LIMB_PARTS = {'leg': ('UpLeg', 'Leg', 'Foot', 'ToeBase'), 'arm': ('Shoulder', 'Arm', 'ForeArm', 'Hand')}
 
 
-def side_coherence(Wobj, co, arm, names, height):
+def side_coherence(Wobj, co, arm, names, height, axis_x=0.0):
     """The voxel proxy fuses limbs that sit close together (feet side by side, arms against the torso), so
     heat weights can leak across. A vertex that is nearer the LEFT limb than the RIGHT one by more than a
     small margin must not carry the right limb's weights (and vice versa).
@@ -692,7 +835,7 @@ def side_coherence(Wobj, co, arm, names, height):
     knee_z = float(np.mean([(arm.matrix_world @ arm.data.bones['mixamorig:%sLeg' % s].head_local).z for s in ('Left', 'Right')]))
     hip_z = float(np.mean([(arm.matrix_world @ arm.data.bones['mixamorig:%sUpLeg' % s].head_local).z for s in ('Left', 'Right')]))
     t = np.clip((z - knee_z) / max(hip_z - knee_z, 1e-6), 0.0, 1.0)
-    margins = {'leg': (0.003 + 0.009 * t) * height, 'arm': np.full(len(z), 0.004 * height)}
+    margins = {'leg': (0.012 * t) * height, 'arm': np.full(len(z), 0.004 * height)}
     removed = 0
     for part, bones in LIMB_PARTS.items():
         li = [names.index('mixamorig:Left' + b) for b in bones]
@@ -701,6 +844,11 @@ def side_coherence(Wobj, co, arm, names, height):
         m = margins[part]
         is_left = dl + m < dr
         is_right = dr + m < dl
+        if part == 'leg':
+            # ties (feet touching on the middle line): the side of the middle line decides, never "both"
+            tie = ~(is_left | is_right) & (t < 0.05)
+            is_left |= tie & (co[:, 0] >= axis_x)
+            is_right |= tie & (co[:, 0] < axis_x)
         for sel, kill in ((is_left, ri), (is_right, li)):
             if sel.any():
                 rows = np.where(sel)[0]
@@ -711,6 +859,34 @@ def side_coherence(Wobj, co, arm, names, height):
     if empty.any():
         W[empty] = envelope_weights(co[empty], arm, names, height)
     return W / np.maximum(W.sum(axis=1, keepdims=True), 1e-9), removed
+
+
+CAP_PARTS = ('Shoulder', 'Arm', 'ForeArm', 'Hand', 'UpLeg', 'Leg', 'Foot', 'ToeBase')
+
+
+def limb_reach_cap(Wobj, co, arm, names, height, lo=1.7, hi=2.7):
+    """Heat weights let a limb bone claim far too much of the body next to it (the upper arm taking the
+    shoulder top and ribs, so lowering the arm drags the body's side down). Each limb bone's weight fades
+    out between `lo` and `hi` times its own radius (measured from the vertices it clearly owns), and the
+    freed weight goes to the other bones (spine, hips ...)."""
+    D = bone_distances(co, arm, names)
+    W = Wobj.copy()
+    capped = 0
+    for side in ('Left', 'Right'):
+        for part in CAP_PARTS:
+            j = names.index('mixamorig:%s%s' % (side, part))
+            owned = (W.argmax(axis=1) == j) & (W[:, j] > 0.6)
+            if owned.sum() < 30:
+                continue
+            r = max(float(np.median(D[owned, j])), 0.008 * height)
+            cap = np.clip((hi * r - D[:, j]) / ((hi - lo) * r), 0.0, 1.0)
+            cap = cap * cap * (3.0 - 2.0 * cap)
+            capped += int(((cap < 0.999) & (W[:, j] > 0)).sum())
+            W[:, j] *= cap
+    empty = W.sum(axis=1) < 1e-6
+    if empty.any():
+        W[empty] = envelope_weights(co[empty], arm, names, height)
+    return W / np.maximum(W.sum(axis=1, keepdims=True), 1e-9), capped
 
 
 def head_lock(Wobj, co, names, L):
@@ -875,7 +1051,9 @@ def main():
     if height < 1e-6:
         fail('The model has no height', 'empty')
     # markers were placed in the preview's frame: re-express them in the frame Blender actually sees
-    mapped = map_landmarks(job['landmarks'], job.get('bbox'), blender_bbox_as_gltf(all_co))
+    biggest = sorted(((o.name, len(o.data.vertices), np.ptp(world_vertices(o), axis=0)) for o in comps), key=lambda r: -float(r[2].max()))[:3]
+    detail = ' [Blender sees: ' + '; '.join('%s (%d verts, %.2gx%.2gx%.2g m)' % (n, v, e[0], e[1], e[2]) for n, v, e in biggest) + ']'
+    mapped = map_landmarks(job['landmarks'], job.get('bbox'), blender_bbox_as_gltf(all_co), detail)
     L = fit_landmarks(mapped)
     check_landmarks_fit(L, all_co, height)
     cx = L['pelvis'].x
@@ -925,37 +1103,69 @@ def main():
     progress(0.60, 'Cleaning up weights')
     locked = 0
     side_removed = 0
+    staged = []
     for o in body:
         W = transferred[o.name]
         co = world_vertices(o)
         if opt['side_coherence']:
-            W, r1 = side_coherence(W, co, arm, names, height)
+            W, r1 = side_coherence(W, co, arm, names, height, cx)
+        if opt['limb_cap']:
+            W, c1 = limb_reach_cap(W, co, arm, names, height, opt['cap_lo'], opt['cap_hi'])
         W = smooth_weights(o, W, opt['smooth_iterations'], opt['smooth_strength'])
         if opt['side_coherence']:
-            W, r2 = side_coherence(W, co, arm, names, height)
+            W, r2 = side_coherence(W, co, arm, names, height, cx)
             side_removed += r1 + r2
+        if opt['limb_cap']:
+            W, c2 = limb_reach_cap(W, co, arm, names, height, opt['cap_lo'], opt['cap_hi'])
         if opt['head_lock']:
             W, n_locked = head_lock(W, co, names, L)
             locked += n_locked
-        W, zero = limit_normalise(W, opt['max_influences'], opt['prune_below'])
-        if zero:  # nothing survived pruning: fall back to the nearest bone
-            for v in np.where(W.sum(axis=1) < 0.5)[0]:
-                bi, _ = nearest_bone(arm, names, Vector(co[v]))
-                W[v] = 0.0
-                W[v, bi] = 1.0
-        write_weights(o, arm, names, W)
+        staged.append((o, W, co))
     report['head_locked_vertices'] = locked
     report['side_leak_removed'] = side_removed
     report['symmetry'] = {'coverage': round(sym_cov, 4), 'applied': bool(sym_used)}
 
+    # fingers: added AFTER the body weights are settled (the proxy cannot resolve them), then each vertex's
+    # hand weight is split between the palm and the finger bones
+    base_names = list(names)
+    layouts = None
+    if opt['fingers']:
+        progress(0.62, 'Adding fingers')
+        try:
+            layouts = add_fingers(arm, L, body, report)
+            names = [b.name for b in arm.data.bones]
+            report['bones'] = len(names)
+        except Exception as e:  # never lose the whole rig over the fingers
+            layouts = None
+            report['warnings'].append('Fingers could not be added (%s); the hands are a single bone.' % e)
+    wide = []
+    for o, W, co in staged:
+        if layouts:
+            Wf = np.zeros((len(W), len(names)), dtype=np.float32)
+            # Blender keeps bones depth-first, so adding fingers shifts the other bones' columns: map BY NAME
+            for j, bn in enumerate(base_names):
+                Wf[:, names.index(bn)] = W[:, j]
+            finger_redistribute(co, Wf, names, layouts, height)
+            W = Wf
+        W, zero = limit_normalise(W, opt['max_influences'], opt['prune_below'])
+        if zero:  # nothing survived pruning: fall back to the nearest bone
+            for v in np.where(W.sum(axis=1) < 0.5)[0]:
+                bi, _ = nearest_bone(arm, base_names, Vector(co[v]))
+                W[v] = 0.0
+                W[v, names.index(base_names[bi])] = 1.0
+        write_weights(o, arm, names, W)
+
     for i in rigid:
         o = i['obj']
         co = world_vertices(o)
-        bi, d = nearest_bone(arm, names, Vector(co.mean(axis=0)))
+        bi, d = nearest_bone(arm, base_names, Vector(co.mean(axis=0)))
         W = np.zeros((len(co), len(names)), dtype=np.float32)
-        W[:, bi] = 1.0
+        W[:, names.index(base_names[bi])] = 1.0
+        if layouts and base_names[bi].endswith('Hand'):
+            finger_redistribute(co, W, names, layouts, height)  # a hand modelled as its own piece gets fingers too
+            W, _ = limit_normalise(W, opt['max_influences'], opt['prune_below'])
         write_weights(o, arm, names, W)
-        i['bone'] = names[bi]
+        i['bone'] = base_names[bi]
     report['rigid_bindings'] = [{'name': i['obj'].name, 'bone': i['bone'], 'reason': i['reason']} for i in rigid]
 
     # remove the proxy

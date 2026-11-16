@@ -29,6 +29,8 @@ POSES = {
     'feet_pointed_40': {'LeftFoot': (40, 0, 0), 'RightFoot': (40, 0, 0)},
     'spine_bend_40': {'Spine': (25, 0, 0), 'Spine1': (25, 0, 0)},
     'spine_twist_50': {'Spine': (0, 25, 0), 'Spine1': (0, 25, 0)},
+    # fingers: curl index..pinky 70 degrees at each of the three joints (about their local X), both hands
+    'fingers_curl_70': {'%sHand%s%d' % (s, f, k): (70, 0, 0) for s in ('Left', 'Right') for f in ('Index', 'Middle', 'Ring', 'Pinky') for k in (1, 2, 3)},
 }
 CT = {5120: np.int8, 5121: np.uint8, 5122: np.int16, 5123: np.uint16, 5125: np.uint32, 5126: np.float32}
 NC = {'SCALAR': 1, 'VEC2': 2, 'VEC3': 3, 'VEC4': 4, 'MAT4': 16}
@@ -218,8 +220,14 @@ def run(truth, rigged):
     for pname, rots in POSES.items():
         tpp, _, _ = evaluate(truth, rots)
         rpp, _, _ = evaluate(rigged, rots)
-        e = np.linalg.norm(rpp - tpp[match], axis=1)[body] / height * 100.0
+        ev = np.linalg.norm(rpp - tpp[match], axis=1) / height * 100.0
+        e = ev[body]
         perr[pname] = {'mean_pct': round(float(e.mean()), 3), 'p95_pct': round(float(np.percentile(e, 95)), 3), 'max_pct': round(float(e.max()), 3)}
+        if pname == 'fingers_curl_70':
+            hand = body & (np.abs(rp[:, 0]) > 0.60) & (rp[:, 1] > 1.2)  # the hands (arms held out)
+            if hand.any():
+                perr[pname]['hands_only_mean_pct'] = round(float(ev[hand].mean()), 3)
+                perr[pname]['hands_only_p95_pct'] = round(float(np.percentile(ev[hand], 95)), 3)
     res['pose_error_pct_of_height'] = perr
     res['pose_error_mean_pct'] = round(float(np.mean([v['mean_pct'] for v in perr.values()])), 3)
     return res

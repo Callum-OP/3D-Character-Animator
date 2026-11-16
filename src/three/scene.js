@@ -148,7 +148,7 @@ import {
 import { initPartRig, getPartRigData, restorePartRigs, getPartRigEntries, invalidatePartRigGeometry, updatePartRig, setPartRigBodyFollow } from './partRig.js'
 import { initMeshSymmetry, getSymmetryData, restoreSymmetry, mirrorMeshes } from './meshSymmetry.js'
 import { combineMeshes as combineExportMeshes, describeCombine } from './combineMeshes.js'
-import { STATIC_FORMATS, bakeStaticMeshes, writeStaticModel } from './exportStatic.js'
+import { STATIC_FORMATS, bakeStaticMeshes, bakeMeshesWithMaterials, writeStaticModel } from './exportStatic.js'
 import { installFlattenerShader } from './flattenerShader.js'
 import { installRigDeltaShader } from './rigDeltaShader.js'
 import { advanceWind, setWindConfig } from './wind.js'
@@ -5496,22 +5496,52 @@ export function setCameraToTarget(kind, id) {
   commitFramingChange(() => frameCameraToObject(target))
 }
 
-// Auto Rigger source: one scene character/object as plain geometry in its REST pose (the shape a rig
-// should be built on), baked to world space, as a PLY plus a ready-to-show preview group. The live
-// scene is not touched: everything works on an export copy.
+// Auto Rigger source: one scene character / object, as a real textured .glb in its REST pose, plus a
+// ready-to-show preview group (grey, translucent, same frame). Works on an export copy: the live scene is
+// never touched.
+//  * Textures and materials travel with it (a plain geometry file would come back white).
+//  * It is written in the object's OWN space: the scene SCALE is kept (so the size matches what you see),
+//    but not its position or rotation, so the rigged copy does not inherit "where the original stands".
 export async function exportRigSource(id) {
   const root = getObjectRootById(id)
   if (!root) throw new Error('That object is no longer in the scene.')
-  const { cloneForExport } = await import('./exportPose.js')
-  root.updateWorldMatrix(true, false)
-  const model = [...state.characters.values()].find((c) => c.root === root)
-  const dup = cloneForExport(root, { pose: 'rest', restQuats: model?.__poseRestQuats || null })
-  root.matrixWorld.decompose(dup.position, dup.quaternion, dup.scale)
-  const wrapper = new THREE.Group()
-  wrapper.add(dup)
-  const { group, meshes } = bakeStaticMeshes(wrapper, { merge: false })
-  if (!meshes) throw new Error('That object has no visible meshes to rig.')
-  const blob = await writeStaticModel('ply', group)
-  const box = new THREE.Box3().setFromObject(group)
-  return { name: 'scene-object.ply', data: new Uint8Array(await blob.arrayBuffer()), group, box: { min: box.min.toArray(), max: box.max.toArray() } }
+  suspendSoftCloth()
+  const blended = [...state.characters.values()].filter((c) => c.__partRigBodyFollow)
+  for (const c of blended) setPartRigBodyFollow(c, false)
+  try {
+    const [{ GLTFExporter }, { cloneForExport }] = await Promise.all([import('three/examples/jsm/exporters/GLTFExporter.js'), import('./exportPose.js')])
+    root.updateWorldMatrix(true, false)
+    const model = [...state.characters.values()].find((c) => c.root === root)
+    const worldScale = new THREE.Vector3()
+    root.matrixWorld.decompose(new THREE.Vector3(), new THREE.Quaternion(), worldScale)
+    const ownSpace = (dup) => {
+      dup.position.set(0, 0, 0)
+      dup.quaternion.identity()
+      dup.scale.copy(worldScale)
+    }
+    // the file: the object in its rest pose, baked to plain geometry that KEEPS its real materials
+    // (a skinned file would be misread by Blender; a plain geometry format would lose the textures)
+    const dup = cloneForExport(root, { pose: 'rest', restQuats: model?.__poseRestQuats || null })
+    ownSpace(dup)
+    dup.updateMatrixWorld(true)
+    useExportMaterials(root, dup, model, null)
+    const { group: baked, meshes } = bakeMeshesWithMaterials(dup)
+    if (!meshes) throw new Error('That object has no visible meshes to rig.')
+    const exporter = new GLTFExporter()
+    const result = await withExportSafeMaterials(baked, () => new Promise((resolve, reject) => {
+      exporter.parse(baked, resolve, reject, { binary: true, onlyVisible: true })
+    }))
+    // the preview: the same geometry, flat grey and translucent, so the joints show through
+    const preview = new THREE.Group()
+    const greyMaterial = new THREE.MeshStandardMaterial({ color: 0xb8b8c4, transparent: true, opacity: 0.8, side: THREE.DoubleSide })
+    baked.traverse((o) => {
+      if (o.isMesh) preview.add(new THREE.Mesh(o.geometry.clone(), greyMaterial))
+    })
+    preview.updateMatrixWorld(true)
+    const box = new THREE.Box3().setFromObject(preview)
+    return { name: 'scene-object.glb', data: new Uint8Array(result), group: preview, box: { min: box.min.toArray(), max: box.max.toArray() } }
+  } finally {
+    for (const c of blended) setPartRigBodyFollow(c, true)
+    resumeSoftCloth()
+  }
 }

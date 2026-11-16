@@ -129,11 +129,14 @@ describe.skipIf(!blenderPath)('real Blender: synthetic humanoid → rigged glb',
     const dom = Object.fromEntries(Object.entries(report.per_component).map(([k, v]) => [k, v.bone]))
     expect(dom).toMatchObject({
       Head: 'Head', Neck: 'Neck', Pelvis: 'Hips',
-      LUpperArm: 'LeftArm', LForeArm: 'LeftForeArm', LHand: 'LeftHand',
-      RUpperArm: 'RightArm', RForeArm: 'RightForeArm', RHand: 'RightHand',
+      LUpperArm: 'LeftArm', LForeArm: 'LeftForeArm',
+      RUpperArm: 'RightArm', RForeArm: 'RightForeArm',
       LThigh: 'LeftUpLeg', LShin: 'LeftLeg', RThigh: 'RightUpLeg', RShin: 'RightLeg',
     })
-    for (const k of ['LForeArm', 'LHand', 'LThigh', 'Head']) expect(report.per_component[k].share).toBeGreaterThan(0.6)
+    for (const k of ['LForeArm', 'LThigh', 'Head']) expect(report.per_component[k].share).toBeGreaterThan(0.6)
+    // a hand is split between the palm and its fingers: its dominant bone is one of the left hand's
+    expect(report.per_component.LHand.bone).toMatch(/^LeftHand/)
+    expect(report.per_component.RHand.bone).toMatch(/^RightHand/)
 
     // thin blade + eyes are bound rigidly, not heat-diffused
     const rigid = Object.fromEntries(report.rigid_bindings.map((r) => [r.name, r.bone]))
@@ -157,6 +160,30 @@ describe.skipIf(!blenderPath)('real Blender: synthetic humanoid → rigged glb',
       const a = worldAxes(j, 'mixamorig:' + bone)
       expect(angleDeg(a.x, want), `${bone} local X`).toBeLessThan(12)
     }
+  }, 300000)
+
+  it('adds five fingers per hand with Mixamo names and axes, and weights the hand across them', async () => {
+    const { glb, report } = await runAutoRig({ blenderPath, input, landmarks })
+    const j = glbJson(glb)
+    const names = j.nodes.map((n) => n.name)
+    for (const side of ['Left', 'Right']) {
+      for (const f of ['Thumb', 'Index', 'Middle', 'Ring', 'Pinky']) for (const k of [1, 2, 3, 4]) expect(names, `${side}Hand${f}${k}`).toContain(`mixamorig:${side}Hand${f}${k}`)
+    }
+    expect(report.bones).toBe(22 + 40)
+    expect(report.fingers.bones_added).toBe(40)
+    // non-thumb fingers share the arm's sideways axis (Mixamo): left -Z, right +Z
+    for (const f of ['Index', 'Middle', 'Ring', 'Pinky']) {
+      expect(angleDeg(worldAxes(j, `mixamorig:LeftHand${f}2`).x, [0, 0, -1]), `Left ${f}`).toBeLessThan(15)
+      expect(angleDeg(worldAxes(j, `mixamorig:RightHand${f}2`).x, [0, 0, 1]), `Right ${f}`).toBeLessThan(15)
+    }
+    // the finger bones really carry weight (a hand that cannot curl would be "not rigged")
+    expect(report.weights.unweighted_vertices).toBe(0)
+    expect(report.weights.max_influences).toBeLessThanOrEqual(4)
+  }, 300000)
+
+  it('can be told not to add fingers', async () => {
+    const { report } = await runAutoRig({ blenderPath, input, landmarks, options: { fingers: false } })
+    expect(report.bones).toBe(22)
   }, 300000)
 
   it('keeps the original mesh objects (names, count) instead of splitting them into loose pieces', async () => {
@@ -185,7 +212,7 @@ describe.skipIf(!blenderPath)('real Blender: synthetic humanoid → rigged glb',
   it('refuses markers that do not fit the model instead of producing garbage', async () => {
     const far = Object.fromEntries(Object.entries(landmarks).map(([k, p]) => [k, p.map((c) => c * 100)]))
     await expect(runAutoRig({ blenderPath, input, landmarks: far })).rejects.toThrow(/do not line up/)
-    await expect(runAutoRig({ blenderPath, input, landmarks, bbox: { min: [0, -1, -1], max: [1.8, 1, 1] } })).rejects.toThrow(/looks different in Blender/)
+    await expect(runAutoRig({ blenderPath, input, landmarks, bbox: { min: [0, -1, -1], max: [1.8, 1, 1] } })).rejects.toThrow(/looks different in Blender[\s\S]*Blender sees:/)
   }, 180000)
 
   it('falls back to flagged envelope weights instead of crashing when the solver cannot be used', async () => {

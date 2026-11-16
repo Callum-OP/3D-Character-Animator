@@ -4,9 +4,10 @@ import { useStore } from '../store.js'
 import { loadModel, disposeObject } from '../three/loadModel.js'
 import { importModelAuto, exportRigSource } from '../three/scene.js'
 import { getRigSources } from '../three/objects.js'
+import { detectLandmarks } from '../three/autoRigDetect.js'
 import { LANDMARKS, guessLandmarks, toPayload, validateLandmarks, moveLandmark, enforceMirror, createHistory } from '../three/autoRigMath.js'
 import {
-  summariseRigReport, autoRigBridge, estimateRigSeconds, etaSeconds, formatDuration, countVertices, loadSpeedFactor, saveSpeedFactor,
+  summariseRigReport, autoRigBridge, estimateRigSeconds, etaSeconds, formatDuration, countVertices, loadSpeedFactor, saveSpeedFactor, collectWorldPositions,
 } from '../three/autoRig.js'
 
 // Bones drawn between landmarks so you can see the skeleton you are about to get.
@@ -55,6 +56,8 @@ function Dialog({ onClose }) {
   const [error, setError] = useState(null)
   const [done, setDone] = useState(null)
   const [hadBones, setHadBones] = useState(false)
+  const [placeNotes, setPlaceNotes] = useState([])
+  const detectedRef = useRef(null) // the auto-placed markers (what "Reset" returns to)
   const [sources, setSources] = useState(() => getRigSources())
   const [sceneId, setSceneId] = useState('')
   const [fileName, setFileName] = useState(null)
@@ -272,7 +275,23 @@ function Dialog({ onClose }) {
     setVerts(count)
     setFileName(name)
     setSelected('pelvis')
-    commit(guessLandmarks(box))
+    // markers read off the mesh itself (neck, crotch, ankles, hands ...), with the proportion guess as backup
+    let start = guessLandmarks(box)
+    let notes = []
+    let axis = (box.min[0] + box.max[0]) / 2
+    try {
+      const det = detectLandmarks(collectWorldPositions(root, THREE))
+      start = det.landmarks
+      notes = det.notes
+      if (Number.isFinite(det.centreX)) axis = det.centreX
+    } catch {
+      notes = ['could not analyse the mesh; markers placed from proportions']
+    }
+    setAxisX(axis)
+    start = mirror ? enforceMirror(start, axis) : start
+    detectedRef.current = start
+    setPlaceNotes(notes)
+    commit(start)
   }
 
   async function onPickFile(e) {
@@ -310,8 +329,9 @@ function Dialog({ onClose }) {
           o.material = new THREE.MeshStandardMaterial({ color: 0xb8b8c4, transparent: true, opacity: 0.8, side: THREE.DoubleSide })
         }
       })
-      const label = sources.find((s) => s.id === id)?.name || 'scene object'
-      installPreview(src.group, src.box, countVertices(src.group), `${label}.ply`, async () => src.data, false)
+      const picked = sources.find((s) => s.id === id)
+      const label = picked?.name || 'scene object'
+      installPreview(src.group, src.box, countVertices(src.group), `${label}.glb`, async () => src.data, picked?.kind === 'character')
     } catch (err) {
       setError(err?.message || String(err))
       setSceneId('')
@@ -393,7 +413,7 @@ function Dialog({ onClose }) {
   }
   function onReset() {
     history.current.push(lmRef.current)
-    const g = guessLandmarks(three.current.box)
+    const g = detectedRef.current || guessLandmarks(three.current.box)
     commit(mirror ? enforceMirror(g, axisX) : g)
     bump((n) => n + 1)
   }
@@ -542,6 +562,7 @@ function Dialog({ onClose }) {
               </div>
             </div>
             {hadBones && <p className="autorig-note">This model already has a skeleton. It is replaced by the new one.</p>}
+            {hasModel && <p className="autorig-note">Markers were placed from the shape of the mesh. Check them in both views, especially the ankles and wrists.{placeNotes.length ? ' Note: ' + placeNotes.join('; ') + '.' : ''}</p>}
             {problems.length > 0 && <pre className="autorig-problems">{problems.join('\n')}</pre>}
             {error && <pre className="autorig-error">{error}</pre>}
             {done && <pre className="autorig-done">{done}</pre>}
