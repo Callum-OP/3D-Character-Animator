@@ -267,8 +267,7 @@ scripts/                 # itch.io packaging, Electron dev runner, Store bundlin
 ## Possible Future Work
 
 ### Auto Rigger
-Implementing an Auto Rigger directly into the app? 
-This had been attempted in previous projects before but found not as much success, would need to see how to make a good accurate auto rig feature that works on most models and can be implemented cleanly into this app. Could even try expanding it further to include not just the body but face as well. It might not be possible to make a perfect auto rigger so alternatively allow users to directly test and adjust the rig and weights within the app so they can get it perfect.
+The desktop Auto Rigger uses an installed Blender to generate a humanoid skeleton and weights locally. Check the detected markers in both views before rigging; existing skeletons are replaced. Hip weights are rebalanced around the pelvis and connected thumb surfaces are kept together when their ownership is clear. Results still depend on the mesh and marker placement, so test animations and refine the rig as needed. Future work could include facial rigging and in-app weight editing.
 
 ### Pose Saving
 While the app works well at importing mocap files for animation it is not as great when it comes to building animations from scratch, the first thing to combat this would be a way to directly save and access poses, maybe even with a preset library of not just full body poses but also hand poses so users are not starting from scratch. This could be improved further with sliders, especially for hands a slider to change and transition from open hand to closed fist.

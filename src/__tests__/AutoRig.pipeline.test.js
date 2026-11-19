@@ -237,11 +237,13 @@ describe.skipIf(!blenderPath)('real Blender: synthetic humanoid → rigged glb',
     const on = await runAutoRig({ blenderPath, input, landmarks })
     expect(on.report.shoulder_soften).toBe(true)
     expect(on.report.hip_soften).toBe(true)
+    expect(on.report.hip_rebalanced_vertices).toBeGreaterThan(0)
     expect(on.report.weights.unweighted_vertices).toBe(0)
     expect(on.report.side_leak_removed).toBeGreaterThanOrEqual(0)
-    const off = await runAutoRig({ blenderPath, input, landmarks, options: { shoulder_soften: false, hip_soften: false } })
+    const off = await runAutoRig({ blenderPath, input, landmarks, options: { shoulder_soften: false, hip_soften: false, hip_rebalance: false } })
     expect(off.report.shoulder_soften).toBe(false)
     expect(off.report.hip_soften).toBe(false)
+    expect(off.report.hip_rebalanced_vertices).toBe(0)
   }, 400000)
 
   it('skins a thin piece lying on the body like clothing, but keeps a blade standing away from it rigid', async () => {

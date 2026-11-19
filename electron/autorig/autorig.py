@@ -118,6 +118,7 @@ DEFAULTS = {
     'shoulder_reach': 0.09,     # how far from the shoulder joint it applies
     'shoulder_strength': 0.9,
     'hip_soften': True,         # smooth neighbouring body and clothing weights around the hip joints
+    'hip_rebalance': True,      # keep the upper pelvis from following the thighs
     'limb_cap': True,           # limb bones cannot claim the body next to them
     'cap_lo': 1.7,
     'cap_hi': 2.7,
@@ -628,6 +629,33 @@ def finger_redistribute(co, W, names, layouts, height, edges=None):
                 p10, p90 = np.percentile(lateral[group], [10, 90])
                 if votes[winner] >= 0.7 * len(group) and p90 - p10 <= 1.5 * spacing:
                     closest[group] = winner
+            # The thumb ends before the other fingers' distal zone. Follow a
+            # narrow connected piece along its own axis instead of the hand axis.
+            J = [np.array(j[:]) for j in lay['joints']['Thumb']]
+            direction = J[3] - J[1]
+            t = ((P - J[1]) @ direction) / max(float(direction @ direction), 1e-12)
+            distance = np.linalg.norm(P - (J[1] + t[:, None] * direction), axis=1)
+            across = np.cross(direction, np.array(up[:]))
+            across /= max(float(np.linalg.norm(across)), 1e-12)
+            width = (P - J[1]) @ across
+            thumb_zone = (t > 0.0) & (t < 1.25) & (distance < 0.14 * length) & (u < 0.70)
+            mask[:] = False
+            mask[sel[thumb_zone]] = True
+            ee = edges[mask[edges[:, 0]] & mask[edges[:, 1]]]
+            parent = np.arange(len(sel))
+            for v, w in local[ee]:
+                rv, rw = root(v), root(w)
+                if rv != rw:
+                    parent[rv] = rw
+            groups = {}
+            for v in np.flatnonzero(thumb_zone):
+                groups.setdefault(root(v), []).append(v)
+            for group in groups.values():
+                if len(group) < 8 or np.count_nonzero(closest[group] == 0) < 0.9 * len(group):
+                    continue
+                p10, p90 = np.percentile(width[group], [10, 90])
+                if p90 - p10 <= 0.15 * length:
+                    closest[group] = 0
         Wseg = ((D.min(axis=1, keepdims=True) + eps) / (D + eps)) ** 6
         for f in range(len(FINGERS)):
             Wseg[closest != f, 4 * f + 1:4 * f + 4] = 0.0
@@ -1146,6 +1174,23 @@ def spine_profile(Wobj, co, arm, names):
     return W
 
 
+def hip_rebalance(Wobj, co, arm, names, height):
+    """Cap thigh influence across the pelvis, transferring excess to Hips."""
+    hips = names.index('mixamorig:Hips')
+    legs = [names.index('mixamorig:%sUpLeg' % side) for side in ('Left', 'Right')]
+    hip_z = float(np.mean([(arm.matrix_world @ arm.data.bones['mixamorig:%sUpLeg' % side].head_local).z
+                           for side in ('Left', 'Right')]))
+    t = np.clip((co[:, 2] - (hip_z - 0.08 * height)) / (0.16 * height), 0.0, 1.0)
+    cap = 1.0 - t * t * (3.0 - 2.0 * t)
+    W = Wobj.copy()
+    leg_mass = W[:, legs].sum(axis=1)
+    allowed = cap * (leg_mass + W[:, hips])
+    factor = np.minimum(1.0, np.divide(allowed, leg_mass, out=np.ones_like(leg_mass), where=leg_mass > 1e-12))
+    W[:, legs] *= factor[:, None]
+    W[:, hips] += leg_mass * (1.0 - factor)
+    return W, int((factor < 0.999).sum())
+
+
 def joint_soften(staged, arm, height, radius_frac, reach_frac, strength, cross_args, part):
     """Blend neighbouring weights around a pair of joints, fading out away from the joints."""
     if not staged:
@@ -1436,6 +1481,14 @@ def main():
             side_removed += r3
             fixed.append((o, W, co))
         staged = fixed
+    hip_rebalanced = 0
+    if opt['hip_rebalance']:
+        fixed = []
+        for o, W, co in staged:
+            W, count = hip_rebalance(W, co, arm, names, height)
+            hip_rebalanced += count
+            fixed.append((o, W, co))
+        staged = fixed
     report['head_locked_vertices'] = locked
     report['side_leak_removed'] = side_removed
     report['clavicle_rebalanced'] = clav_moved
@@ -1443,6 +1496,7 @@ def main():
     report['spine_profile'] = bool(opt['spine_profile'])
     report['shoulder_soften'] = bool(opt['shoulder_soften'])
     report['hip_soften'] = bool(opt['hip_soften'])
+    report['hip_rebalanced_vertices'] = hip_rebalanced
     report['symmetry'] = {'coverage': round(sym_cov, 4), 'applied': bool(sym_used)}
 
     # fingers: added AFTER the body weights are settled (the proxy cannot resolve them), then each vertex's

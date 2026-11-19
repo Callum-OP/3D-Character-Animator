@@ -78,6 +78,48 @@ leg_weights[0, left] = leg_weights[1, right] = 1
 soft = rig.joint_soften([(None, leg_weights, leg_co)], arm, 1.8, 0.004, 0.09, 0.9, (0.92, 0), 'UpLeg')[0][1]
 assert np.array_equal(soft, leg_weights)
 
+# Thigh leakage into the waist is transferred to Hips, without changing unrelated
+# weights or restricting the lower thighs. The operation must be stable on repeat.
+pelvis_co = np.array([[0.1, 0, z] for z in np.linspace(0.65, 1.22, 501)])
+pelvis_weights = np.zeros((len(pelvis_co), len(base_names)), dtype=np.float32)
+spine = base_names.index('mixamorig:Spine')
+pelvis_weights[:, left], pelvis_weights[:, hips], pelvis_weights[:, spine] = 0.8, 0.1, 0.1
+balanced, changed = rig.hip_rebalance(pelvis_weights, pelvis_co, arm, base_names, 1.8)
+assert changed > 0
+assert np.array_equal(balanced[0], pelvis_weights[0])
+assert balanced[-1, left] == 0 and abs(balanced[-1, hips] - 0.9) < 1e-6
+assert np.allclose(balanced[:, spine], 0.1)
+assert np.allclose(balanced.sum(axis=1), 1)
+assert np.max(np.abs(np.diff(balanced[:, left]))) < 0.01
+again, _ = rig.hip_rebalance(balanced, pelvis_co, arm, base_names, 1.8)
+assert np.allclose(again, balanced)
+no_legs = np.zeros_like(pelvis_weights)
+no_legs[:, hips] = 1
+unchanged, count = rig.hip_rebalance(no_legs, pelvis_co, arm, base_names, 1.8)
+assert count == 0 and np.array_equal(unchanged, no_legs)
+probe_co = np.array([[0.1, 0, 0.7], [0.1, 0, 0.99]])
+probe_weights = np.zeros((2, len(base_names)), dtype=np.float32)
+probe_weights[:, left] = 1
+corrected, _ = rig.hip_rebalance(probe_weights, probe_co, arm, base_names, 1.8)
+objects = []
+for label, weights in (('raw', probe_weights), ('balanced', corrected)):
+    mesh = bpy.data.meshes.new(label + ' hip probe')
+    mesh.from_pydata(probe_co.tolist(), [], [])
+    obj = bpy.data.objects.new(label + ' hip probe', mesh)
+    bpy.context.scene.collection.objects.link(obj)
+    rig.write_weights(obj, arm, base_names, weights)
+    objects.append(obj)
+leg = arm.pose.bones['mixamorig:LeftUpLeg']
+leg.rotation_mode = 'XYZ'
+leg.rotation_euler.x = 0.8
+bpy.context.view_layer.update()
+movements = [np.linalg.norm(rig.evaluated_positions(obj, bpy.context.evaluated_depsgraph_get()) - probe_co, axis=1)
+             for obj in objects]
+assert abs(movements[0][0] - movements[1][0]) < 1e-5
+assert movements[1][1] < movements[0][1] * 0.25
+leg.rotation_euler.x = 0
+bpy.context.view_layer.update()
+
 # Finger-zone samples describe the four finger lanes, not the thumb.
 for side, key, sign in (('Left', 'l', 1), ('Right', 'r', -1)):
     wrist, tip = L[key + '_wrist'], L[key + '_fingertip']
@@ -177,6 +219,49 @@ w[:, hand] = 1
 rig.finger_redistribute(two, w, names, {'Left': lay}, 1.8, joined_edges)
 assert w[0, index_ids].sum() > 0.9
 assert w[-1, middle_ids].sum() > 0.9
+
+# The thumb ends before the other fingers' distal zone. Its connected surface
+# should retain thumb ownership even if one vertex is closer to the index root.
+for side in ('Left', 'Right'):
+    lay = layouts[side]
+    thumb, index = lay['joints']['Thumb'], lay['joints']['Index']
+    chain = [np.array(thumb[1].lerp(thumb[2], t)[:]) for t in np.linspace(0.05, 0.8, 20)]
+    chain[-1] = np.array(thumb[2].lerp(index[0].lerp(index[1], 0.5), 0.5)[:])
+    chain = np.array(chain)
+    edges = np.array([(i, i + 1) for i in range(len(chain) - 1)])
+    w = np.zeros((len(chain), len(names)), dtype=np.float32)
+    w[:, names.index('mixamorig:%sHand' % side)] = 1
+    naive, connected = w.copy(), w.copy()
+    rig.finger_redistribute(chain, naive, names, {side: lay}, 1.8)
+    rig.finger_redistribute(chain, connected, names, {side: lay}, 1.8, edges)
+    thumb_ids = [names.index('mixamorig:%sHandThumb%d' % (side, k)) for k in (1, 2, 3)]
+    index_ids = [names.index('mixamorig:%sHandIndex%d' % (side, k)) for k in (1, 2, 3)]
+    assert naive[-1, index_ids].sum() > 0.5
+    assert connected[-1, thumb_ids].sum() > 0.5
+    assert connected[-1, index_ids].sum() == 0
+    mesh = bpy.data.meshes.new(side + ' connected thumb')
+    mesh.from_pydata(chain.tolist(), edges.tolist(), [])
+    obj = bpy.data.objects.new(side + ' connected thumb', mesh)
+    bpy.context.scene.collection.objects.link(obj)
+    rig.write_weights(obj, arm, names, connected)
+    for finger, moves in (('Thumb', True), ('Index', False)):
+        bone = arm.pose.bones['mixamorig:%sHand%s1' % (side, finger)]
+        bone.rotation_mode = 'XYZ'
+        bone.rotation_euler.x = 0.8
+        bpy.context.view_layer.update()
+        posed = rig.evaluated_positions(obj, bpy.context.evaluated_depsgraph_get())
+        displacement = np.linalg.norm(posed[-1] - chain[-1])
+        assert displacement > 0.005 if moves else displacement < 1e-5
+        bone.rotation_euler.x = 0
+        bpy.context.view_layer.update()
+
+    # A mixed web joining thumb and index must not be assigned to the thumb.
+    mixed = np.concatenate((chain[:-1], np.repeat(chain[-1:], 20, axis=0)))
+    mixed_edges = np.array([(i, i + 1) for i in range(len(mixed) - 1)])
+    w = np.zeros((len(mixed), len(names)), dtype=np.float32)
+    w[:, names.index('mixamorig:%sHand' % side)] = 1
+    rig.finger_redistribute(mixed, w, names, {side: lay}, 1.8, mixed_edges)
+    assert w[-1, index_ids].sum() > 0.5
 
 # Exercise the actual Blender armature modifier: curling one finger must not pull the others.
 for side in ('Left', 'Right'):
