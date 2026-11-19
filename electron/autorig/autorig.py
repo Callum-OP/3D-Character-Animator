@@ -420,7 +420,7 @@ def build_armature(L):
     spec = list(CENTER_BONES) + side_bones('Left') + side_bones('Right')
     made = {}
     for name, parent, h, t in spec:
-        b = arm_data.edit_bones.new('mixamorig:' + name)
+        b = arm_data.edit_bones.new(name)
         b.head, b.tail = L[h].copy(), L[t].copy()
         if (b.tail - b.head).length < 1e-5:
             b.tail = b.head + Vector((0, 0, 0.01))
@@ -526,12 +526,12 @@ def add_fingers(arm, L, body_objs, report):
         near = cos[(d < 1.4 * a0.length) & (((cos - np.array(wrist[:])) @ np.array(a0.normalized()[:])) > -0.1 * a0.length)]
         layout, (a, ex, up, hl) = finger_layout(wrist, tip, side, near)
         layouts[side] = {'joints': layout, 'frame': (a, ex, up, hl), 'wrist': np.array(wrist[:])}
-        hand = eb['mixamorig:%sHand' % side]
+        hand = eb['%sHand' % side]
         for f in FINGER_BUILD_ORDER:
             J = layout[f]
             parent = hand
             for kk in range(4):
-                b = eb.new('mixamorig:%sHand%s%d' % (side, f, kk + 1))
+                b = eb.new('%sHand%s%d' % (side, f, kk + 1))
                 b.head = J[kk].copy()
                 seg = (J[kk + 1] - J[kk]).length if kk < 3 else (J[3] - J[2]).length * 0.35
                 if f == 'Thumb':
@@ -570,7 +570,7 @@ def finger_redistribute(co, W, names, layouts, height, edges=None):
     eps = 0.0015 * height
     done = 0
     for side, lay in layouts.items():
-        hi = names.index('mixamorig:%sHand' % side)
+        hi = names.index('%sHand' % side)
         sel = np.where(W[:, hi] > 1e-4)[0]
         if not len(sel):
             continue
@@ -580,7 +580,7 @@ def finger_redistribute(co, W, names, layouts, height, edges=None):
             J = [np.array(j[:]) for j in lay['joints'][f]]
             segs.append((hi, lay['wrist'], J[0]))
             for k in range(3):
-                segs.append((names.index('mixamorig:%sHand%s%d' % (side, f, k + 1)), J[k], J[k + 1]))
+                segs.append((names.index('%sHand%s%d' % (side, f, k + 1)), J[k], J[k + 1]))
         D = np.empty((len(P), len(segs)))
         for j, (_, p0, p1) in enumerate(segs):
             ab = p1 - p0
@@ -1024,14 +1024,14 @@ def side_coherence(Wobj, co, arm, names, height, axis_x=0.0):
     D = bone_distances(co, arm, names)
     W = Wobj.copy()
     z = co[:, 2]
-    knee_z = float(np.mean([(arm.matrix_world @ arm.data.bones['mixamorig:%sLeg' % s].head_local).z for s in ('Left', 'Right')]))
-    hip_z = float(np.mean([(arm.matrix_world @ arm.data.bones['mixamorig:%sUpLeg' % s].head_local).z for s in ('Left', 'Right')]))
+    knee_z = float(np.mean([(arm.matrix_world @ arm.data.bones['%sLeg' % s].head_local).z for s in ('Left', 'Right')]))
+    hip_z = float(np.mean([(arm.matrix_world @ arm.data.bones['%sUpLeg' % s].head_local).z for s in ('Left', 'Right')]))
     t = np.clip((z - knee_z) / max(hip_z - knee_z, 1e-6), 0.0, 1.0)
     margins = {'leg': (0.012 * t) * height, 'arm': np.full(len(z), 0.004 * height)}
     removed = 0
     for part, bones in LIMB_PARTS.items():
-        li = [names.index('mixamorig:Left' + b) for b in bones]
-        ri = [names.index('mixamorig:Right' + b) for b in bones]
+        li = [names.index('Left' + b) for b in bones]
+        ri = [names.index('Right' + b) for b in bones]
         dl, dr = D[:, li].min(axis=1), D[:, ri].min(axis=1)
         m = margins[part]
         is_left = dl + m < dr
@@ -1041,7 +1041,7 @@ def side_coherence(Wobj, co, arm, names, height, axis_x=0.0):
             tie = ~(is_left | is_right) & (t < 0.05)
             # At the pelvis, fade the opposite leg's share continuously rather than cutting it
             # abruptly at the margin. A cap on the share makes repeated cleanup passes stable.
-            hip_i = names.index('mixamorig:Hips')
+            hip_i = names.index('Hips')
             total = W[:, li].sum(axis=1) + W[:, ri].sum(axis=1) + W[:, hip_i]
             for delta, kill in ((dr - dl, ri), (dl - dr, li)):
                 q = np.clip((delta / np.maximum(m, 1e-12) - 0.75) / 0.5, 0.0, 1.0)
@@ -1068,7 +1068,7 @@ def side_coherence(Wobj, co, arm, names, height, axis_x=0.0):
     # The legs cannot influence the upper body. Bone heat sometimes hands a rim or an inner shell near the shoulders
     # a big UpLeg weight (it happened on an open jacket); a vertex up there would then fly off whenever a leg moves.
     # Leg weights are fully allowed up to a little above the hip joint and fade to nothing by 12% of the height above.
-    leg_idx = [names.index('mixamorig:%s%s' % (sd, b)) for sd in ('Left', 'Right') for b in LIMB_PARTS['leg']]
+    leg_idx = [names.index('%s%s' % (sd, b)) for sd in ('Left', 'Right') for b in LIMB_PARTS['leg']]
     fade = np.clip((hip_z + 0.12 * height - z) / (0.08 * height), 0.0, 1.0)
     fade = fade * fade * (3.0 - 2.0 * fade)
     cut = fade < 0.999
@@ -1095,7 +1095,7 @@ def limb_reach_cap(Wobj, co, arm, names, height, lo=1.7, hi=2.7):
     capped = 0
     for side in ('Left', 'Right'):
         for part in CAP_PARTS:
-            j = names.index('mixamorig:%s%s' % (side, part))
+            j = names.index('%s%s' % (side, part))
             owned = (W.argmax(axis=1) == j) & (W[:, j] > 0.6)
             if owned.sum() < 30:
                 continue
@@ -1115,12 +1115,12 @@ def clavicle_rebalance(Wobj, co, arm, names, height):
     arms outward. Cap the clavicle weight to a profile along the bone and
     hand the excess to Spine2; arm-dominated vertices (the deltoid) and everything beyond the joint are untouched."""
     W = Wobj.copy()
-    s2 = names.index('mixamorig:Spine2')
+    s2 = names.index('Spine2')
     moved = 0
     for side in ('Left', 'Right'):
-        sh = names.index('mixamorig:%sShoulder' % side)
-        arm_i = names.index('mixamorig:%sArm' % side)
-        b = arm.data.bones['mixamorig:%sShoulder' % side]
+        sh = names.index('%sShoulder' % side)
+        arm_i = names.index('%sArm' % side)
+        b = arm.data.bones['%sShoulder' % side]
         h = np.array((arm.matrix_world @ b.head_local)[:])
         t = np.array((arm.matrix_world @ b.tail_local)[:])
         ab = t - h
@@ -1149,10 +1149,10 @@ def spine_profile(Wobj, co, arm, names):
     height profile. The hand-over heights are: Hips -> Spine at the Spine joint,
     Spine -> Spine1 just under the Spine1 joint, Spine1 -> Spine2 well under the Spine2 joint, each a ramp about as
     wide as the next segment."""
-    idx = [names.index('mixamorig:' + n) for n in SPINE_CHAIN]
+    idx = [names.index(n) for n in SPINE_CHAIN]
     heads = []
     for n in SPINE_CHAIN + ('Neck',):
-        b = arm.data.bones['mixamorig:' + n]
+        b = arm.data.bones[n]
         heads.append(float((arm.matrix_world @ b.head_local).z))
     h0, h1, h2, h3, h4 = heads
     cross = [h1, h2 - 0.19 * (h2 - h1), h3 - 0.38 * (h3 - h2)]
@@ -1166,19 +1166,19 @@ def spine_profile(Wobj, co, arm, names):
     mass = W[:, idx].sum(axis=1)
     # above the neck base the spine chain's influence fades out and the Neck bone takes over (bone heat bleeds some
     # spine weight up into the neck; consolidating it all on Spine2 would make Spine2 own the neck)
-    head_z = float((arm.matrix_world @ arm.data.bones['mixamorig:Head'].head_local).z)
+    head_z = float((arm.matrix_world @ arm.data.bones['Head'].head_local).z)
     fade = np.clip((z - h4) / max(0.5 * (head_z - h4), 1e-9), 0.0, 1.0)
     to_neck = mass * fade
     W[:, idx] = (prof * (mass - to_neck)[:, None]).astype(W.dtype)
-    W[:, names.index('mixamorig:Neck')] += to_neck.astype(W.dtype)
+    W[:, names.index('Neck')] += to_neck.astype(W.dtype)
     return W
 
 
 def hip_rebalance(Wobj, co, arm, names, height):
     """Cap thigh influence across the pelvis, transferring excess to Hips."""
-    hips = names.index('mixamorig:Hips')
-    legs = [names.index('mixamorig:%sUpLeg' % side) for side in ('Left', 'Right')]
-    hip_z = float(np.mean([(arm.matrix_world @ arm.data.bones['mixamorig:%sUpLeg' % side].head_local).z
+    hips = names.index('Hips')
+    legs = [names.index('%sUpLeg' % side) for side in ('Left', 'Right')]
+    hip_z = float(np.mean([(arm.matrix_world @ arm.data.bones['%sUpLeg' % side].head_local).z
                            for side in ('Left', 'Right')]))
     t = np.clip((co[:, 2] - (hip_z - 0.08 * height)) / (0.16 * height), 0.0, 1.0)
     cap = 1.0 - t * t * (3.0 - 2.0 * t)
@@ -1197,7 +1197,7 @@ def joint_soften(staged, arm, height, radius_frac, reach_frac, strength, cross_a
         return staged
     P = [x[2] for x in staged]
     wide = cross_mesh_blend([x[1] for x in staged], P, height, radius_frac, 1.0, *cross_args)
-    joints = [np.array((arm.matrix_world @ arm.data.bones['mixamorig:%s%s' % (sd, part)].head_local)[:]) for sd in ('Left', 'Right')]
+    joints = [np.array((arm.matrix_world @ arm.data.bones['%s%s' % (sd, part)].head_local)[:]) for sd in ('Left', 'Right')]
     reach = reach_frac * height
     out = []
     for (o, W, co), Ww in zip(staged, wide):
@@ -1211,9 +1211,9 @@ def joint_soften(staged, arm, height, radius_frac, reach_frac, strength, cross_a
 
 def head_lock(Wobj, co, names, L):
     """Everything clearly above the neck, whose weights are spine/neck/head, is Head 100% (face rule)."""
-    head_i = names.index('mixamorig:Head')
-    neck_i = names.index('mixamorig:Neck')
-    spine_ids = [names.index('mixamorig:' + n) for n in ('Spine', 'Spine1', 'Spine2', 'Hips')]
+    head_i = names.index('Head')
+    neck_i = names.index('Neck')
+    spine_ids = [names.index(n) for n in ('Spine', 'Spine1', 'Spine2', 'Hips')]
     allowed = set([head_i, neck_i] + spine_ids)
     z_cut = L['neck'].z + 0.45 * (L['head_top'].z - L['neck'].z)
     argmax = Wobj.argmax(axis=1)
@@ -1302,12 +1302,12 @@ def evaluated_positions(obj, dg):
 
 
 POSES = {
-    'arms_down_80': {'mixamorig:LeftArm': (0, 0, -80), 'mixamorig:RightArm': (0, 0, 80)},
-    'elbows_bent_100': {'mixamorig:LeftForeArm': (0, 100, 0), 'mixamorig:RightForeArm': (0, -100, 0)},
-    'knees_bent_90': {'mixamorig:LeftLeg': (-90, 0, 0), 'mixamorig:RightLeg': (-90, 0, 0)},
-    'hips_flexed_70': {'mixamorig:LeftUpLeg': (-70, 0, 0), 'mixamorig:RightUpLeg': (-70, 0, 0)},
-    'spine_bend_40': {'mixamorig:Spine1': (35, 0, 0), 'mixamorig:Spine': (25, 0, 0)},
-    'head_turn_60': {'mixamorig:Head': (0, 60, 0)},
+    'arms_down_80': {'LeftArm': (0, 0, -80), 'RightArm': (0, 0, 80)},
+    'elbows_bent_100': {'LeftForeArm': (0, 100, 0), 'RightForeArm': (0, -100, 0)},
+    'knees_bent_90': {'LeftLeg': (-90, 0, 0), 'RightLeg': (-90, 0, 0)},
+    'hips_flexed_70': {'LeftUpLeg': (-70, 0, 0), 'RightUpLeg': (-70, 0, 0)},
+    'spine_bend_40': {'Spine1': (35, 0, 0), 'Spine': (25, 0, 0)},
+    'head_turn_60': {'Head': (0, 60, 0)},
 }
 
 
@@ -1431,7 +1431,7 @@ def main():
     locked = 0
     side_removed = 0
     clav_moved = 0
-    crotch_z = float(np.mean([(arm.matrix_world @ arm.data.bones['mixamorig:%sUpLeg' % sd].head_local).z for sd in ('Left', 'Right')]))
+    crotch_z = float(np.mean([(arm.matrix_world @ arm.data.bones['%sUpLeg' % sd].head_local).z for sd in ('Left', 'Right')]))
     # stage 1 (per mesh): side split, limb reach, smoothing along the mesh's own edges
     stage1 = []
     for o in body:
@@ -1554,7 +1554,7 @@ def main():
         W = dense_weights(o, names)
         tot = W.sum(axis=0)
         top = int(tot.argmax())
-        per_component[o.name] = {'bone': names[top].replace('mixamorig:', ''), 'share': round(float(tot[top] / max(tot.sum(), 1e-9)), 3)}
+        per_component[o.name] = {'bone': names[top], 'share': round(float(tot[top] / max(tot.sum(), 1e-9)), 3)}
         s = W.sum(axis=1)
         unweighted += int((s < 0.99).sum())
         wsum_err = max(wsum_err, float(np.abs(s - 1.0).max()))

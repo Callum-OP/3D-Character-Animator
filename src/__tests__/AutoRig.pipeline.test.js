@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { blenderPath } from './helpers/blendFixtures.js'
 
 const require = createRequire(import.meta.url)
@@ -115,9 +116,14 @@ describe.skipIf(!blenderPath)('real Blender: synthetic humanoid → rigged glb',
 
     // expected bone names, one skin
     const names = j.nodes.map((n) => n.name)
-    for (const n of ['mixamorig:Hips', 'mixamorig:Spine2', 'mixamorig:Head', 'mixamorig:LeftForeArm', 'mixamorig:RightLeg', 'mixamorig:LeftToeBase']) expect(names).toContain(n)
+    for (const n of ['Hips', 'Spine2', 'Head', 'LeftForeArm', 'RightLeg', 'LeftToeBase']) expect(names).toContain(n)
     expect(j.skins).toHaveLength(1)
+    for (const i of j.skins[0].joints) expect(j.nodes[i].name).not.toContain(':')
     expect(j.skins[0].joints.length).toBe(report.bones)
+    const parsed = await new GLTFLoader().parseAsync(Uint8Array.from(glb).buffer, '')
+    const loadedBones = []
+    parsed.scene.traverse((node) => { if (node.isBone) loadedBones.push(node.name) })
+    for (const i of j.skins[0].joints) expect(loadedBones).toContain(j.nodes[i].name)
 
     // weights: every vertex bound, normalised, at most 4 influences
     expect(report.weights.unweighted_vertices).toBe(0)
@@ -140,7 +146,7 @@ describe.skipIf(!blenderPath)('real Blender: synthetic humanoid → rigged glb',
 
     // thin blade + eyes are bound rigidly, not heat-diffused
     const rigid = Object.fromEntries(report.rigid_bindings.map((r) => [r.name, r.bone]))
-    expect(rigid).toMatchObject({ Blade: 'mixamorig:RightHand', LEye: 'mixamorig:Head', REye: 'mixamorig:Head' })
+    expect(rigid).toMatchObject({ Blade: 'RightHand', LEye: 'Head', REye: 'Head' })
 
     // left/right symmetry was detected and applied
     expect(report.symmetry.applied).toBe(true)
@@ -157,7 +163,7 @@ describe.skipIf(!blenderPath)('real Blender: synthetic humanoid → rigged glb',
     const { glb } = await runAutoRig({ blenderPath, input, landmarks })
     const j = glbJson(glb)
     for (const [bone, want] of Object.entries(BONE_X)) {
-      const a = worldAxes(j, 'mixamorig:' + bone)
+      const a = worldAxes(j, bone)
       expect(angleDeg(a.x, want), `${bone} local X`).toBeLessThan(12)
     }
   }, 300000)
@@ -167,14 +173,14 @@ describe.skipIf(!blenderPath)('real Blender: synthetic humanoid → rigged glb',
     const j = glbJson(glb)
     const names = j.nodes.map((n) => n.name)
     for (const side of ['Left', 'Right']) {
-      for (const f of ['Thumb', 'Index', 'Middle', 'Ring', 'Pinky']) for (const k of [1, 2, 3, 4]) expect(names, `${side}Hand${f}${k}`).toContain(`mixamorig:${side}Hand${f}${k}`)
+      for (const f of ['Thumb', 'Index', 'Middle', 'Ring', 'Pinky']) for (const k of [1, 2, 3, 4]) expect(names, `${side}Hand${f}${k}`).toContain(`${side}Hand${f}${k}`)
     }
     expect(report.bones).toBe(22 + 40)
     expect(report.fingers.bones_added).toBe(40)
     // non-thumb fingers share the arm's sideways axis: left -Z, right +Z
     for (const f of ['Index', 'Middle', 'Ring', 'Pinky']) {
-      expect(angleDeg(worldAxes(j, `mixamorig:LeftHand${f}2`).x, [0, 0, -1]), `Left ${f}`).toBeLessThan(15)
-      expect(angleDeg(worldAxes(j, `mixamorig:RightHand${f}2`).x, [0, 0, 1]), `Right ${f}`).toBeLessThan(15)
+      expect(angleDeg(worldAxes(j, `LeftHand${f}2`).x, [0, 0, -1]), `Left ${f}`).toBeLessThan(15)
+      expect(angleDeg(worldAxes(j, `RightHand${f}2`).x, [0, 0, 1]), `Right ${f}`).toBeLessThan(15)
     }
     // the finger bones really carry weight (a hand that cannot curl would be "not rigged")
     expect(report.weights.unweighted_vertices).toBe(0)
@@ -185,8 +191,8 @@ describe.skipIf(!blenderPath)('real Blender: synthetic humanoid → rigged glb',
     const { glb } = await runAutoRig({ blenderPath, input, landmarks })
     const j = glbJson(glb)
     // left fingers: X tilted ~6 deg DOWN from straight back (-Z); right fingers: ~6 deg UP from straight forward (+Z)
-    const l = worldAxes(j, 'mixamorig:LeftHandMiddle2').x
-    const r = worldAxes(j, 'mixamorig:RightHandMiddle2').x
+    const l = worldAxes(j, 'LeftHandMiddle2').x
+    const r = worldAxes(j, 'RightHandMiddle2').x
     expect(angleDeg(l, [0, 0, -1])).toBeGreaterThan(4)
     expect(angleDeg(l, [0, 0, -1])).toBeLessThan(8)
     expect(l[1]).toBeLessThan(-0.06)
@@ -194,13 +200,13 @@ describe.skipIf(!blenderPath)('real Blender: synthetic humanoid → rigged glb',
     expect(angleDeg(r, [0, 0, 1])).toBeLessThan(8)
     expect(r[1]).toBeGreaterThan(0.06)
     // the hand carries the same ~6 degrees
-    expect(angleDeg(worldAxes(j, 'mixamorig:LeftHand').x, [0, 0, -1])).toBeGreaterThan(4)
+    expect(angleDeg(worldAxes(j, 'LeftHand').x, [0, 0, -1])).toBeGreaterThan(4)
   }, 300000)
 
   it('points the foot forward and down when the detected direction is close', async () => {
     const { glb } = await runAutoRig({ blenderPath, input, landmarks })
     const j = glbJson(glb)
-    for (const side of ['Left', 'Right']) expect(angleDeg(worldAxes(j, `mixamorig:${side}Foot`).y, [0, -0.57, 0.82].map((c) => c / Math.hypot(0, 0.57, 0.82))), `${side} foot`).toBeLessThan(4)
+    for (const side of ['Left', 'Right']) expect(angleDeg(worldAxes(j, `${side}Foot`).y, [0, -0.57, 0.82].map((c) => c / Math.hypot(0, 0.57, 0.82))), `${side} foot`).toBeLessThan(4)
   }, 300000)
 
   it('rebalances the clavicle so it cannot hold the chest, and the step can be switched off', async () => {
@@ -214,10 +220,10 @@ describe.skipIf(!blenderPath)('real Blender: synthetic humanoid → rigged glb',
     const { glb } = await runAutoRig({ blenderPath, input, landmarks })
     const j = glbJson(glb)
     for (const side of ['Left', 'Right']) {
-      const hand = j.nodes.find((n) => n.name === `mixamorig:${side}Hand`)
+      const hand = j.nodes.find((n) => n.name === `${side}Hand`)
       const children = hand.children.map((i) => j.nodes[i].name)
       for (const finger of ['Thumb', 'Index', 'Middle', 'Ring', 'Pinky']) {
-        expect(children).toContain(`mixamorig:${side}Hand${finger}1`)
+        expect(children).toContain(`${side}Hand${finger}1`)
       }
     }
   }, 300000)
@@ -352,6 +358,36 @@ describe.skipIf(!blenderPath || !python)('accuracy benchmark tool', () => {
     expect(res.pose_error_pct_of_height.index_curl_70.other_fingers_mean_pct).toBe(0)
     expect(res.fingers.mean_l1).toBe(0)
     expect(Object.keys(res.rest_axes_deg).length).toBeGreaterThan(15)
+    const json = glbJson(glb)
+    const writeGlb = (file) => {
+      const jsonBytes = Buffer.from(JSON.stringify(json))
+      const padded = Buffer.alloc(Math.ceil(jsonBytes.length / 4) * 4, 0x20)
+      jsonBytes.copy(padded)
+      const restOfGlb = glb.subarray(20 + glb.readUInt32LE(12))
+      const header = Buffer.from(glb.subarray(0, 20))
+      header.writeUInt32LE(20 + padded.length + restOfGlb.length, 8)
+      header.writeUInt32LE(padded.length, 12)
+      fs.writeFileSync(file, Buffer.concat([header, padded, restOfGlb]))
+    }
+    json.nodes.push({ name: 'Head' })
+    const collisionPath = path.join(dir, 'collision.glb')
+    writeGlb(collisionPath)
+    const poseCheck = spawn(python, ['-c', `
+import sys, numpy as np
+sys.path.insert(0, sys.argv[1])
+from benchmark import evaluate, run
+rest, _, _ = evaluate(sys.argv[2])
+posed, _, _ = evaluate(sys.argv[2], {'Head': (0, 60, 0)})
+assert np.max(np.linalg.norm(posed - rest, axis=1)) > 0.01
+assert run(sys.argv[3], sys.argv[2])['rest_rotation_deg']['Head'] == 0
+`, path.join(__dirname, '../../electron/autorig'), collisionPath, path.join(dir, 'rigged.glb')], { encoding: 'utf8', timeout: 120000 })
+    expect(poseCheck.status, poseCheck.stderr).toBe(0)
+    for (const i of json.skins[0].joints) json.nodes[i].name = `other:${json.nodes[i].name}`
+    const prefixedPath = path.join(dir, 'prefixed.glb')
+    writeGlb(prefixedPath)
+    const prefixed = spawn(python, [path.join(__dirname, '../../electron/autorig/benchmark.py'), prefixedPath, prefixedPath], { encoding: 'utf8', timeout: 120000 })
+    expect(prefixed.status).not.toBe(0)
+    expect(prefixed.stderr).toContain('expected unprefixed names')
     fs.rmSync(dir, { recursive: true, force: true })
   }, 400000)
 })

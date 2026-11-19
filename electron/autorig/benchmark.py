@@ -67,11 +67,11 @@ class Glb:
         bl = struct.unpack('<I', b[off:off + 4])[0]
         self.bin = b[off + 8:off + 8 + bl]
         self.nodes = self.j['nodes']
+        self.joint_nodes = list(dict.fromkeys(i for skin in self.j.get('skins', []) for i in skin['joints']))
         self.parent = {}
         for i, n in enumerate(self.nodes):
             for c in n.get('children', []):
                 self.parent[c] = i
-        self.name_to_node = {n.get('name'): i for i, n in enumerate(self.nodes)}
 
     def acc(self, k):
         a = self.j['accessors'][k]
@@ -152,7 +152,7 @@ class Glb:
         for j in s['joints']:
             cur, res = j, -1
             while cur is not None:
-                nm = (self.nodes[cur].get('name') or '').replace('mixamorig:', '').replace('mixamorig', '')
+                nm = self.nodes[cur].get('name') or ''
                 if nm in BODY:
                     res = BODY.index(nm)
                     break
@@ -164,19 +164,21 @@ class Glb:
 def evaluate(path, pose=None, absolute_by_name=None):
     """-> positions (all skinned meshes concatenated, world space), body weights (N x 22), per-bone world X axes"""
     g = Glb(path)
+    bone_nodes = {(g.nodes[i].get('name') or ''): i for i in g.joint_nodes}
+    if not any(bone in bone_nodes for bone in BODY):
+        raise ValueError('No recognized body bones in %s; expected unprefixed names such as Hips and LeftUpLeg' % path)
     deltas = {}
     if pose:
         for bone, (x, y, z) in pose.items():
-            i = g.name_to_node.get('mixamorig:' + bone, g.name_to_node.get('mixamorig' + bone))
+            i = bone_nodes.get(bone)
             if i is not None:
                 deltas[i] = euler_xyz(x, y, z)
     absolute = None
     if absolute_by_name:
         absolute = {}
-        norm = {(n.get('name') or '').replace(':', ''): i for i, n in enumerate(g.nodes)}
         for nm, (q, t) in absolute_by_name.items():
-            if nm in norm:
-                absolute[norm[nm]] = (q, t)
+            if nm in bone_nodes:
+                absolute[bone_nodes[nm]] = (q, t)
     world = g.world(deltas, absolute)
     P, W22 = [], []
     for pos, joints, wts, skin in g.skinned_meshes():
@@ -195,7 +197,7 @@ def evaluate(path, pose=None, absolute_by_name=None):
         W22.append(wb)
     axes = {}
     for bn in BODY:
-        i = g.name_to_node.get('mixamorig:' + bn, g.name_to_node.get('mixamorig' + bn))
+        i = bone_nodes.get(bn)
         if i is not None:
             axes[bn] = world[i][:3, 0] / max(np.linalg.norm(world[i][:3, 0]), 1e-12)
     return np.concatenate(P), np.concatenate(W22), axes
@@ -206,7 +208,7 @@ def finger_weights(path):
     g = Glb(path)
     parts = []
     for pos, joints, wts, skin in g.skinned_meshes():
-        names = [name.replace(':', '').replace('mixamorig', '') for name in g.joint_names(skin)]
+        names = g.joint_names(skin)
         groups = np.full(len(names), -1, dtype=int)
         for i, name in enumerate(names):
             for f, (side, finger) in enumerate(FINGERS):
@@ -272,8 +274,9 @@ def run(truth, rigged):
         g = Glb(path)
         W = g.world()
         out = {}
-        for i, n in enumerate(g.nodes):
-            nm = (n.get('name') or '').replace(':', '').replace('mixamorig', '')
+        for i in g.joint_nodes:
+            n = g.nodes[i]
+            nm = n.get('name') or ''
             if nm in BODY or (nm.startswith('LeftHand') and nm != 'LeftHand' and not nm.endswith('4')):
                 R = W[i][:3, :3]
                 out[nm] = R / np.maximum(np.linalg.norm(R, axis=0), 1e-12)

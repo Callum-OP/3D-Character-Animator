@@ -34,9 +34,9 @@ base_names = [bone.name for bone in arm.data.bones]
 # The upper pelvis must transition smoothly, while lower legs remain isolated.
 co = np.column_stack((np.linspace(0, 0.02, 401), np.zeros(401), np.full(401, 0.92)))
 weights = np.zeros((len(co), len(base_names)), dtype=np.float32)
-hips = base_names.index('mixamorig:Hips')
-left = base_names.index('mixamorig:LeftUpLeg')
-right = base_names.index('mixamorig:RightUpLeg')
+hips = base_names.index('Hips')
+left = base_names.index('LeftUpLeg')
+right = base_names.index('RightUpLeg')
 weights[:, hips], weights[:, left], weights[:, right] = 0.4, 0.3, 0.3
 result, _ = rig.side_coherence(weights, co, arm, base_names, 1.8)
 assert np.max(np.abs(np.diff(result[:, right]))) < 0.03
@@ -53,8 +53,8 @@ distances = rig.bone_distances
 try:
     def near_tie(points, armature, bone_names):
         d = np.ones((len(points), len(bone_names)))
-        d[:, bone_names.index('mixamorig:LeftLeg')] = 0.01045
-        d[:, bone_names.index('mixamorig:RightLeg')] = 0.01
+        d[:, bone_names.index('LeftLeg')] = 0.01045
+        d[:, bone_names.index('RightLeg')] = 0.01
         return d
     rig.bone_distances = near_tie
     near, _ = rig.side_coherence(weights[:1], np.array([[0.001, 0, 0.51]]), arm, base_names, 1.8)
@@ -82,7 +82,7 @@ assert np.array_equal(soft, leg_weights)
 # weights or restricting the lower thighs. The operation must be stable on repeat.
 pelvis_co = np.array([[0.1, 0, z] for z in np.linspace(0.65, 1.22, 501)])
 pelvis_weights = np.zeros((len(pelvis_co), len(base_names)), dtype=np.float32)
-spine = base_names.index('mixamorig:Spine')
+spine = base_names.index('Spine')
 pelvis_weights[:, left], pelvis_weights[:, hips], pelvis_weights[:, spine] = 0.8, 0.1, 0.1
 balanced, changed = rig.hip_rebalance(pelvis_weights, pelvis_co, arm, base_names, 1.8)
 assert changed > 0
@@ -109,7 +109,7 @@ for label, weights in (('raw', probe_weights), ('balanced', corrected)):
     bpy.context.scene.collection.objects.link(obj)
     rig.write_weights(obj, arm, base_names, weights)
     objects.append(obj)
-leg = arm.pose.bones['mixamorig:LeftUpLeg']
+leg = arm.pose.bones['LeftUpLeg']
 leg.rotation_mode = 'XYZ'
 leg.rotation_euler.x = 0.8
 bpy.context.view_layer.update()
@@ -149,7 +149,7 @@ samples = []
 for side in ('Left', 'Right'):
     thumb_direction = None
     for k in (1, 2, 3):
-        bone = arm.data.bones['mixamorig:%sHandThumb%d' % (side, k)]
+        bone = arm.data.bones['%sHandThumb%d' % (side, k)]
         assert (bone.head_local - layouts[side]['joints']['Thumb'][k - 1]).length < 1e-5
         direction = (bone.tail_local - bone.head_local).normalized()
         if thumb_direction is not None:
@@ -162,12 +162,12 @@ for side in ('Left', 'Right'):
         point += np.array(layouts[side]['frame'][2][:]) * 0.002
         samples.append((side, finger, point))
         w = np.zeros((1, len(names)), dtype=np.float32)
-        hand = names.index('mixamorig:%sHand' % side)
-        forearm = names.index('mixamorig:%sForeArm' % side)
+        hand = names.index('%sHand' % side)
+        forearm = names.index('%sForeArm' % side)
         w[0, hand], w[0, forearm] = 0.7, 0.3
         rig.finger_redistribute(point[None, :], w, names, layouts, 1.8)
-        own = [names.index('mixamorig:%sHand%s%d' % (side, finger, k)) for k in (1, 2, 3)]
-        other = [names.index('mixamorig:%sHand%s%d' % (side, f, k))
+        own = [names.index('%sHand%s%d' % (side, finger, k)) for k in (1, 2, 3)]
+        other = [names.index('%sHand%s%d' % (side, f, k))
                  for f in rig.FINGERS if f != finger for k in (1, 2, 3)]
         assert w[0, own].sum() > 0.65, (side, finger, w[0, own].sum())
         assert w[0, other].sum() == 0, (side, finger)
@@ -183,9 +183,9 @@ chain = [np.array((middle[1].lerp(middle[2], t))[:]) for t in np.linspace(0.1, 0
 chain[-1] = np.array(index[1].lerp(index[2], 0.9)[:])
 chain = np.array(chain)
 chain_edges = np.array([(i, i + 1) for i in range(len(chain) - 1)])
-hand = names.index('mixamorig:LeftHand')
-middle_ids = [names.index('mixamorig:LeftHandMiddle%d' % k) for k in (1, 2, 3)]
-index_ids = [names.index('mixamorig:LeftHandIndex%d' % k) for k in (1, 2, 3)]
+hand = names.index('LeftHand')
+middle_ids = [names.index('LeftHandMiddle%d' % k) for k in (1, 2, 3)]
+index_ids = [names.index('LeftHandIndex%d' % k) for k in (1, 2, 3)]
 naive = np.zeros((len(chain), len(names)), dtype=np.float32)
 naive[:, hand] = 1
 topological = naive.copy()
@@ -200,7 +200,7 @@ chain_obj = bpy.data.objects.new('connected finger', chain_mesh)
 bpy.context.scene.collection.objects.link(chain_obj)
 rig.write_weights(chain_obj, arm, names, topological)
 for finger, expected in (('Index', False), ('Middle', True)):
-    bone = arm.pose.bones['mixamorig:LeftHand%s1' % finger]
+    bone = arm.pose.bones['LeftHand%s1' % finger]
     bone.rotation_mode = 'XYZ'
     bone.rotation_euler.x = 0.8
     bpy.context.view_layer.update()
@@ -230,12 +230,12 @@ for side in ('Left', 'Right'):
     chain = np.array(chain)
     edges = np.array([(i, i + 1) for i in range(len(chain) - 1)])
     w = np.zeros((len(chain), len(names)), dtype=np.float32)
-    w[:, names.index('mixamorig:%sHand' % side)] = 1
+    w[:, names.index('%sHand' % side)] = 1
     naive, connected = w.copy(), w.copy()
     rig.finger_redistribute(chain, naive, names, {side: lay}, 1.8)
     rig.finger_redistribute(chain, connected, names, {side: lay}, 1.8, edges)
-    thumb_ids = [names.index('mixamorig:%sHandThumb%d' % (side, k)) for k in (1, 2, 3)]
-    index_ids = [names.index('mixamorig:%sHandIndex%d' % (side, k)) for k in (1, 2, 3)]
+    thumb_ids = [names.index('%sHandThumb%d' % (side, k)) for k in (1, 2, 3)]
+    index_ids = [names.index('%sHandIndex%d' % (side, k)) for k in (1, 2, 3)]
     assert naive[-1, index_ids].sum() > 0.5
     assert connected[-1, thumb_ids].sum() > 0.5
     assert connected[-1, index_ids].sum() == 0
@@ -245,7 +245,7 @@ for side in ('Left', 'Right'):
     bpy.context.scene.collection.objects.link(obj)
     rig.write_weights(obj, arm, names, connected)
     for finger, moves in (('Thumb', True), ('Index', False)):
-        bone = arm.pose.bones['mixamorig:%sHand%s1' % (side, finger)]
+        bone = arm.pose.bones['%sHand%s1' % (side, finger)]
         bone.rotation_mode = 'XYZ'
         bone.rotation_euler.x = 0.8
         bpy.context.view_layer.update()
@@ -259,7 +259,7 @@ for side in ('Left', 'Right'):
     mixed = np.concatenate((chain[:-1], np.repeat(chain[-1:], 20, axis=0)))
     mixed_edges = np.array([(i, i + 1) for i in range(len(mixed) - 1)])
     w = np.zeros((len(mixed), len(names)), dtype=np.float32)
-    w[:, names.index('mixamorig:%sHand' % side)] = 1
+    w[:, names.index('%sHand' % side)] = 1
     rig.finger_redistribute(mixed, w, names, {side: lay}, 1.8, mixed_edges)
     assert w[-1, index_ids].sum() > 0.5
 
@@ -274,11 +274,11 @@ sample_obj = bpy.data.objects.new('finger samples', sample_mesh)
 bpy.context.scene.collection.objects.link(sample_obj)
 weights = np.zeros((len(samples), len(names)), dtype=np.float32)
 for i, (side, _, _) in enumerate(samples):
-    weights[i, names.index('mixamorig:%sHand' % side)] = 1.0
+    weights[i, names.index('%sHand' % side)] = 1.0
 rig.finger_redistribute(sample_co, weights, names, layouts, 1.8)
 rig.write_weights(sample_obj, arm, names, weights)
 for finger in ('Thumb', 'Index'):
-    bone = arm.pose.bones['mixamorig:LeftHand%s1' % finger]
+    bone = arm.pose.bones['LeftHand%s1' % finger]
     bone.rotation_mode = 'XYZ'
     bone.rotation_euler.x = 0.8
     bpy.context.view_layer.update()
