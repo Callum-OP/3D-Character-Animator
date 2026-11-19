@@ -1625,7 +1625,7 @@ const _pp = new THREE.Vector3()
 const _pq = new THREE.Quaternion()
 
 function fmtNum(n) {
-  return (Math.abs(n) < 1e-6 ? 0 : n).toFixed(4)
+  return (Math.abs(n) < 1e-9 ? 0 : n).toFixed(8)
 }
 
 // A bone's world-space rotation with any scale/reflection in its ancestor
@@ -1703,6 +1703,30 @@ export function exportAnimationBVH(animData, fps, duration, clipName, playbackSo
   const totalDuration = namedClip ? namedClip.duration : duration
   if (!totalDuration || totalDuration <= 0) return null
 
+  const savedBones = bones.map((bone) => ({
+    bone, position: bone.position.clone(), quaternion: bone.quaternion.clone(), scale: bone.scale.clone(),
+  }))
+  const savedPos = a.model.root.position.clone()
+  const savedQuat = a.model.root.quaternion.clone()
+  restoreRest()
+  a.model.root.updateWorldMatrix(true, true)
+
+  const restOffsets = new Map()
+  const restRotations = new Map()
+  for (const b of bones) {
+    if (isRoot(b)) {
+      restOffsets.set(b, new THREE.Vector3())
+      restRotations.set(b, getWorldQuat(b).clone())
+      continue
+    }
+    b.getWorldPosition(_bp)
+    b.parent.getWorldPosition(_pp)
+    _pq.copy(getWorldQuat(b.parent)).invert()
+    restOffsets.set(b, _bp.clone().sub(_pp).applyQuaternion(_pq))
+    restRotations.set(b, getWorldQuat(b).clone().premultiply(_pq))
+  }
+  const restRootPosition = rootBone.getWorldPosition(new THREE.Vector3())
+
   // --- sample the animation frame by frame, on a throwaway mixer so this
   // never disturbs whatever the live a.mixer/a.action are doing ---
   const clip = namedClip || buildEditClip(animData.tracks, duration)
@@ -1713,9 +1737,6 @@ export function exportAnimationBVH(animData, fps, duration, clipName, playbackSo
   bvhAction.play()
 
   const rootKeys = (animData.root || []).slice().sort((x, y) => x.time - y.time)
-  const savedPos = a.model.root.position.clone()
-  const savedQuat = a.model.root.quaternion.clone()
-
   const numFrames = Math.max(2, Math.round(totalDuration * fps) + 1)
   const frameTime = totalDuration / (numFrames - 1)
   const frames = []
@@ -1779,32 +1800,14 @@ export function exportAnimationBVH(animData, fps, duration, clipName, playbackSo
   // --- put everything back exactly how it was before export ---
   mixer.stopAllAction()
   mixer.uncacheClip(clip)
-  restoreRest()
+  for (const { bone, position, quaternion, scale } of savedBones) {
+    bone.position.copy(position)
+    bone.quaternion.copy(quaternion)
+    bone.scale.copy(scale)
+  }
   a.model.root.position.copy(savedPos)
   a.model.root.quaternion.copy(savedQuat)
   a.model.root.updateWorldMatrix(true, true)
-
-  // Rest OFFSETS, one per non-root bone: the bone's rest position relative to
-  // its parent, expressed in the parent's UN-SCALED rotated frame (world-space
-  // delta, un-rotated by the parent's world orientation) rather than read
-  // straight off bone.position. Plain bone.position is defined in the
-  // parent's own (possibly scaled/mirrored) local space, so if a rig mirrors
-  // one side via a negative scale anywhere above a bone — a common cheap way
-  // to build a symmetric left/right pair — that bone's offset comes out
-  // mirrored to the wrong side once BVH (which has no scale channels at all)
-  // drops the scale. Computing it from world positions sidesteps that.
-  const restOffsets = new Map()
-  for (const b of bones) {
-    if (isRoot(b)) {
-      restOffsets.set(b, new THREE.Vector3())
-      continue
-    }
-    b.getWorldPosition(_bp)
-    b.parent.getWorldPosition(_pp)
-    getWorldQuat(b.parent)
-    _pq.copy(_wq2).invert()
-    restOffsets.set(b, _bp.clone().sub(_pp).applyQuaternion(_pq))
-  }
 
   // --- write HIERARCHY (rest offsets), collecting the channel order ---
   const order = []
@@ -1830,7 +1833,7 @@ export function exportAnimationBVH(animData, fps, duration, clipName, playbackSo
   write(rootBone, 0)
 
   // --- write MOTION (channel values per frame, in the same order) ---
-  out += `MOTION\nFrames: ${numFrames}\nFrame Time: ${frameTime.toFixed(6)}\n`
+  out += `MOTION\nFrames: ${numFrames}\nFrame Time: ${frameTime.toFixed(9)}\n`
   for (const fr of frames) {
     const parts = []
     for (const b of order) {
@@ -1840,6 +1843,17 @@ export function exportAnimationBVH(animData, fps, duration, clipName, playbackSo
     }
     out += parts.join(' ') + '\n'
   }
+  // BVH has no rest-rotation fields. Keep the reference pose after the motion
+  // so ordinary BVH readers can still play the unchanged frame data.
+  const rest = {
+    root: restRootPosition.applyQuaternion(yawCancel).toArray(),
+    rotations: order.map((b) => {
+      const q = restRotations.get(b).clone()
+      if (isRoot(b)) q.premultiply(yawCancel)
+      return q.toArray()
+    }),
+  }
+  out += `# AnimareRestPose ${JSON.stringify(rest)}\n`
   return out
 }
 

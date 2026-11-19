@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import * as THREE from 'three'
 import { initAnimation, setAnimationModel, selectClip, stop, exportAnimationBVH } from '../three/animation.js'
+import { parseBVH, buildNameMatch, buildSlotMapping, mergeNames, retargetParsed } from '../three/bvh.js'
 
 // Minimal humanoid-ish rig: Hips -> LeftUpLeg -> LeftFoot
 //                                 -> RightUpLeg -> RightFoot
@@ -57,6 +58,128 @@ const refs = {
 }
 
 describe('exportAnimationBVH', () => {
+  it.each([0, Math.PI / 2])('round-trips a posed first frame with target yaw %s', async (yaw) => {
+    const makeModel = () => {
+      const model = buildFakeModel()
+      const hips = model.bones[0]
+      hips.position.y = 1
+      const hand = new THREE.Bone()
+      hand.name = 'LeftHand'
+      hand.position.set(0.5, 0.4, 0)
+      const finger = new THREE.Bone()
+      finger.name = 'LeftHandMiddle1'
+      finger.position.set(0.1, 0, 0)
+      hand.quaternion.setFromAxisAngle(new THREE.Vector3(1, 0, 0), 0.3)
+      hand.add(finger)
+      hips.add(hand)
+      model.bones.push(hand, finger)
+      model.root.updateMatrixWorld(true)
+      return model
+    }
+    const source = makeModel()
+    const target = makeModel()
+    target.root.rotation.y = yaw
+    const q = (axis, angle) => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(...axis), angle).toArray()
+    source.clips = [new THREE.AnimationClip('Posed', 1, [
+      new THREE.QuaternionKeyframeTrack('Hips.quaternion', [0, 1], [...q([0, 1, 0], 0.4), ...q([0, 1, 0], -0.3)]),
+      new THREE.QuaternionKeyframeTrack('LeftHand.quaternion', [0, 1], [...q([1, 0, 0], 0.8), ...q([0, 1, 0], -0.5)]),
+      new THREE.QuaternionKeyframeTrack('LeftHandMiddle1.quaternion', [0, 1], [...q([0, 0, 1], 0.7), ...q([0, 0, 1], -0.2)]),
+      new THREE.QuaternionKeyframeTrack('LeftFoot.quaternion', [0, 1], [...q([1, 0, 0], -0.6), ...q([1, 0, 0], 0.4)]),
+      new THREE.VectorKeyframeTrack('Hips.position', [0, 1], [0.2, 1.1, 0, 0.4, 1.2, 0.1]),
+    ])]
+    initAnimation(refs)
+    setAnimationModel(source, 'roundtrip-source')
+    selectClip('Posed')
+    const before = source.bones.map((b) => [b.position.clone(), b.quaternion.clone()])
+    const text = exportAnimationBVH({ tracks: {}, root: [] }, 10, 1, 'Posed', 'clip')
+    for (const [i, bone] of source.bones.entries()) {
+      expect(bone.position.distanceTo(before[i][0])).toBeLessThan(1e-8)
+      expect(bone.quaternion.toArray()).toEqual(before[i][1].toArray())
+    }
+
+    const parsed = await parseBVH({ name: 'roundtrip.bvh', text: async () => text })
+    const targetNames = target.bones.map((b) => b.name)
+    const slots = buildSlotMapping(targetNames, parsed.bones, target.bones, parsed.skeleton.bones)
+    const { names, hip } = mergeNames(buildNameMatch(targetNames, parsed.bones), slots)
+    const result = retargetParsed(parsed, target, names, hip)
+    const sourceMixer = new THREE.AnimationMixer(source.root)
+    const targetMixer = new THREE.AnimationMixer(target.root)
+    for (const [mixer, clip] of [[sourceMixer, source.clips[0]], [targetMixer, result.clip]]) {
+      const action = mixer.clipAction(clip)
+      action.setLoop(THREE.LoopOnce)
+      action.clampWhenFinished = true
+      action.play()
+    }
+    for (const t of [0, 0.5, 1]) {
+      sourceMixer.setTime(t)
+      targetMixer.setTime(t)
+      source.root.updateWorldMatrix(true, true)
+      target.root.updateWorldMatrix(true, true)
+      for (const [i, bone] of source.bones.entries()) {
+        const other = target.bones[i]
+        const facing = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw)
+        const a = bone.getWorldQuaternion(new THREE.Quaternion()).premultiply(facing).normalize()
+        const b = other.getWorldQuaternion(new THREE.Quaternion()).normalize()
+        expect(a.angleTo(b), `${bone.name} at ${t}`).toBeLessThan(0.0001)
+        const p = bone.getWorldPosition(new THREE.Vector3()).applyQuaternion(facing)
+        expect(p.distanceTo(other.getWorldPosition(new THREE.Vector3())), `${bone.name} at ${t}`).toBeLessThan(1e-6)
+      }
+    }
+  })
+
+  it('reports malformed exported rest-pose data', async () => {
+    await expect(parseBVH({ name: 'bad.bvh', text: async () => '# AnimareRestPose null\n' }))
+      .rejects.toThrow('invalid Animare rest pose')
+  })
+
+  it('does not bake the previously displayed pose into unanimated bones', async () => {
+    const model = buildFakeModel()
+    model.clips.push(new THREE.AnimationClip('Still', 1, []))
+    initAnimation(refs)
+    setAnimationModel(model, 'roundtrip-previous')
+    selectClip('Walk')
+    const foot = model.bones.find((b) => b.name === 'LeftFoot')
+    foot.quaternion.setFromAxisAngle(new THREE.Vector3(1, 0, 0), 1)
+    const text = exportAnimationBVH({ tracks: {}, root: [] }, 10, 1, 'Still', 'clip')
+    expect(foot.quaternion.angleTo(new THREE.Quaternion())).toBeCloseTo(1)
+    const parsed = await parseBVH({ name: 'still.bvh', text: async () => text })
+    const track = parsed.clip.tracks.find((t) => t.name === 'LeftFoot.quaternion')
+    expect(new THREE.Quaternion().fromArray(track.values).angleTo(new THREE.Quaternion())).toBeLessThan(1e-6)
+  })
+
+  it('round-trips a mirrored limb onto the same mirrored rig', async () => {
+    const source = buildFakeModel()
+    const target = buildFakeModel()
+    for (const model of [source, target]) {
+      model.bones.find((b) => b.name === 'RightUpLeg').scale.x = -1
+      model.bones.find((b) => b.name === 'RightFoot').position.z = 0.2
+    }
+    const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), 0.6)
+    source.clips = [new THREE.AnimationClip('Mirror', 1, [
+      new THREE.QuaternionKeyframeTrack('RightUpLeg.quaternion', [0, 1], [0, 0, 0, 1, ...q.toArray()]),
+    ])]
+    initAnimation(refs)
+    setAnimationModel(source, 'roundtrip-mirror')
+    selectClip('Mirror')
+    const text = exportAnimationBVH({ tracks: {}, root: [] }, 10, 1, 'Mirror', 'clip')
+    const parsed = await parseBVH({ name: 'mirror.bvh', text: async () => text })
+    const targetNames = target.bones.map((b) => b.name)
+    const slots = buildSlotMapping(targetNames, parsed.bones, target.bones, parsed.skeleton.bones)
+    const { names, hip } = mergeNames(buildNameMatch(targetNames, parsed.bones), slots)
+    const { clip } = retargetParsed(parsed, target, names, hip)
+    const mixers = [new THREE.AnimationMixer(source.root), new THREE.AnimationMixer(target.root)]
+    for (const [i, mixer] of mixers.entries()) {
+      const action = mixer.clipAction(i ? clip : source.clips[0])
+      action.setLoop(THREE.LoopOnce)
+      action.clampWhenFinished = true
+      action.play()
+      mixer.setTime(1)
+    }
+    const sourceFoot = source.bones.find((b) => b.name === 'RightFoot')
+    const targetFoot = target.bones.find((b) => b.name === 'RightFoot')
+    expect(sourceFoot.getWorldPosition(new THREE.Vector3()).distanceTo(targetFoot.getWorldPosition(new THREE.Vector3()))).toBeLessThan(1e-6)
+  })
+
   it('exports the WHOLE active clip, not just a single frozen pose', () => {
     initAnimation(refs)
     const model = buildFakeModel()
@@ -81,7 +204,7 @@ describe('exportAnimationBVH', () => {
     const motionLines = text
       .split('MOTION\n')[1]
       .split('\n')
-      .filter((l) => l.trim().length)
+      .filter((l) => l.trim().length && !l.startsWith('#'))
       .slice(2) // drop "Frames:" / "Frame Time:" lines
     expect(motionLines.length).toBe(numFrames)
 
@@ -110,7 +233,7 @@ describe('exportAnimationBVH', () => {
     const motionLines = text
       .split('MOTION\n')[1]
       .split('\n')
-      .filter((l) => l.trim().length)
+      .filter((l) => l.trim().length && !l.startsWith('#'))
       .slice(2)
     const lastFrame = motionLines[motionLines.length - 1].trim().split(/\s+/).map(Number)
 
@@ -213,7 +336,10 @@ describe('exportAnimationBVH', () => {
     const result = new BVHLoader().parse(text)
     const reRoot = result.skeleton.bones[0]
     const reMixer = new THREE.AnimationMixer(reRoot)
-    reMixer.clipAction(result.clip).play()
+    const action = reMixer.clipAction(result.clip)
+    action.setLoop(THREE.LoopOnce)
+    action.clampWhenFinished = true
+    action.play()
     reMixer.update(0)
     reRoot.updateWorldMatrix(true, true)
 
