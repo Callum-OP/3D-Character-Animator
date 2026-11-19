@@ -16,7 +16,7 @@ export function summariseRigReport(report) {
   const w = report.weights
   const lines = []
   lines.push(`Rigged: ${report.bones} bones, ${report.components?.length ?? '?'} parts (${report.rigid_bindings?.length ?? 0} bound rigidly).`)
-  if (report.fingers?.bones_added) lines.push(`Fingers: ${report.fingers.bones_added} finger bones added (five per hand, Mixamo names).`)
+  if (report.fingers?.bones_added) lines.push(`Fingers: ${report.fingers.bones_added} finger bones added (five per hand).`)
   lines.push(`Weights: ${w.unweighted_vertices} unweighted vertices, at most ${w.max_influences} influences per vertex.`)
   if (report.symmetry) lines.push(`Symmetry: ${report.symmetry.applied ? 'applied' : 'not applied'} (${Math.round(report.symmetry.coverage * 100)}% of the mesh matched its mirror).`)
   if (report.pose_check) {

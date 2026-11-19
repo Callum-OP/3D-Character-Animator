@@ -10,11 +10,11 @@ job.json: { "input": "mesh.glb|obj|ply|fbx", "output": "rigged.glb", "report": "
 Stages (accuracy first, every stage reports numbers instead of "looks fine"):
   1. import + apply transforms + weld-aware connected components
   2. classify components: body-like (skinned), rigid (thin shells, blades, small solids such as eyes)
-  3. template skeleton (Mixamo names) fitted to the landmarks
+  3. template skeleton fitted to the landmarks
   4. watertight voxel proxy of the body-like components -> Blender bone-heat weights on the proxy
      (retried at coarser voxel sizes if the solver fails)
   5. transfer proxy weights to every real vertex (nearest surface point, barycentric)
-  6. clean up: weld-consistent smoothing, head lock, mirror symmetry, 4 influences, normalise
+  6. clean up: weld-consistent and joint-local smoothing, head lock, mirror symmetry, 4 influences, normalise
   7. rigid components bound 100% to the nearest bone
   8. self-check: posed volume / stretch tests, written to the report
   9. export GLB
@@ -26,7 +26,7 @@ from mathutils.bvhtree import BVHTree
 from mathutils.kdtree import KDTree
 
 # ----------------------------------------------------------------------------------------------
-# Template: Mixamo names. (bone, parent, head landmark/expression, tail landmark/expression)
+# Template: (bone, parent, head landmark/expression, tail landmark/expression)
 # ----------------------------------------------------------------------------------------------
 CENTER_BONES = [
     ('Hips', None, 'pelvis', 'spine'),
@@ -38,11 +38,11 @@ CENTER_BONES = [
 ]
 
 
-# Mixamo's bone local axes (the "roll"), measured from a real Mixamo character, in glTF world space
+# Bone local axes (the "roll") in glTF world space
 # (Y up, +Z forward, +X = character left). Y always runs along the bone; this is the local X axis.
-# Clips and poses made for any Mixamo rig rotate bones about THESE axes, so a rig that has the right
+# Clips and poses rotate bones about these axes, so a rig that has the right
 # bone names but a different roll twists and bends the wrong way (stretched arms, folded legs).
-MIXAMO_X = {
+BONE_X = {
     'Hips': (1, 0, 0), 'Spine': (1, 0, 0), 'Spine1': (1, 0, 0), 'Spine2': (1, 0, 0), 'Neck': (1, 0, 0), 'Head': (1, 0, 0),
     'LeftShoulder': (0, 0, -1), 'LeftArm': (0, 0, -1), 'LeftForeArm': (0, 0, -1), 'LeftHand': (0, 0, -1),
     'RightShoulder': (0, 0, 1), 'RightArm': (0, 0, 1), 'RightForeArm': (0, 0, 1), 'RightHand': (0, 0, 1),
@@ -51,13 +51,10 @@ MIXAMO_X = {
 }
 
 
-# Mixamo's bone axes are not exactly the clean ones above: measured from a real Mixamo character, the hands and
-# fingers are rolled ~6 degrees, arms ~2.5, feet ~3 (left negative, right positive about the bone's own Y axis,
-# degrees). Clips authored for Mixamo drive the rig through these axes, so a constant offset here shows up as
-# fingertips bent up or a wrist turned.
+# Roll offsets in degrees about each bone's own Y axis (left negative, right positive).
 ROLL_OFFSET = {'Shoulder': 2.6, 'Arm': 2.4, 'ForeArm': 2.5, 'Hand': 6.2, 'Foot': 3.0, 'ToeBase': -2.5}
 FINGER_ROLL = 6.0
-# Mixamo's canonical bone DIRECTIONS (glTF world, Y up, +Z forward) for the bones whose direction a clip is most
+# Canonical bone directions (glTF world, Y up, +Z forward) for the bones whose direction a clip is most
 # sensitive to. A clip that sets absolute rotations (a pose, frame 0 of a mocap) is amplified along the whole limb by
 # a rest-direction mismatch, so when the detected direction is already close (< 20 deg) it is snapped to these.
 # (Not the clavicle: snapping it measurably worsened the shoulder deformation, because the bone must stay on the
@@ -107,9 +104,9 @@ DEFAULTS = {
     'rigid_thin_fraction': 0.03,   # PCA thickness below this fraction of height -> rigid
     'rigid_small_fraction': 0.07,  # whole component smaller than this (diagonal) -> rigid
     'head_lock': True,
-    'fingers': True,            # five fingers per hand, Mixamo names and axes
-    'clavicle_rebalance': True, # the clavicle cannot hold the chest (Mixamo-style shoulder weights)
-    'spine_profile': True,      # Mixamo-style height blend between the spine bones
+    'fingers': True,            # five fingers per hand
+    'clavicle_rebalance': True, # the clavicle cannot hold the chest
+    'spine_profile': True,      # height blend between the spine bones
     'skin_thin_on_body': True,  # thin pieces lying on the body are clothing, not rigid accessories
     'thin_on_body_frac': 0.02,  # mean distance to the body, fraction of the height
     'cross_mesh_blend': True,   # weights agree where different meshes (sleeve / torso / jacket layers) meet
@@ -120,6 +117,7 @@ DEFAULTS = {
     'shoulder_radius': 0.012,   # blend neighbourhood (fraction of the height) around the shoulders
     'shoulder_reach': 0.09,     # how far from the shoulder joint it applies
     'shoulder_strength': 0.9,
+    'hip_soften': True,         # smooth neighbouring body and clothing weights around the hip joints
     'limb_cap': True,           # limb bones cannot claim the body next to them
     'cap_lo': 1.7,
     'cap_hi': 2.7,
@@ -404,7 +402,7 @@ def fit_landmarks(raw):
     missing = [k for k in REQUIRED if k not in L]
     if missing:
         fail('Missing landmarks: ' + ', '.join(missing), 'landmarks')
-    # The clavicle starts a third of the way from the neck base to the shoulder joint, as in Mixamo rigs.
+    # The clavicle starts a third of the way from the neck base to the shoulder joint.
     # (Starting it at the chest centre makes the bone run through the chest and claim it.)
     for k in ('l', 'r'):
         L[k + '_clavicle'] = L['neck'] + (L[k + '_shoulder'] - L['neck']) * 0.33
@@ -431,8 +429,8 @@ def build_armature(L):
             cur = (b.tail - b.head)
             if cur.length > 1e-6 and math.degrees(cur.normalized().angle(want_dir)) < SNAP_MAX_DEG:
                 b.tail = b.head + want_dir * cur.length
-        # roll: make the bone's X axis the Mixamo one (projected so it stays perpendicular to the bone)
-        gx = MIXAMO_X[name]
+        # Project the desired X axis so it stays perpendicular to the bone.
+        gx = BONE_X[name]
         want_x = Vector((gx[0], -gx[2], gx[1]))  # glTF -> Blender axes
         y = (b.tail - b.head).normalized()
         x = want_x - y * want_x.dot(y)
@@ -454,12 +452,11 @@ def build_armature(L):
 
 
 # ----------------------------------------------------------------------------------------------
-# fingers (Mixamo layout, measured from a real Mixamo character)
+# fingers
 # ----------------------------------------------------------------------------------------------
 FINGERS = ('Thumb', 'Index', 'Middle', 'Ring', 'Pinky')
-# The app's BVH retargeter orients a hand toward its FIRST child. The thumb root sits only a few cm from the wrist, so a
-# 1-2 cm placement difference there tilts the whole hand by tens of degrees. The middle finger lies along the hand axis
-# and tolerates the same error, so it is created first.
+# Prefer the middle finger when building the hand; exporters may reorder siblings, so the BVH retargeter
+# chooses the middle branch by name rather than relying on this order.
 FINGER_BUILD_ORDER = ('Middle', 'Index', 'Ring', 'Pinky', 'Thumb')
 # joint 1..4 of each finger in HAND coordinates: (u along the hand, s sideways [thumb negative], w up), all
 # divided by L = wrist -> middle fingertip distance. Joint 4 is the fingertip.
@@ -473,7 +470,7 @@ FINGER_TEMPLATE = {
 
 
 def hand_frame(wrist, tip, side):
-    """a = along the hand, ex = Mixamo's sideways axis (backward for the left hand, forward for the right),
+    """a = along the hand, ex = sideways axis (backward for the left hand, forward for the right),
     up = a x ex. Blender space (Z up, -Y forward)."""
     a = tip - wrist
     L = a.length
@@ -487,11 +484,12 @@ def hand_frame(wrist, tip, side):
 
 
 def finger_layout(wrist, tip, side, pts):
-    """Finger joint positions for one hand: the Mixamo template, stretched/shifted to the real palm width and
+    """Finger joint positions for one hand: the template, stretched/shifted to the real palm width and
     finger-zone height measured from the mesh vertices near the hand. -> {finger: [4 Vectors]}"""
     a, ex, up, L = hand_frame(wrist, tip, side)
     sg = 1.0 if side == 'Left' else -1.0
     scale, shift, wshift = 1.0, 0.0, 0.0
+    thumb_scale, thumb_shift = 1.0, 0.0
     if len(pts):
         rel = np.asarray(pts) - np.array(wrist[:])
         u = rel @ np.array(a[:]) / L
@@ -500,17 +498,21 @@ def finger_layout(wrist, tip, side, pts):
         zone = (u > 0.68) & (u < 1.02) & (np.abs(wm) < 0.3) & (np.abs(sm) < 0.6)  # finger area only: the thumb tip (u~0.6) would stretch it
         if zone.sum() >= 60:
             p5, p95 = np.percentile(sm[zone], [5, 95])
-            scale = float(np.clip((p95 - p5) / 0.43, 0.6, 1.6))
+            scale = float(np.clip((p95 - p5) / 0.34, 0.6, 1.6))
             shift = float((p5 + p95) / 2 - 0.025 * scale)
+            # The thumb is outside this sampling zone; keep its separate, more conservative fit.
+            thumb_scale = float(np.clip((p95 - p5) / 0.43, 0.6, 1.6))
+            thumb_shift = float((p5 + p95) / 2 - 0.025 * thumb_scale)
             wshift = float(np.clip(np.median(wm[zone]) + 0.02, -0.08, 0.08))
     out = {}
     for f, joints in FINGER_TEMPLATE.items():
-        out[f] = [wrist + (a * u_ + ex * ((s_ * scale + shift) * sg) + up * (w_ + wshift)) * L for (u_, s_, w_) in joints]
+        fs, offset = (thumb_scale, thumb_shift) if f == 'Thumb' else (scale, shift)
+        out[f] = [wrist + (a * u_ + ex * ((s_ * fs + offset) * sg) + up * (w_ + wshift)) * L for (u_, s_, w_) in joints]
     return out, (a, ex, up, L)
 
 
 def add_fingers(arm, L, body_objs, report):
-    """Adds Mixamo-named finger bones (1-3 deform, 4 is the tip) to both hands. -> layout per side"""
+    """Adds finger bones (1-3 deform, 4 is the tip) to both hands. -> layout per side"""
     cos = np.concatenate([world_vertices(o) for o in body_objs])
     layouts = {}
     bpy.context.view_layer.objects.active = arm
@@ -532,8 +534,7 @@ def add_fingers(arm, L, body_objs, report):
                 b.head = J[kk].copy()
                 seg = (J[kk + 1] - J[kk]).length if kk < 3 else (J[3] - J[2]).length * 0.35
                 if f == 'Thumb':
-                    # Mixamo's three thumb bones all point the same way (45 degrees out, a touch down), even though
-                    # the joints curve; matching that keeps clips written for Mixamo bending the thumb correctly
+                    # The thumb rotations use a shared axis even though the joint positions curve.
                     sg = 1.0 if side == 'Left' else -1.0
                     d = (a * 0.75 + ex * (-0.65 * sg) + up * (-0.05)).normalized()
                     b.tail = J[kk] + d * seg
@@ -542,7 +543,7 @@ def add_fingers(arm, L, body_objs, report):
                 else:
                     b.tail = J[3] + (J[3] - J[2]).normalized() * (J[3] - J[2]).length * 0.35
                 y = (b.tail - b.head).normalized()
-                # roll: fingers share the hand's sideways axis; the thumb is turned ~45 degrees (Mixamo)
+                # roll: fingers share the hand's sideways axis; the thumb is turned ~45 degrees
                 if f == 'Thumb':
                     want = (a * 0.66 + ex * 0.75) if side == 'Left' else (a * -0.62 + ex * 0.78)
                 else:
@@ -562,11 +563,10 @@ def add_fingers(arm, L, body_objs, report):
     return layouts
 
 
-def finger_redistribute(co, W, names, layouts, height):
-    """Split each vertex's existing HAND weight between the palm (Hand bone) and the finger bones by distance
-    to the finger segments (nearest finger wins; webbing and knuckles blend). Heat weights at 1 cm cannot
-    resolve fingers, so this is analytic and local to the hand."""
-    eps = 0.004 * height
+def finger_redistribute(co, W, names, layouts, height, edges=None):
+    """Split HAND weight between the palm and finger segments. Connected distal finger surfaces use one
+    finger even when a surface vertex is closer to its neighbour; webbing and knuckles retain a palm blend."""
+    eps = 0.0015 * height
     done = 0
     for side, lay in layouts.items():
         hi = names.index('mixamorig:%sHand' % side)
@@ -585,7 +585,52 @@ def finger_redistribute(co, W, names, layouts, height):
             ab = p1 - p0
             t = np.clip(((P - p0) @ ab) / max(float(ab @ ab), 1e-12), 0.0, 1.0)
             D[:, j] = np.linalg.norm(P - (p0 + t[:, None] * ab), axis=1)
-        Wseg = 1.0 / (D + eps) ** 6
+        # A finger surface belongs to one finger, not a weighted average of adjacent fingers.
+        # Keep the palm blend for the webbing and the segment blends for bending at the joints.
+        finger_dist = np.stack([D[:, 4 * f + 1:4 * f + 4].min(axis=1) for f in range(len(FINGERS))], axis=1)
+        closest = finger_dist.argmin(axis=1)
+        if edges is not None and len(edges):
+            # Only trust narrow, predominantly single-finger components past the webbing.
+            a, ex, up, length = lay['frame']
+            rel = P - lay['wrist']
+            u = rel @ np.array(a[:]) / length
+            lateral = rel @ np.array(ex[:])
+            vertical = rel @ np.array(up[:]) / length
+            distal = (u > 0.68) & (u < 1.2) & (np.abs(lateral) < 0.6 * length) & (np.abs(vertical) < 0.3)
+            mask = np.zeros(len(co), dtype=bool)
+            mask[sel[distal]] = True
+            ee = edges[mask[edges[:, 0]] & mask[edges[:, 1]]]
+            local = np.full(len(co), -1, dtype=np.int64)
+            local[sel] = np.arange(len(sel))
+            parent = np.arange(len(sel))
+
+            def root(i):
+                while parent[i] != i:
+                    parent[i] = parent[parent[i]]
+                    i = parent[i]
+                return i
+
+            for v, w in local[ee]:
+                rv, rw = root(v), root(w)
+                if rv != rw:
+                    parent[rv] = rw
+            rows = np.flatnonzero(distal)
+            groups = {}
+            for v in rows:
+                groups.setdefault(root(v), []).append(v)
+            centers = sorted(float((lay['joints'][f][1] - lay['joints']['Middle'][1]).dot(ex)) for f in FINGERS[1:])
+            spacing = min(np.diff(centers))
+            for group in groups.values():
+                if len(group) < 8:
+                    continue
+                votes = np.bincount(closest[group], minlength=len(FINGERS))
+                winner = int(votes.argmax())
+                p10, p90 = np.percentile(lateral[group], [10, 90])
+                if votes[winner] >= 0.7 * len(group) and p90 - p10 <= 1.5 * spacing:
+                    closest[group] = winner
+        Wseg = ((D.min(axis=1, keepdims=True) + eps) / (D + eps)) ** 6
+        for f in range(len(FINGERS)):
+            Wseg[closest != f, 4 * f + 1:4 * f + 4] = 0.0
         bones = sorted(set(b for b, _, _ in segs))
         Wb = np.zeros((len(P), len(names)))
         for j, (b, _, _) in enumerate(segs):
@@ -966,13 +1011,32 @@ def side_coherence(Wobj, co, arm, names, height, axis_x=0.0):
         if part == 'leg':
             # ties (feet touching on the middle line): the side of the middle line decides, never "both"
             tie = ~(is_left | is_right) & (t < 0.05)
-            is_left |= tie & (co[:, 0] >= axis_x)
-            is_right |= tie & (co[:, 0] < axis_x)
-        for sel, kill in ((is_left, ri), (is_right, li)):
-            if sel.any():
+            # At the pelvis, fade the opposite leg's share continuously rather than cutting it
+            # abruptly at the margin. A cap on the share makes repeated cleanup passes stable.
+            hip_i = names.index('mixamorig:Hips')
+            total = W[:, li].sum(axis=1) + W[:, ri].sum(axis=1) + W[:, hip_i]
+            for delta, kill in ((dr - dl, ri), (dl - dr, li)):
+                q = np.clip((delta / np.maximum(m, 1e-12) - 0.75) / 0.5, 0.0, 1.0)
+                q = q * q * (3.0 - 2.0 * q)
+                old = W[:, kill].sum(axis=1)
+                # Cap the opposite side's share after normalisation, so repeated passes do not tighten it.
+                allowed = np.where(q > 1e-12, (total - old) * (1.0 - q) / np.maximum(q, 1e-12), old)
+                factor = np.minimum(1.0, allowed / np.maximum(old, 1e-12))
+                factor = np.where((delta > 0) & ~tie, factor, 1.0)
+                rows = np.where(factor < 1.0)[0]
+                removed += int((W[np.ix_(rows, kill)] > 0).sum())
+                W[np.ix_(rows, kill)] *= factor[rows, None]
+            # Exact ties below the knee are resolved by the centre line.
+            for sel, kill in ((tie & (co[:, 0] >= axis_x), ri), (tie & (co[:, 0] < axis_x), li)):
                 rows = np.where(sel)[0]
                 removed += int((W[np.ix_(rows, kill)] > 0).sum())
                 W[np.ix_(rows, kill)] = 0.0
+        else:
+            for sel, kill in ((is_left, ri), (is_right, li)):
+                if sel.any():
+                    rows = np.where(sel)[0]
+                    removed += int((W[np.ix_(rows, kill)] > 0).sum())
+                    W[np.ix_(rows, kill)] = 0.0
     # The legs cannot influence the upper body. Bone heat sometimes hands a rim or an inner shell near the shoulders
     # a big UpLeg weight (it happened on an open jacket); a vertex up there would then fly off whenever a leg moves.
     # Leg weights are fully allowed up to a little above the hip joint and fade to nothing by 12% of the height above.
@@ -1020,8 +1084,7 @@ def limb_reach_cap(Wobj, co, arm, names, height, lo=1.7, hi=2.7):
 
 def clavicle_rebalance(Wobj, co, arm, names, height):
     """Bone heat lets the clavicle take about half of the upper chest and shoulder top, so the chest follows the
-    arms outward. In Mixamo rigs the clavicle holds ~12% near the neck end rising to ~28% near the shoulder joint
-    and the spine (Spine2) keeps the rest. Cap the clavicle weight to that profile (measured along the bone) and
+    arms outward. Cap the clavicle weight to a profile along the bone and
     hand the excess to Spine2; arm-dominated vertices (the deltoid) and everything beyond the joint are untouched."""
     W = Wobj.copy()
     s2 = names.index('mixamorig:Spine2')
@@ -1034,7 +1097,7 @@ def clavicle_rebalance(Wobj, co, arm, names, height):
         t = np.array((arm.matrix_world @ b.tail_local)[:])
         ab = t - h
         u = ((co - h) @ ab) / max(float(ab @ ab), 1e-12)
-        # measured on a Mixamo character, by how far the vertex is along the clavicle (0 = neck end, 1 = shoulder joint):
+        # Profile by position along the clavicle (0 = neck end, 1 = shoulder joint):
         # ~1% over the inner 40% (the chest centre belongs to the spine), rising to ~14% at 85% and 28% at the joint,
         # then free again out over the arm
         cap = np.interp(u, [0.4, 0.85, 1.0, 1.3], [0.01, 0.14, 0.28, 1.0])
@@ -1047,15 +1110,15 @@ def clavicle_rebalance(Wobj, co, arm, names, height):
 
 
 SPINE_CHAIN = ('Hips', 'Spine', 'Spine1', 'Spine2')
-RAMP = 1.5  # hand-over ramps are 1.5x the Mixamo width: the torso blends more softly between spine bones
+RAMP = 1.5  # widen the hand-over ramps for softer blending between spine bones
 
 
 def spine_profile(Wobj, co, arm, names):
-    """Mixamo splits the spine chain with a clean linear blend by HEIGHT (the upper chest is ~95% Spine2). Bone
-    heat instead lets one spine bone keep far too much (Spine1 right up to the shoulders), which leaves the upper
+    """Split the spine chain with a linear blend by height. Bone heat can let one spine bone keep too much weight
+    (Spine1 right up to the shoulders), which leaves the upper
     torso, and any jacket on it, to the shoulder bones that pull it outward with the arms. The weight a vertex
     already gives the spine chain is kept; only its split between Hips / Spine / Spine1 / Spine2 is replaced by a
-    height profile. The hand-over heights were measured on a Mixamo character: Hips -> Spine at the Spine joint,
+    height profile. The hand-over heights are: Hips -> Spine at the Spine joint,
     Spine -> Spine1 just under the Spine1 joint, Spine1 -> Spine2 well under the Spine2 joint, each a ramp about as
     wide as the next segment."""
     idx = [names.index('mixamorig:' + n) for n in SPINE_CHAIN]
@@ -1083,15 +1146,13 @@ def spine_profile(Wobj, co, arm, names):
     return W
 
 
-def shoulder_soften(staged, arm, names, height, radius_frac, reach_frac, strength, cross_args):
-    """Longer, smoother transitions at the shoulders: around each shoulder joint the weights are blended over a
-    wider neighbourhood (~2-3 cm instead of ~1 cm), fading out with distance so the rest of the body is untouched.
-    Blends across meshes too, so sleeve / jacket / body move as one through the transition."""
+def joint_soften(staged, arm, height, radius_frac, reach_frac, strength, cross_args, part):
+    """Blend neighbouring weights around a pair of joints, fading out away from the joints."""
     if not staged:
         return staged
     P = [x[2] for x in staged]
     wide = cross_mesh_blend([x[1] for x in staged], P, height, radius_frac, 1.0, *cross_args)
-    joints = [np.array((arm.matrix_world @ arm.data.bones['mixamorig:%sArm' % sd].head_local)[:]) for sd in ('Left', 'Right')]
+    joints = [np.array((arm.matrix_world @ arm.data.bones['mixamorig:%s%s' % (sd, part)].head_local)[:]) for sd in ('Left', 'Right')]
     reach = reach_frac * height
     out = []
     for (o, W, co), Ww in zip(staged, wide):
@@ -1364,7 +1425,9 @@ def main():
         final = cross_mesh_blend([x[1] for x in staged], [x[2] for x in staged], height, opt['blend_radius'], opt['final_blend_strength'], crotch_z, cx)
         staged = [(o, Wb, co) for (o, _, co), Wb in zip(staged, final)]
     if opt['shoulder_soften']:
-        staged = shoulder_soften(staged, arm, names, height, opt['shoulder_radius'], opt['shoulder_reach'], opt['shoulder_strength'], (crotch_z, cx))
+        staged = joint_soften(staged, arm, height, opt['shoulder_radius'], opt['shoulder_reach'], opt['shoulder_strength'], (crotch_z, cx), 'Arm')
+    if opt['hip_soften']:
+        staged = joint_soften(staged, arm, height, 0.004, 0.09, 0.9, (crotch_z, cx), 'UpLeg')
     # the blends above may have let a little weight cross the middle line again: the side rule has the last word
     if opt['side_coherence']:
         fixed = []
@@ -1379,6 +1442,7 @@ def main():
     report['cross_mesh_blend'] = {'applied': bool(opt['cross_mesh_blend'] and len(staged) > 1), 'meshes': len(staged)}
     report['spine_profile'] = bool(opt['spine_profile'])
     report['shoulder_soften'] = bool(opt['shoulder_soften'])
+    report['hip_soften'] = bool(opt['hip_soften'])
     report['symmetry'] = {'coverage': round(sym_cov, 4), 'applied': bool(sym_used)}
 
     # fingers: added AFTER the body weights are settled (the proxy cannot resolve them), then each vertex's
@@ -1401,7 +1465,7 @@ def main():
             # Blender keeps bones depth-first, so adding fingers shifts the other bones' columns: map BY NAME
             for j, bn in enumerate(base_names):
                 Wf[:, names.index(bn)] = W[:, j]
-            finger_redistribute(co, Wf, names, layouts, height)
+            finger_redistribute(co, Wf, names, layouts, height, rest_edges[o.name])
             W = Wf
         W, zero = limit_normalise(W, opt['max_influences'], opt['prune_below'])
         if zero:  # nothing survived pruning: fall back to the nearest bone
@@ -1418,7 +1482,7 @@ def main():
         W = np.zeros((len(co), len(names)), dtype=np.float32)
         W[:, names.index(base_names[bi])] = 1.0
         if layouts and base_names[bi].endswith('Hand'):
-            finger_redistribute(co, W, names, layouts, height)  # a hand modelled as its own piece gets fingers too
+            finger_redistribute(co, W, names, layouts, height, rest_edges[o.name])  # a hand modelled as its own piece gets fingers too
             W, _ = limit_normalise(W, opt['max_influences'], opt['prune_below'])
         write_weights(o, arm, names, W)
         i['bone'] = base_names[bi]

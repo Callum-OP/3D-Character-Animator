@@ -743,6 +743,7 @@ export function retargetParsed(parsed, model, names, hip, clipName) {
     // Anchoring a hip's rest alignment on a thigh instead of the spine bakes
     // a constant sideways tilt into the hips (and everything above them) on
     // every single frame — exactly the "one hip permanently cocked up" look.
+    // Hands prefer the middle finger, whose direction is more stable than the short, angled thumb.
     const collectBranches = (node) => {
       const out = []
       const visit = (n) => {
@@ -755,7 +756,13 @@ export function retargetParsed(parsed, model, names, hip, clipName) {
       for (const c of node.children) visit(c)
       return out
     }
-    const branchRank = (n) => {
+    const branchRank = (parent, n) => {
+      if (/^hand\./.test(classifyBone(parent.name) || '')) {
+        const name = n.name.toLowerCase()
+        if (/middle/.test(name)) return 0
+        if (/index|ring|pinky|pinkie|little/.test(name)) return 1
+        if (/thumb/.test(name)) return 2
+      }
       const slot = classifyBone(n.name) || ''
       if (/^(spine|chest|neck|head)/.test(slot)) return 0
       if (/^(shoulder|upperArm)\./.test(slot)) return 1
@@ -764,7 +771,7 @@ export function retargetParsed(parsed, model, names, hip, clipName) {
     for (const b of mapped) {
       const branches = collectBranches(b)
       if (branches.length === 0) continue
-      branches.sort((a, c) => branchRank(a) - branchRank(c))
+      branches.sort((a, c) => branchRank(b, a) - branchRank(b, c))
       const childT = branches[0]
       const srcBone = srcByName.get(names[b.name])
       const childS = srcByName.get(names[childT.name])

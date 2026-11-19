@@ -2,7 +2,7 @@
 
     python benchmark.py truth.glb rigged.glb result.json
 
-truth.glb  : reference rig for the SAME mesh (e.g. a Mixamo-rigged character). Extra bones such as fingers or
+truth.glb  : comparison rig for the SAME mesh. Extra bones such as fingers or
              hair collapse onto their nearest ancestor among the 22 body bones.
 rigged.glb : what the Auto Rigger produced.
 
@@ -10,9 +10,10 @@ Both files are skinned straight from their glTF data (joint transforms x inverse
 the app renders them), so Blender's importer cannot skew the comparison. Reports:
   * weight error per vertex (L1) and dominant-bone agreement
   * left/right leakage (weight on the opposite side's limb bones)
+  * finger ownership and cross-finger influence
   * rest bone-axis match to the reference
   * THE real measure: both rigs posed with identical bone rotations, vertex positions compared (percent of
-    body height). Lower is better; 0 = identical deformation.
+    body height), including finger-only and hip-transition errors. Lower is better; 0 = identical deformation.
 """
 import json, struct, sys, math
 import numpy as np
@@ -26,12 +27,16 @@ POSES = {
     'knees_bent_90': {'LeftLeg': (90, 0, 0), 'RightLeg': (90, 0, 0)},
     'legs_apart_35': {'LeftUpLeg': (0, 0, 35), 'RightUpLeg': (0, 0, -35)},
     'leg_raised_80': {'LeftUpLeg': (80, 0, 0)},
+    'hips_flexed_70': {'LeftUpLeg': (-70, 0, 0), 'RightUpLeg': (-70, 0, 0)},
     'feet_pointed_40': {'LeftFoot': (40, 0, 0), 'RightFoot': (40, 0, 0)},
     'spine_bend_40': {'Spine': (25, 0, 0), 'Spine1': (25, 0, 0)},
     'spine_twist_50': {'Spine': (0, 25, 0), 'Spine1': (0, 25, 0)},
     # fingers: curl index..pinky 70 degrees at each of the three joints (about their local X), both hands
     'fingers_curl_70': {'%sHand%s%d' % (s, f, k): (70, 0, 0) for s in ('Left', 'Right') for f in ('Index', 'Middle', 'Ring', 'Pinky') for k in (1, 2, 3)},
+    'index_curl_70': {'%sHandIndex%d' % (s, k): (70, 0, 0) for s in ('Left', 'Right') for k in (1, 2, 3)},
+    'thumb_curl_50': {'%sHandThumb%d' % (s, k): (50, 0, 0) for s in ('Left', 'Right') for k in (1, 2, 3)},
 }
+FINGERS = [(s, f) for s in ('Left', 'Right') for f in ('Thumb', 'Index', 'Middle', 'Ring', 'Pinky')]
 CT = {5120: np.int8, 5121: np.uint8, 5122: np.int16, 5123: np.uint16, 5125: np.uint32, 5126: np.float32}
 NC = {'SCALAR': 1, 'VEC2': 2, 'VEC3': 3, 'VEC4': 4, 'MAT4': 16}
 
@@ -196,6 +201,27 @@ def evaluate(path, pose=None, absolute_by_name=None):
     return np.concatenate(P), np.concatenate(W22), axes
 
 
+def finger_weights(path):
+    """Per-vertex weights for each finger, in the same mesh order as evaluate()."""
+    g = Glb(path)
+    parts = []
+    for pos, joints, wts, skin in g.skinned_meshes():
+        names = [name.replace(':', '').replace('mixamorig', '') for name in g.joint_names(skin)]
+        groups = np.full(len(names), -1, dtype=int)
+        for i, name in enumerate(names):
+            for f, (side, finger) in enumerate(FINGERS):
+                if name.startswith(side + 'Hand' + finger):
+                    groups[i] = f
+                    break
+        out = np.zeros((len(pos), len(FINGERS)))
+        for k in range(4):
+            col = groups[joints[:, k]]
+            valid = col >= 0
+            np.add.at(out, (np.nonzero(valid)[0], col[valid]), wts[valid, k])
+        parts.append(out)
+    return np.concatenate(parts)
+
+
 def run(truth, rigged):
     from scipy.spatial import cKDTree
     tp, tW, tax = evaluate(truth)
@@ -203,6 +229,7 @@ def run(truth, rigged):
     height = float(tp[:, 1].max() - tp[:, 1].min())
     dist, match = cKDTree(tp).query(rp)
     G = tW[match]
+    GF, RF = finger_weights(truth)[match], finger_weights(rigged)
     body = G.sum(axis=1) > 0.5
     Gn = G / np.maximum(G.sum(axis=1, keepdims=True), 1e-9)
     Rn = rW / np.maximum(rW.sum(axis=1, keepdims=True), 1e-9)
@@ -231,6 +258,15 @@ def run(truth, rigged):
         'regions': regions,
         'rest_axes_deg': {bn: round(math.degrees(math.acos(float(np.clip(tax[bn] @ rax[bn], -1, 1)))), 1) for bn in BODY if bn in tax and bn in rax},
     }
+    finger_sel = GF.max(axis=1) > 0.5
+    if finger_sel.any():
+        owner = GF.argmax(axis=1)
+        other = RF.sum(axis=1) - RF[np.arange(len(RF)), owner]
+        res['fingers'] = {
+            'verts': int(finger_sel.sum()),
+            'mean_l1': round(float(np.abs(GF - RF).sum(axis=1)[finger_sel].mean()), 4),
+            'other_finger_mean': round(float(other[finger_sel].mean()), 4),
+        }
     # full rest orientation (not just the X axis): every body bone and the left-hand finger bones
     def frames(path):
         g = Glb(path)
@@ -255,11 +291,25 @@ def run(truth, rigged):
         ev = np.linalg.norm(rpp - tpp[match], axis=1) / height * 100.0
         e = ev[body]
         perr[pname] = {'mean_pct': round(float(e.mean()), 3), 'p95_pct': round(float(np.percentile(e, 95)), 3), 'max_pct': round(float(e.max()), 3)}
-        if pname == 'fingers_curl_70':
-            hand = body & (np.abs(rp[:, 0]) > 0.60) & (rp[:, 1] > 1.2)  # the hands (arms held out)
-            if hand.any():
-                perr[pname]['hands_only_mean_pct'] = round(float(ev[hand].mean()), 3)
-                perr[pname]['hands_only_p95_pct'] = round(float(np.percentile(ev[hand], 95)), 3)
+        if pname in ('fingers_curl_70', 'index_curl_70', 'thumb_curl_50'):
+            selected = finger_sel
+            if pname != 'fingers_curl_70':
+                finger = 'Index' if pname == 'index_curl_70' else 'Thumb'
+                ids = [i for i, (_, name) in enumerate(FINGERS) if name == finger]
+                selected = GF[:, ids].max(axis=1) > 0.5
+            if selected.any():
+                perr[pname]['hands_only_mean_pct'] = round(float(ev[selected].mean()), 3)
+                perr[pname]['hands_only_p95_pct'] = round(float(np.percentile(ev[selected], 95)), 3)
+            if pname != 'fingers_curl_70':
+                other_fingers = finger_sel & ~selected
+                if other_fingers.any():
+                    perr[pname]['other_fingers_mean_pct'] = round(float(ev[other_fingers].mean()), 3)
+                    perr[pname]['other_fingers_p95_pct'] = round(float(np.percentile(ev[other_fingers], 95)), 3)
+        if pname in ('legs_apart_35', 'leg_raised_80', 'hips_flexed_70'):
+            hip = (G[:, BODY.index('Hips')] > 0.1) & (G[:, [BODY.index('LeftUpLeg'), BODY.index('RightUpLeg')]].sum(axis=1) > 0.1)
+            if hip.any():
+                perr[pname]['hips_only_mean_pct'] = round(float(ev[hip].mean()), 3)
+                perr[pname]['hips_only_p95_pct'] = round(float(np.percentile(ev[hip], 95)), 3)
     res['pose_error_pct_of_height'] = perr
     res['pose_error_mean_pct'] = round(float(np.mean([v['mean_pct'] for v in perr.values()])), 3)
     return res

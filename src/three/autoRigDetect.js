@@ -109,9 +109,7 @@ export function detectLandmarks(pos) {
   }
   const neckBase = neckY != null ? neckY - 0.025 * H : guess.neck[1]
   const neckSlice = stats(pos, sl.range(neckBase - 0.01 * H, neckBase + 0.01 * H), (x) => central(x))
-  // Mixamo's spine joints sit ~1-2 cm in FRONT of the centroid of the body's cross-section (the centroid includes
-  // the back of the neck and the chest); detected depths were all 1-2 cm too far back, which carried the whole
-  // body back when a Mixamo pose was applied
+  // Offset the spine forward from the cross-section centroid, which includes the back of the neck and chest.
   const neckZ = (neckSlice.n ? neckSlice.cz : guess.neck[2]) + 0.012 * H
   L.neck = [cx, neckBase, neckZ]
   L.head = [cx, neckBase + 0.03 * H, neckZ]
@@ -143,7 +141,7 @@ export function detectLandmarks(pos) {
   const place = (t) => [cx, pel + t * (neckBase - pel), pelZ + t * (neckZ - pelZ)]
   L.pelvis = [cx, pel, pelZ]
   L.spine = place(0.2)
-  L.chest = place(0.434) // Mixamo spacing: Spine 0.2, Spine1 0.434, Spine2 0.70 of the way from hips to neck
+  L.chest = place(0.434) // Spine 0.2, Spine1 0.434, Spine2 0.70 of the way from hips to neck
   L.upper_chest = place(0.7)
 
   // ---- legs ----

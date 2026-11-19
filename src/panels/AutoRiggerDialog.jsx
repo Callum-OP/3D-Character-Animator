@@ -25,8 +25,7 @@ const MAX_ZOOM = 12
 
 // Desktop-only (the pipeline runs in the user's own Blender — see electron/BLENDER.md and autorig.cjs).
 // Step 1 choose a model (a file, or something already in the scene), step 2 check/adjust the landmark
-// markers in the front and side views, step 3 rig. The result is imported as a normal character with
-// Mixamo bone names.
+// markers in the front and side views, step 3 rig. The result is imported as a normal character.
 export default function AutoRiggerDialog() {
   const open = useStore((s) => s.autoRiggerOpen)
   const setOpen = useStore((s) => s.setAutoRiggerOpen)
@@ -486,7 +485,7 @@ function Dialog({ onClose }) {
           <>
             <p className="help-intro">
               Pick a model (a file, or something already in your scene), drag the markers onto its joints in the front and side views, then rig.
-              It gets a standard Mixamo skeleton and skin weights and comes back as a normal character. Needs Blender 2.80+.
+              It gets a humanoid skeleton and skin weights and comes back as a normal character. Needs Blender 2.80+.
             </p>
             <input ref={inputRef} type="file" accept={MODEL_TYPES} style={{ display: 'none' }} onChange={onPickFile} />
             <div className="autorig-source">

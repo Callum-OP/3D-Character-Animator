@@ -33,8 +33,8 @@ function worldAxes(j, name) {
 }
 const angleDeg = (a, b) => (Math.acos(Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]))) * 180) / Math.PI
 
-// Mixamo's own bone axes (measured from a real Mixamo character): local X per bone, glTF world space
-const MIXAMO_X = {
+// Expected local X axis per bone in glTF world space.
+const BONE_X = {
   Hips: [1, 0, 0], Spine: [1, 0, 0], Spine1: [1, 0, 0], Spine2: [1, 0, 0], Neck: [1, 0, 0], Head: [1, 0, 0],
   LeftArm: [0, 0, -1], LeftForeArm: [0, 0, -1], LeftHand: [0, 0, -1], RightArm: [0, 0, 1], RightForeArm: [0, 0, 1], RightHand: [0, 0, 1],
   LeftUpLeg: [-1, 0, 0], LeftLeg: [-1, 0, 0], LeftFoot: [-1, 0, 0], LeftToeBase: [-1, 0, 0],
@@ -113,7 +113,7 @@ describe.skipIf(!blenderPath)('real Blender: synthetic humanoid → rigged glb',
     const { glb, report } = await runAutoRig({ blenderPath, input, landmarks })
     const j = glbJson(glb)
 
-    // standard Mixamo bone names, one skin
+    // expected bone names, one skin
     const names = j.nodes.map((n) => n.name)
     for (const n of ['mixamorig:Hips', 'mixamorig:Spine2', 'mixamorig:Head', 'mixamorig:LeftForeArm', 'mixamorig:RightLeg', 'mixamorig:LeftToeBase']) expect(names).toContain(n)
     expect(j.skins).toHaveLength(1)
@@ -153,16 +153,16 @@ describe.skipIf(!blenderPath)('real Blender: synthetic humanoid → rigged glb',
     }
   }, 300000)
 
-  it('gives every bone the same local axes as a Mixamo rig, so Mixamo clips and poses drive it correctly', async () => {
+  it('gives every bone the expected local axes', async () => {
     const { glb } = await runAutoRig({ blenderPath, input, landmarks })
     const j = glbJson(glb)
-    for (const [bone, want] of Object.entries(MIXAMO_X)) {
+    for (const [bone, want] of Object.entries(BONE_X)) {
       const a = worldAxes(j, 'mixamorig:' + bone)
       expect(angleDeg(a.x, want), `${bone} local X`).toBeLessThan(12)
     }
   }, 300000)
 
-  it('adds five fingers per hand with Mixamo names and axes, and weights the hand across them', async () => {
+  it('adds five fingers per hand with the expected names and axes, and weights the hand across them', async () => {
     const { glb, report } = await runAutoRig({ blenderPath, input, landmarks })
     const j = glbJson(glb)
     const names = j.nodes.map((n) => n.name)
@@ -171,7 +171,7 @@ describe.skipIf(!blenderPath)('real Blender: synthetic humanoid → rigged glb',
     }
     expect(report.bones).toBe(22 + 40)
     expect(report.fingers.bones_added).toBe(40)
-    // non-thumb fingers share the arm's sideways axis (Mixamo): left -Z, right +Z
+    // non-thumb fingers share the arm's sideways axis: left -Z, right +Z
     for (const f of ['Index', 'Middle', 'Ring', 'Pinky']) {
       expect(angleDeg(worldAxes(j, `mixamorig:LeftHand${f}2`).x, [0, 0, -1]), `Left ${f}`).toBeLessThan(15)
       expect(angleDeg(worldAxes(j, `mixamorig:RightHand${f}2`).x, [0, 0, 1]), `Right ${f}`).toBeLessThan(15)
@@ -181,7 +181,7 @@ describe.skipIf(!blenderPath)('real Blender: synthetic humanoid → rigged glb',
     expect(report.weights.max_influences).toBeLessThanOrEqual(4)
   }, 300000)
 
-  it('matches the roll Mixamo gives hands and fingers (about 6 degrees), so tips do not bend up under a Mixamo pose', async () => {
+  it('applies the expected roll to hands and fingers', async () => {
     const { glb } = await runAutoRig({ blenderPath, input, landmarks })
     const j = glbJson(glb)
     // left fingers: X tilted ~6 deg DOWN from straight back (-Z); right fingers: ~6 deg UP from straight forward (+Z)
@@ -197,7 +197,7 @@ describe.skipIf(!blenderPath)('real Blender: synthetic humanoid → rigged glb',
     expect(angleDeg(worldAxes(j, 'mixamorig:LeftHand').x, [0, 0, -1])).toBeGreaterThan(4)
   }, 300000)
 
-  it('points the foot like Mixamo\'s (forward and down) when the detected direction is close', async () => {
+  it('points the foot forward and down when the detected direction is close', async () => {
     const { glb } = await runAutoRig({ blenderPath, input, landmarks })
     const j = glbJson(glb)
     for (const side of ['Left', 'Right']) expect(angleDeg(worldAxes(j, `mixamorig:${side}Foot`).y, [0, -0.57, 0.82].map((c) => c / Math.hypot(0, 0.57, 0.82))), `${side} foot`).toBeLessThan(4)
@@ -210,16 +210,19 @@ describe.skipIf(!blenderPath)('real Blender: synthetic humanoid → rigged glb',
     expect(off.report.clavicle_rebalanced).toBe(0)
   }, 400000)
 
-  it('makes the middle finger the hand\'s FIRST child, so the app\'s retargeter orients the hand by it, not by the thumb', async () => {
+  it('parents all five finger roots to the hand, regardless of exporter child order', async () => {
     const { glb } = await runAutoRig({ blenderPath, input, landmarks })
     const j = glbJson(glb)
     for (const side of ['Left', 'Right']) {
       const hand = j.nodes.find((n) => n.name === `mixamorig:${side}Hand`)
-      expect(j.nodes[hand.children[0]].name, `${side} hand first child`).toBe(`mixamorig:${side}HandMiddle1`)
+      const children = hand.children.map((i) => j.nodes[i].name)
+      for (const finger of ['Thumb', 'Index', 'Middle', 'Ring', 'Pinky']) {
+        expect(children).toContain(`mixamorig:${side}Hand${finger}1`)
+      }
     }
   }, 300000)
 
-  it('blends weights between separate meshes and uses the Mixamo spine height profile, and both can be switched off', async () => {
+  it('blends weights between separate meshes and both can be switched off', async () => {
     const on = await runAutoRig({ blenderPath, input, landmarks })
     expect(on.report.cross_mesh_blend.applied).toBe(true)
     expect(on.report.cross_mesh_blend.meshes).toBeGreaterThan(5)
@@ -230,13 +233,15 @@ describe.skipIf(!blenderPath)('real Blender: synthetic humanoid → rigged glb',
     expect(off.report.weights.unweighted_vertices).toBe(0)
   }, 400000)
 
-  it('softens the shoulder transition, keeps the legs from blending into each other, and each can be switched off', async () => {
+  it('softens shoulder and hip transitions and allows both to be switched off', async () => {
     const on = await runAutoRig({ blenderPath, input, landmarks })
     expect(on.report.shoulder_soften).toBe(true)
+    expect(on.report.hip_soften).toBe(true)
     expect(on.report.weights.unweighted_vertices).toBe(0)
     expect(on.report.side_leak_removed).toBeGreaterThanOrEqual(0)
-    const off = await runAutoRig({ blenderPath, input, landmarks, options: { shoulder_soften: false } })
+    const off = await runAutoRig({ blenderPath, input, landmarks, options: { shoulder_soften: false, hip_soften: false } })
     expect(off.report.shoulder_soften).toBe(false)
+    expect(off.report.hip_soften).toBe(false)
   }, 400000)
 
   it('skins a thin piece lying on the body like clothing, but keeps a blade standing away from it rigid', async () => {
@@ -309,11 +314,22 @@ describe.skipIf(!blenderPath)('real Blender: synthetic humanoid → rigged glb',
   }, 120000)
 })
 
+describe.skipIf(!blenderPath)('real Blender: localized deformation weights', () => {
+  it('fits and isolates fingers, preserves thumb axes, and smoothly transitions the hips', () => {
+    const r = spawnSync(blenderPath, [
+      '--background', '--factory-startup', '--python-exit-code', '3',
+      '--python', path.join(__dirname, 'helpers/autorigDeformation.py'),
+      '--', path.join(__dirname, '../../electron/autorig/autorig.py'),
+    ], { encoding: 'utf8', timeout: 120000 })
+    expect(r.status, r.stdout + r.stderr).toBe(0)
+  }, 150000)
+})
+
 
 // The accuracy benchmark (electron/autorig/benchmark.py): pure python + numpy + scipy, no Blender.
 import { spawnSync as spawn } from 'node:child_process'
-const pyOk = spawn('python3', ['-c', 'import numpy, scipy']).status === 0
-describe.skipIf(!blenderPath || !pyOk)('accuracy benchmark tool', () => {
+const python = ['python3', 'python'].find((exe) => spawn(exe, ['-c', 'import numpy, scipy']).status === 0)
+describe.skipIf(!blenderPath || !python)('accuracy benchmark tool', () => {
   it('scores a rig against itself as perfect, and reports the measures that matter', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'animare-bench-'))
     const r = spawnSync(blenderPath, ['--background', '--factory-startup', '--python', path.join(__dirname, 'helpers/syntheticHumanoid.py'), '--', dir], { encoding: 'utf8', timeout: 120000 })
@@ -322,13 +338,17 @@ describe.skipIf(!blenderPath || !pyOk)('accuracy benchmark tool', () => {
     const { glb } = await runAutoRig({ blenderPath, input: { name: 'human.glb', data: fs.readFileSync(path.join(dir, 'human.glb')) }, landmarks: lm })
     fs.writeFileSync(path.join(dir, 'rigged.glb'), glb)
     const out = path.join(dir, 'bench.json')
-    const b = spawn('python3', [path.join(__dirname, '../../electron/autorig/benchmark.py'), path.join(dir, 'rigged.glb'), path.join(dir, 'rigged.glb'), out], { encoding: 'utf8', timeout: 120000 })
+    const b = spawn(python, [path.join(__dirname, '../../electron/autorig/benchmark.py'), path.join(dir, 'rigged.glb'), path.join(dir, 'rigged.glb'), out], { encoding: 'utf8', timeout: 120000 })
     expect(b.status, b.stderr).toBe(0)
     const res = JSON.parse(fs.readFileSync(out, 'utf8'))
     expect(res.weights.mean_l1).toBe(0)
     expect(res.weights.dominant_bone_agreement).toBe(1)
     expect(res.pose_error_mean_pct).toBe(0)
     expect(Object.keys(res.pose_error_pct_of_height)).toContain('leg_raised_80')
+    expect(res.pose_error_pct_of_height.index_curl_70.hands_only_mean_pct).toBe(0)
+    expect(res.pose_error_pct_of_height.thumb_curl_50.hands_only_mean_pct).toBe(0)
+    expect(res.pose_error_pct_of_height.index_curl_70.other_fingers_mean_pct).toBe(0)
+    expect(res.fingers.mean_l1).toBe(0)
     expect(Object.keys(res.rest_axes_deg).length).toBeGreaterThan(15)
     fs.rmSync(dir, { recursive: true, force: true })
   }, 400000)

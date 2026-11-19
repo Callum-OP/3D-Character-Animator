@@ -4,7 +4,7 @@ import { fingerNameOf, fingerInfo, looksLikeHand } from '../three/fingers.js'
 import { classifyBones } from '../three/loadModel.js'
 import { setLimitsModel, clearLimitsModel, clampQuaternionForBone } from '../three/limits.js'
 
-// A Mixamo-style arm: ...Hand > Index1..4, Thumb1..4, plus unrelated bones whose names contain finger words.
+// A synthetic arm: ...Hand > Index1..4, Thumb1..4, plus unrelated bones whose names contain finger words.
 function chain(parent, names, step = [0.1, 0, 0]) {
   const out = []
   let p = parent

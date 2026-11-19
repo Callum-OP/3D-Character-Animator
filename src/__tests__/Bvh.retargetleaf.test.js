@@ -51,6 +51,44 @@ describe('retargetParsed: the last bone of a chain follows its parent\'s alignme
     expect(angle).toBeLessThan(0.5)
   })
 
+  describe('retargetParsed: hand alignment is independent of finger child order', () => {
+    function handRig(order, thumbY, indexY) {
+      const root = new THREE.Group()
+      const hand = new THREE.Bone(); hand.name = 'LeftHand'; root.add(hand)
+      const bones = [hand]
+      for (const finger of order) {
+        const b = new THREE.Bone(); b.name = `LeftHand${finger}1`
+        b.position.set(finger === 'Thumb' ? 0.1 : 0.2, finger === 'Thumb' ? thumbY : finger === 'Index' ? indexY : 0, 0)
+        hand.add(b); bones.push(b)
+      }
+      root.updateMatrixWorld(true)
+      return { root, bones, hand }
+    }
+
+    it.each([
+      ['Thumb', 'Middle', 'Index'],
+      ['Index', 'Thumb', 'Middle'],
+      ['Middle', 'Index', 'Thumb'],
+      ['Thumb', 'Index'],
+    ])('prefers the central mapped finger over the thumb (%s, %s, %s)', (...order) => {
+      const target = handRig(order, 0.1, order.includes('Middle') ? 0.04 : 0)
+      const source = handRig([...order].reverse(), -0.1, order.includes('Middle') ? -0.04 : 0)
+      const mesh = new THREE.SkinnedMesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial())
+      mesh.bind(new THREE.Skeleton(target.bones)); target.root.add(mesh)
+      const model = { root: target.root, bones: target.bones, skinnedMeshes: [mesh] }
+      const tracks = source.bones.map((b) => new THREE.QuaternionKeyframeTrack(
+        `${b.name}.quaternion`, [0, 1], [0, 0, 0, 1, 0, 0, 0, 1],
+      ))
+      const parsed = { skeleton: { bones: source.bones }, clip: new THREE.AnimationClip('pose', 1, tracks) }
+      const names = Object.fromEntries(target.bones.map((b) => [b.name, b.name]))
+      const { clip } = retargetParsed(parsed, model, names, null)
+      const mixer = new THREE.AnimationMixer(target.root)
+      mixer.clipAction(clip).play()
+      mixer.setTime(0)
+      expect(target.hand.quaternion.angleTo(new THREE.Quaternion())).toBeLessThan(1e-4)
+    })
+  })
+
   it('still lines the bones that DO have a child up with the source\'s directions', () => {
     const { model, parsed, t } = build(12)
     frame0(model, parsed)

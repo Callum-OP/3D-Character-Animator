@@ -187,7 +187,7 @@ endsolid tri
 `)
 
 // An OBJ with several materials (usemtl groups), optionally naming an .mtl that
-// does not exist in the download — the "detective" layout (Mixamo Fuse export).
+// does not exist in the download — the "detective" layout.
 export const OBJ_MULTI = (materials = ['Body', 'Hat'], mtl = 'missing.mtl') => {
   const lines = [`mtllib ${mtl}`]
   let v = 0
