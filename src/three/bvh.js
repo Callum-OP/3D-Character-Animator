@@ -774,6 +774,20 @@ export function retargetParsed(parsed, model, names, hip, clipName) {
       if (tDir.lengthSq() < 1e-10 || sDir.lengthSq() < 1e-10) continue
       align.set(b, new THREE.Quaternion().setFromUnitVectors(tDir.normalize(), sDir.normalize()))
     }
+    // A bone with no mapped child to aim at (the last finger bone, the toes, the head) used to be left UNaligned
+    // while its parent was turned onto the source's direction, so on an A-pose clip the tip stayed in the rig's own
+    // rest direction and snapped up/back against the rest of the chain. A BVH makes this common: its last joint is
+    // an unnamed "End Site", so even a finger's last deforming bone has no mapped child. Such a bone follows the
+    // same alignment as its nearest aligned mapped ancestor instead (it continues that bone's direction).
+    for (const b of mapped) {
+      if (align.has(b)) continue
+      for (let p = b.parent; p; p = p.parent) {
+        if (mappedSet.has(p) && align.has(p)) {
+          align.set(b, align.get(p).clone())
+          break
+        }
+      }
+    }
   }
 
   // --- Yaw correction + hip translation setup (needs the frame-0 source pose) ---

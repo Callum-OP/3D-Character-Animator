@@ -51,6 +51,32 @@ MIXAMO_X = {
 }
 
 
+# Mixamo's bone axes are not exactly the clean ones above: measured from a real Mixamo character, the hands and
+# fingers are rolled ~6 degrees, arms ~2.5, feet ~3 (left negative, right positive about the bone's own Y axis,
+# degrees). Clips authored for Mixamo drive the rig through these axes, so a constant offset here shows up as
+# fingertips bent up or a wrist turned.
+ROLL_OFFSET = {'Shoulder': 2.6, 'Arm': 2.4, 'ForeArm': 2.5, 'Hand': 6.2, 'Foot': 3.0, 'ToeBase': -2.5}
+FINGER_ROLL = 6.0
+# Mixamo's canonical bone DIRECTIONS (glTF world, Y up, +Z forward) for the bones whose direction a clip is most
+# sensitive to. A clip that sets absolute rotations (a pose, frame 0 of a mocap) is amplified along the whole limb by
+# a rest-direction mismatch, so when the detected direction is already close (< 20 deg) it is snapped to these.
+# (Not the clavicle: snapping it measurably worsened the shoulder deformation, because the bone must stay on the
+# anatomy it pivots about.)
+CANON_DIR = {
+    'LeftFoot': (0.0, -0.57, 0.82), 'RightFoot': (0.0, -0.57, 0.82),
+    'LeftToeBase': (0.0, 0.0, 1.0), 'RightToeBase': (0.0, 0.0, 1.0),
+}
+SNAP_MAX_DEG = 20.0
+ROLL_SIGN = 1.0  # sign convention between "about the bone's own Y" and Blender's roll
+
+
+def roll_offset_for(side, part):
+    v = ROLL_OFFSET.get(part)
+    if v is None:
+        return 0.0
+    return math.radians(ROLL_SIGN * (-v if side == 'Left' else v))
+
+
 def side_bones(S):
     s = S  # 'Left' / 'Right'
     k = 'l' if S == 'Left' else 'r'
@@ -82,6 +108,18 @@ DEFAULTS = {
     'rigid_small_fraction': 0.07,  # whole component smaller than this (diagonal) -> rigid
     'head_lock': True,
     'fingers': True,            # five fingers per hand, Mixamo names and axes
+    'clavicle_rebalance': True, # the clavicle cannot hold the chest (Mixamo-style shoulder weights)
+    'spine_profile': True,      # Mixamo-style height blend between the spine bones
+    'skin_thin_on_body': True,  # thin pieces lying on the body are clothing, not rigid accessories
+    'thin_on_body_frac': 0.02,  # mean distance to the body, fraction of the height
+    'cross_mesh_blend': True,   # weights agree where different meshes (sleeve / torso / jacket layers) meet
+    'blend_radius': 0.0035,     # fraction of the height: grid cell, so ~1 cm
+    'blend_strength': 1.0,
+    'final_blend_strength': 0.7,
+    'shoulder_soften': True,    # longer, smoother shoulder-to-arm transition
+    'shoulder_radius': 0.012,   # blend neighbourhood (fraction of the height) around the shoulders
+    'shoulder_reach': 0.09,     # how far from the shoulder joint it applies
+    'shoulder_strength': 0.9,
     'limb_cap': True,           # limb bones cannot claim the body next to them
     'cap_lo': 1.7,
     'cap_hi': 2.7,
@@ -387,6 +425,12 @@ def build_armature(L):
         b.head, b.tail = L[h].copy(), L[t].copy()
         if (b.tail - b.head).length < 1e-5:
             b.tail = b.head + Vector((0, 0, 0.01))
+        if name in CANON_DIR:
+            cd = CANON_DIR[name]
+            want_dir = Vector((cd[0], -cd[2], cd[1])).normalized()  # glTF -> Blender
+            cur = (b.tail - b.head)
+            if cur.length > 1e-6 and math.degrees(cur.normalized().angle(want_dir)) < SNAP_MAX_DEG:
+                b.tail = b.head + want_dir * cur.length
         # roll: make the bone's X axis the Mixamo one (projected so it stays perpendicular to the bone)
         gx = MIXAMO_X[name]
         want_x = Vector((gx[0], -gx[2], gx[1]))  # glTF -> Blender axes
@@ -395,6 +439,9 @@ def build_armature(L):
         if x.length > 1e-4:
             x.normalize()
             b.align_roll(x.cross(y))  # Blender aligns the bone's Z axis; Z = X cross Y
+            for sd in ('Left', 'Right'):
+                if name.startswith(sd):
+                    b.roll += roll_offset_for(sd, name[len(sd):])
         made[name] = b
     for name, parent, h, t in spec:
         if parent:
@@ -410,6 +457,10 @@ def build_armature(L):
 # fingers (Mixamo layout, measured from a real Mixamo character)
 # ----------------------------------------------------------------------------------------------
 FINGERS = ('Thumb', 'Index', 'Middle', 'Ring', 'Pinky')
+# The app's BVH retargeter orients a hand toward its FIRST child. The thumb root sits only a few cm from the wrist, so a
+# 1-2 cm placement difference there tilts the whole hand by tens of degrees. The middle finger lies along the hand axis
+# and tolerates the same error, so it is created first.
+FINGER_BUILD_ORDER = ('Middle', 'Index', 'Ring', 'Pinky', 'Thumb')
 # joint 1..4 of each finger in HAND coordinates: (u along the hand, s sideways [thumb negative], w up), all
 # divided by L = wrist -> middle fingertip distance. Joint 4 is the fingertip.
 FINGER_TEMPLATE = {
@@ -446,7 +497,7 @@ def finger_layout(wrist, tip, side, pts):
         u = rel @ np.array(a[:]) / L
         sm = (rel @ np.array(ex[:])) * sg / L
         wm = rel @ np.array(up[:]) / L
-        zone = (u > 0.6) & (u < 1.02) & (np.abs(wm) < 0.3) & (np.abs(sm) < 0.6)
+        zone = (u > 0.68) & (u < 1.02) & (np.abs(wm) < 0.3) & (np.abs(sm) < 0.6)  # finger area only: the thumb tip (u~0.6) would stretch it
         if zone.sum() >= 60:
             p5, p95 = np.percentile(sm[zone], [5, 95])
             scale = float(np.clip((p95 - p5) / 0.43, 0.6, 1.6))
@@ -473,13 +524,20 @@ def add_fingers(arm, L, body_objs, report):
         layout, (a, ex, up, hl) = finger_layout(wrist, tip, side, near)
         layouts[side] = {'joints': layout, 'frame': (a, ex, up, hl), 'wrist': np.array(wrist[:])}
         hand = eb['mixamorig:%sHand' % side]
-        for f in FINGERS:
+        for f in FINGER_BUILD_ORDER:
             J = layout[f]
             parent = hand
             for kk in range(4):
                 b = eb.new('mixamorig:%sHand%s%d' % (side, f, kk + 1))
                 b.head = J[kk].copy()
-                if kk < 3:
+                seg = (J[kk + 1] - J[kk]).length if kk < 3 else (J[3] - J[2]).length * 0.35
+                if f == 'Thumb':
+                    # Mixamo's three thumb bones all point the same way (45 degrees out, a touch down), even though
+                    # the joints curve; matching that keeps clips written for Mixamo bending the thumb correctly
+                    sg = 1.0 if side == 'Left' else -1.0
+                    d = (a * 0.75 + ex * (-0.65 * sg) + up * (-0.05)).normalized()
+                    b.tail = J[kk] + d * seg
+                elif kk < 3:
                     b.tail = J[kk + 1].copy()
                 else:
                     b.tail = J[3] + (J[3] - J[2]).normalized() * (J[3] - J[2]).length * 0.35
@@ -493,8 +551,10 @@ def add_fingers(arm, L, body_objs, report):
                 if x.length > 1e-4:
                     x.normalize()
                     b.align_roll(x.cross(y))
+                    if kk < 3:
+                        b.roll += math.radians(ROLL_SIGN * (-FINGER_ROLL if side == 'Left' else FINGER_ROLL))
                 b.parent = parent
-                if kk > 0:
+                if kk > 0 and f != 'Thumb':
                     b.use_connect = True
                 parent = b
     bpy.ops.object.mode_set(mode='OBJECT')
@@ -731,6 +791,24 @@ def sample_weights(tree, verts, tris, W, points):
     return out, dist
 
 
+def thin_pieces_on_body(proxy, rigid_info, height, frac):
+    """A thin piece lying ON the body (a drawstring, a strap, a collar, a hair card) belongs to the clothing: bound to
+    one bone it would stay put while the cloth around it moves. Only blade-like pieces standing away from the body
+    (a sword, a wing) should be rigid. -> the entries of rigid_info that sit within `frac` x height of the body."""
+    tree, verts, tris = build_tree(proxy)
+    out = []
+    for i in rigid_info:
+        if not (i['reason'] or '').startswith('thin'):
+            continue
+        co = world_vertices(i['obj'])
+        step = max(1, len(co) // 200)
+        ds = [tree.find_nearest(Vector(p))[3] for p in co[::step]]
+        ds = [d for d in ds if d is not None]
+        if ds and float(np.mean(ds)) < frac * height:
+            out.append(i)
+    return out
+
+
 def transfer(proxy, W, targets, names, cx, height, opt, voxel_size):
     """Proxy weights -> every real vertex. Symmetry is applied by ALSO sampling the proxy at the mirrored
     position (works for any tessellation, and across separate left/right parts)."""
@@ -771,6 +849,47 @@ def weld_groups(co, tol=1e-6):
     key = np.round(co / tol).astype(np.int64)
     _, inverse = np.unique(key, axis=0, return_inverse=True)
     return inverse.reshape(-1)
+
+
+def cross_mesh_blend(weights, positions, height, radius_frac=0.0035, strength=1.0, side_below_z=None, axis_x=0.0):
+    """Clothing is often several meshes (jacket, shirt, body, sleeves ...). Weights are computed per vertex and
+    smoothed along each mesh's OWN edges, so two meshes meeting at a shoulder never blend with each other and can
+    pull apart. This averages weights between ALL vertices (of every mesh) within about 1 cm of each other, so
+    vertices that sit together get the same weights and layers/seams move as one. Pure numpy, grid based."""
+    P = np.concatenate(positions)
+    W = np.concatenate(weights).astype(np.float64)
+    cell = max(radius_frac * height, 1e-6)
+    ijk = np.floor(P / cell).astype(np.int64)
+    ijk -= ijk.min(axis=0) - 1
+    # below `side_below_z` (the crotch) the two legs and feet never blend into each other, even where they touch:
+    # a fourth key dimension holds the side of the middle line, and neighbours must share it
+    side = np.where((side_below_z is not None) & (P[:, 2] < (side_below_z if side_below_z is not None else 0)), np.where(P[:, 0] >= axis_x, 2, 1), 0)
+    ijk = np.concatenate([ijk, side[:, None].astype(np.int64)], axis=1)
+    dims = ijk.max(axis=0) + 2
+    def key_of(a):
+        return ((a[:, 0] * dims[1] + a[:, 1]) * dims[2] + a[:, 2]) * dims[3] + a[:, 3]
+    key = key_of(ijk)
+    uniq, inv = np.unique(key, return_inverse=True)
+    S = np.zeros((len(uniq), W.shape[1]))
+    np.add.at(S, inv, W)
+    C = np.bincount(inv).astype(np.float64)
+    acc = np.zeros_like(W)
+    cnt = np.zeros(len(W))
+    for dx in (-1, 0, 1):
+        for dy in (-1, 0, 1):
+            for dz in (-1, 0, 1):
+                nk = key_of(ijk + np.array([dx, dy, dz, 0]))
+                pos = np.clip(np.searchsorted(uniq, nk), 0, len(uniq) - 1)
+                ok = uniq[pos] == nk
+                acc[ok] += S[pos[ok]]
+                cnt[ok] += C[pos[ok]]
+    avg = acc / np.maximum(cnt, 1)[:, None]
+    out = ((1.0 - strength) * W + strength * avg).astype(np.float32)
+    parts, start = [], 0
+    for w in weights:
+        parts.append(out[start:start + len(w)])
+        start += len(w)
+    return parts
 
 
 def smooth_weights(obj, Wobj, iterations, strength):
@@ -854,6 +973,16 @@ def side_coherence(Wobj, co, arm, names, height, axis_x=0.0):
                 rows = np.where(sel)[0]
                 removed += int((W[np.ix_(rows, kill)] > 0).sum())
                 W[np.ix_(rows, kill)] = 0.0
+    # The legs cannot influence the upper body. Bone heat sometimes hands a rim or an inner shell near the shoulders
+    # a big UpLeg weight (it happened on an open jacket); a vertex up there would then fly off whenever a leg moves.
+    # Leg weights are fully allowed up to a little above the hip joint and fade to nothing by 12% of the height above.
+    leg_idx = [names.index('mixamorig:%s%s' % (sd, b)) for sd in ('Left', 'Right') for b in LIMB_PARTS['leg']]
+    fade = np.clip((hip_z + 0.12 * height - z) / (0.08 * height), 0.0, 1.0)
+    fade = fade * fade * (3.0 - 2.0 * fade)
+    cut = fade < 0.999
+    if cut.any():
+        removed += int((W[np.ix_(np.where(cut)[0], leg_idx)] > 0).sum())
+        W[np.ix_(np.where(cut)[0], leg_idx)] *= fade[cut][:, None]
     # a vertex that lost everything: nearest allowed bones
     empty = W.sum(axis=1) < 1e-6
     if empty.any():
@@ -887,6 +1016,91 @@ def limb_reach_cap(Wobj, co, arm, names, height, lo=1.7, hi=2.7):
     if empty.any():
         W[empty] = envelope_weights(co[empty], arm, names, height)
     return W / np.maximum(W.sum(axis=1, keepdims=True), 1e-9), capped
+
+
+def clavicle_rebalance(Wobj, co, arm, names, height):
+    """Bone heat lets the clavicle take about half of the upper chest and shoulder top, so the chest follows the
+    arms outward. In Mixamo rigs the clavicle holds ~12% near the neck end rising to ~28% near the shoulder joint
+    and the spine (Spine2) keeps the rest. Cap the clavicle weight to that profile (measured along the bone) and
+    hand the excess to Spine2; arm-dominated vertices (the deltoid) and everything beyond the joint are untouched."""
+    W = Wobj.copy()
+    s2 = names.index('mixamorig:Spine2')
+    moved = 0
+    for side in ('Left', 'Right'):
+        sh = names.index('mixamorig:%sShoulder' % side)
+        arm_i = names.index('mixamorig:%sArm' % side)
+        b = arm.data.bones['mixamorig:%sShoulder' % side]
+        h = np.array((arm.matrix_world @ b.head_local)[:])
+        t = np.array((arm.matrix_world @ b.tail_local)[:])
+        ab = t - h
+        u = ((co - h) @ ab) / max(float(ab @ ab), 1e-12)
+        # measured on a Mixamo character, by how far the vertex is along the clavicle (0 = neck end, 1 = shoulder joint):
+        # ~1% over the inner 40% (the chest centre belongs to the spine), rising to ~14% at 85% and 28% at the joint,
+        # then free again out over the arm
+        cap = np.interp(u, [0.4, 0.85, 1.0, 1.3], [0.01, 0.14, 0.28, 1.0])
+        over = (W[:, sh] > cap) & (W[:, arm_i] < 0.5)
+        excess = np.where(over, W[:, sh] - cap, 0.0)
+        W[:, sh] -= excess
+        W[:, s2] += excess
+        moved += int(over.sum())
+    return W, moved
+
+
+SPINE_CHAIN = ('Hips', 'Spine', 'Spine1', 'Spine2')
+RAMP = 1.5  # hand-over ramps are 1.5x the Mixamo width: the torso blends more softly between spine bones
+
+
+def spine_profile(Wobj, co, arm, names):
+    """Mixamo splits the spine chain with a clean linear blend by HEIGHT (the upper chest is ~95% Spine2). Bone
+    heat instead lets one spine bone keep far too much (Spine1 right up to the shoulders), which leaves the upper
+    torso, and any jacket on it, to the shoulder bones that pull it outward with the arms. The weight a vertex
+    already gives the spine chain is kept; only its split between Hips / Spine / Spine1 / Spine2 is replaced by a
+    height profile. The hand-over heights were measured on a Mixamo character: Hips -> Spine at the Spine joint,
+    Spine -> Spine1 just under the Spine1 joint, Spine1 -> Spine2 well under the Spine2 joint, each a ramp about as
+    wide as the next segment."""
+    idx = [names.index('mixamorig:' + n) for n in SPINE_CHAIN]
+    heads = []
+    for n in SPINE_CHAIN + ('Neck',):
+        b = arm.data.bones['mixamorig:' + n]
+        heads.append(float((arm.matrix_world @ b.head_local).z))
+    h0, h1, h2, h3, h4 = heads
+    cross = [h1, h2 - 0.19 * (h2 - h1), h3 - 0.38 * (h3 - h2)]
+    half = [r * RAMP for r in (0.5 * (h2 - h1), 0.5 * (h3 - h2), 0.5 * (h4 - h3))]
+    z = co[:, 2]
+    s = [np.clip((z - (cross[k] - half[k])) / max(2 * half[k], 1e-9), 0.0, 1.0) for k in range(3)]
+    s[1] = np.minimum(s[0], s[1])
+    s[2] = np.minimum(s[1], s[2])
+    prof = np.stack([1.0 - s[0], s[0] - s[1], s[1] - s[2], s[2]], axis=1)
+    W = Wobj.copy()
+    mass = W[:, idx].sum(axis=1)
+    # above the neck base the spine chain's influence fades out and the Neck bone takes over (bone heat bleeds some
+    # spine weight up into the neck; consolidating it all on Spine2 would make Spine2 own the neck)
+    head_z = float((arm.matrix_world @ arm.data.bones['mixamorig:Head'].head_local).z)
+    fade = np.clip((z - h4) / max(0.5 * (head_z - h4), 1e-9), 0.0, 1.0)
+    to_neck = mass * fade
+    W[:, idx] = (prof * (mass - to_neck)[:, None]).astype(W.dtype)
+    W[:, names.index('mixamorig:Neck')] += to_neck.astype(W.dtype)
+    return W
+
+
+def shoulder_soften(staged, arm, names, height, radius_frac, reach_frac, strength, cross_args):
+    """Longer, smoother transitions at the shoulders: around each shoulder joint the weights are blended over a
+    wider neighbourhood (~2-3 cm instead of ~1 cm), fading out with distance so the rest of the body is untouched.
+    Blends across meshes too, so sleeve / jacket / body move as one through the transition."""
+    if not staged:
+        return staged
+    P = [x[2] for x in staged]
+    wide = cross_mesh_blend([x[1] for x in staged], P, height, radius_frac, 1.0, *cross_args)
+    joints = [np.array((arm.matrix_world @ arm.data.bones['mixamorig:%sArm' % sd].head_local)[:]) for sd in ('Left', 'Right')]
+    reach = reach_frac * height
+    out = []
+    for (o, W, co), Ww in zip(staged, wide):
+        d = np.min([np.linalg.norm(co - j, axis=1) for j in joints], axis=0)
+        t = np.clip(1.0 - d / reach, 0.0, 1.0)
+        m = (t * t * (3.0 - 2.0 * t) * strength)[:, None]
+        Wn = (1.0 - m) * W + m * Ww
+        out.append((o, (Wn / np.maximum(Wn.sum(axis=1, keepdims=True), 1e-9)).astype(np.float32), co))
+    return out
 
 
 def head_lock(Wobj, co, names, L):
@@ -1099,30 +1313,72 @@ def main():
                                   'Weights will be less accurate. Check the markers, and that the mesh is not extremely thin or broken.')
     progress(0.55, 'Transferring weights to the real mesh')
 
+    if opt['skin_thin_on_body']:
+        on_body = thin_pieces_on_body(proxy, rigid, height, opt['thin_on_body_frac'])
+        for i in on_body:
+            i['rigid'], i['reason'], i['as_clothing'] = False, None, True
+            body.append(i['obj'])
+        rigid = [i for i in rigid if i['rigid']]
+        report['thin_pieces_skinned_as_clothing'] = len(on_body)
     transferred, sym_cov, sym_used = transfer(proxy, Wp, body, names, cx, height, opt, height / float(voxels or opt['proxy_voxels']))
     progress(0.60, 'Cleaning up weights')
     locked = 0
     side_removed = 0
-    staged = []
+    clav_moved = 0
+    crotch_z = float(np.mean([(arm.matrix_world @ arm.data.bones['mixamorig:%sUpLeg' % sd].head_local).z for sd in ('Left', 'Right')]))
+    # stage 1 (per mesh): side split, limb reach, smoothing along the mesh's own edges
+    stage1 = []
     for o in body:
         W = transferred[o.name]
         co = world_vertices(o)
         if opt['side_coherence']:
             W, r1 = side_coherence(W, co, arm, names, height, cx)
+            side_removed += r1
         if opt['limb_cap']:
             W, c1 = limb_reach_cap(W, co, arm, names, height, opt['cap_lo'], opt['cap_hi'])
         W = smooth_weights(o, W, opt['smooth_iterations'], opt['smooth_strength'])
+        stage1.append((o, W, co))
+    # blend BETWEEN meshes, so a sleeve and the torso beside it (or a jacket over a shirt) move as one
+    if opt['cross_mesh_blend'] and len(stage1) > 1:
+        blended = cross_mesh_blend([x[1] for x in stage1], [x[2] for x in stage1], height, opt['blend_radius'], opt['blend_strength'], crotch_z, cx)
+        stage1 = [(o, Wb, co) for (o, _, co), Wb in zip(stage1, blended)]
+    # stage 2 (per mesh): re-apply the rules the blend may have softened, then the face / clavicle rules
+    staged = []
+    for o, W, co in stage1:
         if opt['side_coherence']:
             W, r2 = side_coherence(W, co, arm, names, height, cx)
-            side_removed += r1 + r2
+            side_removed += r2
         if opt['limb_cap']:
             W, c2 = limb_reach_cap(W, co, arm, names, height, opt['cap_lo'], opt['cap_hi'])
+        if opt['spine_profile']:
+            W = spine_profile(W, co, arm, names)
         if opt['head_lock']:
             W, n_locked = head_lock(W, co, names, L)
             locked += n_locked
+        if opt['clavicle_rebalance']:
+            W, n_clav = clavicle_rebalance(W, co, arm, names, height)
+            clav_moved += n_clav
         staged.append((o, W, co))
+    # one last blend between meshes, so the rules above (clavicle, spine, face) cannot reopen a seam
+    if opt['cross_mesh_blend'] and len(staged) > 1:
+        final = cross_mesh_blend([x[1] for x in staged], [x[2] for x in staged], height, opt['blend_radius'], opt['final_blend_strength'], crotch_z, cx)
+        staged = [(o, Wb, co) for (o, _, co), Wb in zip(staged, final)]
+    if opt['shoulder_soften']:
+        staged = shoulder_soften(staged, arm, names, height, opt['shoulder_radius'], opt['shoulder_reach'], opt['shoulder_strength'], (crotch_z, cx))
+    # the blends above may have let a little weight cross the middle line again: the side rule has the last word
+    if opt['side_coherence']:
+        fixed = []
+        for o, W, co in staged:
+            W, r3 = side_coherence(W, co, arm, names, height, cx)
+            side_removed += r3
+            fixed.append((o, W, co))
+        staged = fixed
     report['head_locked_vertices'] = locked
     report['side_leak_removed'] = side_removed
+    report['clavicle_rebalanced'] = clav_moved
+    report['cross_mesh_blend'] = {'applied': bool(opt['cross_mesh_blend'] and len(staged) > 1), 'meshes': len(staged)}
+    report['spine_profile'] = bool(opt['spine_profile'])
+    report['shoulder_soften'] = bool(opt['shoulder_soften'])
     report['symmetry'] = {'coverage': round(sym_cov, 4), 'applied': bool(sym_used)}
 
     # fingers: added AFTER the body weights are settled (the proxy cannot resolve them), then each vertex's

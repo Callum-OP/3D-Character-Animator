@@ -96,14 +96,22 @@ class Glb:
         T[:3, 3] = n.get('translation', [0, 0, 0])
         return T
 
-    def world(self, deltas=None):
-        """world matrix per node, with optional {node: 3x3 pose rotation}"""
+    def world(self, deltas=None, absolute=None):
+        """world matrix per node, with optional {node: 3x3 pose rotation about the bone's own axes} and/or
+        {node: (quaternion xyzw or None, translation or None)} absolute local overrides (a clip frame)"""
         cache = {}
 
         def g(i):
             if i in cache:
                 return cache[i]
             m = self.local(i, (deltas or {}).get(i))
+            if absolute and i in absolute:
+                q, t = absolute[i]
+                if q is not None:
+                    sc = np.array(self.nodes[i].get('scale', [1, 1, 1]))
+                    m[:3, :3] = qmat(q) * sc
+                if t is not None:
+                    m[:3, 3] = t
             p = self.parent.get(i)
             cache[i] = (g(p) @ m) if p is not None else m
             return cache[i]
@@ -148,7 +156,7 @@ class Glb:
         return np.array(out)
 
 
-def evaluate(path, pose=None):
+def evaluate(path, pose=None, absolute_by_name=None):
     """-> positions (all skinned meshes concatenated, world space), body weights (N x 22), per-bone world X axes"""
     g = Glb(path)
     deltas = {}
@@ -157,7 +165,14 @@ def evaluate(path, pose=None):
             i = g.name_to_node.get('mixamorig:' + bone, g.name_to_node.get('mixamorig' + bone))
             if i is not None:
                 deltas[i] = euler_xyz(x, y, z)
-    world = g.world(deltas)
+    absolute = None
+    if absolute_by_name:
+        absolute = {}
+        norm = {(n.get('name') or '').replace(':', ''): i for i, n in enumerate(g.nodes)}
+        for nm, (q, t) in absolute_by_name.items():
+            if nm in norm:
+                absolute[norm[nm]] = (q, t)
+    world = g.world(deltas, absolute)
     P, W22 = [], []
     for pos, joints, wts, skin in g.skinned_meshes():
         M = g.skin_matrices(skin, world)
@@ -216,6 +231,23 @@ def run(truth, rigged):
         'regions': regions,
         'rest_axes_deg': {bn: round(math.degrees(math.acos(float(np.clip(tax[bn] @ rax[bn], -1, 1)))), 1) for bn in BODY if bn in tax and bn in rax},
     }
+    # full rest orientation (not just the X axis): every body bone and the left-hand finger bones
+    def frames(path):
+        g = Glb(path)
+        W = g.world()
+        out = {}
+        for i, n in enumerate(g.nodes):
+            nm = (n.get('name') or '').replace(':', '').replace('mixamorig', '')
+            if nm in BODY or (nm.startswith('LeftHand') and nm != 'LeftHand' and not nm.endswith('4')):
+                R = W[i][:3, :3]
+                out[nm] = R / np.maximum(np.linalg.norm(R, axis=0), 1e-12)
+        return out
+    ft, fr = frames(truth), frames(rigged)
+    res['rest_rotation_deg'] = {}
+    for nm in ft:
+        if nm in fr:
+            R = ft[nm].T @ fr[nm]
+            res['rest_rotation_deg'][nm] = round(math.degrees(math.acos(float(np.clip((np.trace(R) - 1) / 2, -1, 1)))), 1)
     perr = {}
     for pname, rots in POSES.items():
         tpp, _, _ = evaluate(truth, rots)

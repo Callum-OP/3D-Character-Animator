@@ -109,7 +109,10 @@ export function detectLandmarks(pos) {
   }
   const neckBase = neckY != null ? neckY - 0.025 * H : guess.neck[1]
   const neckSlice = stats(pos, sl.range(neckBase - 0.01 * H, neckBase + 0.01 * H), (x) => central(x))
-  const neckZ = neckSlice.n ? neckSlice.cz : guess.neck[2]
+  // Mixamo's spine joints sit ~1-2 cm in FRONT of the centroid of the body's cross-section (the centroid includes
+  // the back of the neck and the chest); detected depths were all 1-2 cm too far back, which carried the whole
+  // body back when a Mixamo pose was applied
+  const neckZ = (neckSlice.n ? neckSlice.cz : guess.neck[2]) + 0.012 * H
   L.neck = [cx, neckBase, neckZ]
   L.head = [cx, neckBase + 0.03 * H, neckZ]
   if (Number.isFinite(headTopY)) L.head_top = [cx, headTopY, neckZ]
@@ -136,12 +139,12 @@ export function detectLandmarks(pos) {
   // ---- spine from crotch to neck ----
   const pel = crotchY + 0.2 * (neckBase - crotchY)
   const pelS = stats(pos, sl.range(pel - 0.01 * H, pel + 0.01 * H), (x) => Math.abs(x - cx) < 0.1 * H)
-  const pelZ = pelS.n ? pelS.cz : neckZ
+  const pelZ = pelS.n ? pelS.cz + 0.006 * H : neckZ
   const place = (t) => [cx, pel + t * (neckBase - pel), pelZ + t * (neckZ - pelZ)]
   L.pelvis = [cx, pel, pelZ]
   L.spine = place(0.2)
-  L.chest = place(0.5)
-  L.upper_chest = place(0.78)
+  L.chest = place(0.434) // Mixamo spacing: Spine 0.2, Spine1 0.434, Spine2 0.70 of the way from hips to neck
+  L.upper_chest = place(0.7)
 
   // ---- legs ----
   for (const sgn of [1, -1]) {
@@ -176,12 +179,13 @@ export function detectLandmarks(pos) {
     L[`${k}_toe`] = [ax, footBottom + 0.011 * H, foot.maxZ - 0.045 * H]
     // hip: just under the crotch, at the centre of this leg's cross-section
     const thigh = stats(pos, sl.range(crotchY - 0.06 * H, crotchY - 0.02 * H), (x) => side(x) && Math.abs(x - cx) < 0.2 * H)
-    const hip = [thigh.n ? cx + (thigh.cx - cx) * 0.9 : cx + sgn * 0.035 * H, crotchY + 0.045 * H, thigh.n ? thigh.cz : az]
+    // the hip joint sits inside the thigh's centre line, so x is pulled in from the slice centroid
+    const hip = [thigh.n ? cx + (thigh.cx - cx) * 0.78 : cx + sgn * 0.035 * H, crotchY + 0.045 * H, thigh.n ? thigh.cz : az]
     L[`${k}_hip`] = hip
     // knee: 54% of the way from hip to ankle, following the leg's own centre line at that height
     const ky = hip[1] + (ankleY - hip[1]) * 0.54
     const kn = stats(pos, sl.range(ky - 0.02 * H, ky + 0.02 * H), (x) => side(x) && Math.abs(x - cx) < 0.2 * H)
-    L[`${k}_knee`] = [kn.n ? kn.cx : ax, ky, kn.n ? kn.cz : az]
+    L[`${k}_knee`] = [kn.n ? cx + (kn.cx - cx) * 0.9 : ax, ky, kn.n ? kn.cz : az]
     detected.push(`${k}_hip`, `${k}_knee`, `${k}_toe`)
   }
 

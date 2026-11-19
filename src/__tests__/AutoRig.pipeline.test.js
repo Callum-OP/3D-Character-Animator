@@ -181,6 +181,72 @@ describe.skipIf(!blenderPath)('real Blender: synthetic humanoid → rigged glb',
     expect(report.weights.max_influences).toBeLessThanOrEqual(4)
   }, 300000)
 
+  it('matches the roll Mixamo gives hands and fingers (about 6 degrees), so tips do not bend up under a Mixamo pose', async () => {
+    const { glb } = await runAutoRig({ blenderPath, input, landmarks })
+    const j = glbJson(glb)
+    // left fingers: X tilted ~6 deg DOWN from straight back (-Z); right fingers: ~6 deg UP from straight forward (+Z)
+    const l = worldAxes(j, 'mixamorig:LeftHandMiddle2').x
+    const r = worldAxes(j, 'mixamorig:RightHandMiddle2').x
+    expect(angleDeg(l, [0, 0, -1])).toBeGreaterThan(4)
+    expect(angleDeg(l, [0, 0, -1])).toBeLessThan(8)
+    expect(l[1]).toBeLessThan(-0.06)
+    expect(angleDeg(r, [0, 0, 1])).toBeGreaterThan(4)
+    expect(angleDeg(r, [0, 0, 1])).toBeLessThan(8)
+    expect(r[1]).toBeGreaterThan(0.06)
+    // the hand carries the same ~6 degrees
+    expect(angleDeg(worldAxes(j, 'mixamorig:LeftHand').x, [0, 0, -1])).toBeGreaterThan(4)
+  }, 300000)
+
+  it('points the foot like Mixamo\'s (forward and down) when the detected direction is close', async () => {
+    const { glb } = await runAutoRig({ blenderPath, input, landmarks })
+    const j = glbJson(glb)
+    for (const side of ['Left', 'Right']) expect(angleDeg(worldAxes(j, `mixamorig:${side}Foot`).y, [0, -0.57, 0.82].map((c) => c / Math.hypot(0, 0.57, 0.82))), `${side} foot`).toBeLessThan(4)
+  }, 300000)
+
+  it('rebalances the clavicle so it cannot hold the chest, and the step can be switched off', async () => {
+    const on = await runAutoRig({ blenderPath, input, landmarks })
+    expect(on.report.clavicle_rebalanced).toBeGreaterThanOrEqual(0)
+    const off = await runAutoRig({ blenderPath, input, landmarks, options: { clavicle_rebalance: false } })
+    expect(off.report.clavicle_rebalanced).toBe(0)
+  }, 400000)
+
+  it('makes the middle finger the hand\'s FIRST child, so the app\'s retargeter orients the hand by it, not by the thumb', async () => {
+    const { glb } = await runAutoRig({ blenderPath, input, landmarks })
+    const j = glbJson(glb)
+    for (const side of ['Left', 'Right']) {
+      const hand = j.nodes.find((n) => n.name === `mixamorig:${side}Hand`)
+      expect(j.nodes[hand.children[0]].name, `${side} hand first child`).toBe(`mixamorig:${side}HandMiddle1`)
+    }
+  }, 300000)
+
+  it('blends weights between separate meshes and uses the Mixamo spine height profile, and both can be switched off', async () => {
+    const on = await runAutoRig({ blenderPath, input, landmarks })
+    expect(on.report.cross_mesh_blend.applied).toBe(true)
+    expect(on.report.cross_mesh_blend.meshes).toBeGreaterThan(5)
+    expect(on.report.spine_profile).toBe(true)
+    const off = await runAutoRig({ blenderPath, input, landmarks, options: { cross_mesh_blend: false, spine_profile: false } })
+    expect(off.report.cross_mesh_blend.applied).toBe(false)
+    expect(off.report.spine_profile).toBe(false)
+    expect(off.report.weights.unweighted_vertices).toBe(0)
+  }, 400000)
+
+  it('softens the shoulder transition, keeps the legs from blending into each other, and each can be switched off', async () => {
+    const on = await runAutoRig({ blenderPath, input, landmarks })
+    expect(on.report.shoulder_soften).toBe(true)
+    expect(on.report.weights.unweighted_vertices).toBe(0)
+    expect(on.report.side_leak_removed).toBeGreaterThanOrEqual(0)
+    const off = await runAutoRig({ blenderPath, input, landmarks, options: { shoulder_soften: false } })
+    expect(off.report.shoulder_soften).toBe(false)
+  }, 400000)
+
+  it('skins a thin piece lying on the body like clothing, but keeps a blade standing away from it rigid', async () => {
+    const { report } = await runAutoRig({ blenderPath, input, landmarks })
+    expect(report.rigid_bindings.map((r) => r.name)).toContain('Blade') // held out away from the body: rigid
+    expect(report.thin_pieces_skinned_as_clothing).toBeGreaterThanOrEqual(0)
+    const all = await runAutoRig({ blenderPath, input, landmarks, options: { skin_thin_on_body: false } })
+    expect(all.report.thin_pieces_skinned_as_clothing).toBeUndefined()
+  }, 400000)
+
   it('can be told not to add fingers', async () => {
     const { report } = await runAutoRig({ blenderPath, input, landmarks, options: { fingers: false } })
     expect(report.bones).toBe(22)
