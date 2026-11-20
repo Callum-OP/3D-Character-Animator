@@ -2327,7 +2327,7 @@ export default function AnimationPanel() {
                   Combine {combineSel.length > 1 ? `(${combineSel.length})` : ''}
                 </button>
                 {combineSel.length > 0 && (
-                  <button className="btn secondary danger" onClick={() => setCombineSel([])}>
+                  <button className="btn secondary" onClick={() => setCombineSel([])}>
                     Clear selection
                   </button>
                 )}
