@@ -119,6 +119,8 @@ DEFAULTS = {
     'shoulder_strength': 0.9,
     'hip_soften': True,         # smooth neighbouring body and clothing weights around the hip joints
     'hip_rebalance': True,      # keep the upper pelvis from following the thighs
+    'crotch_profile': True,     # one smooth left/right thigh handover across the crotch, same for every layer
+    'crotch_width': 0.0064,     # length of the far-thigh tail of that handover, fraction of the height
     'limb_cap': True,           # limb bones cannot claim the body next to them
     'cap_lo': 1.7,
     'cap_hi': 2.7,
@@ -1350,6 +1352,50 @@ def hip_rebalance(Wobj, co, arm, names, height):
     return W, int((factor < 0.999).sum())
 
 
+def crotch_apex(Wobj, co, names, height, axis_x=0.0):
+    """Height of the crotch of one mesh: the lowest vertex near the middle that still carries both thighs.
+    None when the mesh has no crotch (a shirt, a jacket, the head)."""
+    li, ri = names.index('LeftUpLeg'), names.index('RightUpLeg')
+    seam = (np.minimum(Wobj[:, li], Wobj[:, ri]) > 0.05) & (np.abs(co[:, 0] - axis_x) < 0.03 * height)
+    if seam.sum() < 20:
+        return None
+    return float(co[seam, 2].min())
+
+
+def crotch_profile(Wobj, co, arm, names, height, axis_x, apex, width_frac=0.0064):
+    """Skin, underwear and trousers meet in one place between the legs and must share the same thigh handover.
+    The proxy hands the thigh weight over differently on every layer: the skin is 100% one thigh right up to the
+    middle, while the cloth next to it is split 74/26 or 50/50. With the legs apart the cloth then slides away from
+    the skin and its middle vertices hang halfway between the legs as a fin of stretched trousers, and the thin
+    seam folds over. Here every layer in the crotch band gets one smooth profile of the lateral position: the
+    thigh on the far side fades from half at the middle to a few per cent a centimetre or two out (a short
+    exponential tail, the usual hand-weighted look). Hips weight and the total thigh share are unchanged and it
+    depends on position only, so layers that reach the same spot get the same weights.
+    apex is the lowest crotch of all layers (crotch_apex); below it the thighs are separate tubes and stay as they
+    are. -> (weights, vertices changed)"""
+    li, ri = names.index('LeftUpLeg'), names.index('RightUpLeg')
+    heads = [arm.matrix_world @ arm.data.bones['%sUpLeg' % s].head_local for s in ('Left', 'Right')]
+    hip_z = float(np.mean([h.z for h in heads]))
+    left_sign = 1.0 if heads[0].x >= heads[1].x else -1.0
+    scale = max(width_frac * height, 1e-6)
+    cut = 4.5 * scale
+    z = co[:, 2]
+    dx = left_sign * (co[:, 0] - axis_x)
+    rise = 0.0116 * height
+    gz = np.clip((z - (apex - 0.5 * rise)) / rise, 0.0, 1.0) * np.clip(((hip_z + 0.05 * height) - z) / (0.023 * height), 0.0, 1.0)
+    gz = gz * gz * (3.0 - 2.0 * gz)
+    gx = np.clip((cut - np.abs(dx)) / (0.5 * cut), 0.0, 1.0)
+    gx = gx * gx * (3.0 - 2.0 * gx)
+    g = gx * gz
+    W = Wobj.copy()
+    legs = W[:, li] + W[:, ri]
+    other = 0.5 * np.exp(-np.abs(dx) / scale)
+    left_share = np.where(dx >= 0.0, 1.0 - other, other)
+    W[:, li] = (1.0 - g) * W[:, li] + g * legs * left_share
+    W[:, ri] = (1.0 - g) * W[:, ri] + g * legs * (1.0 - left_share)
+    return W, int((g > 0.01).sum())
+
+
 def joint_soften(staged, arm, height, radius_frac, reach_frac, strength, cross_args, part):
     """Blend neighbouring weights around a pair of joints, fading out away from the joints."""
     if not staged:
@@ -1657,6 +1703,19 @@ def main():
             hip_rebalanced += count
             fixed.append((o, W, co))
         staged = fixed
+    crotch_vertices = 0
+    if opt['crotch_profile']:
+        apexes = [crotch_apex(W, co, names, height, cx) for o, W, co in staged]
+        apexes = [a for a in apexes if a is not None]
+        if apexes:
+            apex = min(apexes)          # every layer uses the lowest crotch (the trousers hang lower than the skin)
+            fixed = []
+            for o, W, co in staged:
+                W, count = crotch_profile(W, co, arm, names, height, cx, apex, opt['crotch_width'])
+                crotch_vertices += count
+                fixed.append((o, W, co))
+            staged = fixed
+    report['crotch_profile_vertices'] = crotch_vertices
     report['head_locked_vertices'] = locked
     report['side_leak_removed'] = side_removed
     report['clavicle_rebalanced'] = clav_moved

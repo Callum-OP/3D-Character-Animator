@@ -54,4 +54,47 @@ assert np.allclose(W[0], [1, 0, 0, 0]), 'weight near the wrist is untouched'
 assert abs(W[1, 0]) < 1e-9 and abs(W[1, 2] - 1.0) < 1e-9, 'thumb tip loses its forearm weight to the thumb bone'
 assert abs(W[2, 1] - 0.1) < 1e-9 and W[2, 0] == 0, 'a vertex with no hand weight gets it on the hand'
 assert n == 2
+
+# --- crotch_profile: every layer gets the same smooth thigh handover across the middle
+class P3:
+    def __init__(self, x, y, z):
+        self.x, self.y, self.z = x, y, z
+class Ident:
+    def __matmul__(self, v):
+        return v
+class Bone:
+    def __init__(self, x, z):
+        self.head_local = P3(x, 0.0, z)
+class Arm:
+    matrix_world = Ident()
+    class data:
+        bones = {'LeftUpLeg': Bone(0.06, 0.9), 'RightUpLeg': Bone(-0.06, 0.9)}
+nm = ['Hips', 'LeftUpLeg', 'RightUpLeg']
+H = 1.7
+xs = np.linspace(-0.08, 0.08, 33)
+upper = np.c_[xs, np.zeros(33), np.full(33, 0.85)]     # the sheet above the crotch apex
+lower = np.c_[xs, np.zeros(33), np.full(33, 0.70)]     # separate inner thighs below it
+seam = np.c_[np.linspace(-0.01, 0.01, 30), np.zeros(30), np.linspace(0.80, 0.83, 30)]   # apex z = 0.80
+cc = np.concatenate([upper, lower, seam])
+one = np.where(cc[:, 0] > 0, 0.9, 0.0)                 # every thigh vertex 100% on its own side...
+left = one.copy()
+left[-30:] = 0.45                                      # ...except the seam, which carries both thighs
+Wc = np.c_[np.full(len(cc), 0.1), left, 0.9 - left]
+apex = rig.crotch_apex(Wc, cc, nm, H, 0.0)
+assert abs(apex - 0.80) < 1e-9, 'the apex is the lowest vertex that still carries both thighs'
+assert rig.crotch_apex(np.tile([1.0, 0, 0], (40, 1)), np.c_[np.linspace(-0.1, 0.1, 40), np.zeros(40), np.full(40, 1.2)], nm, H, 0.0) is None, 'no crotch on a shirt'
+out, cnt = rig.crotch_profile(Wc, cc, Arm, nm, H, 0.0, apex, 0.0064)
+assert np.allclose(out.sum(axis=1), Wc.sum(axis=1)) and np.allclose(out[:, 0], Wc[:, 0]), 'hips and the total are unchanged'
+assert np.allclose(out[33:66], Wc[33:66]), 'below the apex the legs are separate tubes and stay untouched'
+ramp = out[:33, 1] / np.maximum(out[:33, 1] + out[:33, 2], 1e-9)
+mid = len(xs) // 2
+assert abs(ramp[mid] - 0.5) < 1e-6, 'half and half exactly on the middle line'
+assert np.all(np.diff(ramp[mid - 6:mid + 7]) >= -1e-9), 'the left share rises steadily across the middle'
+assert ramp[mid + 4] > 0.9 and ramp[mid - 4] < 0.1, 'a couple of centimetres out each thigh is nearly all its own'
+assert np.allclose(out[0], Wc[0]) and np.allclose(out[32], Wc[32]), 'outside the crotch band nothing changes'
+# the skin (100% one thigh) and the cloth next to it (mixed) end up with the same weights at the same spot
+skin = Wc[:33].copy(); cloth = Wc[:33].copy(); cloth[:, 1:] = cloth[:, 1:][:, ::-1] * 0 + [0.45, 0.45]
+sk_out = rig.crotch_profile(skin, upper, Arm, nm, H, 0.0, apex, 0.0064)[0]
+cl_out = rig.crotch_profile(cloth, upper, Arm, nm, H, 0.0, apex, 0.0064)[0]
+assert np.allclose(sk_out[mid - 3:mid + 4, 1:], cl_out[mid - 3:mid + 4, 1:] * (sk_out[mid - 3:mid + 4, 1:].sum(1) / cl_out[mid - 3:mid + 4, 1:].sum(1))[:, None]), 'same position, same handover'
 print('ok')
