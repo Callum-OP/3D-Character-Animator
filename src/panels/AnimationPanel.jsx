@@ -49,6 +49,7 @@ import {
   hasFileSystemAccess as hasClipFileSystemAccess,
 } from '../three/clipLibrary.js'
 import { getBoneQuaternion, getPosedBones, applyPose, setPosingEnabled } from '../three/posing.js'
+import { saveClipToLibrary } from '../three/poseLibraryActions.js'
 import {
   getCurrentModel,
   refreshSoftCloth,
@@ -1096,6 +1097,14 @@ export default function AnimationPanel() {
   // which unmount via their own Accordion's `mode === …` condition in
   // App.jsx), so it's the one place in this file that previously called
   // hooks after a conditional return. See Titlebar.blackscreen.test.js.
+  // A clip put on the character from the Pose Library asks for its remembered keyframes to be loaded here.
+  const adoptRequest = useStore((s) => s.adoptClipRequest)
+  useEffect(() => {
+    if (!adoptRequest) return
+    st().requestAdoptClipKeys(null)
+    if (st().activeClipName === adoptRequest) adoptClipKeys(adoptRequest)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adoptRequest])
   useEffect(() => {
     if (!pickingSlotKey) return
     if (!selectedBoneName || selectedBoneName === pickBaselineRef.current) return
@@ -1864,6 +1873,24 @@ export default function AnimationPanel() {
     )
   }
 
+  function onSaveEditToLibrary() {
+    const name = clipFromTracks(animData.tracks, animDuration, activeClipName ? `${activeClipName} (edited)` : 'My clip', animData.root, animData.meshes, animData.morphs)
+    if (!name) return
+    stop()
+    armClip(name)
+    saveClipToLibrary(name)
+      .then((e) => setKfMsg(`Saved as the clip “${name}” and added “${e.name}” to the Pose Library.`))
+      .catch((e) => setKfMsg(e.message))
+  }
+
+  function onOpenRename() {
+    setRenameText(activeClipName || '')
+    setRenameOpen(true)
+  }
+
+  function onConfirmRename() {
+    if (!activeClipName) return
+    const finalName = renameClip(activeClipName, renameText)
   function onCommitClipRename(oldName, text) {
     setRenamingClip(null)
     if (!(text || '').trim()) return // an empty name just cancels
@@ -2794,6 +2821,14 @@ export default function AnimationPanel() {
             title="Save the animation you created or edited as a new reusable clip."
           >
             Save as clip…
+          </button>
+          <button
+            className="btn secondary"
+            style={{ marginTop: 8, marginLeft: 6 }}
+            onClick={onSaveEditToLibrary}
+            title="Turn this animation into a clip and keep it in the Pose Library (titlebar)"
+          >
+            📚 Save to library
           </button>
 
           <details className="anim-disclosure">

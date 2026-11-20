@@ -15,6 +15,7 @@ import ViewPanel from './panels/ViewPanel.jsx'
 import HelpOverlay from './panels/HelpOverlay.jsx'
 import PoseFinderPanel from './panels/PoseFinderPanel.jsx'
 import CloseGuard from './panels/CloseGuard.jsx'
+import PoseLibrary from './panels/PoseLibrary.jsx'
 import Accordion from './panels/Accordion.jsx'
 import TabGroup from './panels/TabGroup.jsx'
 import { useStore } from './store.js'
@@ -207,6 +208,7 @@ function AppInner() {
           </aside>
         </div>
       )}
+      <PoseLibrary />
       <HelpOverlay />
       </div>
     </div>

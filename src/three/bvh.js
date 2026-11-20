@@ -668,7 +668,7 @@ export function retargetParsed(parsed, model, names, hip, clipName, { preserveFo
     else bone.quaternion.set(values[0], values[1], values[2], values[3])
   }
   const origPos = new Map(srcPosTracks.map(({ bone }) => [bone, bone.position.clone()]))
-  for (const { bone, values } of srcPosTracks) {
+  if (!parsed.useSourceRest) for (const { bone, values } of srcPosTracks) {
     bone.position.set(values[0], values[1], values[2])
   }
   if (restPose) srcBones[0].position.fromArray(restPose.root)
@@ -685,7 +685,7 @@ export function retargetParsed(parsed, model, names, hip, clipName, { preserveFo
   // hip) go back to their ORIGINAL construction-time offset, not zero — for
   // the root that's conventionally (0,0,0) already, but this must not assume
   // that; it has to actually restore what BVHLoader put there.
-  for (const b of srcBones) b.quaternion.identity()
+  if (!parsed.useSourceRest) for (const b of srcBones) b.quaternion.identity()
   for (const { bone } of srcPosTracks) bone.position.copy(origPos.get(bone))
   srcBones[0].updateWorldMatrix(false, true)
   // For unannotated files the yaw-fix compares frame 0's hip orientation against raw
@@ -836,7 +836,7 @@ export function retargetParsed(parsed, model, names, hip, clipName, { preserveFo
     for (const { bone, values } of srcPosTracks) {
       bone.position.set(values[0], values[1], values[2])
     }
-    srcBones[0].updateWorldMatrix(false, true)
+    updateSource()
     // How much the hips have yawed away from the mocap rest at frame 0 — undo
     // it so the character starts out facing wherever its rest pose faces.
     const d0 = (identityHipW || restSrcW.get(srcHip))
@@ -875,7 +875,7 @@ export function retargetParsed(parsed, model, names, hip, clipName, { preserveFo
       const o = i * 3
       bone.position.set(values[o], values[o + 1], values[o + 2])
     }
-    srcBones[0].updateWorldMatrix(false, true)
+    updateSource()
 
     // Hip translation: source hip movement since frame 0, scaled to the
     // character's hip height, yaw-corrected, re-anchored on the target hip's

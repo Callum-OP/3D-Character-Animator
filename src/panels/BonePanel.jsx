@@ -30,6 +30,8 @@ import { performUndo, performRedo } from '../three/undoPriority.js'
 import EditableValue from './EditableValue.jsx'
 import IkPinsSection from './IkPinsSection.jsx'
 import FlattenerSection from './FlattenerSection.jsx'
+import HandPoseSection from './HandPoseSection.jsx'
+import { saveCurrentBodyPose } from '../three/poseLibraryActions.js'
 
 const AXES = ['x', 'y', 'z']
 
@@ -779,6 +781,13 @@ export default function BonePanel() {
       </FxEditor>
       </FxCollapse>
 
+      <FxCollapse title="Hands & Pose Library" hint="open ↔ fist sliders, save to library">
+        <HandPoseSection onMessage={setPoseMsg} />
+        <FxButtons wide>
+          <button className="btn secondary" onClick={() => saveCurrentBodyPose().then((e) => setPoseMsg(`Saved “${e.name}” to the library.`)).catch((e) => setPoseMsg(e.message))}>📚 Save pose to library</button>
+          <button className="btn secondary" onClick={() => useStore.getState().openPoseLibrary('body')}>Open library</button>
+        </FxButtons>
+      </FxCollapse>
       <IkPinsSection />
 
       <FlattenerSection />

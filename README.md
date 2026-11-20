@@ -16,7 +16,8 @@ mocap retargeting, allows mesh-level edits for accessories and clothing, and add
   Front, Side, Rim, and Top, with optional ground shadowing, different preset styles include flat, anime, cel shaded, realistic and noir.
 - **Pose workflow** — select bones from the viewport or the bone tree, rotate or
   manipulate them with gizmos, save/load/reset poses as JSON, switch gizmo space,
-  filter deform bones, and undo edits with a consistent pose history.
+  filter deform bones, and undo edits with a consistent pose history. Hand poses
+  and curl controls support recognised finger rigs, including Mixamo Y Bot FBX rigs.
 - **Mesh editing** — work in Mesh mode to move, rotate, and scale individual
   parts such as eyes, hair, clothing, accessories, and facial features. Each mesh
   part has its own transform controls, reset tools, pivot behaviour, and trackable
