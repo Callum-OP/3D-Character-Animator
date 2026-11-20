@@ -110,7 +110,7 @@ DEFAULTS = {
     'skin_thin_on_body': True,  # thin pieces lying on the body are clothing, not rigid accessories
     'thin_on_body_frac': 0.02,  # mean distance to the body, fraction of the height
     'cross_mesh_blend': True,   # weights agree where different meshes (sleeve / torso / jacket layers) meet
-    'blend_radius': 0.0035,     # fraction of the height: grid cell, so ~1 cm
+    'blend_radius': 0.0035,     # spatial grid cell as a fraction of height
     'blend_strength': 1.0,
     'final_blend_strength': 0.7,
     'shoulder_soften': True,    # longer, smoother shoulder-to-arm transition
@@ -664,8 +664,25 @@ def finger_redistribute(co, W, names, layouts, height, edges=None):
         for j, (b, _, _) in enumerate(segs):
             Wb[:, b] = np.maximum(Wb[:, b], Wseg[:, j])  # the palm is five segments: take the nearest, never the sum
         Wb /= np.maximum(Wb.sum(axis=1, keepdims=True), 1e-18)
+        # A distal surface should rotate with one bone rather than collapse between transforms.
+        J = [np.array(j[:]) for j in lay['joints']['Thumb']]
+        ab = J[3] - J[2]
+        t = ((P - J[2]) @ ab) / max(float(ab @ ab), 1e-12)
+        distance = np.linalg.norm(P - (J[2] + np.clip(t, 0.0, 1.0)[:, None] * ab), axis=1)
+        length = lay['frame'][3]
+        along = np.clip((t - 0.55) / 0.35, 0.0, 1.0)
+        radial = np.clip((0.12 * length - distance) / (0.06 * length), 0.0, 1.0)
+        tip = along * along * (3.0 - 2.0 * along) * radial * radial * (3.0 - 2.0 * radial)
+        tip *= (closest == 0)
+        Wb *= (1.0 - tip[:, None])
+        thumb_tip = names.index('%sHandThumb3' % side)
+        Wb[:, thumb_tip] += tip
         h = W[sel, hi].copy()
         W[sel, hi] = 0.0
+        forearm = names.index('%sForeArm' % side)
+        forearm_tip = W[sel, forearm] * tip
+        W[sel, forearm] -= forearm_tip
+        W[sel, thumb_tip] += forearm_tip
         W[sel] += (Wb * h[:, None]).astype(W.dtype)
         done += len(sel)
     return done
@@ -927,36 +944,43 @@ def weld_groups(co, tol=1e-6):
 def cross_mesh_blend(weights, positions, height, radius_frac=0.0035, strength=1.0, side_below_z=None, axis_x=0.0):
     """Clothing is often several meshes (jacket, shirt, body, sleeves ...). Weights are computed per vertex and
     smoothed along each mesh's OWN edges, so two meshes meeting at a shoulder never blend with each other and can
-    pull apart. This averages weights between ALL vertices (of every mesh) within about 1 cm of each other, so
-    vertices that sit together get the same weights and layers/seams move as one. Pure numpy, grid based."""
+    pull apart. A spatial grid blends neighbouring weights across meshes and along seams."""
     P = np.concatenate(positions)
     W = np.concatenate(weights).astype(np.float64)
     cell = max(radius_frac * height, 1e-6)
-    ijk = np.floor(P / cell).astype(np.int64)
-    ijk -= ijk.min(axis=0) - 1
+    grid = P / cell
+    ijk = np.floor(grid).astype(np.int64)
+    frac = grid - ijk
+    ijk -= ijk.min(axis=0)
     # below `side_below_z` (the crotch) the two legs and feet never blend into each other, even where they touch:
     # a fourth key dimension holds the side of the middle line, and neighbours must share it
     side = np.where((side_below_z is not None) & (P[:, 2] < (side_below_z if side_below_z is not None else 0)), np.where(P[:, 0] >= axis_x, 2, 1), 0)
     ijk = np.concatenate([ijk, side[:, None].astype(np.int64)], axis=1)
-    dims = ijk.max(axis=0) + 2
+    dims = ijk.max(axis=0) + np.array([2, 2, 2, 1])
     def key_of(a):
         return ((a[:, 0] * dims[1] + a[:, 1]) * dims[2] + a[:, 2]) * dims[3] + a[:, 3]
-    key = key_of(ijk)
-    uniq, inv = np.unique(key, return_inverse=True)
+    # Splat and sample continuously so crossing a cell boundary cannot produce a weight step.
+    keys, factors = [], []
+    for dx in (0, 1):
+        for dy in (0, 1):
+            for dz in (0, 1):
+                keys.append(key_of(ijk + np.array([dx, dy, dz, 0])))
+                factors.append((frac[:, 0] if dx else 1 - frac[:, 0]) *
+                               (frac[:, 1] if dy else 1 - frac[:, 1]) *
+                               (frac[:, 2] if dz else 1 - frac[:, 2]))
+    uniq, inverse = np.unique(np.concatenate(keys), return_inverse=True)
+    inverse = inverse.reshape(8, len(P))
     S = np.zeros((len(uniq), W.shape[1]))
-    np.add.at(S, inv, W)
-    C = np.bincount(inv).astype(np.float64)
+    C = np.zeros(len(uniq))
+    for inv, factor in zip(inverse, factors):
+        np.add.at(S, inv, W * factor[:, None])
+        np.add.at(C, inv, factor)
     acc = np.zeros_like(W)
     cnt = np.zeros(len(W))
-    for dx in (-1, 0, 1):
-        for dy in (-1, 0, 1):
-            for dz in (-1, 0, 1):
-                nk = key_of(ijk + np.array([dx, dy, dz, 0]))
-                pos = np.clip(np.searchsorted(uniq, nk), 0, len(uniq) - 1)
-                ok = uniq[pos] == nk
-                acc[ok] += S[pos[ok]]
-                cnt[ok] += C[pos[ok]]
-    avg = acc / np.maximum(cnt, 1)[:, None]
+    for inv, factor in zip(inverse, factors):
+        acc += S[inv] * factor[:, None]
+        cnt += C[inv] * factor
+    avg = acc / np.maximum(cnt, 1e-12)[:, None]
     out = ((1.0 - strength) * W + strength * avg).astype(np.float32)
     parts, start = [], 0
     for w in weights:
@@ -1018,8 +1042,8 @@ def side_coherence(Wobj, co, arm, names, height, axis_x=0.0):
     """The voxel proxy fuses limbs that sit close together (feet side by side, arms against the torso), so
     heat weights can leak across. A vertex that is nearer the LEFT limb than the RIGHT one by more than a
     small margin must not carry the right limb's weights (and vice versa).
-    Legs: the margin is tight on shins and feet (they never share weight with the other leg, even when the
-    feet touch) and relaxes toward the crotch, where skinning legitimately blends across the midline.
+    Legs: the margin is tight on shins and feet and relaxes toward the crotch.
+    At the upper-leg centre seam, opposite-thigh influence fades toward the nearer side.
     Arms: a small constant margin, so the chest centre, equally near both, is left alone."""
     D = bone_distances(co, arm, names)
     W = Wobj.copy()
@@ -1075,6 +1099,23 @@ def side_coherence(Wobj, co, arm, names, height, axis_x=0.0):
     if cut.any():
         removed += int((W[np.ix_(np.where(cut)[0], leg_idx)] > 0).sum())
         W[np.ix_(np.where(cut)[0], leg_idx)] *= fade[cut][:, None]
+    thigh_ids = [names.index('%sUpLeg' % side) for side in ('Left', 'Right')]
+    hip_heads = [arm.matrix_world @ arm.data.bones['%sUpLeg' % side].head_local for side in ('Left', 'Right')]
+    width = max(min(abs(hip_heads[0].x - hip_heads[1].x) * 0.1, 0.012 * height), 1e-6)
+    lower = np.clip((z - (hip_z - 0.08 * height)) / (0.04 * height), 0.0, 1.0)
+    upper = np.clip(((hip_z + 0.10 * height) - z) / (0.06 * height), 0.0, 1.0)
+    gate = lower * lower * (3.0 - 2.0 * lower) * upper * upper * (3.0 - 2.0 * upper)
+    # Keep total thigh influence unchanged so bending both hips does not pin the seam.
+    total = W[:, thigh_ids].sum(axis=1)
+    side = np.clip(np.abs(co[:, 0] - axis_x) / width, 0.0, 1.0)
+    side = side * side * (3.0 - 2.0 * side)
+    for sign, own, other in ((1.0, thigh_ids[0], thigh_ids[1]), (-1.0, thigh_ids[1], thigh_ids[0])):
+        cap = total * (1.0 - 0.5 * gate * (1.0 + side))
+        excess = np.where((sign * (co[:, 0] - axis_x) > 0) & (W[:, other] <= W[:, own]),
+                          np.maximum(W[:, other] - cap, 0.0), 0.0)
+        removed += int((excess > 1e-6).sum())
+        W[:, other] -= excess
+        W[:, own] += excess
     # a vertex that lost everything: nearest allowed bones
     empty = W.sum(axis=1) < 1e-6
     if empty.any():
@@ -1226,7 +1267,10 @@ def head_lock(Wobj, co, names, L):
 
 def limit_normalise(Wobj, max_inf, prune):
     W = Wobj.copy()
-    W[W < prune] = 0.0
+    if prune > 0:
+        # Fade small influences out rather than creating a step at the cutoff.
+        t = np.clip((W - prune) / prune, 0.0, 1.0)
+        W *= t * t * (3.0 - 2.0 * t)
     if max_inf < W.shape[1]:
         order = np.argsort(-W, axis=1)
         mask = np.zeros_like(W, dtype=bool)

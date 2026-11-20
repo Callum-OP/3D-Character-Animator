@@ -31,8 +31,58 @@ L = {key: Vector(value) for key, value in points.items()}
 arm = rig.build_armature(L)
 base_names = [bone.name for bone in arm.data.bones]
 
-# The upper pelvis must transition smoothly, while lower legs remain isolated.
-co = np.column_stack((np.linspace(0, 0.02, 401), np.zeros(401), np.full(401, 0.92)))
+# A grid boundary must not introduce a sudden jump between adjacent vertices.
+grid_co = np.array([[0.009999, 0, 1.2], [0.010001, 0, 1.2],
+                    [-0.009, 0, 1.2], [0.029, 0, 1.2]])
+grid_weights = np.zeros((4, len(base_names)), dtype=np.float32)
+grid_weights[:2, base_names.index('Spine')] = 0.5
+grid_weights[:2, base_names.index('Spine1')] = 0.5
+grid_weights[2, base_names.index('Spine')] = 1
+grid_weights[3, base_names.index('Spine1')] = 1
+grid_result = rig.cross_mesh_blend([grid_weights], [grid_co], 1.0, 0.01)[0]
+assert np.max(np.abs(grid_result[0] - grid_result[1])) < 0.002
+assert np.allclose(grid_result.sum(axis=1), 1)
+
+# Pruning a tiny influence must not create a visible step at the cutoff.
+prune_input = np.array([[0.9901, 0.0099], [0.9899, 0.0101]], dtype=np.float32)
+pruned, empty = rig.limit_normalise(prune_input, 4, 0.01)
+assert empty == 0 and np.max(np.abs(pruned[0] - pruned[1])) < 0.001
+
+# Two nearby layers should not move through each other when a joint bends.
+layer_points = [np.array([[0.72, 0, 1.45]]), np.array([[0.72, 0, 1.4505]])]
+layer_w = [np.zeros((1, len(base_names)), dtype=np.float32) for _ in range(2)]
+layer_w[0][0, base_names.index('LeftForeArm')] = 1
+layer_w[1][0, base_names.index('LeftArm')] = 1
+aligned_w = rig.cross_mesh_blend(layer_w, layer_points, 1.8, 0.0035)
+aligned_w = rig.cross_mesh_blend(aligned_w, layer_points, 1.8, 0.0035)
+layer_objs = []
+for label, weights in (('raw', layer_w), ('aligned', aligned_w)):
+    pair = []
+    for i, point in enumerate(layer_points):
+        mesh = bpy.data.meshes.new(label + str(i))
+        mesh.from_pydata(point.tolist(), [], [])
+        obj = bpy.data.objects.new(label + str(i), mesh)
+        bpy.context.scene.collection.objects.link(obj)
+        rig.write_weights(obj, arm, base_names, weights[i])
+        pair.append(obj)
+    layer_objs.append(pair)
+forearm_bone = arm.pose.bones['LeftForeArm']
+forearm_bone.rotation_mode = 'XYZ'
+forearm_bone.rotation_euler.x = -0.8
+bpy.context.view_layer.update()
+separations = []
+signed_gaps = []
+for pair in layer_objs:
+    posed = [rig.evaluated_positions(o, bpy.context.evaluated_depsgraph_get())[0] for o in pair]
+    separations.append(np.linalg.norm(posed[1] - posed[0]))
+    signed_gaps.append(posed[1][2] - posed[0][2])
+assert separations[1] < separations[0] * 0.5
+assert signed_gaps[0] < 0 and signed_gaps[1] > 0
+forearm_bone.rotation_euler.x = 0
+bpy.context.view_layer.update()
+
+# The upper-leg junction transitions smoothly between the two thighs.
+co = np.column_stack((np.linspace(0, 0.10, 401), np.zeros(401), np.full(401, 0.92)))
 weights = np.zeros((len(co), len(base_names)), dtype=np.float32)
 hips = base_names.index('Hips')
 left = base_names.index('LeftUpLeg')
@@ -40,10 +90,21 @@ right = base_names.index('RightUpLeg')
 weights[:, hips], weights[:, left], weights[:, right] = 0.4, 0.3, 0.3
 result, _ = rig.side_coherence(weights, co, arm, base_names, 1.8)
 assert np.max(np.abs(np.diff(result[:, right]))) < 0.03
-assert result[0, right] > 0.29 and result[-1, right] < 1e-5
-assert result[-1, hips] > 0.56 and result[-1, left] > 0.42
+assert abs(result[0, hips] - 0.4) < 1e-5 and abs(result[0, left] - 0.3) < 1e-5
+assert result[-1, right] < 1e-5 and result[-1, left] > 0.29
 again, _ = rig.side_coherence(result, co, arm, base_names, 1.8)
 assert np.max(np.abs(again - result)) < 1e-5
+vertical = np.column_stack((np.full(401, 0.02), np.zeros(401), np.linspace(0.65, 1.15, 401)))
+vertical_weights = np.zeros((len(vertical), len(base_names)), dtype=np.float32)
+vertical_weights[:, left], vertical_weights[:, hips] = 0.7, 0.3
+vertical_result, _ = rig.side_coherence(vertical_weights, vertical, arm, base_names, 1.8)
+assert abs(vertical_result[0, left] - 0.7) < 1e-5
+assert np.max(np.abs(np.diff(vertical_result[:, left]))) < 0.03
+near_seam = np.array([[0.009, 0, 0.92], [-0.009, 0, 0.92]])
+near_result, _ = rig.side_coherence(weights[:2], near_seam, arm, base_names, 1.8)
+assert near_result[0, right] < 0.2 and near_result[1, left] < 0.2
+assert np.allclose(near_result[:, hips], 0.4)
+assert np.allclose(near_result[:, left] + near_result[:, right], 0.6)
 lower = np.array([[0.08, 0, 0.5], [-0.08, 0, 0.5], [0, 0, 0.5]])
 lower_result, _ = rig.side_coherence(weights[:3], lower, arm, base_names, 1.8)
 assert lower_result[0, right] == 0 and lower_result[1, left] == 0
@@ -120,6 +181,24 @@ assert movements[1][1] < movements[0][1] * 0.25
 leg.rotation_euler.x = 0
 bpy.context.view_layer.update()
 
+# Moving one thigh must not drag the opposite side.
+groin_co = np.array([[-0.05, 0.04, 0.92], [0, 0.04, 0.92], [0.05, 0.04, 0.92]])
+groin_weights = np.zeros((3, len(base_names)), dtype=np.float32)
+groin_weights[:, hips], groin_weights[:, left], groin_weights[:, right] = 0.4, 0.3, 0.3
+groin_weights, _ = rig.side_coherence(groin_weights, groin_co, arm, base_names, 1.8)
+mesh = bpy.data.meshes.new('groin probe')
+mesh.from_pydata(groin_co.tolist(), [], [])
+obj = bpy.data.objects.new('groin probe', mesh)
+bpy.context.scene.collection.objects.link(obj)
+rig.write_weights(obj, arm, base_names, groin_weights)
+leg.rotation_euler.x = 0.8
+bpy.context.view_layer.update()
+posed = rig.evaluated_positions(obj, bpy.context.evaluated_depsgraph_get())
+movement = np.linalg.norm(posed - groin_co, axis=1)
+assert movement[0] < 1e-5 and movement[1] > 0.005 and movement[2] > 0.005
+leg.rotation_euler.x = 0
+bpy.context.view_layer.update()
+
 # Finger-zone samples describe the four finger lanes, not the thumb.
 for side, key, sign in (('Left', 'l', 1), ('Right', 'r', -1)):
     wrist, tip = L[key + '_wrist'], L[key + '_fingertip']
@@ -145,6 +224,38 @@ body = bpy.data.objects.new('body', mesh)
 bpy.context.scene.collection.objects.link(body)
 layouts = rig.add_fingers(arm, L, [body], {})
 names = [bone.name for bone in arm.data.bones]
+
+# Distal thumb surfaces must move as a unit, including beyond the estimated tip.
+for side in ('Left', 'Right'):
+    lay = layouts[side]
+    joints = lay['joints']['Thumb']
+    axis = (joints[3] - joints[2]).normalized()
+    up = lay['frame'][2]
+    across = axis.cross(up).normalized()
+    points = np.array([np.array((joints[3] + axis * axial + across * lateral + up * vertical)[:])
+                       for axial in (0, 0.003) for lateral in (-0.003, 0.003)
+                       for vertical in (-0.003, 0.003)])
+    w = np.zeros((len(points), len(names)), dtype=np.float32)
+    w[:, names.index(side + 'Hand')] = 0.7
+    w[:, names.index(side + 'ForeArm')] = 0.3
+    rig.finger_redistribute(points, w, names, {side: lay}, 1.8)
+    assert np.all(w[:, names.index(side + 'HandThumb3')] > 0.99)
+    mesh = bpy.data.meshes.new(side + ' thumb tip')
+    mesh.from_pydata(points.tolist(), [], [])
+    obj = bpy.data.objects.new(side + ' thumb tip', mesh)
+    bpy.context.scene.collection.objects.link(obj)
+    rig.write_weights(obj, arm, names, w)
+    bone = arm.pose.bones[side + 'HandThumb3']
+    bone.rotation_mode = 'XYZ'
+    bone.rotation_euler.x = 1.2
+    bpy.context.view_layer.update()
+    posed = rig.evaluated_positions(obj, bpy.context.evaluated_depsgraph_get())
+    rest_distances = np.linalg.norm(points[:, None] - points[None, :], axis=2)
+    posed_distances = np.linalg.norm(posed[:, None] - posed[None, :], axis=2)
+    assert np.allclose(posed_distances, rest_distances, atol=1e-5), (side, np.max(np.abs(posed_distances - rest_distances)), w[:, names.index(side + 'HandThumb3')])
+    bone.rotation_euler.x = 0
+    bpy.context.view_layer.update()
+
 samples = []
 for side in ('Left', 'Right'):
     thumb_direction = None
