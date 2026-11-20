@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { buildNameMatch, buildSlotMapping, mergeNames, parseBVH, retargetParsed } from './bvh.js'
+import { libraryPoseClip, retargetLibraryClip } from './libraryRetarget.js'
 
 export function previewModelFromRoot(root) {
   const bones = []
@@ -37,4 +38,9 @@ export async function retargetPreviewBVH(text, root, name = 'Preview') {
 
 export function animationClipFromJSON(json) {
   return json ? THREE.AnimationClip.parse(json.clip || json) : null
+}
+
+export function retargetLibraryPreview(entry, root) {
+  const json = entry.kind === 'body' ? libraryPoseClip(entry.data.bones) : entry.data.clip
+  return retargetLibraryClip(json, entry.data.rig, previewModelFromRoot(root))
 }

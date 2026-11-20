@@ -3,7 +3,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { analyseHands, analyticHandPose, handPoseToBoneQuats, handPosesFromBVH, migrateHandPose, rigsForSide } from './handPose.js'
 import { applyClipFrame, parsedBVHResolver, posedBoneBounds, representativeClipTime } from './poseThumb.js'
 import { loadPresetPoseText, loadPresetText } from './poseLibraryPresets.js'
-import { retargetPreviewBVH } from './posePreviewRetarget.js'
+import { retargetLibraryPreview, retargetPreviewBVH } from './posePreviewRetarget.js'
 
 const SIZE = 192
 let runtimePromise
@@ -15,7 +15,7 @@ function normalizeName(name) {
 
 function findBone(root, sourceName) {
   if (!root || !sourceName) return null
-  const exact = root.getObjectByName(sourceName)
+  const exact = root.getObjectByName(sourceName) || root.getObjectByProperty('uuid', sourceName)
   if (exact) return exact
   const wanted = normalizeName(sourceName)
   let found = null
@@ -108,6 +108,8 @@ async function applyEntry(runtime, entry) {
       const parsed = new BVHLoader().parse(await loadPresetPoseText(entry))
       const sourceName = parsedBVHResolver(parsed)
       applyBoneTracks(root, parsed.clip.tracks, sourceName)
+    } else if (entry.data?.rig) {
+      applyClipFrame(root, retargetLibraryPreview(entry, root), 0, (name) => findBone(root, name))
     } else {
       for (const [name, value] of Object.entries(entry.data?.bones || {})) {
         const bone = findBone(root, name)
@@ -142,7 +144,7 @@ async function applyEntry(runtime, entry) {
       clip = await retargetPreviewBVH(await loadPresetText(entry), root, entry.name)
     } else {
       const json = entry.data?.clip
-      clip = THREE.AnimationClip.parse(json?.clip || json)
+      clip = entry.data?.rig ? retargetLibraryPreview(entry, root) : THREE.AnimationClip.parse(json?.clip || json)
     }
     applyClipFrame(root, clip, representativeClipTime(clip), (name) => findBone(root, resolver?.(name) || name))
   }

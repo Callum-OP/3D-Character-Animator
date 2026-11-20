@@ -10,7 +10,10 @@ import {
   endBonesAdjust,
 } from './posing.js'
 import { POSE_FORMAT } from './poses.js'
-import { poseFromBVHText, stop as stopAnimation, exportClipJSON, importClipJSON, selectClip } from './animation.js'
+import {
+  poseFromBVHText, stop as stopAnimation, exportClipJSON, addGeneratedClip, selectClip,
+  getLibraryRig, prepareLibraryClip, retargetLibraryPose,
+} from './animation.js'
 import { importBVHAuto } from './scene.js'
 import {
   analyseHands,
@@ -93,10 +96,16 @@ export async function applyBodyEntry(entry, { keepHands = true } = {}) {
     bones = await poseFromBVHText(text, entry.name)
     if (!Object.keys(bones).length) throw new Error(`"${entry.name}" didn't match any of this character's bones.`)
   } else {
-    bones = { ...entry.data.bones }
+    bones = entry.data.rig
+      ? retargetLibraryPose(entry.data.bones, entry.data.rig)
+      : { ...entry.data.bones }
   }
   if (keepHands) {
     for (const name of fingerBoneNames()) delete bones[name]
+  }
+  if (entry.source !== 'preset' && !entry.data.rig && Object.keys(bones).length &&
+      !getPoseBones().some((bone) => Object.hasOwn(bones, bone.name))) {
+    throw new Error('This older library pose has no source rig and cannot be retargeted. Save it again from its original character.')
   }
   stopPlaybackForPosing()
   const { applied, missing } = applyPose({ format: POSE_FORMAT, bones })
@@ -140,7 +149,8 @@ export async function applyAnimationEntry(entry) {
     const { name } = await importBVHAuto(new File([text], `${base}.bvh`))
     return { name, label: entry.name }
   }
-  const name = importClipJSON(entry.data.clip)
+  const { clip, retargeted } = prepareLibraryClip(entry.data.clip, entry.data.rig)
+  const name = addGeneratedClip(clip)
   if (!name) throw new Error('Load a model first.')
   s.addImportedClipName(name)
   s.setPlaybackSource('clip')
@@ -149,8 +159,8 @@ export async function applyAnimationEntry(entry) {
   s.setDuration(d)
   s.setCurrentTime(0)
   s.setPlayback('paused')
-  s.requestAdoptClipKeys(name) // the Animate panel loads the clip's remembered keyframes when it can
-  return { name, label: entry.name }
+  if (!retargeted) s.requestAdoptClipKeys(name)
+  return { name, label: entry.name, retargeted }
 }
 
 // ---- Hand sliders (live) ------------------------------------------------------------------------------
@@ -196,7 +206,7 @@ export async function saveCurrentBodyPose(name) {
     kind: 'body',
     name: cleanName(name, 'My pose'),
     thumb: bodyThumb(bones),
-    data: { bones: pose.bones },
+    data: { bones: pose.bones, rig: getLibraryRig() },
   })
 }
 
@@ -222,7 +232,7 @@ export async function saveClipToLibrary(clipName, name) {
     kind: 'animation',
     name: cleanName(name, clipName),
     thumb: animationThumbFromClipJSON(json, getPoseBones()),
-    data: { clip: json },
+    data: { clip: json, rig: getLibraryRig() },
   })
 }
 

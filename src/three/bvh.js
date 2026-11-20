@@ -656,14 +656,15 @@ export function retargetParsed(parsed, model, names, hip, clipName) {
   // (clean files conventionally start at/near a neutral pose), so this is a
   // strict improvement: harmless when frame 0 is already near-identity, and
   // it correctly absorbs the baseline twist when it isn't.
-  for (const { bone, values } of srcTracks) {
+  if (!parsed.useSourceRest) for (const { bone, values } of srcTracks) {
     bone.quaternion.set(values[0], values[1], values[2], values[3])
   }
   const origPos = new Map(srcPosTracks.map(({ bone }) => [bone, bone.position.clone()]))
-  for (const { bone, values } of srcPosTracks) {
+  if (!parsed.useSourceRest) for (const { bone, values } of srcPosTracks) {
     bone.position.set(values[0], values[1], values[2])
   }
-  srcBones[0].updateWorldMatrix(false, true)
+  const updateSource = () => (parsed.root || srcBones[0]).updateWorldMatrix(true, true)
+  updateSource()
   const restSrcW = new Map()
   const restSrcP = new Map()
   for (const b of srcBones) {
@@ -676,9 +677,9 @@ export function retargetParsed(parsed, model, names, hip, clipName) {
   // hip) go back to their ORIGINAL construction-time offset, not zero — for
   // the root that's conventionally (0,0,0) already, but this must not assume
   // that; it has to actually restore what BVHLoader put there.
-  for (const b of srcBones) b.quaternion.identity()
+  if (!parsed.useSourceRest) for (const b of srcBones) b.quaternion.identity()
   for (const { bone } of srcPosTracks) bone.position.copy(origPos.get(bone))
-  srcBones[0].updateWorldMatrix(false, true)
+  updateSource()
   // The yaw-fix below needs to compare frame 0's hip orientation against raw
   // identity specifically (BVH's own "facing +Z" convention), NOT against
   // the frame-0-based restSrcW above — those are now the same thing for the
@@ -721,7 +722,8 @@ export function retargetParsed(parsed, model, names, hip, clipName) {
 
   // The mocap's world frame faces +Z; carry it into the direction this character
   // actually faces. `faceQ` turns source-world vectors into target-world ones.
-  const faceQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), detectFacingYaw(tgtBones, restTgtP, mapped))
+  const sourceYaw = parsed.useSourceRest ? detectFacingYaw(srcBones, restSrcP) : 0
+  const faceQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), detectFacingYaw(tgtBones, restTgtP, mapped) - sourceYaw)
   const faceInv = faceQ.clone().invert()
 
   // --- Rest alignment (auto T-pose) ---
@@ -790,7 +792,7 @@ export function retargetParsed(parsed, model, names, hip, clipName) {
     for (const { bone, values } of srcPosTracks) {
       bone.position.set(values[0], values[1], values[2])
     }
-    srcBones[0].updateWorldMatrix(false, true)
+    updateSource()
     // How much the hips have yawed away from the mocap rest at frame 0 — undo
     // it so the character starts out facing wherever its rest pose faces.
     const d0 = (identityHipW || restSrcW.get(srcHip))
@@ -798,12 +800,13 @@ export function retargetParsed(parsed, model, names, hip, clipName) {
       .invert()
       .premultiply(srcHip.getWorldQuaternion(new THREE.Quaternion()))
     const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(d0)
-    if (Math.abs(fwd.y) < 0.9) {
+    if (!parsed.useSourceRest && Math.abs(fwd.y) < 0.9) {
       // (skip when frame 0 has the body pitched vertical — yaw is meaningless)
       yawFix.setFromAxisAngle(new THREE.Vector3(0, 1, 0), -Math.atan2(fwd.x, fwd.z))
     }
     if (tgtHip) {
-      srcHip.getWorldPosition(srcHipStart)
+      if (parsed.useSourceRest) srcHipStart.copy(restSrcP.get(srcHip))
+      else srcHip.getWorldPosition(srcHipStart)
       const tgtY = restTgtP.get(tgtHip).y
       hipScale = srcHipStart.y > 1e-4 && tgtY > 1e-4 ? tgtY / srcHipStart.y : 1
       if (tgtHip.parent) hipParentInv.copy(tgtHip.parent.matrixWorld).invert()
@@ -828,7 +831,7 @@ export function retargetParsed(parsed, model, names, hip, clipName) {
       const o = i * 3
       bone.position.set(values[o], values[o + 1], values[o + 2])
     }
-    srcBones[0].updateWorldMatrix(false, true)
+    updateSource()
 
     // Hip translation: source hip movement since frame 0, scaled to the
     // character's hip height, yaw-corrected, re-anchored on the target hip's

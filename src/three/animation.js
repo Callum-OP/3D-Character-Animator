@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { parseBVH, retargetParsed, buildSlotMapping, buildNameMatch, mergeNames } from './bvh.js'
+import { captureLibraryRig, libraryPoseClip, libraryRigsMatch, retargetLibraryClip } from './libraryRetarget.js'
 import {
   sampleMeshTracks,
   getMeshPlaybackSnapshot,
@@ -404,6 +405,75 @@ export function exportClipJSON(name) {
   const clip = findClip(name)
   if (!clip) return null
   return wrapClipJSON(clip)
+}
+
+// Inspect the load-time rest rig without disturbing the current pose or playback.
+function withLibraryRest(fn) {
+  if (!a.model) throw new Error('Load a model first.')
+  const model = a.model
+  const saved = (model.bones || []).map((bone) => ({
+    bone, position: bone.position.clone(), quaternion: bone.quaternion.clone(),
+  }))
+  try {
+    restoreRest()
+    model.root.updateWorldMatrix(true, true)
+    return fn(model)
+  } finally {
+    for (const item of saved) {
+      item.bone.position.copy(item.position)
+      item.bone.quaternion.copy(item.quaternion)
+    }
+    model.root.updateWorldMatrix(true, true)
+    a.refs?.requestRender()
+  }
+}
+
+export function getLibraryRig() {
+  return withLibraryRest(captureLibraryRig)
+}
+
+function libraryTrackTarget(track) {
+  const binding = THREE.PropertyBinding.parseTrackName(track.name)
+  return binding.objectName === 'bones' ? binding.objectIndex : binding.nodeName
+}
+
+export function prepareLibraryClip(json, rig) {
+  return withLibraryRest((model) => {
+    const targetRig = captureLibraryRig(model)
+    const original = unwrapClipJSON(json)
+    if (rig && !libraryRigsMatch(rig, targetRig)) {
+      return { clip: retargetLibraryClip(json, rig, model), retargeted: true }
+    }
+    if (rig) {
+      const ids = new Map(rig.nodes.map((node, i) => [node.uuid, targetRig.nodes[i].uuid]))
+      for (const track of original.tracks) {
+        const id = libraryTrackTarget(track)
+        if (ids.has(id)) track.name = track.name.replace(id, ids.get(id))
+      }
+    } else {
+      const missing = original.tracks.map(libraryTrackTarget).filter((name) =>
+        name && !model.root.getObjectByName(name) && !model.root.getObjectByProperty('uuid', name))
+      if (missing.length) {
+        throw new Error('This older library clip has no source rig and cannot be retargeted. Save it again from its original character.')
+      }
+    }
+    return { clip: original, retargeted: false }
+  })
+}
+
+export function retargetLibraryPose(bones, rig) {
+  return withLibraryRest((model) => {
+    if (libraryRigsMatch(rig, captureLibraryRig(model))) return { ...bones }
+    const clip = retargetLibraryClip(libraryPoseClip(bones), rig, model)
+    const result = {}
+    for (const track of clip.tracks) {
+      const match = /^(.+)\.quaternion$/.exec(track.name)
+      if (!match) continue
+      const bone = model.bones.find((item) => item.name === match[1] || item.uuid === match[1])
+      if (bone) result[bone.name] = Array.from(track.values.slice(0, 4))
+    }
+    return result
+  })
 }
 
 // Every IMPORTED/GENERATED clip (BVH imports, ragdoll bakes, combined/trimmed

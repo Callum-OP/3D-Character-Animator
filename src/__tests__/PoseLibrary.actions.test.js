@@ -26,7 +26,8 @@ vi.mock('../three/posing.js', () => ({
 }))
 vi.mock('../three/scene.js', () => ({ importBVHAuto: vi.fn() }))
 vi.mock('../three/animation.js', () => ({
-  poseFromBVHText: vi.fn(), stop: vi.fn(), exportClipJSON: vi.fn(), importClipJSON: vi.fn(), selectClip: vi.fn(),
+  poseFromBVHText: vi.fn(), stop: vi.fn(), exportClipJSON: vi.fn(), addGeneratedClip: vi.fn(), selectClip: vi.fn(),
+  getLibraryRig: vi.fn(() => ({ nodes: [] })), prepareLibraryClip: vi.fn(), retargetLibraryPose: vi.fn(),
 }))
 
 const actions = await import('../three/poseLibraryActions.js')
@@ -100,6 +101,17 @@ describe('body poses', () => {
     expect(e.kind).toBe('body')
     expect(Object.keys(e.data.bones)).toContain('mixamorig:Hips')
     expect(e.thumb.segs.length).toBeGreaterThan(3)
+    expect(e.data.rig).toEqual({ nodes: [] })
+  })
+  it('retargets saved poses before applying the keep-hands filter', async () => {
+    const anim = await import('../three/animation.js')
+    const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.5, 0, 0)).toArray()
+    anim.retargetLibraryPose.mockReturnValue({ 'mixamorig:Spine': q, 'mixamorig:RightHandIndex1': q })
+    const rig = { nodes: [] }
+    await actions.applyBodyEntry({ source: 'mine', name: 'Lean', data: { bones: { Spine: q }, rig } })
+    expect(anim.retargetLibraryPose).toHaveBeenCalledWith({ Spine: q }, rig)
+    expect(angle('mixamorig:Spine')).toBeGreaterThan(0.4)
+    expect(angle('mixamorig:RightHandIndex1')).toBe(0)
   })
 })
 
@@ -133,7 +145,8 @@ describe('animations', () => {
   })
   it('a saved clip is added, armed and its keyframes requested', async () => {
     const anim = await import('../three/animation.js')
-    anim.importClipJSON.mockReturnValue('Walk')
+    anim.prepareLibraryClip.mockReturnValue({ clip: {}, retargeted: false })
+    anim.addGeneratedClip.mockReturnValue('Walk')
     anim.selectClip.mockReturnValue(2.5)
     const r = await actions.applyAnimationEntry({ source: 'mine', name: 'Walk', data: { clip: {} } })
     expect(r.name).toBe('Walk')
@@ -141,6 +154,16 @@ describe('animations', () => {
     expect(s.activeClipName).toBe('Walk')
     expect(s.playback).toBe('paused')
     expect(s.adoptClipRequest).toBe('Walk')
+  })
+  it('does not adopt source editing keys after retargeting', async () => {
+    const anim = await import('../three/animation.js')
+    anim.prepareLibraryClip.mockReturnValue({ clip: {}, retargeted: true })
+    anim.addGeneratedClip.mockReturnValue('Retargeted')
+    anim.selectClip.mockReturnValue(2)
+    useStore.setState({ adoptClipRequest: null })
+    const result = await actions.applyAnimationEntry({ source: 'mine', name: 'Move', data: { clip: {}, rig: {} } })
+    expect(result.retargeted).toBe(true)
+    expect(useStore.getState().adoptClipRequest).toBeNull()
   })
   it('a preset is imported as a BVH with a name that does not clash', async () => {
     const scene = await import('../three/scene.js')

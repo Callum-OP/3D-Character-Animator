@@ -8,9 +8,9 @@
 //
 // An entry:
 //   { id, kind: 'body' | 'hand' | 'animation', name, createdAt, thumb: { segs }, data }
-//     body:      data = { bones: { boneName: [x, y, z, w] } }                      (a pose-v1 pose)
+//     body:      data = { bones: { boneName: [x, y, z, w] }, rig }                 (a pose-v1 pose)
 //     hand:      data = { poses: { L?: hand-v1 pose, R?: hand-v1 pose } }          (see handPose.js)
-//     animation: data = { clip: <wrapped clip JSON from animation.js>, duration }
+//     animation: data = { clip: <wrapped clip JSON from animation.js>, rig }
 // ---------------------------------------------------------------------------
 
 const DB_NAME = 'animare-pose-library'

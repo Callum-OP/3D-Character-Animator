@@ -14,3 +14,4 @@ Drop `.bvh` files into these folders and rebuild (or restart `npm run dev`) — 
 * Hand files may hold one hand or both. A right-hand pose can be put on a left hand and vice versa.
 * Body poses leave the fingers alone unless "Keep current hand poses" is switched off.
 * Keep pose files single-frame; long animations belong in `animation/`.
+* Newly saved body poses and clips include their source rest rig and are automatically retargeted to other rigs. Retargeted clips transfer bone rotations and hip translation, not source-specific mesh, morph or editable keyframe data. Older saved poses and clips without a source rig cannot be retargeted; save them again from their original character to enable retargeting.

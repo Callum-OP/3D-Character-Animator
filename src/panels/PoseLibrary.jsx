@@ -15,7 +15,7 @@ import { analyseHands, analyticHandPose, handPoseToBoneQuats, handPosesFromBVH, 
 import {
   applyClipFrame, basicHandThumb, parsedBVHResolver, posedBoneBounds, representativeClipTime,
 } from '../three/poseThumb.js'
-import { animationClipFromJSON, retargetPreviewBVH } from '../three/posePreviewRetarget.js'
+import { animationClipFromJSON, retargetLibraryPreview, retargetPreviewBVH } from '../three/posePreviewRetarget.js'
 import HandPoseSection from './HandPoseSection.jsx'
 import { confirmDialog } from '../dialogs.js'
 
@@ -71,7 +71,7 @@ function normalizePreviewBoneName(name) {
 
 function findPreviewBone(root, sourceName) {
   if (!root || !sourceName) return null
-  const exact = root.getObjectByName(sourceName)
+  const exact = root.getObjectByName(sourceName) || root.getObjectByProperty('uuid', sourceName)
   if (exact) return exact
   const source = normalizePreviewBoneName(sourceName)
   let found = null
@@ -350,6 +350,9 @@ function PosePreview({ tab, entry, side, strength, handAdjust, previewVersion })
                 bone.position.set(values[0] || 0, values[1] || 0, values[2] || 0)
               }
             }
+          } else if (entry.data?.rig) {
+            const clip = retargetLibraryPreview(entry, preview.root)
+            if (!applyClipFrame(preview.root, clip, 0, (name) => findPreviewBone(preview.root, name))) throw new Error('No pose bones matched the example rig')
           } else if (entry.data?.bones) {
             for (const [name, value] of Object.entries(entry.data.bones)) {
               const bone = findPreviewBone(preview.root, name)
@@ -399,7 +402,7 @@ function PosePreview({ tab, entry, side, strength, handAdjust, previewVersion })
             clip = await retargetPreviewBVH(text, preview.root, entry.name)
             if (cancelled) return
           } else {
-            clip = animationClipFromJSON(entry.data?.clip)
+            clip = entry.data?.rig ? retargetLibraryPreview(entry, preview.root) : animationClipFromJSON(entry.data?.clip)
           }
           if (clip) {
             const resolveTarget = (name) => findPreviewBone(preview.root, entryResolver?.(name) || name)
@@ -593,14 +596,15 @@ export default function PoseLibrary() {
     if (!hasCharacter) throw new Error('Load a character first.')
     if (tab === 'body') {
       const r = await applyBodyEntry(entry, { keepHands })
-      return `Applied “${r.label}” (${r.applied} bones${r.skipped ? `, ${r.skipped} not on this rig` : ''}).`
+      const missing = r.skipped ? `, ${r.skipped} not on this rig${entry.source !== 'preset' && !entry.data?.rig ? '; save it again from the original rig to enable retargeting' : ''}` : ''
+      return `Applied “${r.label}” (${r.applied} bones${missing}).`
     }
     if (tab === 'hand') {
       const r = await applyHandEntry(entry, { side, amount: strength / 100 })
       return `Applied “${r.label}” to the ${side === 'L' ? 'left hand' : side === 'R' ? 'right hand' : 'hands'}.`
     }
     const r = await applyAnimationEntry(entry)
-    return `Added the clip “${r.name}” — press Play in Animate.`
+    return `Added the clip “${r.name}”${r.retargeted ? ' (retargeted rotations and hip motion; other source-specific tracks and editing data were not transferred)' : ''} — press Play in Animate.`
   })
   const onSave = (fn) => run(async () => { const e = await fn(); await refresh(); setSource('all'); setSaveName(''); return `Saved “${e.name}” to the library.` })
   const onDelete = (e) => { if (confirmDialog(`Delete “${e.name}” from your library?`)) deleteEntry(e.id).then(refresh) }
