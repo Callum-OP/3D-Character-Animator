@@ -314,13 +314,15 @@ function Dialog({ onClose }) {
   }
 
   async function onPickScene(id) {
-    setSceneId(id)
-    if (!id) return
+    const picked = sources.find((source) => `${source.kind}:${String(source.id)}` === id)
+    setSceneId(picked ? `${picked.kind}:${String(picked.id)}` : '')
+    if (!picked) return
+    const sourceId = picked.id
     setError(null)
     setDone(null)
     setBusy('loading')
     try {
-      const src = await exportRigSource(id)
+      const src = await exportRigSource(sourceId)
       // flat translucent preview: shows the joints through the body, and avoids copying the scene's materials
       src.group.traverse((o) => {
         if (o.isMesh) {
@@ -328,7 +330,6 @@ function Dialog({ onClose }) {
           o.material = new THREE.MeshStandardMaterial({ color: 0xb8b8c4, transparent: true, opacity: 0.8, side: THREE.DoubleSide })
         }
       })
-      const picked = sources.find((s) => s.id === id)
       const label = picked?.name || 'scene object'
       installPreview(src.group, src.box, countVertices(src.group), `${label}.glb`, async () => src.data, picked?.kind === 'character')
     } catch (err) {
@@ -494,7 +495,7 @@ function Dialog({ onClose }) {
                 <select value={sceneId} onMouseDown={() => setSources(getRigSources())} onChange={(e) => onPickScene(e.target.value)} disabled={!!busy}>
                   <option value="">{sources.length ? 'Choose a character or object…' : 'Nothing in the scene yet'}</option>
                   {sources.map((s) => (
-                    <option key={s.id} value={s.id}>{s.name} ({s.kind})</option>
+                    <option key={`${s.kind}:${String(s.id)}`} value={`${s.kind}:${String(s.id)}`}>{s.name} ({s.kind})</option>
                   ))}
                 </select>
               </label>

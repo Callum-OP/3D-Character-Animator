@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import {
   addObject,
   getObjectRootById,
+  getRigSources,
   initObjects,
   setCharacterObject,
   setObjectVisible,
@@ -44,6 +45,11 @@ describe('object clipboard and visibility history', () => {
     expect(pastedRoot.position.x).toBeCloseTo(sourceRoot.position.x)
     expect(pastedMesh.geometry).not.toBe(sourceMesh.geometry)
     expect(pastedMesh.material).not.toBe(sourceMesh.material)
+  })
+
+  it('resolves numeric prop IDs from string scene-source values', () => {
+    expect(getObjectRootById(String(objectId))).toBe(sourceRoot)
+    expect(getRigSources().find((source) => source.id === objectId)?.kind).toBe('object')
   })
 
   it('undoes and redoes object visibility', () => {

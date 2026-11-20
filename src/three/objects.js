@@ -1629,9 +1629,12 @@ export function stepObjectAnimation(delta, loopOverride) {
 
 // Resolve a prop or character id to its live scene root for viewport commands.
 export function getObjectRootById(id) {
-  const prop = o.objects.find((entry) => entry.id === id)
+  const prop = o.objects.find((entry) => String(entry.id) === String(id))
   if (prop) return prop.root
-  return o.characterRoots.get(id)?.root || null
+  for (const [characterId, entry] of o.characterRoots.entries()) {
+    if (String(characterId) === String(id)) return entry.root
+  }
+  return null
 }
 
 // Every prop root plus every loaded character root, for a combined scene
