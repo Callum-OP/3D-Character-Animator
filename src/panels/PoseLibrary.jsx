@@ -227,7 +227,7 @@ function PosePreview({ tab, entry, side, strength, handAdjust, previewVersion })
           halfWidth = Math.max(halfWidth, Math.abs(local.dot(palmRight)))
           halfHeight = Math.max(halfHeight, Math.abs(local.dot(palmUp)))
         }
-        const margin = 1.28
+        const margin = 1.15
         halfWidth *= margin
         halfHeight *= margin
         if (halfHeight * aspect > halfWidth) halfWidth = halfHeight * aspect
@@ -534,6 +534,7 @@ export default function PoseLibrary() {
   const close = useStore((s) => s.closePoseLibrary)
   const activeClipName = useStore((s) => s.activeClipName)
   const hasCharacter = useStore((s) => !!s.modelInfo)
+  const qualityPreset = useStore((s) => s.qualityPreset)
   const [mine, setMine] = useState([])
   const [query, setQuery] = useState('')
   const [source, setSource] = useState('all')
@@ -547,7 +548,7 @@ export default function PoseLibrary() {
   const fileRef = useRef(null)
   const [previewEntry, setPreviewEntry] = useState(null)
   const [handAdjust, setHandAdjust] = useState(null)
-  const [renderedCards, setRenderedCards] = useState(false)
+  const [renderedCards, setRenderedCards] = useState(() => useStore.getState().qualityPreset !== 'verylow')
   const [previewVersion, setPreviewVersion] = useState(0)
 
   const refresh = useCallback(async () => {
@@ -557,6 +558,7 @@ export default function PoseLibrary() {
   }, [])
   useEffect(() => { if (tab) refresh() }, [tab, refresh])
   useEffect(() => { setCategory('all'); setQuery('') }, [tab])
+  useEffect(() => { setRenderedCards(qualityPreset !== 'verylow') }, [qualityPreset])
   useEffect(() => {
     if (!tab) return undefined
     const onKey = (e) => { if (e.key === 'Escape') close() }

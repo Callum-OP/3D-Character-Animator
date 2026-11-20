@@ -26,7 +26,7 @@ const { useStore } = await import('../store.js')
 beforeEach(async () => {
   cleanup()
   for (const e of await store.listEntries()) await store.deleteEntry(e.id)
-  useStore.setState({ poseLibraryTab: null, modelInfo: { name: 'x' } })
+  useStore.setState({ poseLibraryTab: null, modelInfo: { name: 'x' }, qualityPreset: 'standard' })
 })
 
 describe('Pose Library panel', () => {
@@ -78,9 +78,21 @@ describe('Pose Library panel', () => {
     useStore.setState({ poseLibraryTab: 'body' })
     render(<PoseLibrary />)
     const option = screen.getByRole('checkbox', { name: 'Rendered cards' })
-    expect(option.checked).toBe(false)
-    fireEvent.click(option)
     expect(option.checked).toBe(true)
+    fireEvent.click(option)
+    expect(option.checked).toBe(false)
+  })
+
+  it('defaults rendered cards off only for Potato quality and follows quality changes', async () => {
+    useStore.setState({ poseLibraryTab: 'body', qualityPreset: 'verylow' })
+    render(<PoseLibrary />)
+    const option = screen.getByRole('checkbox', { name: 'Rendered cards' })
+    expect(option.checked).toBe(false)
+
+    useStore.setState({ qualityPreset: 'low' })
+    await waitFor(() => expect(option.checked).toBe(true))
+    useStore.setState({ qualityPreset: 'verylow' })
+    await waitFor(() => expect(option.checked).toBe(false))
   })
 
   it('switches tabs and closes with Escape', async () => {

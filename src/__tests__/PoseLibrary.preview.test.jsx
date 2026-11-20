@@ -73,7 +73,7 @@ describe('Pose Library animation preview', () => {
       new THREE.QuaternionKeyframeTrack('Hips.quaternion', [0, 1], [0, 0, 0, 1, ...end.toArray()]),
     ])
     const entry = await store.putEntry({ kind: 'animation', name: 'Preview wave', data: { clip: THREE.AnimationClip.toJSON(clip) } })
-    useStore.setState({ poseLibraryTab: 'animation', modelInfo: { name: 'x' } })
+    useStore.setState({ poseLibraryTab: 'animation', modelInfo: { name: 'x' }, qualityPreset: 'standard' })
     render(<PoseLibrary />)
     const card = (await screen.findByTitle('Apply “Preview wave”')).closest('.pl-card')
     await act(async () => { fireEvent.mouseEnter(card) })

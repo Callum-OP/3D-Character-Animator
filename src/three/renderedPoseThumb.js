@@ -185,7 +185,7 @@ function frame(runtime, entry) {
       width = Math.max(width, Math.abs(offset.dot(palmRight)))
       height = Math.max(height, Math.abs(offset.dot(palmUp)))
     }
-    const half = Math.max(width, height) * 1.45
+    const half = Math.max(width, height) * 1.2
     camera.left = -half
     camera.right = half
     camera.top = half
