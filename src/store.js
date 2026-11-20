@@ -1469,6 +1469,8 @@ export const useStore = create((set) => ({
     set((s) => ({
       importedClipNames: s.importedClipNames.map((n) => (n === oldName ? newName : n)),
     })),
+  removeImportedClipName: (name) =>
+    set((s) => ({ importedClipNames: s.importedClipNames.filter((n) => n !== name) })),
   setLoop: (loop) => set({ loop }),
   setSpeed: (speed) => set({ speed }),
   setRippleRootEdit: (rippleRootEdit) => set({ rippleRootEdit }),

@@ -334,7 +334,26 @@ export function renameClip(name, newName) {
   if (base === name) return name
   const final = uniqueClipName(base, new Set([...a.bakedClips, ...a.importedClips].map((c) => c.name)))
   clip.name = final
+  // Which clip the editor's keys belong to is tracked by name, so follow the rename.
+  if (a.adoptedClip === name) a.adoptedClip = final
   return final
+}
+
+// Delete an imported/generated clip from the active character (combined,
+// trimmed, imported, ragdoll, …). Clips baked into the model file itself can't
+// be deleted — they come straight back from the file on load — so this returns
+// false for them (and for unknown names). If the clip is the one currently
+// loaded in the mixer it is stopped first so nothing keeps playing a clip that
+// is no longer in the list.
+export function removeClip(name) {
+  const i = a.importedClips.findIndex((c) => c.name === name)
+  if (i === -1) return false
+  const clip = a.importedClips[i]
+  if (a.sourceClip === clip) stop()
+  if (a.adoptedClip === name) a.adoptedClip = null
+  a.importedClips.splice(i, 1)
+  inPlaceClipCache.delete(clip)
+  return true
 }
 
 // Wrap a clip's standard three.js JSON together with its (optional) baked

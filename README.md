@@ -196,6 +196,8 @@ Vite build sets `base: '/3D-Character-Animator/'` (see `vite.config.js`). Local
    a single pose (**Frame → pose**) or editable keyframes (**Bake → keys**).
    Duplicate clip names on a character are automatically numbered, including
    clips restored from projects and imported from BVH, Pose Finder, or clip files.
+   In **Manage clips**, select clips in playback order to combine them; use the
+   row menu for clip tools or × to delete an imported or generated clip.
    BVH exports include an Animare rest-pose comment after the motion data so
    reimporting preserves the first pose and joint orientations. The motion
    data remains standard BVH, but some other readers may reject the trailing
