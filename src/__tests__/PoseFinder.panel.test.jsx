@@ -10,7 +10,7 @@ import PoseFinderPanel from '../panels/PoseFinderPanel.jsx'
 import { useStore } from '../store.js'
 import { openVideo, openImage, makeCropper, seekTo } from '../three/poseFinder/videoFrames.js'
 import { runPoseFinder } from '../three/poseFinder/run.js'
-import { importBVHAuto } from '../three/scene.js'
+import { importBVHAuto, scrubTimeline } from '../three/scene.js'
 import { lockBonesInPlace } from '../three/ikpins.js'
 
 const baseStatus = { ortOk: true, ortError: null, modelReady: false, modelBytes: 0, expectedBytes: 1424013951, modelPath: '/x', licenseUrl: 'https://example.com/LICENSE', loaded: false, provider: null, platform: 'win32', arch: 'arm64' }
@@ -72,6 +72,7 @@ describe('PoseFinderPanel', () => {
     expect(picker.accept).toContain('image/*')
     fireEvent.change(picker, { target: { files: [new File(['image'], 'pose.png', { type: 'image/png' })] } })
     expect(await screen.findByText(/still image/i)).toBeTruthy()
+    expect(screen.getByText(/This will analyse 1 frame\./i)).toBeTruthy()
     expect(document.querySelector('.pf-stage img')).toBeTruthy()
     expect(screen.queryByLabelText(/start:/i)).toBeNull()
     await waitFor(() => expect(screen.getByRole('button', { name: 'Find poses' }).disabled).toBe(false))
@@ -228,6 +229,7 @@ describe('PoseFinderPanel', () => {
     await waitFor(() => expect(lockBonesInPlace).toHaveBeenCalled())
     expect(importBVHAuto.mock.calls[0][0].name).toBe('test-pose.bvh')
     expect(importBVHAuto.mock.calls[0][1]).toEqual({ preserveFootRest: true })
+    expect(scrubTimeline).toHaveBeenCalledWith(0)
   })
 
   it('keeps the standing foot correction when the preset changes after a run', async () => {

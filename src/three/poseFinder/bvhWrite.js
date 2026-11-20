@@ -1,12 +1,12 @@
 // Writes the solved motion as BVH text. Every bone's rest orientation is identity (offsets only), channels are
-// Zrotation Xrotation Yrotation. The first frame is a reference pose: the app's BVH retargeter treats frame 0
-// as the rest pose, and a video rarely starts in one.
+// Zrotation Xrotation Yrotation. Animare's rest-relative retargeting data is stored separately in metadata so
+// frame 0 remains the first real pose for ordinary BVH readers and the app's clip importer.
 import * as THREE from 'three'
 import { BVH_JOINTS, restOffsets, endOffset, hasChildren } from './humanoid.js'
 
 const f4 = (v) => (Math.abs(v) < 5e-5 ? '0' : v.toFixed(4))
 
-export function writeBVH({ fps, count, root, rot, restRot, restFrame = true }) {
+export function writeBVH({ fps, count, root, rot, restRot, restFrame = false }) {
   const off = restOffsets()
   const lines = ['HIERARCHY']
   const depth = (i) => { let d = 0; for (let p = BVH_JOINTS[i].parent; p >= 0; p = BVH_JOINTS[p].parent) d++; return d }
@@ -51,6 +51,17 @@ export function writeBVH({ fps, count, root, rot, restRot, restFrame = true }) {
       row.push(f4(e.z * deg), f4(e.x * deg), f4(e.y * deg))
     }
     lines.push(row.join(' '))
+  }
+  if (!restFrame) {
+    const rest = {
+      root: [root[0], off[0][1], root[2]],
+      rotations: order.map((j) => {
+        if (restRot) q.fromArray(restRot[j]).normalize()
+        else q.identity()
+        return q.toArray()
+      }),
+    }
+    lines.push(`# AnimareRestPose ${JSON.stringify(rest)}`)
   }
   return lines.join('\n') + '\n'
 }

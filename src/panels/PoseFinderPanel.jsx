@@ -272,8 +272,7 @@ export default function PoseFinderPanel({ onClose }) {
       const { name, matched, total } = await importBVHAuto(fileFor(), { preserveFootRest: true })
       let lockNote = ''
       if (result.info.feetLocked) {
-        // frame 0 is the neutral reference frame, so the first real pose is one frame in
-        scrubTimeline(1 / (result.fps || 30))
+        scrubTimeline(0)
         const r = lockBonesInPlace(limbBoneNames('foot'), { rotation: true })
         lockNote = r.locked + r.relocked ? ' Both feet are locked at their first-pose position and rotation (Animate > More character tools > Lock in place); saving the clip or exporting a BVH keeps the lock.' : ' No feet were found to lock.'
       }
@@ -351,7 +350,7 @@ export default function PoseFinderPanel({ onClose }) {
               </div>
               {src && (
                 <>
-                  <p className="pf-dim">Drag on the picture to draw a box around the person. The box then follows them in a video. For an image, Pose Finder makes a static pose clip.</p>
+                  <p className="pf-dim">Drag on the picture to draw a box around the person. The box then follows them in a video. An image produces one static pose frame.</p>
                   <div className="pf-stage" ref={stageRef}>
                     <div ref={mediaHostRef} />
                     <div className="pf-overlay" ref={overlayRef} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp}>
@@ -460,7 +459,7 @@ export default function PoseFinderPanel({ onClose }) {
                 </label>
               </div>
               </details>
-              <p className="pf-dim">Each analysed frame takes a few seconds on a laptop CPU. {src ? `This will analyse about ${src.kind === 'image' ? 2 : estFrames} frames.` : ''} Frames in between are interpolated.</p>
+              <p className="pf-dim">Each analysed frame takes a few seconds on a laptop CPU. {src ? `This will analyse ${src.kind === 'image' ? 1 : `about ${estFrames}`} frame${src.kind === 'image' || estFrames === 1 ? '' : 's'}.` : ''}{src?.kind === 'video' ? ' Frames in between are interpolated.' : ''}</p>
               <div className="pf-row">
                 {!running && <button className="btn" disabled={!ready || !src || !validBox || uninstalling || !!dl} onClick={onRun}>Find poses</button>}
                 {running && <button className="btn secondary" onClick={() => abortRef.current?.abort()}>Cancel</button>}
@@ -506,7 +505,7 @@ export default function PoseFinderPanel({ onClose }) {
                 </div>
                 {!hasCharacter && <p className="pf-dim">Load a character to apply it, or download the BVH.</p>}
                 {notice && <p className="pf-ok">{notice}</p>}
-                <p className="pf-dim">The clip starts with one neutral reference frame (the BVH importer treats the first frame as the rest pose).</p>
+                <p className="pf-dim">The clip starts on the first detected pose. Images contain one pose frame.</p>
               </div>
             )}
           </>

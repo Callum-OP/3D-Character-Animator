@@ -1525,10 +1525,11 @@ export function playAllCharacters({ loop, speed, stopAtFirstClipEnd = false } = 
       durSec = selectClip(c.activeClipName, { ...opts, inPlace: c.removeClipMovement }, c.animData)
     }
     if (durSec > 0) {
-      play()
-      started++
-      maxDuration = Math.max(maxDuration, durSec)
-      minDuration = Math.min(minDuration, durSec)
+      if (play()) {
+        started++
+        maxDuration = Math.max(maxDuration, durSec)
+        minDuration = Math.min(minDuration, durSec)
+      }
     }
   }
   setActiveAnimationCharacter(uiActiveId) // restore whichever character the UI is focused on
@@ -1647,10 +1648,15 @@ export function startGlobalClock(fromStart, options = {}) {
   const store = useStore.getState()
   const stopAtFirstClipEnd = options.stopAtFirstClipEnd ?? store.stopAtFirstClipEnd
   globalClockDuration = options.duration ?? getAllTimelineDuration({ stopAtFirstClipEnd })
+  if (!(globalClockDuration > 0)) {
+    globalClock = false
+    return false
+  }
   globalClockLoop = options.loop ?? (store.loop && !stopAtFirstClipEnd)
   const cur = store.globalTime
   if (fromStart || (globalClockDuration > 0 && cur >= globalClockDuration)) useStore.setState({ globalTime: 0 })
   globalClock = true
+  return true
 }
 
 let globalClockLoop = true
@@ -1662,6 +1668,11 @@ export function pauseGlobalClock() {
 function advanceGlobalClock(delta) {
   if (!globalClock) return
   const s = useStore.getState()
+  if (!(globalClockDuration > 0)) {
+    globalClock = false
+    useStore.setState({ globalTime: 0 })
+    return
+  }
   let t = s.globalTime + Math.max(0, delta) * (Number(s.speed) || 1)
   const d = globalClockDuration
   if (d > 0 && t >= d) {
@@ -1703,8 +1714,7 @@ export function resumeAllCharacters() {
     if (!state.characters.has(id)) continue
     setActiveAnimationCharacter(id)
     if (!hasActiveAction()) continue
-    play()
-    resumed++
+    if (play()) resumed++
   }
   setActiveAnimationCharacter(uiActiveId)
   if (resumed > 0) {

@@ -7,7 +7,7 @@ Flow: titlebar **Pose Finder** → accept licence + download model once (~1.4 GB
 draw a box round the person → **Find poses** → **Add to active character** (goes through the normal BVH import/retarget) or
 **Download BVH**.
 
-The model and video/image processing run locally. An image produces a static pose clip. Analysing frames can use substantial RAM and, with DirectML, GPU memory.
+The model and video/image processing run locally. An image is analysed once and produces a single static pose frame. The source rest pose is stored as BVH metadata instead of a visible motion frame. Analysing frames can use substantial RAM and, with DirectML, GPU memory.
 On opening Pose Finder, the app checks its own model file in `userData/pose-engine` and shows **Model ready** if its
 size matches the expected download; it does not search for other installations or recheck the checksum at startup.
 The download itself is SHA-256 verified. **Uninstall model** removes the downloaded model from this device; it
@@ -41,12 +41,13 @@ off the optional fixed-foot pin). Advanced settings can override cleanup.
 Advanced settings expose sampling, smoothing and cleanup controls. The optional fixed-foot pin is for motion on
 the spot, not walking: it is baked into the BVH, but feet can move if the hips travel beyond leg reach. Choosing
 a preset resets these settings. Results are generated from the settings at the time **Find poses** is pressed;
-run it again after changing settings. Both download and character import use that generated BVH. A neutral
-reference frame is included at the start for the app's retargeter. All presets use a lower shoulder and upper-arm
+run it again after changing settings. Both download and character import use that generated BVH. The source rest
+pose is stored in metadata for the app's retargeter. All presets use a lower shoulder and upper-arm
 reference pose by default, while preserving the tracked motion relative to that pose. Adjust or disable
 **Lower shoulders and arms** in advanced settings if it changes the intended result.
+The generated BVH's frame 0 is the first analysed pose, not a separate A-pose calibration frame.
 
-**Analyse frames at** controls model inference, while **Clip frame rate** controls the generated BVH's frame rate.
+**Analyse frames at** controls model inference for videos, while **Clip frame rate** controls the generated BVH's frame rate.
 Both offer a 12 fps option. Lower analysis rates require less inference work
 but can miss fast motion. Lower clip rates produce fewer output frames.
 

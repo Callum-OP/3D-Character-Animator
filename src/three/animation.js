@@ -218,6 +218,7 @@ export function updateAnimation(delta) {
   for (const [id, entry] of perChar) {
     if (!entry.mixer) continue
     activeId = id // let the helpers below (which read through the `a` proxy) see this entry
+    if (entry.action && !(entry.clip?.duration > 0)) entry.action.paused = true
     entry.mixer.update(delta)
     if (entry.action) {
       const t = entry.action.time
@@ -1503,10 +1504,14 @@ function applyMorphPlaybackSnapshot(snap) {
 // --- Transport ---------------------------------------------------------------
 
 export function play() {
-  if (!a.action) return
+  if (!a.action || !(a.clip?.duration > 0)) {
+    if (a.action) a.action.paused = true
+    return false
+  }
   a.refs.suspendPosing()
   a.action.paused = false
   a.refs.setContinuousRender(true)
+  return true
 }
 
 // True if the active character has an armed (playing or paused) action — lets
@@ -1595,8 +1600,9 @@ export function stop() {
 
 export function setLoop(loop) {
   if (!a.action) return
-  a.action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity)
-  a.action.clampWhenFinished = !loop
+  const repeat = loop && !!(a.clip?.duration > 0)
+  a.action.setLoop(repeat ? THREE.LoopRepeat : THREE.LoopOnce, Infinity)
+  a.action.clampWhenFinished = !repeat
 }
 
 export function setSpeed(speed) {
@@ -1992,8 +1998,9 @@ function activate(clip, opts, sourceClip = clip) {
   }
   const action = a.mixer.clipAction(clip)
   action.reset()
-  action.setLoop(opts.loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity)
-  action.clampWhenFinished = !opts.loop
+  const repeat = opts.loop && clip.duration > 0
+  action.setLoop(repeat ? THREE.LoopRepeat : THREE.LoopOnce, Infinity)
+  action.clampWhenFinished = !repeat
   action.timeScale = opts.speed ?? 1
   action.paused = true
   action.play() // activate so the mixer evaluates it (stays put while paused)

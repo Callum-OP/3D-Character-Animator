@@ -53,6 +53,15 @@ async function retarget(model, bvhText, options) {
 }
 
 describe('a neutral Pose Finder clip leaves the character in its own rest pose', () => {
+  it('retargets a one-frame image as a one-frame clip without an A-pose frame', async () => {
+    const model = character()
+    const rot = BVH_JOINTS.map(() => new Float32Array([0, 0, 0, 1]))
+    const root = new Float32Array([0, 92, 0])
+    const { clip } = await retarget(model, writeBVH({ fps: 30, count: 1, root, rot }))
+    expect(clip.duration).toBe(0)
+    expect(clip.tracks.every((track) => track.times.length === 1 && track.times[0] === 0)).toBe(true)
+  })
+
   it('every driven bone keeps its rest orientation relative to its parent (no tips-up, no hooked thumb, no leaning neck)', async () => {
     const model = character()
     const rest = new Map(model.bones.map((b) => [b.name, b.quaternion.clone()]))
@@ -75,7 +84,7 @@ describe('a neutral Pose Finder clip leaves the character in its own rest pose',
     const root = new Float32Array([0, 25, 0, 0, 25, 0])
     const { clip } = await retarget(model, writeBVH({ fps: 30, count: 2, root, rot }))
     const hips = clip.tracks.find((t) => t.name === 'mixamorig:Hips.position')
-    expect(hips.values[1]).toBeCloseTo(0.95, 2)
+    expect(hips.values[1]).toBeLessThan(0.4)
     expect(hips.values[4]).toBeLessThan(0.4)
   })
 
@@ -130,7 +139,7 @@ describe('a neutral Pose Finder clip leaves the character in its own rest pose',
       }
       model.root.updateMatrixWorld(true)
     }
-    pose(1)
+    pose(0)
     let plantedFoot
     for (const side of ['Left', 'Right']) {
       const f = byName[`mixamorig:${side}Foot`], t = byName[`mixamorig:${side}ToeBase`]
@@ -141,9 +150,9 @@ describe('a neutral Pose Finder clip leaves the character in its own rest pose',
     }
     const ordinaryFoot = ordinary.clip.tracks.find((t) => t.name === 'mixamorig:LeftFoot.quaternion')
     const ordinaryToe = ordinary.clip.tracks.find((t) => t.name === 'mixamorig:LeftToeBase.quaternion')
-    expect(new THREE.Quaternion().fromArray(ordinaryFoot.values, 4).angleTo(new THREE.Quaternion())).toBeGreaterThan(0.3)
-    expect(new THREE.Quaternion().fromArray(ordinaryToe.values, 4).angleTo(new THREE.Quaternion())).toBeGreaterThan(0.3)
-    pose(2)
+    expect(new THREE.Quaternion().fromArray(ordinaryFoot.values, 0).angleTo(new THREE.Quaternion())).toBeGreaterThan(0.3)
+    expect(new THREE.Quaternion().fromArray(ordinaryToe.values, 0).angleTo(new THREE.Quaternion())).toBeGreaterThan(0.3)
+    pose(1)
     expect(byName['mixamorig:LeftFoot'].getWorldQuaternion(new THREE.Quaternion()).angleTo(plantedFoot)).toBeCloseTo(0.4, 3)
     expect(byName['mixamorig:LeftToeBase'].quaternion.angleTo(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), 0.15))).toBeCloseTo(0.25, 3)
   })

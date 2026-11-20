@@ -1377,8 +1377,8 @@ export default function AnimationPanel() {
     scrubTimeline(time)
     st().setCurrentTime(time)
     if (wasPlaying) {
-      play()
-      st().setPlayback('playing')
+      if (play()) st().setPlayback('playing')
+      else st().setPlayback('paused')
     } else {
       st().setPlayback('paused')
     }
@@ -1394,8 +1394,11 @@ export default function AnimationPanel() {
       const d = selectActiveClip(activeClipName, { loop, speed }, animData)
       st().setDuration(d)
     }
-    play()
-    st().setPlayback('playing')
+    if (play()) st().setPlayback('playing')
+    else {
+      st().setPlayback('paused')
+      setKfMsg('This clip has one pose frame, so there is nothing to play.')
+    }
   }
 
   function onPauseToggle() {
@@ -2691,7 +2694,7 @@ export default function AnimationPanel() {
 
       {/* Transport */}
       <div className="transport">
-        <button className="btn" onClick={onPauseToggle} disabled={source === 'clip' && !activeClipName}>
+        <button className="btn" onClick={onPauseToggle} disabled={source === 'clip' && (!activeClipName || !(displayDuration > 0))} title={source === 'clip' && !(displayDuration > 0) ? 'This clip contains a single static pose.' : ''}>
           {playing ? '❚❚ Pause' : '▶ Play'}
         </button>
         <button className="btn secondary" onClick={onStop} disabled={playback === 'stopped'}>

@@ -260,8 +260,11 @@ export default function TitleBar({ onOpenSettings, onOpenPoseFinder }) {
     } else if (playback === 'stopped' && activeClipName) {
       s.setDuration(selectClip(activeClipName, { loop, speed, inPlace: s.removeClipMovement }, s.animData))
     }
-    play()
-    s.setPlayback('playing')
+    if (play()) s.setPlayback('playing')
+    else {
+      s.setPlayback('paused')
+      setMsg('This clip has one pose frame, so there is nothing to play.')
+    }
   }
 
   function onPause() {

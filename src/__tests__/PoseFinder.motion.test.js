@@ -98,7 +98,7 @@ describe('motion presets', () => {
     const parsed = new BVHLoader().parse(writeBVH(s))
     const rot = parsed.clip.tracks.find((t) => t.name === 'Hips.quaternion')
     const position = parsed.clip.tracks.find((t) => t.name === 'Hips.position')
-    const middle = new THREE.Quaternion().fromArray(rot.values, 11 * 4)
+    const middle = new THREE.Quaternion().fromArray(rot.values, 10 * 4)
     expect(middle.angleTo(new THREE.Quaternion())).toBeGreaterThan(3)
     expect(position.values[11 * 3 + 1]).toBeGreaterThan(position.values[1 * 3 + 1] + 20)
     expect(s.info.groundLocked).toBe(false)
@@ -115,8 +115,8 @@ describe('motion presets', () => {
     const clip = new BVHLoader().parse(writeBVH(s)).clip
     const position = clip.tracks.find((t) => t.name === 'Hips.position')
     const rotation = clip.tracks.find((t) => t.name === 'Hips.quaternion')
-    expect(position.values[4] - position.values[s.count * 3 + 1]).toBeGreaterThan(30)
-    expect(new THREE.Quaternion().fromArray(rotation.values, s.count * 4).angleTo(new THREE.Quaternion())).toBeGreaterThan(1.3)
+    expect(position.values[4] - position.values[(s.count - 1) * 3 + 1]).toBeGreaterThan(30)
+    expect(new THREE.Quaternion().fromArray(rotation.values, (s.count - 1) * 4).angleTo(new THREE.Quaternion())).toBeGreaterThan(1.3)
   })
 
   it('retains a short fall and bounce in adaptable root motion', () => {
@@ -204,7 +204,7 @@ describe('motion presets', () => {
     const clip = new BVHLoader().parse(writeBVH(solved)).clip
     const position = clip.tracks.find((t) => t.name === 'Hips.position')
     const rotation = clip.tracks.find((t) => t.name === 'Hips.quaternion')
-    const height = (i) => position.values[(i + 1) * 3 + 1]
+    const height = (i) => position.values[i * 3 + 1]
     expect(solved.info.lockSegments).toBeGreaterThan(0)
     expect(height(39) - height(34)).toBeGreaterThan(15)
     expect(height(39) - height(47)).toBeGreaterThan(15)
@@ -261,12 +261,14 @@ describe('solveMotion + writeBVH round trip', () => {
 
   it('writes a hierarchy the three.js loader reads', () => {
     expect(parsed.skeleton.bones.filter((b) => b.name !== 'ENDSITE').map((b) => b.name).sort()).toEqual(BVH_JOINTS.map((j) => j.name).sort())
-    expect(parsed.clip.tracks.find((t) => t.name === 'Hips.position').times.length).toBe(sol.count + 1)
+    expect(parsed.clip.tracks.find((t) => t.name === 'Hips.position').times.length).toBe(sol.count)
   })
 
-  it('first frame is a neutral rest frame', () => {
+  it('first frame is the first analysed pose', () => {
     const t = parsed.clip.tracks.find((t) => t.name === 'LeftArm.quaternion')
-    expect([...t.values.slice(0, 4)].map((v) => +v.toFixed(4))).toEqual([0, 0, 0, 1])
+    const written = new THREE.Quaternion().fromArray(t.values)
+    const solved = new THREE.Quaternion().fromArray(sol.rot[JOINT_INDEX.LeftArm])
+    expect(written.angleTo(solved)).toBeLessThan(0.001)
   })
 
   it('reproduces the posed world rotations and joint positions of the MHR skeleton', () => {
@@ -275,10 +277,10 @@ describe('solveMotion + writeBVH round trip', () => {
     const byName = Object.fromEntries(bones.map((b) => [b.name, b]))
     for (const b of bones.filter((b) => b.name !== 'ENDSITE')) {
       const tr = parsed.clip.tracks.find((t) => t.name === `${b.name}.quaternion`)
-      b.quaternion.fromArray(tr.values, (k + 1) * 4)
+      b.quaternion.fromArray(tr.values, k * 4)
     }
     const pt = parsed.clip.tracks.find((t) => t.name === 'Hips.position')
-    byName.Hips.position.fromArray(pt.values, (k + 1) * 3)
+    byName.Hips.position.fromArray(pt.values, k * 3)
     byName.Hips.updateWorldMatrix(false, true)
     const truth = fk(poseAt(k))
     const q = new THREE.Quaternion(), p = new THREE.Vector3()
@@ -495,7 +497,7 @@ describe('ground lock and arm lowering', () => {
     const { skeleton, clip } = new BVHLoader().parse(writeBVH(s))
     const by = Object.fromEntries(skeleton.bones.map((b) => [b.name, b]))
     const tracks = Object.fromEntries(clip.tracks.map((t) => [t.name, t]))
-    for (let k = 1; k <= s.count; k++) {
+    for (let k = 0; k < s.count; k++) {
       for (const b of skeleton.bones) if (tracks[`${b.name}.quaternion`]) b.quaternion.fromArray(tracks[`${b.name}.quaternion`].values, k * 4)
       by.Hips.position.fromArray(tracks['Hips.position'].values, k * 3)
       by.Hips.updateWorldMatrix(false, true)
@@ -524,7 +526,7 @@ describe('ground lock and arm lowering', () => {
     const { skeleton, clip } = new BVHLoader().parse(writeBVH(natural))
     const by = Object.fromEntries(skeleton.bones.map((b) => [b.name, b]))
     const tracks = Object.fromEntries(clip.tracks.map((t) => [t.name, t]))
-    for (let k = 1; k <= natural.count; k++) {
+    for (let k = 0; k < natural.count; k++) {
       for (const b of skeleton.bones) if (tracks[`${b.name}.quaternion`]) b.quaternion.fromArray(tracks[`${b.name}.quaternion`].values, k * 4)
       by.Hips.position.fromArray(tracks['Hips.position'].values, k * 3)
       by.Hips.updateWorldMatrix(false, true)
@@ -575,7 +577,7 @@ describe('baked foot lock', () => {
     const by = Object.fromEntries(skeleton.bones.map((b) => [b.name, b]))
     const tr = Object.fromEntries(clip.tracks.map((t) => [t.name, t]))
     const out = { pos: [], rot: [] }
-    for (let k = 1; k <= sol.count; k++) {
+    for (let k = 0; k < sol.count; k++) {
       for (const b of skeleton.bones) { const t = tr[`${b.name}.quaternion`]; if (t) b.quaternion.fromArray(t.values, k * 4) }
       by.Hips.position.fromArray(tr['Hips.position'].values, k * 3)
       by.Hips.updateWorldMatrix(false, true)

@@ -145,14 +145,14 @@ function medianFilter(values, dim, win = 5) {
 
 function makeGrid(times, outFps) {
   const t0 = times[0], t1 = times[times.length - 1]
-  const count = Math.max(2, Math.floor((t1 - t0) * outFps + 1e-6) + 1)
+  const count = times.length === 1 ? 1 : Math.max(2, Math.floor((t1 - t0) * outFps + 1e-6) + 1)
   const idx = new Int32Array(count), frac = new Float32Array(count)
   let j = 0
   for (let k = 0; k < count; k++) {
     const t = Math.min(t1, t0 + k / outFps)
     while (j < times.length - 2 && times[j + 1] < t) j++
     idx[k] = j
-    const span = times[j + 1] - times[j]
+    const span = times.length > 1 ? times[j + 1] - times[j] : 0
     frac[k] = span > 0 ? Math.min(1, Math.max(0, (t - times[j]) / span)) : 0
   }
   return { count, idx, frac }
@@ -164,8 +164,10 @@ function resampleQuat(values, grid) {
   for (let k = 0; k < grid.count; k++) {
     const i = grid.idx[k]
     a.set(values[i * 4], values[i * 4 + 1], values[i * 4 + 2], values[i * 4 + 3])
-    b.set(values[i * 4 + 4], values[i * 4 + 5], values[i * 4 + 6], values[i * 4 + 7])
-    a.slerp(b, grid.frac[k])
+    if (grid.frac[k] > 0) {
+      b.set(values[i * 4 + 4], values[i * 4 + 5], values[i * 4 + 6], values[i * 4 + 7])
+      a.slerp(b, grid.frac[k])
+    }
     out[k * 4] = a.x; out[k * 4 + 1] = a.y; out[k * 4 + 2] = a.z; out[k * 4 + 3] = a.w
   }
   return out
@@ -173,9 +175,10 @@ function resampleQuat(values, grid) {
 
 function resampleVec(values, dim, grid) {
   const out = new Float32Array(grid.count * dim)
+  const last = values.length / dim - 1
   for (let k = 0; k < grid.count; k++) {
-    const i = grid.idx[k], f = grid.frac[k]
-    for (let d = 0; d < dim; d++) out[k * dim + d] = values[i * dim + d] * (1 - f) + values[(i + 1) * dim + d] * f
+    const i = grid.idx[k], next = Math.min(last, i + 1), f = grid.frac[k]
+    for (let d = 0; d < dim; d++) out[k * dim + d] = values[i * dim + d] * (1 - f) + values[next * dim + d] * f
   }
   return out
 }
@@ -697,7 +700,7 @@ function lockFeet(rot, root, count, planted, fixed, ground, level, contactFps = 
 //           restRot: local reference quaternions per BVH joint, info: {...} }
 export function solveMotion(frames, opts = {}) {
   const o = { outFps: 30, smoothing: 'medium', footLock: true, contactMode: 'ground', levelCamera: true, posture: 'auto', levelFeet: true, limitJoints: true, lowerArms: 'slight', ground: 'strict', groundReference: 'feet', lockFeet: false, ...opts }
-  if (!frames || frames.length < 2) throw new Error('Need at least two analysed frames.')
+  if (!frames || frames.length < 1 || (!o.staticPose && frames.length < 2)) throw new Error('Need at least two analysed frames.')
   const n = frames.length
   const times = frames.map((f) => f.t)
   for (let i = 1; i < n; i++) if (!(times[i] > times[i - 1])) throw new Error('Frame times must increase.')

@@ -14,13 +14,12 @@ export class BadOutputError extends Error {
 // onFrame({ i, t, rgba, box, kp2d, valid, reason, source }) lets the UI show what the model was actually given.
 export async function runPoseFinder({ source, engine, box, startTime = 0, endTime, sampleFps = 10, outFps = 30, smoothing = 'medium', footLock = true, clean = {}, onProgress, onFrame, signal }) {
   const end = Math.min(endTime ?? source.duration, source.duration)
-  const total = Math.max(2, Math.floor((end - startTime) * sampleFps) + 1)
+  const total = source.staticPose ? 1 : Math.max(2, Math.floor((end - startTime) * sampleFps) + 1)
   const camera = defaultCamera(source.width, source.height)
   const frames = []
   const diag = []
   let current = box
   let lastGood = null
-  let stillFrame = null
   let invalid = 0, lost = 0, held = 0
   const t0 = Date.now()
   for (let i = 0; i < total; i++) {
@@ -29,15 +28,9 @@ export async function runPoseFinder({ source, engine, box, startTime = 0, endTim
     const crop = makeCrop(current)
     let rgba
     let res
-    if (source.staticPose && stillFrame) {
-      rgba = stillFrame.rgba
-      res = { ok: true, out: stillFrame.out }
-    } else {
-      rgba = await source.frameAt(t, crop)
-      if (signal?.aborted) throw new Error('Cancelled')
-      res = await engine.infer({ rgba, center: crop.center, scale: crop.scale, affine: crop.affine, imageSize: [source.width, source.height], camera })
-      if (source.staticPose && res.ok) stillFrame = { rgba, out: res.out }
-    }
+    rgba = await source.frameAt(t, crop)
+    if (signal?.aborted) throw new Error('Cancelled')
+    res = await engine.infer({ rgba, center: crop.center, scale: crop.scale, affine: crop.affine, imageSize: [source.width, source.height], camera })
     if (!res.ok) throw new Error(res.error || 'The pose model failed on a frame.')
     const o = res.out
     const check = checkFrameOutput(o)
