@@ -545,7 +545,18 @@ export function mergeNames(autoNames, slots) {
 // UI shows the mapping editor first.
 export async function parseBVH(file) {
   const { BVHLoader } = await import('three/examples/jsm/loaders/BVHLoader.js')
-  const text = await file.text()
+  let text = await file.text()
+  const marker = /^# AnimareRestPose(?: (.*))?\r?$/m.exec(text)
+  let restPose = null
+  if (marker) {
+    try {
+      restPose = JSON.parse(marker[1])
+      if (!restPose || typeof restPose !== 'object') throw new Error('Invalid rest pose')
+    } catch {
+      throw new Error('The BVH contains an invalid Animare rest pose.')
+    }
+    text = text.replace(marker[0], '')
+  }
   const result = new BVHLoader().parse(text)
   if (!result || !result.clip || !result.skeleton) {
     throw new Error('Could not parse this BVH file.')
@@ -555,6 +566,7 @@ export async function parseBVH(file) {
     clip: result.clip,
     bones: result.skeleton.bones.map((b) => b.name),
     name: file.name.replace(/\.bvh$/i, ''),
+    restPose,
   }
 }
 
@@ -570,7 +582,7 @@ export async function parseBVH(file) {
 // around in the scene) gets the motion applied in world space: arms and legs
 // swing to its back instead of its front.
 const FACING_SNAP = (12 * Math.PI) / 180
-export function detectFacingYaw(tgtBones, restP, preferred = null) {
+export function detectFacingYaw(tgtBones, restP, preferred = null, snap = true) {
   const fallback = buildSlotFallbackMap(tgtBones)
   const slotOf = (b) => classifyBone(b.name) || fallback.get(b.name) || null
   const bySlot = new Map()
@@ -592,7 +604,7 @@ export function detectFacingYaw(tgtBones, restP, preferred = null) {
     if (Math.hypot(lx, lz) < 0.02) continue // pair is not spread sideways — no signal
     // forward = left × up = (-lz, 0, lx)
     const yaw = Math.atan2(-lz, lx)
-    return Math.abs(yaw) < FACING_SNAP ? 0 : yaw
+    return snap && Math.abs(yaw) < FACING_SNAP ? 0 : yaw
   }
   return 0
 }
@@ -611,7 +623,7 @@ export function detectFacingYaw(tgtBones, restP, preferred = null) {
 // also turned to the direction the character itself faces (see detectFacingYaw),
 // so characters authored facing -Z or turned around still swing their limbs to
 // their FRONT.
-export function retargetParsed(parsed, model, names, hip, clipName) {
+export function retargetParsed(parsed, model, names, hip, clipName, { preserveFootRest = false } = {}) {
   const target = model.skinnedMeshes && model.skinnedMeshes[0]
   if (!target) throw new Error('This model has no skinned mesh to retarget mocap onto.')
   if (Object.keys(names).length === 0) {
@@ -638,33 +650,29 @@ export function retargetParsed(parsed, model, names, hip, clipName) {
   }
   const times = parsed.clip.tracks.find((t) => /\.quaternion$/.test(t.name)).times
   const numFrames = times.length
+  const restPose = parsed.restPose
+  if (restPose) {
+    const validVector = (v, size) => Array.isArray(v) && v.length === size && v.every(Number.isFinite)
+    if (!validVector(restPose.root, 3) || !Array.isArray(restPose.rotations) ||
+        restPose.rotations.length !== srcTracks.length ||
+        !restPose.rotations.every((q) => validVector(q, 4) && q.some((v) => v !== 0))) {
+      throw new Error('The BVH contains an invalid Animare rest pose.')
+    }
+  }
 
   // --- Rest world orientations & positions ---
-  // Source rest reference: pose the source skeleton at its OWN first frame
-  // and use THAT as "rest", not the freshly-loaded skeleton sitting at
-  // BVHLoader's default identity quaternion. Those are only the same thing
-  // for BVH files whose joints happen to use clean, untwisted local axes
-  // (true for most hand-authored/mocap-house files) — but BVH's OFFSET field
-  // is translation-only, so any rig with non-standard joint axes (including
-  // BVH files this app itself exports when round-tripped from such a rig) has
-  // to bake a constant per-bone rest-twist into EVERY frame's rotation channel just to
-  // play back correctly. Treating identity as "rest" then means that
-  // constant twist gets read as if it were motion, subtracted out of the
-  // delta, and re-added on the target side on top of the target's OWN rest
-  // twist — double-counting it and visibly twisting the retargeted limb.
-  // First-frame calibration is what most real mocap pipelines do anyway
-  // (clean files conventionally start at/near a neutral pose), so this is a
-  // strict improvement: harmless when frame 0 is already near-identity, and
-  // it correctly absorbs the baseline twist when it isn't.
-  if (!parsed.useSourceRest) for (const { bone, values } of srcTracks) {
-    bone.quaternion.set(values[0], values[1], values[2], values[3])
+  // BVH offsets cannot describe rest rotations. Our exports include that pose
+  // separately; for other files retain the first-frame calibration heuristic.
+  for (const [index, { bone, values }] of srcTracks.entries()) {
+    if (restPose) bone.quaternion.fromArray(restPose.rotations[index]).normalize()
+    else bone.quaternion.set(values[0], values[1], values[2], values[3])
   }
   const origPos = new Map(srcPosTracks.map(({ bone }) => [bone, bone.position.clone()]))
   if (!parsed.useSourceRest) for (const { bone, values } of srcPosTracks) {
     bone.position.set(values[0], values[1], values[2])
   }
-  const updateSource = () => (parsed.root || srcBones[0]).updateWorldMatrix(true, true)
-  updateSource()
+  if (restPose) srcBones[0].position.fromArray(restPose.root)
+  srcBones[0].updateWorldMatrix(false, true)
   const restSrcW = new Map()
   const restSrcP = new Map()
   for (const b of srcBones) {
@@ -679,8 +687,8 @@ export function retargetParsed(parsed, model, names, hip, clipName) {
   // that; it has to actually restore what BVHLoader put there.
   if (!parsed.useSourceRest) for (const b of srcBones) b.quaternion.identity()
   for (const { bone } of srcPosTracks) bone.position.copy(origPos.get(bone))
-  updateSource()
-  // The yaw-fix below needs to compare frame 0's hip orientation against raw
+  srcBones[0].updateWorldMatrix(false, true)
+  // For unannotated files the yaw-fix compares frame 0's hip orientation against raw
   // identity specifically (BVH's own "facing +Z" convention), NOT against
   // the frame-0-based restSrcW above — those are now the same thing for the
   // hip, which would silently zero out the yaw check. Capture it here, while
@@ -722,8 +730,8 @@ export function retargetParsed(parsed, model, names, hip, clipName) {
 
   // The mocap's world frame faces +Z; carry it into the direction this character
   // actually faces. `faceQ` turns source-world vectors into target-world ones.
-  const sourceYaw = parsed.useSourceRest ? detectFacingYaw(srcBones, restSrcP) : 0
-  const faceQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), detectFacingYaw(tgtBones, restTgtP, mapped) - sourceYaw)
+  const sourceYaw = restPose ? detectFacingYaw(srcBones, restSrcP, null, false) : 0
+  const faceQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), detectFacingYaw(tgtBones, restTgtP, mapped, !restPose) - sourceYaw)
   const faceInv = faceQ.clone().invert()
 
   // --- Rest alignment (auto T-pose) ---
@@ -763,18 +771,54 @@ export function retargetParsed(parsed, model, names, hip, clipName) {
       if (/^(shoulder|upperArm)\./.test(slot)) return 1
       return 2
     }
+    const fingerRank = (n) => {
+      const f = (fingerSlot(n.name) || '').split('.')[0]
+      const i = ['middle', 'ring', 'index', 'pinky', 'little', 'thumb'].indexOf(f)
+      return i < 0 ? 9 : i
+    }
     for (const b of mapped) {
       const branches = collectBranches(b)
       if (branches.length === 0) continue
-      branches.sort((a, c) => branchRank(a) - branchRank(c))
+      // A hand has several finger branches. Anchor it on the middle finger (it runs along the hand), never the
+      // thumb, which points a different way and would twist the whole hand.
+      const isHand = /^hand\./.test(classifyBone(b.name) || '')
+      branches.sort((a, c) => (isHand ? fingerRank(a) - fingerRank(c) : branchRank(a) - branchRank(c)))
       const childT = branches[0]
       const srcBone = srcByName.get(names[b.name])
       const childS = srcByName.get(names[childT.name])
       if (!childS || childS === srcBone) continue
       tDir.copy(restTgtP.get(childT)).sub(restTgtP.get(b))
       sDir.copy(restSrcP.get(childS)).sub(restSrcP.get(srcBone)).applyQuaternion(faceQ)
+      if (preserveFootRest && /^foot\./.test(classifyBone(b.name) || '')) {
+        tDir.y = 0
+        sDir.y = 0
+      }
       if (tDir.lengthSq() < 1e-10 || sDir.lengthSq() < 1e-10) continue
       align.set(b, new THREE.Quaternion().setFromUnitVectors(tDir.normalize(), sDir.normalize()))
+    }
+    // Fingers move with their hand: every finger bone (tips and thumbs included) takes the HAND's alignment instead
+    // of its own. Aligning each segment on its own swings it towards the source's finger shape by a different
+    // amount than its parent, which bent fingertips (leaf bones had no alignment at all) and hooked the thumb away
+    // from the hand even for a perfectly neutral clip. Sharing the hand's swing keeps the character's own finger
+    // shape relative to its hand and lets the mocap's world-space deltas do the moving.
+    for (const b of mapped) {
+      if (!fingerSlot(b.name)) continue
+      let p = b.parent
+      while (p && !(mappedSet.has(p) && !fingerSlot(p.name))) p = p.parent
+      const A = p && align.get(p)
+      if (A) align.set(b, A.clone())
+      else align.delete(b)
+    }
+    if (preserveFootRest) {
+      // Keep the character's toe rest pose relative to the foot, just as fingers follow the hand.
+      for (const b of mapped) {
+        if (!/^toe\./.test(classifyBone(b.name) || '')) continue
+        let p = b.parent
+        while (p && !(mappedSet.has(p) && /^foot\./.test(classifyBone(p.name) || ''))) p = p.parent
+        const A = p && align.get(p)
+        if (A) align.set(b, A.clone())
+        else align.delete(b)
+      }
     }
   }
 
@@ -800,12 +844,12 @@ export function retargetParsed(parsed, model, names, hip, clipName) {
       .invert()
       .premultiply(srcHip.getWorldQuaternion(new THREE.Quaternion()))
     const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(d0)
-    if (!parsed.useSourceRest && Math.abs(fwd.y) < 0.9) {
+    if (!restPose && Math.abs(fwd.y) < 0.9) {
       // (skip when frame 0 has the body pitched vertical — yaw is meaningless)
       yawFix.setFromAxisAngle(new THREE.Vector3(0, 1, 0), -Math.atan2(fwd.x, fwd.z))
     }
     if (tgtHip) {
-      if (parsed.useSourceRest) srcHipStart.copy(restSrcP.get(srcHip))
+      if (restPose) srcHipStart.copy(restSrcP.get(srcHip))
       else srcHip.getWorldPosition(srcHipStart)
       const tgtY = restTgtP.get(tgtHip).y
       hipScale = srcHipStart.y > 1e-4 && tgtY > 1e-4 ? tgtY / srcHipStart.y : 1

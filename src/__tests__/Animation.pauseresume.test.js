@@ -31,11 +31,11 @@ function buildFakeModel() {
 
 describe('play/pause/stop hand-off to posing + mesh-edit', () => {
   function makeRefs() {
-    const calls = { suspend: 0, resume: 0 }
+    const calls = { suspend: 0, resume: 0, continuous: [] }
     return {
       refs: {
         requestRender: () => {},
-        setContinuousRender: () => {},
+        setContinuousRender: (on) => { calls.continuous.push(on) },
         getObjectByUuid: () => null,
         suspendPosing: () => { calls.suspend += 1 },
         resumePosing: () => { calls.resume += 1 },
@@ -47,6 +47,20 @@ describe('play/pause/stop hand-off to posing + mesh-edit', () => {
       calls,
     }
   }
+
+  it('does not play a zero-duration single-pose clip', () => {
+    const { refs, calls } = makeRefs()
+    initAnimation(refs)
+    const model = buildFakeModel()
+    model.clips.push(new THREE.AnimationClip('Pose', 0, [
+      new THREE.QuaternionKeyframeTrack('Hips.quaternion', [0], [0, 0, 0, 1]),
+    ]))
+    setAnimationModel(model, 'char-static')
+    expect(selectClip('Pose')).toBe(0)
+    expect(play()).toBe(false)
+    expect(calls.suspend).toBe(0)
+    expect(calls.continuous).not.toContain(true)
+  })
 
   it('play() suspends, pause() resumes (clicks should work while paused)', () => {
     const { refs, calls } = makeRefs()

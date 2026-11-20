@@ -108,4 +108,24 @@ describe('importBVHAuto (title bar quick BVH import)', () => {
     expect(s.currentTime).toBe(0)
     expect(s.duration).toBeGreaterThan(0)
   })
+
+  it('gives repeated BVH imports distinct selectable names', async () => {
+    const source = buildFakeModel()
+    setAnimationModel(source, 'source-duplicate')
+    selectClip('Walk')
+    const bvhText = exportAnimationBVH(emptyAnimData, 30, 1, 'Walk', 'clip')
+    const target = buildFakeModel()
+    setAnimationModel(target, 'target-duplicate')
+    useStore.setState({ importedClipNames: [], activeClipName: null, playbackSource: 'edit' })
+
+    const file = new File([bvhText], 'walk.bvh', { type: 'text/plain' })
+    const first = await importBVHAuto(file)
+    const second = await importBVHAuto(file)
+
+    expect(second.name).not.toBe(first.name)
+    expect(useStore.getState().importedClipNames).toEqual([first.name, second.name])
+    expect(useStore.getState().activeClipName).toBe(second.name)
+    expect(selectClip(first.name)).toBeGreaterThan(0)
+    expect(selectClip(second.name)).toBeGreaterThan(0)
+  })
 })

@@ -13,6 +13,7 @@ import ProjectPanel from './panels/ProjectPanel.jsx'
 import ExportPanel from './panels/ExportPanel.jsx'
 import ViewPanel from './panels/ViewPanel.jsx'
 import HelpOverlay from './panels/HelpOverlay.jsx'
+import PoseFinderPanel from './panels/PoseFinderPanel.jsx'
 import CloseGuard from './panels/CloseGuard.jsx'
 import PoseLibrary from './panels/PoseLibrary.jsx'
 import Accordion from './panels/Accordion.jsx'
@@ -74,6 +75,7 @@ class AppErrorBoundary extends Component {
 // session.
 function AppInner() {
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [poseFinderOpen, setPoseFinderOpen] = useState(false)
   const toggleHelp = useStore((s) => s.toggleHelp)
   const mode = useStore((s) => s.mode)
   const modelInfo = useStore((s) => s.modelInfo)
@@ -92,7 +94,7 @@ function AppInner() {
   return (
     <div className="app-shell">
       <CloseGuard />
-      <TitleBar onOpenSettings={() => setSettingsOpen(true)} />
+      <TitleBar onOpenSettings={() => setSettingsOpen(true)} onOpenPoseFinder={() => setPoseFinderOpen(true)} />
       <div className={'app' + (settingsOpen ? ' settings-is-open' : '')}>
         <Viewport />
       <aside className="sidebar">
@@ -179,6 +181,7 @@ function AppInner() {
           <ExportPanel />
         </Accordion>
       </aside>
+      {poseFinderOpen && <PoseFinderPanel onClose={() => setPoseFinderOpen(false)} />}
       {settingsOpen && (
         <div className="settings-backdrop" onClick={() => setSettingsOpen(false)}>
           <aside

@@ -3904,3 +3904,32 @@ img.pl-thumb-model { object-fit: contain; }
 .icon-btn.active { background: #e8863a; color: #fff; }
 .pl-dots { margin-left: auto; width: 24px; height: 24px; line-height: 1; border: 0; border-radius: 6px; background: transparent; color: inherit; opacity: .35; cursor: pointer; }
 .pl-dots:hover, .pl-dots.active { opacity: 1; }
+/* "Clips on this character" rows in Animate > Manage clips */
+.kf-list-row.clip-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.clip-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.clip-len {
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+.clip-row:hover .obj-more,
+.clip-row.active .obj-more {
+  opacity: 0.8;
+}
+.clip-combine:disabled {
+  opacity: 0.45;
+  cursor: default;
+  filter: none;
+  box-shadow: none;
+}

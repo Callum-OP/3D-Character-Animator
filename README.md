@@ -195,6 +195,17 @@ Vite build sets `base: '/3D-Character-Animator/'` (see `vite.config.js`). Local
    retarget a motion onto the rig (a mapping editor appears — accept the
    auto-guess or correct any bone slot, then **Retarget**), and turn any clip into
    a single pose (**Frame → pose**) or editable keyframes (**Bake → keys**).
+   Duplicate clip names on a character are automatically numbered, including
+   clips restored from projects and imported from BVH, Pose Finder, or clip files.
+   In **Manage clips**, select clips in playback order to combine them; use the
+   row menu for clip tools or × to delete an imported or generated clip.
+   BVH exports include an Animare rest-pose comment after the motion data so
+   reimporting preserves the first pose and joint orientations. The motion
+   data remains standard BVH, but some other readers may reject the trailing
+   comment. Removing it reverts Animare's importer to first-frame rest-pose
+   estimation. BVH is sampled at
+   the export frame rate and carries root translation and joint rotations,
+   not animated scale or non-root joint translation.
 8. Switch to **Mesh** mode (toolbar or key `3`) to adjust individual parts: click
    a part in the viewport or the **Parts** list, drag the gizmo (`W` move /
    `E` rotate / `R` resize) or type exact values, and **Key part** to animate it
