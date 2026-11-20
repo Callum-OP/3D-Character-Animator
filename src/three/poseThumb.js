@@ -72,6 +72,29 @@ export function handThumbFromBones(bones, restQuatOf, side = null) {
   return rig ? normalizeSegments(handSegments(rig)) : { segs: [] }
 }
 
+export function basicHandThumb({ curl = {}, spread = 0 } = {}) {
+  const fingers = [
+    ['thumb', 18, 46, -0.16],
+    ['index', 36, 70, -0.18],
+    ['middle', 50, 78, 0],
+    ['ring', 64, 72, 0.16],
+    ['pinky', 78, 62, 0.28],
+  ]
+  const segs = []
+  for (const [name, x, straightY, tilt] of fingers) {
+    const amount = typeof curl === 'number' ? curl : curl[name] ?? 0
+    const fan = (x - 50) * spread * 0.52
+    const baseX = x + fan
+    const length = straightY * (1 - amount * 0.58)
+    const endX = baseX + tilt * 16 * amount
+    const endY = 92 - length
+    segs.push([50, 92, baseX, 92 - length * 0.48])
+    segs.push([baseX, 92 - length * 0.48, endX, endY])
+  }
+  segs.push([50, 92, 50, 72])
+  return normalizeSegments(segs)
+}
+
 // Put a parsed BVH (BVHLoader's result) into the pose of its frame 0 so its bones can be read.
 export function poseParsedBVH(parsed) {
   for (const tr of parsed.clip.tracks) {

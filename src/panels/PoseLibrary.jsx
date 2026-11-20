@@ -1,11 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import * as THREE from 'three'
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { useStore } from '../store.js'
-import { listPresets, presetThumb } from '../three/poseLibraryPresets.js'
+import { listPresets, presetThumb, loadPresetPoseText, loadPresetText } from '../three/poseLibraryPresets.js'
 import { listEntries, deleteEntry, renameEntry, exportLibraryJSON, importLibraryJSON, isPersistent } from '../three/poseLibraryStore.js'
 import {
   applyBodyEntry, applyHandEntry, applyAnimationEntry,
   saveCurrentBodyPose, saveCurrentHandPose, saveClipToLibrary, BASIC_HANDS,
 } from '../three/poseLibraryActions.js'
+import { analyseHands, analyticHandPose, handPoseToBoneQuats, handPosesFromBVH, rigsForSide, migrateHandPose } from '../three/handPose.js'
+import { bvhSingleFrame } from '../three/bvhText.js'
+import { basicHandThumb } from '../three/poseThumb.js'
 import HandPoseSection from './HandPoseSection.jsx'
 import { confirmDialog } from '../dialogs.js'
 
@@ -16,20 +21,406 @@ const EMPTY = {
   animation: 'No animation presets yet. Drop .bvh files into src/poseLibrary/animation/ and rebuild, or save a clip from Animate.',
 }
 
-function Thumb({ thumb, animation }) {
+function Thumb({ thumb, animation, hand = false }) {
   if (!thumb || !thumb.segs?.length) {
-    return <div className="pl-thumb pl-thumb-empty">{animation ? '🎬' : '…'}</div>
+    return animation
+      ? <svg className="pl-thumb pl-thumb-model" viewBox="0 0 100 100" aria-hidden="true"><circle cx="50" cy="50" r="22" fill="#2f3339"/><path d="M43 34 L43 66 L68 50 Z" fill="#dfe4e9"/></svg>
+      : <div className="pl-thumb pl-thumb-empty">…</div>
   }
   return (
-    <svg className="pl-thumb" viewBox="0 0 100 100" aria-hidden="true">
+    <svg className="pl-thumb pl-thumb-model" viewBox="0 0 100 100" aria-hidden="true">
       {thumb.segs.map(([x1, y1, x2, y2], i) => (
-        <line key={i} x1={x1} y1={100 - y1} x2={x2} y2={100 - y2} stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
+        <line
+          key={i}
+          x1={x1}
+          y1={100 - y1}
+          x2={x2}
+          y2={100 - y2}
+          stroke="#aeb5bd"
+          strokeWidth={hand ? 5.2 : 7.2}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
       ))}
+      {hand && thumb.segs.length > 0 && (
+        <circle
+          cx={thumb.segs.reduce((sum, [, , x2]) => sum + x2, 0) / thumb.segs.length}
+          cy={100 - thumb.segs.reduce((sum, [, , , y2]) => sum + y2, 0) / thumb.segs.length}
+          r="3.2"
+          fill="#dfe4e9"
+        />
+      )}
+      {animation && <circle cx="82" cy="82" r="11" fill="#e8863a"/>}
+      {animation && <path d="M79 76 L79 88 L88 82 Z" fill="#fff"/>}
     </svg>
   )
 }
 
-function Card({ entry, onApply, onDelete, onRename }) {
+function normalizePreviewBoneName(name) {
+  return String(name || '')
+    .replace(/^(mixamorig)?[:_\-.]*/i, '')
+    .replace(/[^a-z0-9]/gi, '')
+    .toLowerCase()
+}
+
+function findPreviewBone(root, sourceName) {
+  if (!root || !sourceName) return null
+  const exact = root.getObjectByName(sourceName)
+  if (exact) return exact
+  const source = normalizePreviewBoneName(sourceName)
+  let found = null
+  root.traverse((object) => {
+    if (found || !object.isBone) return
+    const name = normalizePreviewBoneName(object.name)
+    if (name === source || name.endsWith(source) || source.endsWith(name)) found = object
+  })
+  return found
+}
+
+function PosePreview({ tab, entry, side, handAdjust }) {
+  const hostRef = useRef(null)
+  const previewRef = useRef(null)
+  const [status, setStatus] = useState('Loading example model…')
+  const tabRef = useRef(tab)
+  const sideRef = useRef(side)
+  const handAdjustRef = useRef(handAdjust)
+  tabRef.current = tab
+  sideRef.current = side
+  handAdjustRef.current = handAdjust
+
+  useEffect(() => {
+    const host = hostRef.current
+    if (!host) return undefined
+    const scene = new THREE.Scene()
+    scene.background = null
+    const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 100)
+    let renderer
+    try {
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
+    } catch {
+      setStatus('3D preview unavailable')
+      return undefined
+    }
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
+    renderer.outputColorSpace = THREE.SRGBColorSpace
+    renderer.setClearColor(0x000000, 0)
+    renderer.domElement.className = 'pl-preview-canvas'
+    host.appendChild(renderer.domElement)
+
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x30343a, 2.2))
+    const key = new THREE.DirectionalLight(0xffffff, 2.6)
+    key.position.set(3, 5, 4)
+    scene.add(key)
+    const rim = new THREE.DirectionalLight(0xbad8ff, 1.2)
+    rim.position.set(-4, 2, -3)
+    scene.add(rim)
+
+    let disposed = false
+    let frame = 0
+    let root = null
+    let rest = null
+
+    const resize = () => {
+      const rect = host.getBoundingClientRect()
+      if (!rect.width || !rect.height) return
+      renderer.setSize(rect.width, rect.height, false)
+      const aspect = rect.width / rect.height
+      camera.left = -1 * aspect
+      camera.right = 1 * aspect
+      camera.top = 1
+      camera.bottom = -1
+      camera.updateProjectionMatrix()
+    }
+    const observer = new ResizeObserver(resize)
+    observer.observe(host)
+    resize()
+
+    new GLTFLoader().load(
+      '/models/Base_rigged.glb',
+      (gltf) => {
+        if (disposed) return
+        root = gltf.scene
+        root.updateWorldMatrix(true, true)
+        const bounds = new THREE.Box3().setFromObject(root)
+        const size = bounds.getSize(new THREE.Vector3())
+        const height = Math.max(size.y, 0.001)
+        const scale = 2 / height
+        root.scale.setScalar(scale)
+        root.position.set(0, -bounds.min.y * scale, 0)
+        root.updateWorldMatrix(true, true)
+        scene.add(root)
+        rest = []
+        root.traverse((object) => {
+          if (object.isBone) rest.push({
+            object,
+            position: object.position.clone(),
+            quaternion: object.quaternion.clone(),
+            scale: object.scale.clone(),
+          })
+        })
+        previewRef.current = { root, rest, resetPose, framePreview, camera, scene }
+        setStatus('')
+        framePreview()
+      },
+      undefined,
+      () => setStatus('Could not load example model'),
+    )
+
+    const resetPose = () => {
+      if (!rest) return
+      for (const item of rest) {
+        item.object.position.copy(item.position)
+        item.object.quaternion.copy(item.quaternion)
+        item.object.scale.copy(item.scale)
+      }
+      if (root) root.updateWorldMatrix(true, true)
+    }
+
+    const framePreview = () => {
+      if (!root) return
+      root.updateWorldMatrix(true, true)
+      const activeTab = tabRef.current
+      const activeSide = sideRef.current
+      if (activeTab === 'hand') {
+        const wantedSide = activeSide === 'L' ? 'LeftHand' : activeSide === 'R' ? 'RightHand' : 'RightHand'
+        const hand = findPreviewBone(root, wantedSide) || root.getObjectByName(wantedSide)
+        const tipNames = activeSide === 'L'
+          ? ['LeftHandThumb4', 'LeftHandIndex4', 'LeftHandMiddle4', 'LeftHandRing4', 'LeftHandPinky4']
+          : ['RightHandThumb4', 'RightHandIndex4', 'RightHandMiddle4', 'RightHandRing4', 'RightHandPinky4']
+        const tips = tipNames.map((name) => findPreviewBone(root, name)?.getWorldPosition(new THREE.Vector3())).filter(Boolean)
+        const handPosition = hand ? hand.getWorldPosition(new THREE.Vector3()) : new THREE.Vector3()
+        const fingerCenter = tips.length
+          ? tips.reduce((sum, point) => sum.add(point), new THREE.Vector3()).multiplyScalar(1 / tips.length)
+          : handPosition.clone().add(new THREE.Vector3(0, 0.18, 0))
+        const wristToFingers = fingerCenter.clone().sub(handPosition)
+        const target = handPosition.clone().lerp(fingerCenter, 0.55)
+
+        const rect = host.getBoundingClientRect()
+        const aspect = rect.width && rect.height ? rect.width / rect.height : 1
+        const rigBones = []
+        root.traverse((object) => { if (object.isBone) rigBones.push(object) })
+        const rigs = analyseHands(rigBones, () => new THREE.Quaternion())
+        const rig = rigs.find((item) => item.side === activeSide) || rigs.find((item) => item.side === 'R') || rigs[0]
+
+        let palmNormal = new THREE.Vector3(0, 0, 1)
+        let palmUp = wristToFingers.clone().normalize()
+        if (rig?.frame) {
+          const worldFrame = rig.hand.getWorldQuaternion(new THREE.Quaternion()).multiply(rig.frame.handLocal)
+          palmNormal = new THREE.Vector3(0, 0, 1).applyQuaternion(worldFrame).normalize()
+          palmUp = new THREE.Vector3(0, 1, 0).applyQuaternion(worldFrame).normalize()
+        }
+        const palmRight = palmUp.clone().cross(palmNormal).normalize()
+
+        const points = [handPosition, fingerCenter, ...tips]
+        let halfWidth = 0.12
+        let halfHeight = 0.12
+        for (const point of points) {
+          const local = point.clone().sub(target)
+          halfWidth = Math.max(halfWidth, Math.abs(local.dot(palmRight)))
+          halfHeight = Math.max(halfHeight, Math.abs(local.dot(palmUp)))
+        }
+        const margin = 1.28
+        halfWidth *= margin
+        halfHeight *= margin
+        if (halfHeight * aspect > halfWidth) halfWidth = halfHeight * aspect
+        else halfHeight = halfWidth / aspect
+
+        camera.left = -halfWidth
+        camera.right = halfWidth
+        camera.top = halfHeight
+        camera.bottom = -halfHeight
+        camera.position.copy(target).add(palmNormal.multiplyScalar(Math.max(halfWidth, halfHeight) * 2))
+        camera.up.copy(palmUp)
+        camera.lookAt(target)
+        camera.updateProjectionMatrix()
+      } else {
+        const bounds = new THREE.Box3().setFromObject(root)
+        const center = bounds.getCenter(new THREE.Vector3())
+        const size = bounds.getSize(new THREE.Vector3())
+        const rectNow = host.getBoundingClientRect()
+        const aspect = rectNow.width && rectNow.height ? rectNow.width / rectNow.height : 1
+        const halfHeight = Math.max(size.y * 0.56, (size.x / 2) / aspect * 1.12)
+        camera.left = -halfHeight * aspect
+        camera.right = halfHeight * aspect
+        camera.top = halfHeight
+        camera.bottom = -halfHeight
+        camera.up.set(0, 1, 0)
+        camera.position.set(center.x + size.x * 0.08, center.y, size.y * 2.2)
+        camera.lookAt(center)
+        camera.updateProjectionMatrix()
+      }
+    }
+
+    previewRef.current = { root: null, rest: null, resetPose, framePreview, camera, scene }
+    const render = () => {
+      if (disposed) return
+      const animation = previewRef.current?.animation
+      if (animation?.tracks?.length) {
+        const duration = Math.max(animation.duration || 0.001, 0.001)
+        const elapsed = (performance.now() * 0.001) % duration
+        const timeRatio = elapsed / duration
+        for (const track of animation.tracks) {
+          const match = /^(.+)\.(quaternion|position)$/.exec(track.name)
+          if (!match) continue
+          const bone = findPreviewBone(root, match[1])
+          if (!bone) continue
+          const itemSize = match[2] === 'quaternion' ? 4 : 3
+          const frameCount = Math.max(1, Math.floor(track.values.length / itemSize))
+          const frameIndex = Math.min(frameCount - 1, Math.floor(timeRatio * frameCount))
+          const offset = frameIndex * itemSize
+          if (match[2] === 'quaternion') {
+            bone.quaternion.set(track.values[offset], track.values[offset + 1], track.values[offset + 2], track.values[offset + 3])
+          } else {
+            bone.position.set(track.values[offset], track.values[offset + 1], track.values[offset + 2])
+          }
+        }
+        if (root) root.updateWorldMatrix(true, true)
+      }
+      renderer.render(scene, camera)
+      frame = requestAnimationFrame(render)
+    }
+    frame = requestAnimationFrame(render)
+
+    return () => {
+      disposed = true
+      cancelAnimationFrame(frame)
+      observer.disconnect()
+      scene.traverse((object) => {
+        if (object.geometry) object.geometry.dispose()
+        if (object.material) {
+          const materials = Array.isArray(object.material) ? object.material : [object.material]
+          for (const material of materials) material.dispose()
+        }
+      })
+      renderer.dispose()
+      if (renderer.domElement.parentNode === host) host.removeChild(renderer.domElement)
+      previewRef.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    const preview = previewRef.current
+    if (!preview?.root || !preview.resetPose) return
+    preview.resetPose()
+    preview.animation = null
+
+    const apply = async () => {
+      if (!entry) {
+        preview.framePreview()
+        return
+      }
+      try {
+        if (tab === 'hand' && handAdjustRef.current) {
+          const bones = []
+          preview.root.traverse((object) => { if (object.isBone) bones.push(object) })
+          const identity = () => new THREE.Quaternion()
+          const adjust = handAdjustRef.current
+          const rigs = rigsForSide(analyseHands(bones, identity), adjust.side)
+          for (const rig of rigs) {
+            for (const [boneName, value] of Object.entries(handPoseToBoneQuats(
+              rig,
+              analyticHandPose(rig, { curl: adjust.curl, spread: adjust.spread }),
+            ))) {
+              const bone = preview.root.getObjectByName(boneName)
+              if (bone) bone.quaternion.set(value[0], value[1], value[2], value[3])
+            }
+          }
+        } else if (tab === 'body') {
+          if (entry.source === 'preset') {
+            const { BVHLoader } = await import('three/examples/jsm/loaders/BVHLoader.js')
+            const text = await loadPresetPoseText(entry)
+            const parsed = new BVHLoader().parse(text)
+            for (const track of parsed.clip.tracks) {
+              const match = /^(.+)\.(quaternion|position)$/.exec(track.name)
+              if (!match) continue
+              const bone = findPreviewBone(preview.root, match[1])
+              if (!bone) continue
+              if (match[2] === 'quaternion') {
+                const values = track.values
+                bone.quaternion.set(values[0] || 0, values[1] || 0, values[2] || 0, values[3] ?? 1)
+              } else if (match[2] === 'position') {
+                const values = track.values
+                bone.position.set(values[0] || 0, values[1] || 0, values[2] || 0)
+              }
+            }
+          } else if (entry.data?.bones) {
+            for (const [name, value] of Object.entries(entry.data.bones)) {
+              const bone = findPreviewBone(preview.root, name)
+              if (bone && value?.length >= 4) bone.quaternion.set(value[0], value[1], value[2], value[3])
+            }
+          }
+        } else if (tab === 'hand') {
+          const bones = []
+          preview.root.traverse((object) => { if (object.isBone) bones.push(object) })
+          const identity = () => new THREE.Quaternion()
+          let poses = null
+          if (entry.source === 'basic') {
+            const rigs = rigsForSide(analyseHands(bones, identity), side)
+            for (const rig of rigs) {
+              for (const [boneName, value] of Object.entries(handPoseToBoneQuats(rig, analyticHandPose(rig, entry)))) {
+                const bone = preview.root.getObjectByName(boneName)
+                if (bone) bone.quaternion.set(value[0], value[1], value[2], value[3])
+              }
+            }
+          } else if (entry.source === 'preset') {
+            const { BVHLoader } = await import('three/examples/jsm/loaders/BVHLoader.js')
+            const text = await loadPresetPoseText(entry)
+            const parsed = new BVHLoader().parse(text)
+            poses = handPosesFromBVH(parsed)
+          } else {
+            poses = Object.fromEntries(Object.entries(entry.data?.poses || {}).map(([key, pose]) => [key, migrateHandPose(pose)]))
+          }
+          if (poses) {
+            preview.root.updateWorldMatrix(true, true)
+            const rigs = rigsForSide(analyseHands(bones, identity), side)
+            for (const rig of rigs) {
+              const pose = poses[rig.side] || poses.R || poses.L
+              if (!pose) continue
+              for (const [boneName, value] of Object.entries(handPoseToBoneQuats(rig, pose))) {
+                const bone = preview.root.getObjectByName(boneName)
+                if (bone) bone.quaternion.set(value[0], value[1], value[2], value[3])
+              }
+            }
+          }
+        } else if (tab === 'animation' && entry.source === 'preset') {
+          const { BVHLoader } = await import('three/examples/jsm/loaders/BVHLoader.js')
+          const text = await loadPresetText(entry)
+          const parsed = new BVHLoader().parse(text)
+          preview.animation = {
+            tracks: parsed.clip.tracks,
+            duration: parsed.clip.duration || 3,
+          }
+          for (const track of parsed.clip.tracks) {
+            const match = /^(.+)\.(quaternion|position)$/.exec(track.name)
+            if (!match) continue
+            const bone = findPreviewBone(preview.root, match[1])
+            if (!bone) continue
+            const itemSize = match[2] === 'quaternion' ? 4 : 3
+            const frameCount = track.values.length / itemSize
+            const frameIndex = Math.floor(frameCount / 2)
+            const offset = frameIndex * itemSize
+            if (match[2] === 'quaternion') bone.quaternion.set(track.values[offset], track.values[offset + 1], track.values[offset + 2], track.values[offset + 3])
+            else bone.position.set(track.values[offset], track.values[offset + 1], track.values[offset + 2])
+          }
+        }
+      } catch {
+        // The preview remains in rest pose if an entry cannot be translated.
+      }
+      preview.root.updateWorldMatrix(true, true)
+      preview.framePreview()
+    }
+    apply()
+  }, [tab, entry, side, handAdjust])
+
+  return (
+    <div className="pl-preview" aria-label="Example character pose preview">
+      {status && <div className="pl-preview-status">{status}</div>}
+      <div className="pl-preview-host" ref={hostRef} />
+    </div>
+  )
+}
+
+function Card({ entry, onApply, onDelete, onRename, onPreview }) {
   const [thumb, setThumb] = useState(entry.thumb || null)
   const ref = useRef(null)
   const [editing, setEditing] = useState(false)
@@ -44,9 +435,9 @@ function Card({ entry, onApply, onDelete, onRename }) {
   }, [entry])
   const duration = thumb?.duration ?? entry.data?.clip?.clip?.duration
   return (
-    <div className="pl-card" ref={ref}>
+    <div className="pl-card" ref={ref} onMouseEnter={() => onPreview?.(entry)} onFocus={() => onPreview?.(entry)}>
       <button className="pl-card-main" onClick={() => onApply(entry)} title={`Apply “${entry.name}”`}>
-        <Thumb thumb={thumb} animation={entry.kind === 'animation'} />
+        <Thumb thumb={thumb} animation={entry.kind === 'animation'} hand={entry.kind === 'hand'} />
         {editing ? (
           <input
             className="pl-rename" autoFocus defaultValue={entry.name}
@@ -91,6 +482,8 @@ export default function PoseLibrary() {
   const [saveName, setSaveName] = useState('')
   const [manage, setManage] = useState(false)
   const fileRef = useRef(null)
+  const [previewEntry, setPreviewEntry] = useState(null)
+  const [handAdjust, setHandAdjust] = useState(null)
 
   const refresh = useCallback(() => listEntries().then((all) => setMine(all.map((e) => ({ ...e, source: 'mine' })))), [])
   useEffect(() => { if (tab) refresh() }, [tab, refresh])
@@ -105,7 +498,13 @@ export default function PoseLibrary() {
   const items = useMemo(() => {
     if (!tab) return []
     const presets = listPresets(tab)
-    const basics = tab === 'hand' ? BASIC_HANDS.map((b) => ({ ...b, source: 'basic', kind: 'hand', category: 'Basic' })) : []
+    const basics = tab === 'hand' ? BASIC_HANDS.map((b) => ({
+      ...b,
+      source: 'basic',
+      kind: 'hand',
+      category: 'Basic',
+      thumb: basicHandThumb(b),
+    })) : []
     return [...mine.filter((e) => e.kind === tab), ...basics, ...presets]
   }, [tab, mine])
   const categories = useMemo(() => [...new Set(items.map((i) => i.category).filter(Boolean))], [items])
@@ -114,6 +513,9 @@ export default function PoseLibrary() {
     (source === 'all' || (source === 'mine' ? i.source === 'mine' : i.source !== 'mine')) &&
     (category === 'all' || i.category === category) &&
     (!q || i.name.toLowerCase().includes(q) || (i.category || '').toLowerCase().includes(q)))
+  useEffect(() => {
+    setPreviewEntry(shown[0] || null)
+  }, [tab, category, source, q])
 
   if (!tab) return null
 
@@ -192,15 +594,20 @@ export default function PoseLibrary() {
         )}
       </div>
 
+      <PosePreview tab={tab} entry={previewEntry} side={side} handAdjust={handAdjust} />
+
       <div className="pl-grid">
-        {shown.map((entry) => <Card key={entry.id || entry.name} entry={entry} onApply={onApply} onDelete={onDelete} onRename={onRename} />)}
+        {shown.map((entry) => <Card key={entry.id || entry.name} entry={entry} onApply={onApply} onDelete={onDelete} onRename={onRename} onPreview={setPreviewEntry} />)}
         {!shown.length && <div className="pl-empty">{items.length ? 'Nothing matches.' : EMPTY[tab]}</div>}
       </div>
 
       {tab === 'hand' && (
         <details className="pl-sliders">
           <summary>Hand sliders (open ↔ fist)</summary>
-          <HandPoseSection onMessage={setMsg} />
+          <HandPoseSection onMessage={setMsg} onPreviewChange={(value) => {
+            setSide(value.side)
+            setHandAdjust(value)
+          }} />
         </details>
       )}
 

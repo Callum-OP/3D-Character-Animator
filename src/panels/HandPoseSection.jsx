@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { FINGERS } from '../three/handPose.js'
 import { beginHandAdjust, setHandCurl, endHandAdjust, saveCurrentHandPose } from '../three/poseLibraryActions.js'
 
@@ -8,7 +8,7 @@ const ZERO = { thumb: 0, index: 0, middle: 0, ring: 0, pinky: 0 }
 // Open <-> fist sliders for the left hand, right hand or both: one slider for the whole hand, one per finger, and a
 // spread slider. Dragging shows the change live and lands as ONE undo step when released. The sliders set the
 // fingers from rest (they replace whatever the fingers were doing).
-export default function HandPoseSection({ onMessage, compact = false }) {
+export default function HandPoseSection({ onMessage, compact = false, onPreviewChange }) {
   const [side, setSide] = useState('both')
   const [curl, setCurl] = useState(ZERO)
   const [spread, setSpread] = useState(0)
@@ -38,15 +38,22 @@ export default function HandPoseSection({ onMessage, compact = false }) {
     setCurl(nextCurl)
     setSpread(nextSpread)
     run(() => setHandCurl(side, nextCurl, nextSpread))
+    reportPreview(side, nextCurl, nextSpread)
   }
   const release = { onPointerUp: end, onKeyUp: end, onBlur: end }
   const master = Math.round((Object.values(curl).reduce((a, b) => a + b, 0) / FINGERS.length) * 100)
+  const reportPreview = (nextSide = side, nextCurl = curl, nextSpread = spread) => {
+    onPreviewChange?.({ side: nextSide, curl: nextCurl, spread: nextSpread })
+  }
+  useEffect(() => {
+    reportPreview(side, curl, spread)
+  }, [side, curl, spread])
 
   return (
     <div className="hand-controls">
       <div className="seg" role="group" aria-label="Which hand">
         {[['L', 'Left'], ['R', 'Right'], ['both', 'Both']].map(([key, label]) => (
-          <button key={key} className={'seg-btn' + (side === key ? ' active' : '')} onClick={() => { end(); setSide(key) }}>
+          <button key={key} className={'seg-btn' + (side === key ? ' active' : '')} onClick={() => { end(); setSide(key); reportPreview(key, curl, spread) }}>
             {label}
           </button>
         ))}
