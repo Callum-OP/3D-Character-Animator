@@ -1,11 +1,12 @@
 import 'fake-indexeddb/auto'
 import { afterEach, describe, expect, it } from 'vitest'
+import * as THREE from 'three'
 import { bvhInfo, bvhSingleFrame } from '../three/bvhText.js'
 import {
   listEntries, putEntry, deleteEntry, renameEntry, exportLibraryJSON, importLibraryJSON, resetLibraryStoreForTest, LIBRARY_FILE_FORMAT,
 } from '../three/poseLibraryStore.js'
 import { listPresets } from '../three/poseLibraryPresets.js'
-import { normalizeSegments } from '../three/poseThumb.js'
+import { normalizeSegments, representativeClipTime } from '../three/poseThumb.js'
 import { makeHandBVH } from './helpers/syntheticHand.js'
 
 afterEach(async () => {
@@ -76,6 +77,16 @@ describe('presets and thumbnails', () => {
     expect(Math.max(...xs) - Math.min(...xs)).toBeCloseTo(2 * (Math.max(...ys) - Math.min(...ys)), 0)
     expect(Math.max(...xs, ...ys)).toBeLessThanOrEqual(100)
     expect(Math.min(...xs, ...ys)).toBeGreaterThanOrEqual(0)
+  })
+  it('uses a noticeable pose instead of frame zero for animation thumbnails', () => {
+    const clip = new THREE.AnimationClip('Wave', 2, [
+      new THREE.QuaternionKeyframeTrack(
+        'Spine.quaternion',
+        [0, 1, 2],
+        [0, 0, 0, 1, 0, Math.SQRT1_2, 0, Math.SQRT1_2, 0, 0, 0, 1],
+      ),
+    ])
+    expect(representativeClipTime(clip)).toBeCloseTo(1)
   })
 })
 

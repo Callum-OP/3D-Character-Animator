@@ -117,6 +117,20 @@ describe('sliders', () => {
 })
 
 describe('animations', () => {
+  it('saves a stick figure from the most expressive clip frame', async () => {
+    const anim = await import('../three/animation.js')
+    const clip = new THREE.AnimationClip('Wave', 2, [
+      new THREE.QuaternionKeyframeTrack(
+        'mixamorig:Spine.quaternion',
+        [0, 1, 2],
+        [0, 0, 0, 1, 0, Math.SQRT1_2, 0, Math.SQRT1_2, 0, 0, 0, 1],
+      ),
+    ])
+    anim.exportClipJSON.mockReturnValue({ clip: clip.toJSON() })
+    const entry = await actions.saveClipToLibrary('Wave')
+    expect(entry.thumb.segs.length).toBeGreaterThan(3)
+    expect(entry.thumb.duration).toBe(2)
+  })
   it('a saved clip is added, armed and its keyframes requested', async () => {
     const anim = await import('../three/animation.js')
     anim.importClipJSON.mockReturnValue('Walk')

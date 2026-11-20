@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { fingerInfo, fingerNameOf } from './fingers.js'
 import { isHandBone, analyseHands, handSegments } from './handPose.js'
+import { classifyBone } from './bvh.js'
 
 // ---------------------------------------------------------------------------
 // Stick-figure thumbnails for the Pose Library cards.
@@ -44,7 +45,8 @@ const YAW = (35 * Math.PI) / 180 // turn the figure a little so depth shows
 
 // Parent -> child lines of the bones as they are posed right now (their world matrices must be current).
 export function bodySegments(bones) {
-  const keep = new Set(bones.filter(isBodyBone))
+  const core = bones.filter((bone) => bone?.isBone && classifyBone(bone.name))
+  const keep = new Set(core.length >= 2 ? core : bones.filter(isBodyBone))
   const world = new Map()
   const at = (b) => {
     if (!world.has(b)) world.set(b, b.getWorldPosition(new THREE.Vector3()))
@@ -55,8 +57,9 @@ export function bodySegments(bones) {
   const flat = (v) => [v.x * cos + v.z * sin, v.y]
   const segs = []
   for (const bone of keep) {
-    const parent = bone.parent
-    if (parent && keep.has(parent)) segs.push([...flat(at(parent)), ...flat(at(bone))])
+    let parent = bone.parent
+    while (parent && !keep.has(parent)) parent = parent.parent
+    if (parent) segs.push([...flat(at(parent)), ...flat(at(bone))])
   }
   return segs
 }
@@ -120,4 +123,82 @@ export function thumbFromParsedBVH(parsed, kind) {
     return rig ? normalizeSegments(handSegments(rig)) : { segs: [] }
   }
   return bodyThumb(poseParsedBVH(parsed))
+}
+
+function quaternionTracks(clip) {
+  return (clip?.tracks || []).filter((track) => track.name.endsWith('.quaternion') && track.times.length > 1)
+}
+
+// Pick the frame furthest from the opening pose, ignoring translations so a character simply walking across the
+// scene still gets a useful pose rather than "the moment it travelled farthest".
+export function representativeClipTime(clip, samples = 24) {
+  const duration = Math.max(Number(clip?.duration) || 0, 0)
+  if (!duration) return 0
+  const tracks = quaternionTracks(clip)
+  if (!tracks.length) return duration / 2
+  const prepared = tracks.map((track) => ({
+    interpolant: track.createInterpolant(new Float32Array(4)),
+    initial: new THREE.Quaternion(track.values[0], track.values[1], track.values[2], track.values[3]).normalize(),
+  }))
+  let bestTime = 0
+  let bestScore = -1
+  for (let i = 0; i <= samples; i++) {
+    const time = duration * i / samples
+    let score = 0
+    for (const { interpolant, initial } of prepared) {
+      const value = interpolant.evaluate(time)
+      const sample = new THREE.Quaternion(value[0], value[1], value[2], value[3]).normalize()
+      score += 1 - Math.abs(initial.dot(sample))
+    }
+    if (score > bestScore) {
+      bestScore = score
+      bestTime = time
+    }
+  }
+  return bestTime
+}
+
+export function applyClipFrame(root, clip, time, resolveTarget = (name) => root?.getObjectByName(name)) {
+  if (!root || !clip) return
+  for (const track of clip.tracks || []) {
+    const match = /^(.+)\.(quaternion|position)$/.exec(track.name)
+    if (!match) continue
+    const target = resolveTarget(match[1])
+    if (!target) continue
+    if (match[2] === 'quaternion') {
+      const value = track.createInterpolant(new Float32Array(4)).evaluate(time)
+      target.quaternion.set(value[0], value[1], value[2], value[3])
+    } else {
+      const value = track.createInterpolant(new Float32Array(3)).evaluate(time)
+      target.position.set(value[0], value[1], value[2])
+    }
+  }
+  root.updateWorldMatrix(true, true)
+}
+
+export function animationThumbFromClipJSON(json, bones) {
+  if (!json) return { segs: [] }
+  let clip
+  try {
+    clip = THREE.AnimationClip.parse(json.clip || json)
+  } catch {
+    return { segs: [] }
+  }
+  if (!bones?.length) return { segs: [], duration: clip.duration }
+  const root = bones[0]
+  const saved = bones.map((bone) => ({
+    bone,
+    position: bone.position.clone(),
+    quaternion: bone.quaternion.clone(),
+  }))
+  try {
+    applyClipFrame(root, clip, representativeClipTime(clip), (name) => bones.find((bone) => bone.name === name))
+    return { ...bodyThumb(bones), duration: clip.duration }
+  } finally {
+    for (const item of saved) {
+      item.bone.position.copy(item.position)
+      item.bone.quaternion.copy(item.quaternion)
+    }
+    root.updateWorldMatrix(true, true)
+  }
 }

@@ -9,6 +9,7 @@ vi.mock('../three/poseLibraryActions.js', () => ({
   saveCurrentBodyPose: vi.fn().mockResolvedValue({ name: 'Mine1' }),
   saveCurrentHandPose: vi.fn(),
   saveClipToLibrary: vi.fn(),
+  backfillAnimationThumb: vi.fn(async (entry) => entry),
   BASIC_HANDS: [
     { id: 'open', name: 'Open hand', curl: {}, spread: 0 },
     { id: 'fist', name: 'Fist', curl: {}, spread: 0 },

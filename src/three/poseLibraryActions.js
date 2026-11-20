@@ -25,7 +25,7 @@ import {
   BASIC_HANDS,
 } from './handPose.js'
 import { fingerInfo } from './fingers.js'
-import { bodyThumb, handThumbFromBones, thumbFromParsedBVH } from './poseThumb.js'
+import { animationThumbFromClipJSON, bodyThumb, handThumbFromBones } from './poseThumb.js'
 import { loadPresetPoseText, loadPresetText } from './poseLibraryPresets.js'
 import { bvhInfo } from './bvhText.js'
 import { putEntry } from './poseLibraryStore.js'
@@ -221,9 +221,18 @@ export async function saveClipToLibrary(clipName, name) {
   return putEntry({
     kind: 'animation',
     name: cleanName(name, clipName),
-    thumb: { segs: [], duration: json.clip?.duration },
+    thumb: animationThumbFromClipJSON(json, getPoseBones()),
     data: { clip: json },
   })
+}
+
+// Older library entries predate animation thumbnails. Fill one from the active rig once, while leaving entries alone
+// when no model (or no matching bones) is available.
+export async function backfillAnimationThumb(entry) {
+  if (entry?.kind !== 'animation' || entry.thumb?.segs?.length) return entry
+  const thumb = animationThumbFromClipJSON(entry.data?.clip, getPoseBones())
+  if (!thumb.segs?.length) return entry
+  return putEntry({ ...entry, thumb })
 }
 
 export { BASIC_HANDS, sideLabel }

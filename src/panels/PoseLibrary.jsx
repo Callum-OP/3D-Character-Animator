@@ -6,11 +6,11 @@ import { listPresets, presetThumb, loadPresetPoseText, loadPresetText } from '..
 import { listEntries, deleteEntry, renameEntry, exportLibraryJSON, importLibraryJSON, isPersistent } from '../three/poseLibraryStore.js'
 import {
   applyBodyEntry, applyHandEntry, applyAnimationEntry,
-  saveCurrentBodyPose, saveCurrentHandPose, saveClipToLibrary, BASIC_HANDS,
+  saveCurrentBodyPose, saveCurrentHandPose, saveClipToLibrary, backfillAnimationThumb, BASIC_HANDS,
 } from '../three/poseLibraryActions.js'
 import { analyseHands, analyticHandPose, handPoseToBoneQuats, handPosesFromBVH, rigsForSide, migrateHandPose } from '../three/handPose.js'
-import { bvhSingleFrame } from '../three/bvhText.js'
-import { basicHandThumb } from '../three/poseThumb.js'
+import { bvhInfo, bvhSingleFrame } from '../three/bvhText.js'
+import { applyClipFrame, basicHandThumb, representativeClipTime } from '../three/poseThumb.js'
 import HandPoseSection from './HandPoseSection.jsx'
 import { confirmDialog } from '../dialogs.js'
 
@@ -77,10 +77,11 @@ function findPreviewBone(root, sourceName) {
   return found
 }
 
-function PosePreview({ tab, entry, side, handAdjust }) {
+function PosePreview({ tab, entry, side, strength, handAdjust }) {
   const hostRef = useRef(null)
   const previewRef = useRef(null)
   const [status, setStatus] = useState('Loading example model…')
+  const [ready, setReady] = useState(false)
   const tabRef = useRef(tab)
   const sideRef = useRef(side)
   const handAdjustRef = useRef(handAdjust)
@@ -161,6 +162,7 @@ function PosePreview({ tab, entry, side, handAdjust }) {
         previewRef.current = { root, rest, resetPose, framePreview, camera, scene }
         setStatus('')
         framePreview()
+        setReady(true)
       },
       undefined,
       () => setStatus('Could not load example model'),
@@ -254,28 +256,6 @@ function PosePreview({ tab, entry, side, handAdjust }) {
     previewRef.current = { root: null, rest: null, resetPose, framePreview, camera, scene }
     const render = () => {
       if (disposed) return
-      const animation = previewRef.current?.animation
-      if (animation?.tracks?.length) {
-        const duration = Math.max(animation.duration || 0.001, 0.001)
-        const elapsed = (performance.now() * 0.001) % duration
-        const timeRatio = elapsed / duration
-        for (const track of animation.tracks) {
-          const match = /^(.+)\.(quaternion|position)$/.exec(track.name)
-          if (!match) continue
-          const bone = findPreviewBone(root, match[1])
-          if (!bone) continue
-          const itemSize = match[2] === 'quaternion' ? 4 : 3
-          const frameCount = Math.max(1, Math.floor(track.values.length / itemSize))
-          const frameIndex = Math.min(frameCount - 1, Math.floor(timeRatio * frameCount))
-          const offset = frameIndex * itemSize
-          if (match[2] === 'quaternion') {
-            bone.quaternion.set(track.values[offset], track.values[offset + 1], track.values[offset + 2], track.values[offset + 3])
-          } else {
-            bone.position.set(track.values[offset], track.values[offset + 1], track.values[offset + 2])
-          }
-        }
-        if (root) root.updateWorldMatrix(true, true)
-      }
       renderer.render(scene, camera)
       frame = requestAnimationFrame(render)
     }
@@ -302,13 +282,15 @@ function PosePreview({ tab, entry, side, handAdjust }) {
     const preview = previewRef.current
     if (!preview?.root || !preview.resetPose) return
     preview.resetPose()
-    preview.animation = null
+    let cancelled = false
 
     const apply = async () => {
       if (!entry) {
+        setStatus('')
         preview.framePreview()
         return
       }
+      setStatus('')
       try {
         if (tab === 'hand' && handAdjustRef.current) {
           const bones = []
@@ -329,6 +311,7 @@ function PosePreview({ tab, entry, side, handAdjust }) {
           if (entry.source === 'preset') {
             const { BVHLoader } = await import('three/examples/jsm/loaders/BVHLoader.js')
             const text = await loadPresetPoseText(entry)
+            if (cancelled) return
             const parsed = new BVHLoader().parse(text)
             for (const track of parsed.clip.tracks) {
               const match = /^(.+)\.(quaternion|position)$/.exec(track.name)
@@ -357,7 +340,7 @@ function PosePreview({ tab, entry, side, handAdjust }) {
           if (entry.source === 'basic') {
             const rigs = rigsForSide(analyseHands(bones, identity), side)
             for (const rig of rigs) {
-              for (const [boneName, value] of Object.entries(handPoseToBoneQuats(rig, analyticHandPose(rig, entry)))) {
+              for (const [boneName, value] of Object.entries(handPoseToBoneQuats(rig, analyticHandPose(rig, entry), strength / 100))) {
                 const bone = preview.root.getObjectByName(boneName)
                 if (bone) bone.quaternion.set(value[0], value[1], value[2], value[3])
               }
@@ -365,6 +348,7 @@ function PosePreview({ tab, entry, side, handAdjust }) {
           } else if (entry.source === 'preset') {
             const { BVHLoader } = await import('three/examples/jsm/loaders/BVHLoader.js')
             const text = await loadPresetPoseText(entry)
+            if (cancelled) return
             const parsed = new BVHLoader().parse(text)
             poses = handPosesFromBVH(parsed)
           } else {
@@ -376,41 +360,37 @@ function PosePreview({ tab, entry, side, handAdjust }) {
             for (const rig of rigs) {
               const pose = poses[rig.side] || poses.R || poses.L
               if (!pose) continue
-              for (const [boneName, value] of Object.entries(handPoseToBoneQuats(rig, pose))) {
+              for (const [boneName, value] of Object.entries(handPoseToBoneQuats(rig, pose, strength / 100))) {
                 const bone = preview.root.getObjectByName(boneName)
                 if (bone) bone.quaternion.set(value[0], value[1], value[2], value[3])
               }
             }
           }
-        } else if (tab === 'animation' && entry.source === 'preset') {
+        } else if (tab === 'animation') {
           const { BVHLoader } = await import('three/examples/jsm/loaders/BVHLoader.js')
-          const text = await loadPresetText(entry)
-          const parsed = new BVHLoader().parse(text)
-          preview.animation = {
-            tracks: parsed.clip.tracks,
-            duration: parsed.clip.duration || 3,
+          let clip
+          if (entry.source === 'preset') {
+            const text = await loadPresetText(entry)
+            if (cancelled) return
+            const info = bvhInfo(text)
+            const frame = info ? Math.floor(info.frames / 2) : 0
+            clip = new BVHLoader().parse(bvhSingleFrame(text, frame)).clip
+          } else {
+            const json = entry.data?.clip
+            clip = THREE.AnimationClip.parse(json?.clip || json)
           }
-          for (const track of parsed.clip.tracks) {
-            const match = /^(.+)\.(quaternion|position)$/.exec(track.name)
-            if (!match) continue
-            const bone = findPreviewBone(preview.root, match[1])
-            if (!bone) continue
-            const itemSize = match[2] === 'quaternion' ? 4 : 3
-            const frameCount = track.values.length / itemSize
-            const frameIndex = Math.floor(frameCount / 2)
-            const offset = frameIndex * itemSize
-            if (match[2] === 'quaternion') bone.quaternion.set(track.values[offset], track.values[offset + 1], track.values[offset + 2], track.values[offset + 3])
-            else bone.position.set(track.values[offset], track.values[offset + 1], track.values[offset + 2])
-          }
+          if (clip) applyClipFrame(preview.root, clip, representativeClipTime(clip), (name) => findPreviewBone(preview.root, name))
         }
-      } catch {
-        // The preview remains in rest pose if an entry cannot be translated.
+      } catch (error) {
+        if (!cancelled) setStatus(`Could not preview this ${tab} (${error?.message || 'invalid data'})`)
       }
+      if (cancelled) return
       preview.root.updateWorldMatrix(true, true)
       preview.framePreview()
     }
     apply()
-  }, [tab, entry, side, handAdjust])
+    return () => { cancelled = true }
+  }, [ready, tab, entry, side, strength, handAdjust])
 
   return (
     <div className="pl-preview" aria-label="Example character pose preview">
@@ -485,7 +465,11 @@ export default function PoseLibrary() {
   const [previewEntry, setPreviewEntry] = useState(null)
   const [handAdjust, setHandAdjust] = useState(null)
 
-  const refresh = useCallback(() => listEntries().then((all) => setMine(all.map((e) => ({ ...e, source: 'mine' })))), [])
+  const refresh = useCallback(async () => {
+    const all = await listEntries()
+    const updated = await Promise.all(all.map(backfillAnimationThumb))
+    setMine(updated.map((entry) => ({ ...entry, source: 'mine' })))
+  }, [])
   useEffect(() => { if (tab) refresh() }, [tab, refresh])
   useEffect(() => { setCategory('all'); setQuery('') }, [tab])
   useEffect(() => {
@@ -514,6 +498,7 @@ export default function PoseLibrary() {
     (category === 'all' || i.category === category) &&
     (!q || i.name.toLowerCase().includes(q) || (i.category || '').toLowerCase().includes(q)))
   useEffect(() => {
+    setHandAdjust(null)
     setPreviewEntry(shown[0] || null)
   }, [tab, category, source, q])
 
@@ -594,10 +579,19 @@ export default function PoseLibrary() {
         )}
       </div>
 
-      <PosePreview tab={tab} entry={previewEntry} side={side} handAdjust={handAdjust} />
+      <PosePreview tab={tab} entry={previewEntry} side={side} strength={strength} handAdjust={handAdjust} />
 
       <div className="pl-grid">
-        {shown.map((entry) => <Card key={entry.id || entry.name} entry={entry} onApply={onApply} onDelete={onDelete} onRename={onRename} onPreview={setPreviewEntry} />)}
+        {shown.map((entry) => (
+          <Card
+            key={entry.id || entry.name}
+            entry={entry}
+            onApply={onApply}
+            onDelete={onDelete}
+            onRename={onRename}
+            onPreview={(next) => { setHandAdjust(null); setPreviewEntry(next) }}
+          />
+        ))}
         {!shown.length && <div className="pl-empty">{items.length ? 'Nothing matches.' : EMPTY[tab]}</div>}
       </div>
 
