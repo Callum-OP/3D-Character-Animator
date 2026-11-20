@@ -1883,14 +1883,6 @@ export default function AnimationPanel() {
       .catch((e) => setKfMsg(e.message))
   }
 
-  function onOpenRename() {
-    setRenameText(activeClipName || '')
-    setRenameOpen(true)
-  }
-
-  function onConfirmRename() {
-    if (!activeClipName) return
-    const finalName = renameClip(activeClipName, renameText)
   function onCommitClipRename(oldName, text) {
     setRenamingClip(null)
     if (!(text || '').trim()) return // an empty name just cancels

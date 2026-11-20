@@ -632,6 +632,7 @@ export function retargetParsed(parsed, model, names, hip, clipName, { preserveFo
 
   const srcBones = parsed.skeleton.bones
   const srcByName = new Map(srcBones.map((b) => [b.name, b]))
+  const updateSource = () => srcBones[0].updateWorldMatrix(false, true)
   const tgtBones = model.bones && model.bones.length ? model.bones : target.skeleton.bones
 
   // Source rotation tracks (BVH shares one time array across channels).
@@ -849,7 +850,7 @@ export function retargetParsed(parsed, model, names, hip, clipName, { preserveFo
       yawFix.setFromAxisAngle(new THREE.Vector3(0, 1, 0), -Math.atan2(fwd.x, fwd.z))
     }
     if (tgtHip) {
-      if (restPose) srcHipStart.copy(restSrcP.get(srcHip))
+      if (restPose || parsed.useSourceRest) srcHipStart.copy(restSrcP.get(srcHip))
       else srcHip.getWorldPosition(srcHipStart)
       const tgtY = restTgtP.get(tgtHip).y
       hipScale = srcHipStart.y > 1e-4 && tgtY > 1e-4 ? tgtY / srcHipStart.y : 1
