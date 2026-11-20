@@ -159,7 +159,8 @@ export function representativeClipTime(clip, samples = 24) {
 }
 
 export function applyClipFrame(root, clip, time, resolveTarget = (name) => root?.getObjectByName(name)) {
-  if (!root || !clip) return
+  if (!root || !clip) return 0
+  let applied = 0
   for (const track of clip.tracks || []) {
     const match = /^(.+)\.(quaternion|position)$/.exec(track.name)
     if (!match) continue
@@ -172,8 +173,17 @@ export function applyClipFrame(root, clip, time, resolveTarget = (name) => root?
       const value = track.createInterpolant(new Float32Array(3)).evaluate(time)
       target.position.set(value[0], value[1], value[2])
     }
+    applied++
   }
   root.updateWorldMatrix(true, true)
+  return applied
+}
+
+export function parsedBVHResolver(parsed) {
+  const sourceNames = new Map(
+    (parsed?.skeleton?.bones || []).map((bone) => [bone.uuid, bone.name]),
+  )
+  return (name) => sourceNames.get(name) || name
 }
 
 export function animationThumbFromClipJSON(json, bones) {

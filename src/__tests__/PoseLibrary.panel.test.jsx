@@ -74,6 +74,15 @@ describe('Pose Library panel', () => {
     expect(screen.getByText('Import library')).toBeTruthy()
   })
 
+  it('offers rendered model cards as an option', async () => {
+    useStore.setState({ poseLibraryTab: 'body' })
+    render(<PoseLibrary />)
+    const option = screen.getByRole('checkbox', { name: 'Rendered cards' })
+    expect(option.checked).toBe(false)
+    fireEvent.click(option)
+    expect(option.checked).toBe(true)
+  })
+
   it('switches tabs and closes with Escape', async () => {
     useStore.setState({ poseLibraryTab: 'body' })
     const { container } = render(<PoseLibrary />)

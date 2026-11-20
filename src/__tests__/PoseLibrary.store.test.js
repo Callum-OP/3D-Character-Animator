@@ -4,9 +4,10 @@ import * as THREE from 'three'
 import { bvhInfo, bvhSingleFrame } from '../three/bvhText.js'
 import {
   listEntries, putEntry, deleteEntry, renameEntry, exportLibraryJSON, importLibraryJSON, resetLibraryStoreForTest, LIBRARY_FILE_FORMAT,
+  getRenderedThumb, putRenderedThumb,
 } from '../three/poseLibraryStore.js'
 import { listPresets } from '../three/poseLibraryPresets.js'
-import { normalizeSegments, representativeClipTime } from '../three/poseThumb.js'
+import { normalizeSegments, parsedBVHResolver, representativeClipTime } from '../three/poseThumb.js'
 import { makeHandBVH } from './helpers/syntheticHand.js'
 
 afterEach(async () => {
@@ -64,6 +65,16 @@ describe('library storage', () => {
   it('refuses a file that is not a library', async () => {
     await expect(importLibraryJSON({ nope: true })).rejects.toThrow(/not a Pose Library/)
   })
+  it('stores rendered screenshots outside exported library data', async () => {
+    await putRenderedThumb('pose-1', new Blob(['image'], { type: 'image/webp' }))
+    const screenshot = await getRenderedThumb('pose-1')
+    expect(screenshot.type).toBe('image/webp')
+    expect(screenshot.size).toBe(5)
+    const json = await exportLibraryJSON()
+    expect(json.entries.every((entry) => !entry.renderedThumb)).toBe(true)
+    await deleteEntry('pose-1')
+    expect(await getRenderedThumb('pose-1')).toBeNull()
+  })
 })
 
 describe('presets and thumbnails', () => {
@@ -87,6 +98,11 @@ describe('presets and thumbnails', () => {
       ),
     ])
     expect(representativeClipTime(clip)).toBeCloseTo(1)
+  })
+  it('resolves BVH track UUIDs back to source bone names', () => {
+    const resolve = parsedBVHResolver({ skeleton: { bones: [{ uuid: 'abc-123', name: 'mixamorigSpine' }] } })
+    expect(resolve('abc-123')).toBe('mixamorigSpine')
+    expect(resolve('Spine')).toBe('Spine')
   })
 })
 

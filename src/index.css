@@ -3881,6 +3881,7 @@ body {
 .pl-card-main:hover { border-color: #e8863a; background: rgba(232,134,58,.1); }
 .pl-thumb { width: 100%; aspect-ratio: 1; color: #cfd6df; }
 .pl-thumb-model { display: block; border-radius: 7px; background: linear-gradient(145deg, rgba(255,255,255,.055), rgba(255,255,255,.015)); }
+img.pl-thumb-model { object-fit: contain; }
 .pl-thumb-empty { display: flex; align-items: center; justify-content: center; opacity: .5; }
 .pl-name { font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pl-sub { font-size: 10.5px; opacity: .65; }

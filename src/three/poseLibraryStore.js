@@ -14,11 +14,14 @@
 // ---------------------------------------------------------------------------
 
 const DB_NAME = 'animare-pose-library'
-const DB_VERSION = 1
+const DB_VERSION = 2
 const STORE = 'entries'
+const THUMB_STORE = 'rendered-thumbs'
+const THUMB_CACHE_VERSION = 'base-rigged-v3'
 export const LIBRARY_FILE_FORMAT = 'animare-pose-library-v1'
 
 const memory = new Map()
+const memoryThumbs = new Map()
 let persistent = true
 
 export function isPersistent() {
@@ -34,6 +37,7 @@ function open() {
     const req = indexedDB.open(DB_NAME, DB_VERSION)
     req.onupgradeneeded = () => {
       if (!req.result.objectStoreNames.contains(STORE)) req.result.createObjectStore(STORE, { keyPath: 'id' })
+      if (!req.result.objectStoreNames.contains(THUMB_STORE)) req.result.createObjectStore(THUMB_STORE)
     }
     req.onsuccess = () => resolve(req.result)
     req.onerror = () => reject(req.error)
@@ -41,12 +45,12 @@ function open() {
 }
 
 // Run `fn(store)` in a transaction and resolve with the request's result.
-async function withStore(mode, fn) {
+async function withStore(mode, fn, storeName = STORE) {
   const db = await open()
   try {
     return await new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE, mode)
-      const req = fn(tx.objectStore(STORE))
+      const tx = db.transaction(storeName, mode)
+      const req = fn(tx.objectStore(storeName))
       tx.oncomplete = () => resolve(req ? req.result : undefined)
       tx.onerror = () => reject(tx.error)
       tx.onabort = () => reject(tx.error)
@@ -96,6 +100,12 @@ export async function deleteEntry(id) {
     () => withStore('readwrite', (s) => s.delete(id)),
     () => undefined,
   )
+  memoryThumbs.delete(id)
+  try {
+    await withStore('readwrite', (s) => s.delete(`${THUMB_CACHE_VERSION}:${id}`), THUMB_STORE)
+  } catch {
+    // The screenshot cache is disposable; library entry deletion still succeeds without it.
+  }
 }
 
 export async function renameEntry(id, name) {
@@ -126,8 +136,41 @@ export async function importLibraryJSON(json) {
   return added
 }
 
+export async function getRenderedThumb(id) {
+  if (!id) return null
+  try {
+    const stored = await withStore('readonly', (s) => s.get(`${THUMB_CACHE_VERSION}:${id}`), THUMB_STORE)
+    if (stored?.data && stored.type) return new Blob([stored.data], { type: stored.type })
+    return stored || memoryThumbs.get(id) || null
+  } catch {
+    return memoryThumbs.get(id) || null
+  }
+}
+
+function blobBuffer(blob) {
+  if (typeof blob.arrayBuffer === 'function') return blob.arrayBuffer()
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result)
+    reader.onerror = () => reject(reader.error || new Error('Could not read rendered thumbnail'))
+    reader.readAsArrayBuffer(blob)
+  })
+}
+
+export async function putRenderedThumb(id, blob) {
+  if (!id || !blob) return
+  memoryThumbs.set(id, blob)
+  try {
+    const stored = { type: blob.type || 'image/webp', data: await blobBuffer(blob) }
+    await withStore('readwrite', (s) => s.put(stored, `${THUMB_CACHE_VERSION}:${id}`), THUMB_STORE)
+  } catch {
+    // Keep the session copy as a fallback when storage is full or unavailable.
+  }
+}
+
 // Test hook: forget everything held in memory and try IndexedDB again.
 export function resetLibraryStoreForTest() {
   memory.clear()
+  memoryThumbs.clear()
   persistent = true
 }

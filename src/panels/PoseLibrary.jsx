@@ -3,14 +3,16 @@ import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { useStore } from '../store.js'
 import { listPresets, presetThumb, loadPresetPoseText, loadPresetText } from '../three/poseLibraryPresets.js'
-import { listEntries, deleteEntry, renameEntry, exportLibraryJSON, importLibraryJSON, isPersistent } from '../three/poseLibraryStore.js'
+import {
+  listEntries, deleteEntry, renameEntry, exportLibraryJSON, importLibraryJSON, isPersistent,
+  getRenderedThumb, putRenderedThumb,
+} from '../three/poseLibraryStore.js'
 import {
   applyBodyEntry, applyHandEntry, applyAnimationEntry,
   saveCurrentBodyPose, saveCurrentHandPose, saveClipToLibrary, backfillAnimationThumb, BASIC_HANDS,
 } from '../three/poseLibraryActions.js'
 import { analyseHands, analyticHandPose, handPoseToBoneQuats, handPosesFromBVH, rigsForSide, migrateHandPose } from '../three/handPose.js'
-import { bvhInfo, bvhSingleFrame } from '../three/bvhText.js'
-import { applyClipFrame, basicHandThumb, representativeClipTime } from '../three/poseThumb.js'
+import { applyClipFrame, basicHandThumb, parsedBVHResolver, representativeClipTime } from '../three/poseThumb.js'
 import HandPoseSection from './HandPoseSection.jsx'
 import { confirmDialog } from '../dialogs.js'
 
@@ -21,7 +23,8 @@ const EMPTY = {
   animation: 'No animation presets yet. Drop .bvh files into src/poseLibrary/animation/ and rebuild, or save a clip from Animate.',
 }
 
-function Thumb({ thumb, animation, hand = false }) {
+function Thumb({ thumb, image, animation, hand = false }) {
+  if (image) return <img className="pl-thumb pl-thumb-model" src={image} alt="" />
   if (!thumb || !thumb.segs?.length) {
     return animation
       ? <svg className="pl-thumb pl-thumb-model" viewBox="0 0 100 100" aria-hidden="true"><circle cx="50" cy="50" r="22" fill="#2f3339"/><path d="M43 34 L43 66 L68 50 Z" fill="#dfe4e9"/></svg>
@@ -77,7 +80,7 @@ function findPreviewBone(root, sourceName) {
   return found
 }
 
-function PosePreview({ tab, entry, side, strength, handAdjust }) {
+function PosePreview({ tab, entry, side, strength, handAdjust, previewVersion }) {
   const hostRef = useRef(null)
   const previewRef = useRef(null)
   const [status, setStatus] = useState('Loading example model…')
@@ -256,6 +259,20 @@ function PosePreview({ tab, entry, side, strength, handAdjust }) {
     previewRef.current = { root: null, rest: null, resetPose, framePreview, camera, scene }
     const render = () => {
       if (disposed) return
+      const animation = previewRef.current?.animation
+      if (animation?.running && animation.clip) {
+        const elapsed = (performance.now() - animation.startedAt) / 1000
+        if (elapsed <= animation.clip.duration) {
+          previewRef.current.resetPose()
+          applyClipFrame(preview.root, animation.clip, elapsed, animation.resolveTarget)
+          previewRef.current.framePreview()
+        } else {
+          animation.running = false
+          previewRef.current.resetPose()
+          applyClipFrame(preview.root, animation.clip, representativeClipTime(animation.clip), animation.resolveTarget)
+          previewRef.current.framePreview()
+        }
+      }
       renderer.render(scene, camera)
       frame = requestAnimationFrame(render)
     }
@@ -282,6 +299,7 @@ function PosePreview({ tab, entry, side, strength, handAdjust }) {
     const preview = previewRef.current
     if (!preview?.root || !preview.resetPose) return
     preview.resetPose()
+    preview.animation = null
     let cancelled = false
 
     const apply = async () => {
@@ -313,10 +331,11 @@ function PosePreview({ tab, entry, side, strength, handAdjust }) {
             const text = await loadPresetPoseText(entry)
             if (cancelled) return
             const parsed = new BVHLoader().parse(text)
+            const sourceName = parsedBVHResolver(parsed)
             for (const track of parsed.clip.tracks) {
               const match = /^(.+)\.(quaternion|position)$/.exec(track.name)
               if (!match) continue
-              const bone = findPreviewBone(preview.root, match[1])
+              const bone = findPreviewBone(preview.root, sourceName(match[1]))
               if (!bone) continue
               if (match[2] === 'quaternion') {
                 const values = track.values
@@ -367,19 +386,25 @@ function PosePreview({ tab, entry, side, strength, handAdjust }) {
             }
           }
         } else if (tab === 'animation') {
-          const { BVHLoader } = await import('three/examples/jsm/loaders/BVHLoader.js')
           let clip
+          let entryResolver = null
           if (entry.source === 'preset') {
             const text = await loadPresetText(entry)
             if (cancelled) return
-            const info = bvhInfo(text)
-            const frame = info ? Math.floor(info.frames / 2) : 0
-            clip = new BVHLoader().parse(bvhSingleFrame(text, frame)).clip
+            const { BVHLoader } = await import('three/examples/jsm/loaders/BVHLoader.js')
+            const parsed = new BVHLoader().parse(text)
+            clip = parsed.clip
+            entryResolver = parsedBVHResolver(parsed)
           } else {
             const json = entry.data?.clip
             clip = THREE.AnimationClip.parse(json?.clip || json)
           }
-          if (clip) applyClipFrame(preview.root, clip, representativeClipTime(clip), (name) => findPreviewBone(preview.root, name))
+          if (clip) {
+            const resolveTarget = (name) => findPreviewBone(preview.root, entryResolver?.(name) || name)
+            const applied = applyClipFrame(preview.root, clip, 0, resolveTarget)
+            if (!applied) throw new Error('No animation bones matched the example rig')
+            preview.animation = { clip, running: true, startedAt: performance.now(), resolveTarget }
+          }
         }
       } catch (error) {
         if (!cancelled) setStatus(`Could not preview this ${tab} (${error?.message || 'invalid data'})`)
@@ -390,7 +415,7 @@ function PosePreview({ tab, entry, side, strength, handAdjust }) {
     }
     apply()
     return () => { cancelled = true }
-  }, [ready, tab, entry, side, strength, handAdjust])
+  }, [ready, tab, entry, side, strength, handAdjust, previewVersion])
 
   return (
     <div className="pl-preview" aria-label="Example character pose preview">
@@ -400,8 +425,9 @@ function PosePreview({ tab, entry, side, strength, handAdjust }) {
   )
 }
 
-function Card({ entry, onApply, onDelete, onRename, onPreview }) {
+function Card({ entry, rendered, onApply, onDelete, onRename, onPreview }) {
   const [thumb, setThumb] = useState(entry.thumb || null)
+  const [image, setImage] = useState(null)
   const ref = useRef(null)
   const [editing, setEditing] = useState(false)
   useEffect(() => {
@@ -413,11 +439,56 @@ function Card({ entry, onApply, onDelete, onRename, onPreview }) {
     if (ref.current) io.observe(ref.current)
     return () => { live = false; io.disconnect() }
   }, [entry])
+  useEffect(() => {
+    let live = true
+    let objectUrl = null
+    if (!rendered) {
+      setImage(null)
+      return undefined
+    }
+    const show = (blob) => {
+      if (!live || !blob) return
+      objectUrl = URL.createObjectURL(blob)
+      setImage(objectUrl)
+    }
+    const load = async () => {
+      try {
+        const cached = await getRenderedThumb(entry.id)
+        if (cached) {
+          show(cached)
+          return
+        }
+        const { renderedPoseThumb } = await import('../three/renderedPoseThumb.js')
+        const blob = await renderedPoseThumb(entry)
+        if (!live) return
+        await putRenderedThumb(entry.id, blob)
+        show(blob)
+      } catch {
+        if (live) setImage(null)
+      }
+    }
+    let io
+    if (typeof IntersectionObserver === 'undefined') load()
+    else {
+      io = new IntersectionObserver((hits) => {
+        if (hits[0].isIntersecting) {
+          io.disconnect()
+          load()
+        }
+      })
+      if (ref.current) io.observe(ref.current)
+    }
+    return () => {
+      live = false
+      io?.disconnect()
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [entry, rendered])
   const duration = thumb?.duration ?? entry.data?.clip?.clip?.duration
   return (
     <div className="pl-card" ref={ref} onMouseEnter={() => onPreview?.(entry)} onFocus={() => onPreview?.(entry)}>
       <button className="pl-card-main" onClick={() => onApply(entry)} title={`Apply “${entry.name}”`}>
-        <Thumb thumb={thumb} animation={entry.kind === 'animation'} hand={entry.kind === 'hand'} />
+        <Thumb thumb={thumb} image={image} animation={entry.kind === 'animation'} hand={entry.kind === 'hand'} />
         {editing ? (
           <input
             className="pl-rename" autoFocus defaultValue={entry.name}
@@ -464,6 +535,8 @@ export default function PoseLibrary() {
   const fileRef = useRef(null)
   const [previewEntry, setPreviewEntry] = useState(null)
   const [handAdjust, setHandAdjust] = useState(null)
+  const [renderedCards, setRenderedCards] = useState(false)
+  const [previewVersion, setPreviewVersion] = useState(0)
 
   const refresh = useCallback(async () => {
     const all = await listEntries()
@@ -565,6 +638,10 @@ export default function PoseLibrary() {
             <input type="checkbox" checked={keepHands} onChange={(e) => setKeepHands(e.target.checked)} /> Keep current hand poses
           </label>
         )}
+        <label className="pl-check" title="Use a rendered example character instead of stick figures. Images are cached locally.">
+          <input type="checkbox" checked={renderedCards} onChange={(e) => setRenderedCards(e.target.checked)} />
+          Rendered cards
+        </label>
         {tab === 'hand' && (
           <div className="pl-hand-apply">
             <div className="seg">
@@ -579,17 +656,30 @@ export default function PoseLibrary() {
         )}
       </div>
 
-      <PosePreview tab={tab} entry={previewEntry} side={side} strength={strength} handAdjust={handAdjust} />
+      <PosePreview
+        key={tab}
+        tab={tab}
+        entry={previewEntry}
+        side={side}
+        strength={strength}
+        handAdjust={handAdjust}
+        previewVersion={previewVersion}
+      />
 
       <div className="pl-grid">
         {shown.map((entry) => (
           <Card
             key={entry.id || entry.name}
             entry={entry}
+            rendered={renderedCards}
             onApply={onApply}
             onDelete={onDelete}
             onRename={onRename}
-            onPreview={(next) => { setHandAdjust(null); setPreviewEntry(next) }}
+            onPreview={(next) => {
+              setHandAdjust(null)
+              setPreviewEntry(next)
+              setPreviewVersion((version) => version + 1)
+            }}
           />
         ))}
         {!shown.length && <div className="pl-empty">{items.length ? 'Nothing matches.' : EMPTY[tab]}</div>}
