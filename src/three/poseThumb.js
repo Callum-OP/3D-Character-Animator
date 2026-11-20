@@ -186,6 +186,17 @@ export function parsedBVHResolver(parsed) {
   return (name) => sourceNames.get(name) || name
 }
 
+export function posedBoneBounds(root, padding = 0.12) {
+  const bounds = new THREE.Box3()
+  if (!root) return bounds
+  root.updateWorldMatrix(true, true)
+  root.traverse((object) => {
+    if (object.isBone) bounds.expandByPoint(object.getWorldPosition(new THREE.Vector3()))
+  })
+  if (!bounds.isEmpty() && padding > 0) bounds.expandByScalar(padding)
+  return bounds
+}
+
 export function animationThumbFromClipJSON(json, bones) {
   if (!json) return { segs: [] }
   let clip

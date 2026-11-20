@@ -12,7 +12,10 @@ import {
   saveCurrentBodyPose, saveCurrentHandPose, saveClipToLibrary, backfillAnimationThumb, BASIC_HANDS,
 } from '../three/poseLibraryActions.js'
 import { analyseHands, analyticHandPose, handPoseToBoneQuats, handPosesFromBVH, rigsForSide, migrateHandPose } from '../three/handPose.js'
-import { applyClipFrame, basicHandThumb, parsedBVHResolver, representativeClipTime } from '../three/poseThumb.js'
+import {
+  applyClipFrame, basicHandThumb, parsedBVHResolver, posedBoneBounds, representativeClipTime,
+} from '../three/poseThumb.js'
+import { animationClipFromJSON, retargetPreviewBVH } from '../three/posePreviewRetarget.js'
 import HandPoseSection from './HandPoseSection.jsx'
 import { confirmDialog } from '../dialogs.js'
 
@@ -239,12 +242,13 @@ function PosePreview({ tab, entry, side, strength, handAdjust, previewVersion })
         camera.lookAt(target)
         camera.updateProjectionMatrix()
       } else {
-        const bounds = new THREE.Box3().setFromObject(root)
+        const bounds = posedBoneBounds(root)
+        if (bounds.isEmpty()) return
         const center = bounds.getCenter(new THREE.Vector3())
         const size = bounds.getSize(new THREE.Vector3())
         const rectNow = host.getBoundingClientRect()
         const aspect = rectNow.width && rectNow.height ? rectNow.width / rectNow.height : 1
-        const halfHeight = Math.max(size.y * 0.56, (size.x / 2) / aspect * 1.12)
+        const halfHeight = Math.max(size.y * 0.58, (size.x / 2) / aspect * 1.12)
         camera.left = -halfHeight * aspect
         camera.right = halfHeight * aspect
         camera.top = halfHeight
@@ -259,18 +263,19 @@ function PosePreview({ tab, entry, side, strength, handAdjust, previewVersion })
     previewRef.current = { root: null, rest: null, resetPose, framePreview, camera, scene }
     const render = () => {
       if (disposed) return
-      const animation = previewRef.current?.animation
+      const preview = previewRef.current
+      const animation = preview?.animation
       if (animation?.running && animation.clip) {
         const elapsed = (performance.now() - animation.startedAt) / 1000
         if (elapsed <= animation.clip.duration) {
-          previewRef.current.resetPose()
+          preview.resetPose()
           applyClipFrame(preview.root, animation.clip, elapsed, animation.resolveTarget)
-          previewRef.current.framePreview()
+          preview.framePreview()
         } else {
           animation.running = false
-          previewRef.current.resetPose()
+          preview.resetPose()
           applyClipFrame(preview.root, animation.clip, representativeClipTime(animation.clip), animation.resolveTarget)
-          previewRef.current.framePreview()
+          preview.framePreview()
         }
       }
       renderer.render(scene, camera)
@@ -391,19 +396,23 @@ function PosePreview({ tab, entry, side, strength, handAdjust, previewVersion })
           if (entry.source === 'preset') {
             const text = await loadPresetText(entry)
             if (cancelled) return
-            const { BVHLoader } = await import('three/examples/jsm/loaders/BVHLoader.js')
-            const parsed = new BVHLoader().parse(text)
-            clip = parsed.clip
-            entryResolver = parsedBVHResolver(parsed)
+            clip = await retargetPreviewBVH(text, preview.root, entry.name)
+            if (cancelled) return
           } else {
-            const json = entry.data?.clip
-            clip = THREE.AnimationClip.parse(json?.clip || json)
+            clip = animationClipFromJSON(entry.data?.clip)
           }
           if (clip) {
             const resolveTarget = (name) => findPreviewBone(preview.root, entryResolver?.(name) || name)
             const applied = applyClipFrame(preview.root, clip, 0, resolveTarget)
             if (!applied) throw new Error('No animation bones matched the example rig')
-            preview.animation = { clip, running: true, startedAt: performance.now(), resolveTarget }
+            preview.root.updateWorldMatrix(true, true)
+            preview.framePreview()
+            preview.animation = {
+              clip,
+              running: true,
+              startedAt: performance.now(),
+              resolveTarget,
+            }
           }
         }
       } catch (error) {

@@ -1,8 +1,9 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { analyseHands, analyticHandPose, handPoseToBoneQuats, handPosesFromBVH, migrateHandPose, rigsForSide } from './handPose.js'
-import { applyClipFrame, parsedBVHResolver, representativeClipTime } from './poseThumb.js'
+import { applyClipFrame, parsedBVHResolver, posedBoneBounds, representativeClipTime } from './poseThumb.js'
 import { loadPresetPoseText, loadPresetText } from './poseLibraryPresets.js'
+import { retargetPreviewBVH } from './posePreviewRetarget.js'
 
 const SIZE = 192
 let runtimePromise
@@ -138,10 +139,7 @@ async function applyEntry(runtime, entry) {
     let clip
     let resolver = null
     if (entry.source === 'preset') {
-      const { BVHLoader } = await import('three/examples/jsm/loaders/BVHLoader.js')
-      const parsed = new BVHLoader().parse(await loadPresetText(entry))
-      clip = parsed.clip
-      resolver = parsedBVHResolver(parsed)
+      clip = await retargetPreviewBVH(await loadPresetText(entry), root, entry.name)
     } else {
       const json = entry.data?.clip
       clip = THREE.AnimationClip.parse(json?.clip || json)
@@ -194,7 +192,7 @@ function frame(runtime, entry) {
     camera.up.copy(palmUp)
     camera.lookAt(center)
   } else {
-    const box = new THREE.Box3().setFromObject(root)
+    const box = posedBoneBounds(root, entry.kind === 'animation' ? 0.16 : 0.12)
     const center = box.getCenter(new THREE.Vector3())
     const size = box.getSize(new THREE.Vector3())
     const half = Math.max(size.y, size.x) * 0.56

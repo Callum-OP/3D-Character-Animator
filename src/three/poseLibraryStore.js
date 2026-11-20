@@ -17,7 +17,7 @@ const DB_NAME = 'animare-pose-library'
 const DB_VERSION = 2
 const STORE = 'entries'
 const THUMB_STORE = 'rendered-thumbs'
-const THUMB_CACHE_VERSION = 'base-rigged-v3'
+const THUMB_CACHE_VERSION = 'base-rigged-v5'
 export const LIBRARY_FILE_FORMAT = 'animare-pose-library-v1'
 
 const memory = new Map()
