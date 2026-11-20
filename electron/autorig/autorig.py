@@ -123,6 +123,10 @@ DEFAULTS = {
     'cap_lo': 1.7,
     'cap_hi': 2.7,
     'side_coherence': True,     # stop the voxel proxy leaking weights between left and right limbs
+    'layer_blend': True,        # stacked layers (skin / shirt / jacket) share weights so the inner one cannot poke through
+    'layer_cell': 0.012,        # layer thickness it bridges, fraction of the height
+    'layer_strength': 0.9,
+    'hand_isolate': True,       # no arm weight past the wrist (thumb / fingertip tearing)
     'run_self_check': True,
     'force_envelope': False,    # skip the heat solver (tests / emergency)
 }
@@ -668,7 +672,7 @@ def finger_redistribute(co, W, names, layouts, height, edges=None):
         J = [np.array(j[:]) for j in lay['joints']['Thumb']]
         ab = J[3] - J[2]
         t = ((P - J[2]) @ ab) / max(float(ab @ ab), 1e-12)
-        distance = np.linalg.norm(P - (J[2] + np.clip(t, 0.0, 1.0)[:, None] * ab), axis=1)
+        distance = np.linalg.norm(P - (J[2] + np.clip(t, 0.0, 2.0)[:, None] * ab), axis=1)  # the tip sticks out past the last joint
         length = lay['frame'][3]
         along = np.clip((t - 0.55) / 0.35, 0.0, 1.0)
         radial = np.clip((0.12 * length - distance) / (0.06 * length), 0.0, 1.0)
@@ -1021,6 +1025,120 @@ def smooth_weights(obj, Wobj, iterations, strength):
         has = N > 0
         GW[has] = GW[has] * (1 - strength) + avg[has] * strength
     return GW[group]
+
+
+def world_normals(obj):
+    """Area-weighted vertex normals (outward for a normal Blender mesh), in the same space as world_vertices."""
+    co = world_vertices(obj)
+    me = obj.data
+    me.calc_loop_triangles()
+    nt = len(me.loop_triangles)
+    tris = np.empty(nt * 3, dtype=np.int64)
+    me.loop_triangles.foreach_get('vertices', tris)
+    tris = tris.reshape(-1, 3)
+    fn = np.cross(co[tris[:, 1]] - co[tris[:, 0]], co[tris[:, 2]] - co[tris[:, 0]])
+    out = np.zeros_like(co)
+    for k in range(3):
+        np.add.at(out, tris[:, k], fn)
+    return out / np.maximum(np.linalg.norm(out, axis=1, keepdims=True), 1e-12)
+
+
+_BIN_DIRS = None
+
+
+def _bin_dirs():
+    global _BIN_DIRS
+    if _BIN_DIRS is None:
+        d = np.array([(x, y, z) for x in (-1, 0, 1) for y in (-1, 0, 1) for z in (-1, 0, 1) if (x, y, z) != (0, 0, 0)], dtype=np.float64)
+        _BIN_DIRS = d / np.linalg.norm(d, axis=1, keepdims=True)
+    return _BIN_DIRS
+
+
+def layer_blend(weights, positions, normals, cell, strength=1.0, slots=3, power=4.0):
+    """Layered clothing (skin, shirt, jacket) must move as one: where a layer lies a centimetre or two
+    under another, vertices at the same spot need the same weights, or the inner layer pokes through
+    when a joint bends. Weights are averaged between SAME-FACING surfaces that are stacked within about
+    one grid cell. Surfaces that face each other (armpit, inner thigh, between fingers) never mix:
+    the grid key holds a soft orientation bin as well as the cell.
+    weights / positions / normals: one array per mesh. -> list of blended weight arrays"""
+    P = np.concatenate(positions)
+    N = np.concatenate(normals)
+    W = np.concatenate(weights).astype(np.float32)
+    n = len(P)
+    N = N / np.maximum(np.linalg.norm(N, axis=1, keepdims=True), 1e-9)
+    D = _bin_dirs()
+    A = np.clip(N @ D.T, 0.0, None) ** power
+    top = np.argsort(-A, axis=1)[:, :slots]
+    a = np.take_along_axis(A, top, 1)
+    a = a / np.maximum(a.sum(axis=1, keepdims=True), 1e-9)
+    grid = P / max(cell, 1e-9)
+    ijk = np.floor(grid).astype(np.int64)
+    frac = grid - ijk
+    ijk -= ijk.min(axis=0)
+    dims = ijk.max(axis=0) + np.array([2, 2, 2])
+    nb = len(D)
+    entries = []
+    for s in range(slots):
+        b = top[:, s]
+        for dx in (0, 1):
+            for dy in (0, 1):
+                for dz in (0, 1):
+                    c = ijk + np.array([dx, dy, dz])
+                    key = ((c[:, 0] * dims[1] + c[:, 1]) * dims[2] + c[:, 2]) * nb + b
+                    f = ((frac[:, 0] if dx else 1 - frac[:, 0]) * (frac[:, 1] if dy else 1 - frac[:, 1]) *
+                         (frac[:, 2] if dz else 1 - frac[:, 2]) * a[:, s])
+                    entries.append((key, f.astype(np.float32)))
+    uniq, inv = np.unique(np.concatenate([e[0] for e in entries]), return_inverse=True)
+    inv = inv.reshape(len(entries), n)
+    S = np.zeros((len(uniq), W.shape[1]), dtype=np.float32)
+    C = np.zeros(len(uniq), dtype=np.float32)
+    for (_, f), iv in zip(entries, inv):
+        order = np.argsort(iv, kind='stable')
+        ivs = iv[order]
+        starts = np.concatenate([[0], np.flatnonzero(np.diff(ivs)) + 1])
+        ids = ivs[starts]
+        S[ids] += np.add.reduceat(W[order] * f[order, None], starts, axis=0)
+        C[ids] += np.add.reduceat(f[order], starts)
+    acc = np.zeros_like(W)
+    cnt = np.zeros(n, dtype=np.float32)
+    for (_, f), iv in zip(entries, inv):
+        acc += (S[iv] / np.maximum(C[iv], 1e-9)[:, None]) * f[:, None]
+        cnt += f
+    out = (1.0 - strength) * W + strength * (acc / np.maximum(cnt, 1e-9)[:, None])
+    out /= np.maximum(out.sum(axis=1, keepdims=True), 1e-9)
+    parts, start = [], 0
+    for w in weights:
+        parts.append(out[start:start + len(w)])
+        start += len(w)
+    return parts
+
+
+def hand_isolate(W, co, names, layouts, near=0.15, far=0.35, reach=0.75):
+    """The arm bones must not hold anything out in the hand. The voxel weights leave a few per cent of ForeArm on
+    the thumb tip and fingertips, and where neighbouring vertices carry different amounts the tip tears when
+    the thumb moves. Past the wrist the arm weight fades out and moves to the hand / finger bones the vertex
+    already has (or to the hand). Edits W in place. -> number of vertices changed"""
+    changed = 0
+    for side, lay in layouts.items():
+        a = np.array(lay['frame'][0][:], dtype=np.float64)
+        length = float(lay['frame'][3])
+        rel = co - np.array(lay['wrist'][:], dtype=np.float64)
+        along = rel @ a
+        lateral = np.linalg.norm(rel - np.outer(along, a), axis=1) / length
+        x = np.clip(((along / length) - near) / (far - near), 0.0, 1.0)
+        t = x * x * (3.0 - 2.0 * x) * (lateral < reach)
+        donors = [names.index(side + k) for k in ('ForeArm', 'Arm', 'Shoulder') if (side + k) in names]
+        hand_cols = [i for i, nm in enumerate(names) if nm.startswith(side + 'Hand')]
+        moved = W[:, donors].sum(axis=1) * t
+        if not (moved > 1e-7).any():
+            continue
+        W[:, donors] *= (1.0 - t)[:, None]
+        cur = W[:, hand_cols].sum(axis=1)
+        has = cur > 1e-6
+        W[np.ix_(has, hand_cols)] += (W[np.ix_(has, hand_cols)] / cur[has, None]) * moved[has, None]
+        W[~has, names.index(side + 'Hand')] += moved[~has]
+        changed += int((moved > 1e-4).sum())
+    return changed
 
 
 def mirror_names(names):
@@ -1517,6 +1635,12 @@ def main():
         staged = joint_soften(staged, arm, height, opt['shoulder_radius'], opt['shoulder_reach'], opt['shoulder_strength'], (crotch_z, cx), 'Arm')
     if opt['hip_soften']:
         staged = joint_soften(staged, arm, height, 0.004, 0.09, 0.9, (crotch_z, cx), 'UpLeg')
+    layer_meshes = 0
+    if opt['layer_blend'] and len(staged) > 1:
+        blended = layer_blend([x[1] for x in staged], [x[2] for x in staged], [world_normals(x[0]) for x in staged],
+                              opt['layer_cell'] * height, opt['layer_strength'])
+        staged = [(o, Wb, co) for (o, _, co), Wb in zip(staged, blended)]
+        layer_meshes = len(staged)
     # the blends above may have let a little weight cross the middle line again: the side rule has the last word
     if opt['side_coherence']:
         fixed = []
@@ -1540,6 +1664,7 @@ def main():
     report['spine_profile'] = bool(opt['spine_profile'])
     report['shoulder_soften'] = bool(opt['shoulder_soften'])
     report['hip_soften'] = bool(opt['hip_soften'])
+    report['layer_blend'] = {'applied': bool(layer_meshes), 'meshes': layer_meshes}
     report['hip_rebalanced_vertices'] = hip_rebalanced
     report['symmetry'] = {'coverage': round(sym_cov, 4), 'applied': bool(sym_used)}
 
@@ -1557,6 +1682,7 @@ def main():
             layouts = None
             report['warnings'].append('Fingers could not be added (%s); the hands are a single bone.' % e)
     wide = []
+    hand_fixed = 0
     for o, W, co in staged:
         if layouts:
             Wf = np.zeros((len(W), len(names)), dtype=np.float32)
@@ -1564,6 +1690,8 @@ def main():
             for j, bn in enumerate(base_names):
                 Wf[:, names.index(bn)] = W[:, j]
             finger_redistribute(co, Wf, names, layouts, height, rest_edges[o.name])
+            if opt['hand_isolate']:
+                hand_fixed += hand_isolate(Wf, co, names, layouts)
             W = Wf
         W, zero = limit_normalise(W, opt['max_influences'], opt['prune_below'])
         if zero:  # nothing survived pruning: fall back to the nearest bone
@@ -1581,9 +1709,12 @@ def main():
         W[:, names.index(base_names[bi])] = 1.0
         if layouts and base_names[bi].endswith('Hand'):
             finger_redistribute(co, W, names, layouts, height, rest_edges[o.name])  # a hand modelled as its own piece gets fingers too
+            if opt['hand_isolate']:
+                hand_fixed += hand_isolate(W, co, names, layouts)
             W, _ = limit_normalise(W, opt['max_influences'], opt['prune_below'])
         write_weights(o, arm, names, W)
         i['bone'] = base_names[bi]
+    report['hand_arm_weight_removed'] = hand_fixed
     report['rigid_bindings'] = [{'name': i['obj'].name, 'bone': i['bone'], 'reason': i['reason']} for i in rigid]
 
     # remove the proxy
