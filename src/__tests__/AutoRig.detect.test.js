@@ -25,7 +25,7 @@ const norm = (a) => {
   return a.map((c) => c / l)
 }
 
-function body({ pose }) {
+function body({ pose, hand = 'normal' }) {
   const pts = []
   const H = 1.75
   const armDir = pose === 'T' ? [1, 0, 0] : norm([1, -1.1, 0])
@@ -38,8 +38,9 @@ function body({ pose }) {
     const at = (t) => [sh[0] + dir[0] * t, sh[1] + dir[1] * t, sh[2] + dir[2] * t]
     j[side + '_shoulder'] = sh
     j[side + '_elbow'] = at(0.29)
-    j[side + '_wrist'] = at(0.55)
-    j[side + '_fingertip'] = at(0.74)
+    // a big-gloved hand (a wide flat palm, thin fingers) is 0.28 long = 16% of the height, not the usual ~11%
+    j[side + '_wrist'] = at(hand === 'big' ? 0.5 : 0.55)
+    j[side + '_fingertip'] = at(hand === 'big' ? 0.78 : 0.74)
     j[side + '_hip'] = [sx * 0.085, 0.92, 0]
     j[side + '_knee'] = [sx * 0.085, 0.5, 0.01]
     j[side + '_ankle'] = [sx * 0.085, 0.09, -0.02]
@@ -47,7 +48,10 @@ function body({ pose }) {
     j[side + '_toe_tip'] = [sx * 0.085, 0.025, 0.16]
     capsule(pts, sh, j[side + '_elbow'], 0.045)
     capsule(pts, j[side + '_elbow'], j[side + '_wrist'], 0.038)
-    capsule(pts, j[side + '_wrist'], j[side + '_fingertip'], 0.03)
+    if (hand === 'big') {
+      capsule(pts, j[side + '_wrist'], at(0.63), 0.085)
+      capsule(pts, at(0.63), j[side + '_fingertip'], 0.02)
+    } else capsule(pts, j[side + '_wrist'], j[side + '_fingertip'], 0.03)
     capsule(pts, [sx * 0.085, 0.95, 0], j[side + '_knee'], 0.075)
     capsule(pts, j[side + '_knee'], j[side + '_ankle'], 0.055)
     capsule(pts, [sx * 0.085, 0.04, -0.07], [sx * 0.085, 0.04, 0.16], 0.045)
@@ -82,6 +86,23 @@ describe('Auto Rigger mesh-based marker placement', () => {
       const det = detectLandmarks(body({ pose }).pos)
       for (const id of LANDMARK_IDS) expect(det.landmarks[id], id).toHaveLength(3)
       expect(validateLandmarks(det.landmarks)).toEqual([])
+    })
+  }
+  for (const pose of ['T']) {
+    it('measures a hand that is much bigger than usual instead of assuming 11.5% of the height', () => {
+      const { pos, joints, H } = body({ pose, hand: 'big' })
+      const det = detectLandmarks(pos)
+      for (const k of ['l', 'r']) {
+        expect(dist(det.landmarks[k + '_wrist'], joints[k + '_wrist']), k + ' wrist').toBeLessThan(0.05)
+        expect(dist(det.landmarks[k + '_wrist'], det.landmarks[k + '_fingertip']) / H).toBeGreaterThan(0.14)
+      }
+      expect(det.notes.join(' ')).toMatch(/hand measured at/)
+    })
+    it('keeps the usual hand length for a normal hand (no note, same wrist as before)', () => {
+      const { pos, H } = body({ pose })
+      const det = detectLandmarks(pos)
+      expect(dist(det.landmarks.l_wrist, det.landmarks.l_fingertip) / H).toBeCloseTo(0.115, 2)
+      expect(det.notes.join(' ')).not.toMatch(/hand measured at/)
     })
   }
   it('depth (Z) comes from the body: a body standing off-centre in Z gets markers at that depth', () => {

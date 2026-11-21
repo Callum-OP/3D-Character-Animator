@@ -472,12 +472,272 @@ FINGER_BUILD_ORDER = ('Middle', 'Index', 'Ring', 'Pinky', 'Thumb')
 # joint 1..4 of each finger in HAND coordinates: (u along the hand, s sideways [thumb negative], w up), all
 # divided by L = wrist -> middle fingertip distance. Joint 4 is the fingertip.
 FINGER_TEMPLATE = {
-    'Thumb': [(0.23, -0.12, -0.03), (0.42, -0.21, -0.05), (0.53, -0.33, -0.06), (0.60, -0.44, -0.07)],
+    # The thumb starts well behind the finger knuckles, at the edge of the palm; the segments follow the anatomical
+    # 44 / 31 / 25 % split of the thumb's length.
+    'Thumb': [(0.20, -0.14, -0.04), (0.35, -0.24, -0.055), (0.47, -0.32, -0.065), (0.57, -0.40, -0.07)],
     'Index': [(0.57, -0.12, -0.03), (0.72, -0.11, -0.02), (0.85, -0.11, -0.02), (0.97, -0.10, -0.02)],
     'Middle': [(0.57, -0.02, -0.02), (0.73, -0.02, -0.02), (0.87, -0.01, -0.01), (1.00, 0.00, 0.00)],
     'Ring': [(0.56, 0.07, -0.03), (0.70, 0.08, -0.03), (0.84, 0.09, -0.02), (0.95, 0.10, -0.01)],
     'Pinky': [(0.54, 0.17, -0.06), (0.66, 0.17, -0.05), (0.76, 0.17, -0.05), (0.85, 0.18, -0.05)],
 }
+
+
+FINGER_ROOT_AFTER_WEB = 0.01                  # the knuckle sits this far (hand lengths) beyond where the fingers part
+THUMB_FRACTIONS = (0.0, 0.44, 0.75, 1.0)  # CMC, MCP, IP, tip along the thumb (anatomical segment proportions)
+THUMB_BASE_ADVANCE = 0.20                # how far the thumb's first joint moves from the template base towards the tip
+THUMB_TIP_INSET = 0.03                   # the tip joint sits this far (hand lengths) inside the end of the thumb
+
+
+def fit_thumb(u, s, w, edge, prior):
+    """Measure the thumb on the mesh. u, s, w: vertices in hand coordinates (along the hand, sideways with the thumb
+    side NEGATIVE, up), all divided by the hand length; edge: the thumb-side edge of the finger area; prior: the
+    4 template joints (4x3) already stretched to this hand. The template says roughly where the thumb is, the mesh
+    says how far it really reaches: the base (carpometacarpal joint) stays where the template puts it, the tip goes
+    to the far end of the thumb's own vertices, and the two middle joints follow the thumb's curve between them.
+    A hand with a short, wide or very long thumb (big gloves, paws, cartoon hands) gets bones that end where its
+    thumb ends instead of at a fixed distance.
+    -> (4 joints as (u, s, w) rows or None when the mesh is not convincing, info dict)"""
+    info = {'used': False, 'points': 0}
+    prior = np.asarray(prior, dtype=np.float64)
+    base = prior[0].copy()
+    P = np.stack([u, s, w], axis=1)
+    # vertices on the thumb side of the palm; past the finger roots the index finger's own side is not thumb
+    cand = (u > 0.03) & (u < 0.85) & (np.abs(w) < 0.35) & (s < edge + 0.04)
+    cand &= ~((u > 0.55) & (s > edge - 0.10))  # a wide index finger / glove stays out
+    X = P[cand]
+    info['points'] = int(len(X))
+    if len(X) < 40:
+        return None, info
+    # the tip: the far end of the thumb = the vertices farthest from its base (mean of the farthest 2%, so one
+    # stray vertex cannot move it), pulled in a hair so the joint sits inside the fingertip
+    dist = np.linalg.norm(X - base, axis=1)
+    far = np.argsort(dist)[-max(5, int(0.02 * len(X))):]
+    tip = X[far].mean(axis=0)
+    chord = tip - base
+    length = float(np.linalg.norm(chord))
+    if not (0.30 <= length <= 0.90) or tip[1] > base[1] - 0.05:  # too short / long, or not out on the thumb side
+        return None, info
+    # The carpometacarpal joint sits inside the palm, where its weights drag the palm around, so it moves well forward
+    # to where the thumb leaves the palm's edge; the tip and middle joints sit inside the visible thumb, only a
+    # little short of its far end.
+    base = base + chord * THUMB_BASE_ADVANCE
+    chord = tip - base
+    length = float(np.linalg.norm(chord))
+    tip = base + chord * (1.0 - THUMB_TIP_INSET / length)
+    chord = tip - base
+    length = float(np.linalg.norm(chord))
+    axis = chord / length
+    rel = X - base
+    t = rel @ axis
+    perp = np.linalg.norm(rel - t[:, None] * axis, axis=1)
+    joints = [base]
+    for f in THUMB_FRACTIONS[1:3]:
+        # the middle joints sit in the middle of the thumb's own cross-section at that point along it, so they
+        # follow a curved thumb; a thin or empty slice keeps them on the straight line
+        near = (np.abs(t - f * length) < 0.05) & (perp < 0.14)
+        joints.append(X[near].mean(axis=0) if int(near.sum()) >= 8 else base + chord * f)
+    joints.append(tip)
+    info.update({'used': True, 'length': round(length, 3), 'tip_u': round(float(tip[0]), 3), 'tip_s': round(float(tip[1]), 3)})
+    return np.array(joints), info
+
+
+FINGER_NAMES = ('Index', 'Middle', 'Ring', 'Pinky')
+FINGER_SEGMENT_FRACTIONS = (0.38, 0.33, 0.29)  # knuckle -> tip: each phalanx a little shorter than the one before it
+FINGER_PIVOT_U = 0.77
+FINGER_TIP_INSET = 0.012                       # the tip joint sits this far (hand lengths) inside the end of the finger
+
+
+def fit_fingers_by_outline(u, s, w, prior):
+    """Measure the four fingers on the mesh (from the outline of the finger area, no mesh connections needed). u, s, w: vertices in hand coordinates (divided by the hand length);
+    prior: {finger: 4x3 template joints, already stretched to this hand}. Each finger is a line s = a + k * (u - pivot)
+    found by assigning the finger-area vertices to their nearest line and refitting (a few rounds), so a hand with
+    spread, diagonal fingers (big gloves, cartoon hands) gets bones that follow them, while a hand with straight
+    fingers keeps straight bones. The tip joint goes to the far end of the finger's own vertices, the knuckle follows
+    a little, and the joints in between shorten gradually (first phalanx longest).
+    -> ({finger: 4x3 joints}, info); a finger the mesh does not show clearly keeps its template joints"""
+    names = FINGER_NAMES
+    out = {f: np.array(prior[f], dtype=np.float64) for f in names}
+    info = {f: {'used': False} for f in names}
+    a = np.array([np.interp(FINGER_PIVOT_U, prior[f][:, 0], prior[f][:, 1]) for f in names])
+    k = np.array([(prior[f][3, 1] - prior[f][0, 1]) / max(prior[f][3, 0] - prior[f][0, 0], 1e-6) for f in names])
+    a0 = a.copy()
+    wref = float(np.mean([np.interp(FINGER_PIVOT_U, prior[f][:, 0], prior[f][:, 2]) for f in names]))
+    gap = np.diff(a)
+    if np.any(gap <= 0.02):
+        return out, info
+    sp = np.array([gap[0], min(gap[0], gap[1]), min(gap[1], gap[2]), gap[2]])
+    # the finger area: not the thumb (beyond the index finger) and not past the little finger
+    sel = (u > 0.62) & (u < 1.2) & (np.abs(w - wref) < 0.3) & (s > a[0] - 0.9 * sp[0]) & (s < a[3] + 0.9 * sp[3])
+    U, S, Wv = u[sel], s[sel], w[sel]
+    if len(U) < 100:
+        return out, info
+    # How do the fingers fan out? The outer edges of the finger area (the index finger's thumb-side edge and the little
+    # finger's outer edge) are easy to measure and robust: cut the area into thin slices across the hand and take the
+    # 3rd / 97th percentile of the sideways position in each. The slope of each edge along the hand (a robust
+    # median-of-slopes fit, so one slice where a short finger has ended cannot bend it) is how much that outer finger
+    # fans out; the two middle fingers fan out in proportion. Positions across the hand stay where the template (fitted
+    # to the palm width) puts them; only the direction of each finger changes.
+    us, los, his = [], [], []
+    for u_c in (0.64, 0.68, 0.72, 0.76, 0.80, 0.84):
+        x = S[np.abs(U - u_c) < 0.03]
+        if len(x) < 12:
+            continue
+        us.append(u_c)
+        los.append(float(np.percentile(x, 3)))
+        his.append(float(np.percentile(x, 97)))
+    if len(us) < 4:
+        return out, info
+
+    def median_slope(xs, ys):
+        sl = [(ys[j] - ys[i]) / (xs[j] - xs[i]) for i in range(len(xs)) for j in range(i + 1, len(xs)) if xs[j] - xs[i] >= 0.07]
+        return float(np.median(sl)) if sl else 0.0
+
+    def slope(v):  # below ~5 degrees it is noise on a straight finger
+        return float(np.clip(v, -0.5, 0.5)) if abs(v) > 0.087 else 0.0
+
+    k_index, k_pinky = slope(median_slope(us, los)), slope(median_slope(us, his))
+    t_mid = (a0 - a0[0]) / (a0[3] - a0[0])
+    k = k_index + t_mid * (k_pinky - k_index)
+    # With the directions fixed, centre each finger on its own vertices: assign the vertices to the nearest finger line,
+    # move each line to the middle of what it got (median, so a stray vertex cannot pull it), and repeat. The lines
+    # stay in order and close to where the template put them.
+    a = a0.copy()
+    for _ in range(3):
+        lines = a[None, :] + k[None, :] * (U[:, None] - FINGER_PIVOT_U)
+        D = np.abs(S[:, None] - lines)
+        near = D.argmin(axis=1)
+        got = D[np.arange(len(U)), near] < 0.9 * sp[near]
+        moved = a.copy()
+        for i in range(4):
+            m = got & (near == i)
+            if int(m.sum()) >= 25:
+                moved[i] = np.clip(np.median(S[m] - k[i] * (U[m] - FINGER_PIVOT_U)), a0[i] - 0.12, a0[i] + 0.12)
+        if np.any(np.diff(moved) <= 0.03):
+            break
+        a = moved
+    lines = a[None, :] + k[None, :] * (U[:, None] - FINGER_PIVOT_U)
+    D = np.abs(S[:, None] - lines)
+    near = D.argmin(axis=1)
+    member = np.where(D[np.arange(len(U)), near] < 0.62 * sp[near], near, -1)
+    cum = np.concatenate([[0.0], np.cumsum(FINGER_SEGMENT_FRACTIONS)])
+    for i, f in enumerate(names):
+        m = member == i
+        if int(m.sum()) < 25:
+            continue
+        tip_u = float(np.percentile(U[m], 99)) - FINGER_TIP_INSET
+        pr = prior[f]
+        if not (0.80 <= tip_u <= 1.2) or tip_u - pr[0, 0] < 0.2:
+            continue
+        # the knuckle follows the measured tip a little (a finger that reaches further out starts a little further out)
+        root_u = float(np.clip(pr[0, 0] + 0.3 * np.clip(tip_u - pr[3, 0], -0.1, 0.2), 0.5, 0.70))
+        us = root_u + cum * (tip_u - root_u)
+        wmid = float((np.percentile(Wv[m], 5) + np.percentile(Wv[m], 95)) / 2)
+        woff = float(np.clip(wmid - np.interp(FINGER_PIVOT_U, pr[:, 0], pr[:, 2]), -0.05, 0.05))
+        out[f] = np.stack([us, a[i] + k[i] * (us - FINGER_PIVOT_U), np.interp(us, pr[:, 0], pr[:, 2]) + woff], axis=1)
+        info[f] = {'used': True, 'splay_deg': round(math.degrees(math.atan(float(k[i]))), 1), 'tip_u': round(tip_u, 3), 'points': int(m.sum())}
+    return out, info
+
+
+def _components(n, a, b):
+    """Connected-component label per node for n nodes and edges (a[i], b[i]). Plain python: Blender ships no scipy."""
+    parent = list(range(n))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for i, j in zip(a.tolist(), b.tolist()):
+        ri, rj = find(i), find(j)
+        if ri != rj:
+            parent[ri] = rj
+    return np.array([find(i) for i in range(n)])
+
+
+def fit_fingers_by_shape(u, s, w, prior, edges):
+    """Measure the four fingers from the mesh's own shape: past the webbing the fingers are separate pieces of surface,
+    so cut the hand at increasing distance along it until exactly four sizeable pieces appear (that distance is where
+    the fingers leave the palm, the knuckles), then take each piece's own axis (direction, far end). This follows any
+    hand, however spread, short or cartoony, instead of assuming a layout. Duplicate vertices (UV seams) are welded
+    first so a finger split down the middle by a seam is still one piece.
+    u, s, w: vertices in hand coordinates; prior: {finger: 4x3 template joints stretched to this hand}; edges: Nx2
+    vertex index pairs. -> ({finger: 4x3 joints}, info) or None when the shape is not four clear fingers"""
+    names = FINGER_NAMES
+    a0 = np.array([np.interp(FINGER_PIVOT_U, prior[f][:, 0], prior[f][:, 1]) for f in names])
+    gap = np.diff(a0)
+    if np.any(gap <= 0.02) or edges is None or len(edges) == 0:
+        return None
+    sp = np.array([gap[0], min(gap[0], gap[1]), min(gap[1], gap[2]), gap[2]])
+    wref = float(np.mean([np.interp(FINGER_PIVOT_U, prior[f][:, 0], prior[f][:, 2]) for f in names]))
+    area = (np.abs(w - wref) < 0.3) & (u < 1.2) & (s > a0[0] - 1.1 * sp[0]) & (s < a0[3] + 1.1 * sp[3])  # not the thumb
+    key = np.round(np.stack([u, s, w], axis=1) / 0.002).astype(np.int64)
+    _, wid = np.unique(key, axis=0, return_inverse=True)
+    wid = wid.ravel()
+    nw = int(wid.max()) + 1
+    found = None
+    for web in np.arange(0.44, 0.801, 0.02):
+        sel = area & (u > web)
+        ee = edges[sel[edges[:, 0]] & sel[edges[:, 1]]]
+        if len(ee) == 0:
+            continue
+        lab = _components(nw, wid[ee[:, 0]], wid[ee[:, 1]])
+        verts = np.flatnonzero(sel)
+        comp = lab[wid[verts]]
+        pieces = []
+        for c in np.unique(comp):
+            members = verts[comp == c]
+            if len(np.unique(wid[members])) >= 12:
+                pieces.append(members)
+        if len(pieces) > 4:
+            # small loose bits (a nail, a ring, a stray island) are not fingers: keep the 4 big pieces if the rest are tiny
+            pieces.sort(key=len, reverse=True)
+            if len(pieces[4]) >= 0.3 * len(pieces[3]):
+                return None  # more fingers-sized pieces than fingers: not a hand this method understands
+            pieces = pieces[:4]
+        if len(pieces) == 4:
+            found = (float(web), pieces)
+            break
+    if found is None:
+        return None
+    web, pieces = found
+    pieces.sort(key=lambda m: float(np.mean(s[m])))
+    out = {f: np.array(prior[f], dtype=np.float64) for f in names}
+    info = {f: {'used': False} for f in names}
+    cum = np.concatenate([[0.0], np.cumsum(FINGER_SEGMENT_FRACTIONS)])
+    root_u = web + FINGER_ROOT_AFTER_WEB
+    for f, m in zip(names, pieces):
+        X = np.stack([u[m], s[m]], axis=1)
+        c = X.mean(axis=0)
+        evals, evecs = np.linalg.eigh(np.cov((X - c).T))
+        d = evecs[:, -1] if evecs[0, -1] >= 0 else -evecs[:, -1]
+        extent = float(X[:, 0].max() - X[:, 0].min())
+        if evals[-1] < 1.8 * evals[-2] or extent < 0.15 or d[0] < 0.5:  # no clear direction: straight along the hand
+            d = np.array([1.0, 0.0])
+        k = float(np.clip(d[1] / d[0], -0.84, 0.84))
+        k = k if abs(k) > 0.087 else 0.0  # below ~5 degrees it is noise on a straight finger
+        d = np.array([1.0, k]) / math.hypot(1.0, k)
+        t = (X - c) @ d
+        t_tip = float(np.percentile(t, 99)) - FINGER_TIP_INSET
+        t_root = (root_u - c[0]) / d[0]
+        tip_u = c[0] + d[0] * t_tip
+        if not (0.70 <= tip_u <= 1.25) or t_tip - t_root < 0.2:
+            return None
+        ts = t_root + cum * (t_tip - t_root)
+        pr = prior[f]
+        wmid = float((np.percentile(w[m], 5) + np.percentile(w[m], 95)) / 2)
+        woff = float(np.clip(wmid - np.interp(FINGER_PIVOT_U, pr[:, 0], pr[:, 2]), -0.05, 0.05))
+        uu = c[0] + d[0] * ts
+        out[f] = np.stack([uu, c[1] + d[1] * ts, np.interp(uu, pr[:, 0], pr[:, 2]) + woff], axis=1)
+        info[f] = {'used': True, 'method': 'shape', 'splay_deg': round(math.degrees(math.atan(k)), 1), 'tip_u': round(float(tip_u), 3), 'root_u': round(root_u, 3), 'points': int(len(m))}
+    return out, info
+
+
+def fit_fingers(u, s, w, prior, edges=None):
+    """The fingers measured on the mesh: from its shape when the mesh connections are known and show four clear
+    fingers, otherwise from the outline of the finger area. Fingers neither shows keep their template joints."""
+    got = fit_fingers_by_shape(u, s, w, prior, edges)
+    return got if got is not None else fit_fingers_by_outline(u, s, w, prior)
 
 
 def hand_frame(wrist, tip, side):
@@ -494,13 +754,15 @@ def hand_frame(wrist, tip, side):
     return a, ex, a.cross(ex), L
 
 
-def finger_layout(wrist, tip, side, pts):
+def finger_layout(wrist, tip, side, pts, edges=None):
     """Finger joint positions for one hand: the template, stretched/shifted to the real palm width and
     finger-zone height measured from the mesh vertices near the hand. -> {finger: [4 Vectors]}"""
     a, ex, up, L = hand_frame(wrist, tip, side)
     sg = 1.0 if side == 'Left' else -1.0
     scale, shift, wshift = 1.0, 0.0, 0.0
     thumb_scale, thumb_shift = 1.0, 0.0
+    thumb_fit, thumb_info = None, {'used': False, 'points': 0}
+    finger_fit, finger_info = None, {}
     if len(pts):
         rel = np.asarray(pts) - np.array(wrist[:])
         u = rel @ np.array(a[:]) / L
@@ -515,16 +777,34 @@ def finger_layout(wrist, tip, side, pts):
             thumb_scale = float(np.clip((p95 - p5) / 0.43, 0.6, 1.6))
             thumb_shift = float((p5 + p95) / 2 - 0.025 * thumb_scale)
             wshift = float(np.clip(np.median(wm[zone]) + 0.02, -0.08, 0.08))
+        edge = float(np.percentile(sm[zone], 5)) if zone.sum() >= 60 else -0.17
+        prior = np.array([(u_, s_ * thumb_scale + thumb_shift, w_ + wshift) for (u_, s_, w_) in FINGER_TEMPLATE['Thumb']])
+        thumb_fit, thumb_info = fit_thumb(u, sm, wm, edge, prior)
+        fprior = {f: np.array([(u_, s_ * scale + shift, w_ + wshift) for (u_, s_, w_) in FINGER_TEMPLATE[f]]) for f in FINGER_NAMES}
+        finger_fit, finger_info = fit_fingers(u, sm, wm, fprior, edges)
     out = {}
     for f, joints in FINGER_TEMPLATE.items():
         fs, offset = (thumb_scale, thumb_shift) if f == 'Thumb' else (scale, shift)
         out[f] = [wrist + (a * u_ + ex * ((s_ * fs + offset) * sg) + up * (w_ + wshift)) * L for (u_, s_, w_) in joints]
-    return out, (a, ex, up, L)
+    for f, j in (finger_fit or {}).items():  # the fingers measured on the mesh replace the template fingers
+        if finger_info.get(f, {}).get('used'):
+            out[f] = [wrist + (a * p[0] + ex * (p[1] * sg) + up * p[2]) * L for p in j]
+    if thumb_fit is not None:  # the thumb measured on the mesh replaces the template thumb
+        out['Thumb'] = [wrist + (a * j[0] + ex * (j[1] * sg) + up * j[2]) * L for j in thumb_fit]
+    thumb_info = dict(thumb_info, fingers=finger_info)
+    return out, (a, ex, up, L), thumb_info
 
 
 def add_fingers(arm, L, body_objs, report):
     """Adds finger bones (1-3 deform, 4 is the tip) to both hands. -> layout per side"""
     cos = np.concatenate([world_vertices(o) for o in body_objs])
+    all_edges, offset = [], 0
+    for o in body_objs:  # the mesh connections, numbered like cos
+        e = np.empty(len(o.data.edges) * 2, dtype=np.int64)
+        o.data.edges.foreach_get('vertices', e)
+        all_edges.append(e.reshape(-1, 2) + offset)
+        offset += len(o.data.vertices)
+    all_edges = np.concatenate(all_edges) if all_edges else np.empty((0, 2), dtype=np.int64)
     layouts = {}
     bpy.context.view_layer.objects.active = arm
     bpy.ops.object.mode_set(mode='EDIT')
@@ -533,9 +813,13 @@ def add_fingers(arm, L, body_objs, report):
         wrist, tip = L[k + '_wrist'].copy(), L[k + '_fingertip'].copy()
         a0 = tip - wrist
         d = np.linalg.norm(cos - np.array(wrist[:]), axis=1)
-        near = cos[(d < 1.4 * a0.length) & (((cos - np.array(wrist[:])) @ np.array(a0.normalized()[:])) > -0.1 * a0.length)]
-        layout, (a, ex, up, hl) = finger_layout(wrist, tip, side, near)
-        layouts[side] = {'joints': layout, 'frame': (a, ex, up, hl), 'wrist': np.array(wrist[:])}
+        near_mask = (d < 1.4 * a0.length) & (((cos - np.array(wrist[:])) @ np.array(a0.normalized()[:])) > -0.1 * a0.length)
+        near = cos[near_mask]
+        local = np.full(len(cos), -1, dtype=np.int64)
+        local[np.flatnonzero(near_mask)] = np.arange(int(near_mask.sum()))
+        near_edges = local[all_edges[near_mask[all_edges[:, 0]] & near_mask[all_edges[:, 1]]]]
+        layout, (a, ex, up, hl), thumb_info = finger_layout(wrist, tip, side, near, near_edges)
+        layouts[side] = {'joints': layout, 'frame': (a, ex, up, hl), 'wrist': np.array(wrist[:]), 'thumb_fit': thumb_info}
         hand = eb['%sHand' % side]
         for f in FINGER_BUILD_ORDER:
             J = layout[f]
@@ -570,7 +854,7 @@ def add_fingers(arm, L, body_objs, report):
                     b.use_connect = True
                 parent = b
     bpy.ops.object.mode_set(mode='OBJECT')
-    report['fingers'] = {'bones_added': 2 * 5 * 4, 'scale': {s: round(float(np.linalg.norm(np.array(layouts[s]['joints']['Pinky'][0][:]) - np.array(layouts[s]['joints']['Index'][0][:]))), 4) for s in layouts}}
+    report['fingers'] = {'thumb_fit': {sd: layouts[sd]['thumb_fit'] for sd in layouts}, 'bones_added': 2 * 5 * 4, 'scale': {s: round(float(np.linalg.norm(np.array(layouts[s]['joints']['Pinky'][0][:]) - np.array(layouts[s]['joints']['Index'][0][:]))), 4) for s in layouts}}
     return layouts
 
 

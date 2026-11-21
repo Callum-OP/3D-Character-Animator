@@ -67,6 +67,60 @@ const median = (a) => {
   return s.length ? s[Math.floor(s.length / 2)] : 0
 }
 
+// How long is this hand? The wrist is the narrowest part of the arm just behind the palm, so walk back from the
+// fingertip, measure the arm's cross-section, find the palm (its widest part) and then the narrowest point after
+// it. A fixed fraction of the height is right for a typical body but wrong for big gloves / paws / tiny hands.
+// -> hand length in model units, or null when the mesh shows no clear palm-and-wrist (the caller then uses the
+// proportion guess).
+function measureHandLength(pos, sl, tipP, dir, H) {
+  const up = Math.abs(dir[1]) < 0.9 ? [0, 1, 0] : [0, 0, 1]
+  const e1 = norm3(cross3(dir, up))
+  const e2 = cross3(dir, e1)
+  const step = 0.005 * H
+  const nb = Math.ceil((0.32 * H) / step)
+  const lo1 = new Array(nb).fill(Infinity)
+  const hi1 = new Array(nb).fill(-Infinity)
+  const lo2 = new Array(nb).fill(Infinity)
+  const hi2 = new Array(nb).fill(-Infinity)
+  const cnt = new Array(nb).fill(0)
+  for (const i of sl.range(tipP[1] - 0.4 * H, tipP[1] + 0.4 * H)) {
+    const rel = [pos[i * 3] - tipP[0], pos[i * 3 + 1] - tipP[1], pos[i * 3 + 2] - tipP[2]]
+    const along = rel[0] * dir[0] + rel[1] * dir[1] + rel[2] * dir[2]
+    const back = -along // distance back from the tip, towards the shoulder
+    if (back < 0 || back >= nb * step) continue
+    const c1 = rel[0] * e1[0] + rel[1] * e1[1] + rel[2] * e1[2]
+    const c2 = rel[0] * e2[0] + rel[1] * e2[1] + rel[2] * e2[2]
+    if (Math.hypot(c1, c2) > 0.14 * H) continue // the arm only: not the torso, a cape or the other limbs
+    const b = Math.floor(back / step)
+    cnt[b]++
+    if (c1 < lo1[b]) lo1[b] = c1
+    if (c1 > hi1[b]) hi1[b] = c1
+    if (c2 < lo2[b]) lo2[b] = c2
+    if (c2 > hi2[b]) hi2[b] = c2
+  }
+  const raw = cnt.map((n, b) => (n >= 6 ? Math.max(hi1[b] - lo1[b], hi2[b] - lo2[b]) : NaN))
+  const w = raw.map((_, b) => {
+    const v = [raw[b - 1], raw[b], raw[b + 1]].filter((x) => Number.isFinite(x))
+    return v.length >= 2 ? v.reduce((a, c) => a + c, 0) / v.length : NaN
+  })
+  // the palm: the widest part of the hand
+  let palm = -1
+  for (let b = Math.floor((0.015 * H) / step); b < Math.min(nb, Math.ceil((0.25 * H) / step)); b++) {
+    if (Number.isFinite(w[b]) && (palm < 0 || w[b] > w[palm])) palm = b
+  }
+  if (palm < 0) return null
+  // the wrist: the narrowest point behind the palm, before the arm widens again (cuff, forearm)
+  let wrist = -1
+  for (let b = palm + 1; b < nb; b++) {
+    if (!Number.isFinite(w[b])) continue
+    if (wrist >= 0 && w[b] > w[wrist] * 1.35) break
+    if (wrist < 0 || w[b] < w[wrist]) wrist = b
+  }
+  if (wrist < 0 || wrist - palm < 2 || !(w[wrist] < 0.8 * w[palm])) return null
+  const len = (wrist + 0.5) * step
+  return len >= 0.05 * H && len <= 0.3 * H ? len : null
+}
+
 export function detectLandmarks(pos) {
   const n = pos.length / 3
   const notes = []
@@ -215,9 +269,16 @@ export function detectLandmarks(pos) {
     })()
     const shoulderX = cx + sgn * torsoHalf * 1.12
     const shoulder = tpose ? [shoulderX, tipP[1], tipP[2]] : [shoulderX, neckBase - 0.032 * H, neckZ]
-    // wrist: a hand is ~11.5% of the height; elbow ~46% of the way from shoulder to wrist
+    // wrist: a typical hand is ~11.5% of the height, but a big glove / paw or a tiny hand is measured on the mesh;
+    // elbow ~46% of the way from shoulder to wrist
     const dir = norm3(sub3(tipP, shoulder))
-    const wrist = add3(tipP, scale3(dir, -0.115 * H))
+    const measured = measureHandLength(pos, sl, tipP, dir, H)
+    let handLen = 0.115 * H
+    if (measured != null && Math.abs(measured - handLen) > 0.02 * H) {
+      handLen = measured
+      notes.push(`${sgn > 0 ? 'left' : 'right'} hand measured at ${Math.round((100 * measured) / H)}% of the height (not the usual 11.5%)`)
+    }
+    const wrist = add3(tipP, scale3(dir, -handLen))
     const elbow = lerp3(shoulder, wrist, 0.46)
     // keep the arm's own height/depth at each joint in a T-pose (the arm is rarely perfectly level)
     if (tpose) {
@@ -258,3 +319,4 @@ const norm3 = (a) => {
   const l = Math.hypot(a[0], a[1], a[2]) || 1
   return [a[0] / l, a[1] / l, a[2] / l]
 }
+const cross3 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
