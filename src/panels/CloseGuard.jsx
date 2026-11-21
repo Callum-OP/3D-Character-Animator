@@ -51,6 +51,7 @@ export default function CloseGuard() {
           }
           askAboutUnsavedWork('close the app').then((ok) => {
             if (ok) bridge.closeNow()
+            else bridge.closeCancelled?.()
           })
         }
         // A save that is still being written finishes first; only then is "unsaved changes" a real question.

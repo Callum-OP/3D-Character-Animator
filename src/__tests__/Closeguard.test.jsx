@@ -24,6 +24,7 @@ beforeEach(() => {
     }),
     closeAck: vi.fn(),
     closeNow: vi.fn(),
+    closeCancelled: vi.fn(),
   }
   window.animare = bridge
   useStore.setState({ currentProject: { name: 'Chase scene', handle: null } })
@@ -74,13 +75,14 @@ describe('closing the desktop app', () => {
     expect(screen.getByRole('alertdialog').textContent).toContain('Save changes to “Chase scene”?')
   })
 
-  it('Cancel keeps the app open', () => {
+  it('Cancel keeps the app open and tells the main process, so a pending Quit is dropped', async () => {
     render(<CloseGuard />)
     makeDirty()
     ask()
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(bridge.closeNow).not.toHaveBeenCalled()
     expect(screen.queryByRole('alertdialog')).toBeNull()
+    await waitFor(() => expect(bridge.closeCancelled).toHaveBeenCalledTimes(1))
   })
 
   it("Don't save closes without saving", async () => {

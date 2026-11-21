@@ -203,6 +203,38 @@ body {
   letter-spacing: 0.04em;
 }
 
+/* Taller menus (clip list, export formats) scroll instead of running off the window. */
+.titlebar-dropdown-tall {
+  max-width: 340px;
+  max-height: calc(100vh - 60px);
+  overflow-y: auto;
+}
+
+/* Tools menu: each row is a title with a one-line description under it. */
+.titlebar-dropdown-wide {
+  min-width: 290px;
+}
+
+.titlebar-dropdown button.titlebar-rich {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  white-space: normal;
+}
+
+.titlebar-rich-title {
+  font-size: 12.5px;
+}
+
+.titlebar-rich-desc {
+  font-size: 11px;
+  color: var(--text-dim, #9a9ca6);
+}
+
+.titlebar-dropdown button.titlebar-rich:hover:not(:disabled) .titlebar-rich-desc {
+  color: rgba(255, 255, 255, 0.85);
+}
+
 .titlebar-msg {
   position: absolute;
   top: 100%;

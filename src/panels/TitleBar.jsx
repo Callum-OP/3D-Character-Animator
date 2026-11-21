@@ -1,5 +1,8 @@
 import { PRIVACY_POLICY_URL } from '../links.js'
 import { autoRigAvailable } from '../three/autoRig.js'
+import { openAccordion } from './Accordion.jsx'
+import { MODEL_FORMATS, saveImagePNG, saveFramesZip, saveBVH, saveSceneModel } from '../three/exportActions.js'
+import { switchToClip, switchToEditAnimation } from '../three/clipSwitch.js'
 import SaveErrorDialog from './SaveErrorDialog.jsx'
 import { confirmDiscardUnsaved, markProjectSaveFailed } from '../three/projectDirty.js'
 import { useEffect, useRef, useState } from 'react'
@@ -10,8 +13,6 @@ import {
   clearProjectScene,
   importModelAuto,
   importBVHAuto,
-  exportPNG,
-  exportSceneModel,
   setObjectVisibleById,
   playAllCharacters,
   stopAllCharacters,
@@ -31,7 +32,7 @@ import {
 import { pickFileWithInput } from '../three/fsAccess.js'
 import { importProjectFromFile } from '../three/importProject.js'
 import { modelFileFromInput, MODEL_ACCEPT } from '../three/modelBundle.js'
-import { exportAnimationBVH, play, pause, stop, selectClip, selectEdit } from '../three/animation.js'
+import { play, pause, stop, selectClip, selectEdit, setLoop as engineSetLoop, setSpeed as engineSetSpeed } from '../three/animation.js'
 import { runExportShot, canRecordVideo } from '../three/exportShot.js'
 import {
   getPose,
@@ -49,6 +50,18 @@ import {
   toggleCurrentVisibility,
 } from '../three/editClipboard.js'
 
+const SPEEDS = [0.25, 0.5, 1, 1.5, 2]
+
+// A dropdown row with a title and a one-line description under it, so a menu explains itself.
+function RichItem({ title, desc, onClick, disabled, tip }) {
+  return (
+    <button role="menuitem" className="titlebar-rich" onClick={onClick} disabled={disabled} title={tip}>
+      <span className="titlebar-rich-title">{title}</span>
+      {desc && <span className="titlebar-rich-desc">{desc}</span>}
+    </button>
+  )
+}
+
 // A VS Code-style menu row that sits above the viewport/sidebar and shares
 // the same window-drag strip as the native minimize/maximize/close buttons
 // (drawn by Electron's titleBarOverlay — see electron/main.cjs). The row
@@ -62,8 +75,9 @@ import {
 // sync — there's only one place that actually owns the file I/O. Likewise
 // video export shares exportShot.js with the Export panel.
 export default function TitleBar({ onOpenSettings, onOpenPoseFinder }) {
-  const [openMenu, setOpenMenu] = useState(null) // 'file' | 'edit' | 'animation' | 'help' | null
+  const [openMenu, setOpenMenu] = useState(null) // 'file' | 'edit' | 'animation' | 'tools' | 'help' | null
   const [fileView, setFileView] = useState('root') // 'root' | 'import' | 'export'
+  const [animView, setAnimView] = useState('root') // 'root' | 'clips' | 'speed'
   const [recents, setRecents] = useState([])
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState(null)
@@ -76,6 +90,11 @@ export default function TitleBar({ onOpenSettings, onOpenPoseFinder }) {
   const current = useStore((s) => s.currentProject)
   const setCurrent = useStore((s) => s.setCurrentProject)
   const setLastProjectSave = useStore((s) => s.setLastProjectSave)
+  const importedClipNames = useStore((s) => s.importedClipNames)
+  const bakedClipNames = useStore((s) => s.modelInfo?.clipNames)
+  const videoFormat = useStore((s) => s.exportVideoFormat)
+  const canQuit = typeof window !== 'undefined' && !!window.animare?.quit
+  const poseFinderAvailable = typeof window !== 'undefined' && !!window.animare?.pose
   const toggleHelp = useStore((s) => s.toggleHelp)
   const setAutoRiggerOpen = useStore((s) => s.setAutoRiggerOpen)
   const openPoseLibrary = useStore((s) => s.openPoseLibrary)
@@ -144,6 +163,7 @@ export default function TitleBar({ onOpenSettings, onOpenPoseFinder }) {
 
   useEffect(() => {
     if (openMenu !== 'file') setFileView('root')
+    if (openMenu !== 'animation') setAnimView('root')
   }, [openMenu])
 
   useEffect(() => {
@@ -367,38 +387,75 @@ export default function TitleBar({ onOpenSettings, onOpenPoseFinder }) {
 
   const onExportPNG = () =>
     withMenuClosed(async () => {
-      const size = exportPNG(exportScale, name)
-      setMsg(size ? `Saved a ${size.width}×${size.height} PNG.` : 'Could not save the image right now.')
+      setMsg(saveImagePNG(name).message)
     })
 
   const onExportModel = (format) =>
     withMenuClosed(async () => {
-      const result = await exportSceneModel(format, name, exportPoseMode)
+      const result = await saveSceneModel(format, name)
       setMsg(result.message)
     })
 
   const onExportBVH = () =>
     withMenuClosed(async () => {
-      const s = useStore.getState()
-      const text = exportAnimationBVH(s.animData, s.animFps, s.animDuration, s.activeClipName, s.playbackSource)
-      if (!text) {
-        setMsg('Nothing to export — make an in-app animation first.')
-        return
-      }
-      const blob = new Blob([text], { type: 'text/plain' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `${name}.bvh`
-      a.click()
-      URL.revokeObjectURL(url)
-      setMsg('Animation exported as .bvh.')
+      setMsg(saveBVH(name).message)
     })
 
-  const onExportVideo = () =>
+  const onExportFrames = () =>
     withMenuClosed(async () => {
-      runExportShot({ record: true, name, onStatus: setMsg })
+      const result = await saveFramesZip(name, (frame, total) => {
+        setMsg(frame ? `Saving animation frames… ${frame} of ${total}` : `Preparing ${total} animation frames…`)
+      })
+      setMsg(result.message)
     })
+
+  // Video follows the Export panel's saved settings (size, frame rate, quality, format, camera).
+  const onExportVideo = (record) =>
+    withMenuClosed(async () => {
+      runExportShot({ record, name, onStatus: setMsg })
+    })
+
+  function onMoreExportOptions() {
+    setOpenMenu(null)
+    openAccordion('export')
+  }
+
+  // ---- Animation: loop, speed, clip list ----
+
+  function onToggleLoop() {
+    const next = !loop
+    useStore.getState().setLoop(next)
+    engineSetLoop(next)
+  }
+
+  function onSetSpeed(value) {
+    useStore.getState().setSpeed(value)
+    engineSetSpeed(value)
+    setAnimView('root')
+  }
+
+  function onPickClip(clipName) {
+    setOpenMenu(null)
+    if (clipName == null) {
+      switchToEditAnimation({ loop, speed })
+      return
+    }
+    const warning = switchToClip(clipName, { loop, speed })
+    if (warning) setMsg(warning)
+  }
+
+  function onManageClips() {
+    setOpenMenu(null)
+    openAccordion('animate')
+    useStore.getState().setManageClipsRequested(true)
+  }
+
+  // File > Quit does what the window's X does: the main process asks the page first, so unsaved
+  // work gets the same "Save changes?" box.
+  function onQuit() {
+    setOpenMenu(null)
+    window.animare?.quit?.()
+  }
 
   // ---- Edit: shared undo/redo history and mode-aware copy/paste. ----
 
@@ -547,6 +604,12 @@ export default function TitleBar({ onOpenSettings, onOpenPoseFinder }) {
               )}
               <div className="titlebar-dropdown-sep" />
               <button role="menuitem" onClick={() => { setOpenMenu(null); onOpenSettings?.() }}>Settings</button>
+              {canQuit && (
+                <>
+                  <div className="titlebar-dropdown-sep" />
+                  <button role="menuitem" onClick={onQuit} title="Close the app (asks to save first if there are unsaved changes)">Quit</button>
+                </>
+              )}
             </div>
           )}
           {openMenu === 'file' && fileView === 'import' && (
@@ -565,18 +628,27 @@ export default function TitleBar({ onOpenSettings, onOpenPoseFinder }) {
             </div>
           )}
           {openMenu === 'file' && fileView === 'export' && (
-            <div className="titlebar-dropdown" role="menu">
+            <div className="titlebar-dropdown titlebar-dropdown-tall" role="menu">
               <button role="menuitem" onClick={() => setFileView('root')}>◂ Back</button>
               <div className="titlebar-dropdown-sep" />
-              <button role="menuitem" onClick={onExportPNG}>Image (.png)</button>
-              <button role="menuitem" onClick={() => onExportModel('glb')}>Scene model (.glb)</button>
-              <button role="menuitem" onClick={() => onExportModel('gltf')}>Scene model (.gltf)</button>
-              <button role="menuitem" onClick={onExportBVH}>Animation (.bvh)</button>
-              <button role="menuitem" onClick={onExportVideo} disabled={!canRecord} title={canRecord ? undefined : 'Not supported in this browser'}>
-                Video (.webm)
+              <div className="titlebar-dropdown-label">Video</div>
+              <button role="menuitem" onClick={() => onExportVideo(true)} disabled={!canRecord} title={canRecord ? 'Records the whole animation using the Export panel’s size, frame rate and quality' : 'Not supported in this browser'}>
+                Record video ({videoFormat === 'mp4' ? '.mp4' : '.webm'})
               </button>
+              <button role="menuitem" onClick={() => onExportVideo(false)} title="Plays the animation exactly as the video would look — nothing is saved">Preview video</button>
+              <div className="titlebar-dropdown-label">Image</div>
+              <button role="menuitem" onClick={onExportPNG}>Current view (.png)</button>
+              <button role="menuitem" onClick={onExportFrames} title="Every animation frame as a numbered PNG in one zip">All animation frames (.zip)</button>
+              <div className="titlebar-dropdown-label">Mocap</div>
+              <button role="menuitem" onClick={onExportBVH}>Animation (.bvh)</button>
+              <div className="titlebar-dropdown-label">3D model</div>
+              {MODEL_FORMATS.map((f) => (
+                <button key={f.value} role="menuitem" onClick={() => onExportModel(f.value)} title={f.hint}>
+                  Scene model ({'.' + f.ext}){f.value === 'glb' ? ' — recommended' : ''}
+                </button>
+              ))}
               <div className="titlebar-dropdown-sep" />
-              <div className="titlebar-dropdown-label">Three.js can't write .fbx — export .glb and re-export from Blender if you need it</div>
+              <button role="menuitem" onClick={onMoreExportOptions} title="Size, frame rate, quality, pose and material options live in the Export section of the side panel">More export options…</button>
             </div>
           )}
         </div>
@@ -645,29 +717,52 @@ export default function TitleBar({ onOpenSettings, onOpenPoseFinder }) {
           >
             Animation
           </button>
-          {openMenu === 'animation' && (
+          {openMenu === 'animation' && animView === 'root' && (
             <div className="titlebar-dropdown" role="menu">
               <button role="menuitem" onClick={onPlay} disabled={!hasCharacter}>Play</button>
-              <button role="menuitem" onClick={onPlayAll} disabled={!hasCharacter && !hasObjectAnimation}>Play All</button>
               <button role="menuitem" onClick={onPause} disabled={!hasCharacter || playback !== 'playing'}>Pause</button>
               <button role="menuitem" onClick={onStop} disabled={!hasCharacter}>Stop</button>
               <div className="titlebar-dropdown-sep" />
+              <button role="menuitem" onClick={onPlayAll} disabled={!hasCharacter && !hasObjectAnimation}>Play All</button>
               <button role="menuitem" onClick={onStopAll} disabled={!hasCharacter && !hasObjectAnimation}>Stop All</button>
+              <div className="titlebar-dropdown-sep" />
+              <button role="menuitem" onClick={onToggleLoop} disabled={!hasCharacter}>{loop ? '✓ ' : ''}Loop</button>
+              <button role="menuitem" onClick={() => setAnimView('speed')} disabled={!hasCharacter}>Speed: {speed}× ▸</button>
+              <div className="titlebar-dropdown-sep" />
+              <button role="menuitem" onClick={() => setAnimView('clips')} disabled={!hasCharacter}>Clips ▸</button>
+              <button role="menuitem" onClick={onManageClips} disabled={!hasCharacter} title="Open the clip tools in the Animate section: rename, trim, mirror, combine, delete">Manage clips…</button>
+              <div className="titlebar-dropdown-sep" />
+              <button role="menuitem" onClick={() => { setOpenMenu(null); bvhInputRef.current?.click() }} disabled={!hasCharacter} title={hasCharacter ? 'Applies to the active character, using the best-guess bone mapping' : 'Load a character first'}>Import animation (.bvh)…</button>
+              <button role="menuitem" onClick={onExportBVH} disabled={!hasCharacter}>Export animation (.bvh)</button>
+            </div>
+          )}
+          {openMenu === 'animation' && animView === 'speed' && (
+            <div className="titlebar-dropdown" role="menu">
+              <button role="menuitem" onClick={() => setAnimView('root')}>◂ Back</button>
+              <div className="titlebar-dropdown-sep" />
+              {SPEEDS.map((v) => (
+                <button key={v} role="menuitem" onClick={() => onSetSpeed(v)}>{speed === v ? '✓ ' : ''}{v}×{v === 1 ? ' (normal)' : ''}</button>
+              ))}
+            </div>
+          )}
+          {openMenu === 'animation' && animView === 'clips' && (
+            <div className="titlebar-dropdown titlebar-dropdown-tall" role="menu">
+              <button role="menuitem" onClick={() => setAnimView('root')}>◂ Back</button>
+              <div className="titlebar-dropdown-sep" />
+              <button role="menuitem" onClick={() => onPickClip(null)} title="The character's own keyframe animation, edited in the Animate section">
+                {playbackSource === 'edit' ? '✓ ' : ''}Editable animation (keyframes)
+              </button>
+              {[...(bakedClipNames || []), ...importedClipNames].length > 0 && <div className="titlebar-dropdown-label">Clips on this character</div>}
+              {[...(bakedClipNames || []), ...importedClipNames].map((clipName) => (
+                <button key={clipName} role="menuitem" onClick={() => onPickClip(clipName)} title={clipName}>
+                  {playbackSource === 'clip' && activeClipName === clipName ? '✓ ' : ''}{clipName}
+                </button>
+              ))}
+              <div className="titlebar-dropdown-sep" />
+              <button role="menuitem" onClick={onManageClips}>Manage clips…</button>
             </div>
           )}
         </div>
-
-        {onOpenPoseFinder && typeof window !== 'undefined' && window.animare?.pose && (
-          <div className="titlebar-menu-item">
-            <button
-              className="titlebar-menu-btn"
-              title="Turn a video into a mocap clip"
-              onClick={() => { setOpenMenu(null); onOpenPoseFinder() }}
-            >
-              Pose Finder
-            </button>
-          </div>
-        )}
 
         <div className="titlebar-menu-item">
           <button
@@ -680,15 +775,26 @@ export default function TitleBar({ onOpenSettings, onOpenPoseFinder }) {
 
         <div className="titlebar-menu-item">
           <button
-            className={'titlebar-menu-btn' + (openMenu === 'autorig' ? ' active' : '')}
-            onClick={() => toggleMenu('autorig')}
+            className={'titlebar-menu-btn' + (openMenu === 'tools' ? ' active' : '')}
+            onClick={() => toggleMenu('tools')}
           >
-            Auto Rigger
+            Tools
           </button>
-          {openMenu === 'autorig' && (
-            <div className="titlebar-dropdown" role="menu">
-              <button role="menuitem" onClick={() => { setOpenMenu(null); setAutoRiggerOpen(true) }}>Rig a character…</button>
-              {!autoRigAvailable() && <div className="titlebar-dropdown-label">Desktop app + Blender needed</div>}
+          {openMenu === 'tools' && (
+            <div className="titlebar-dropdown titlebar-dropdown-wide" role="menu">
+              <div className="titlebar-dropdown-label">Motion</div>
+              <RichItem
+                title="Pose Finder…"
+                desc={poseFinderAvailable ? 'Turn a video into a mocap clip' : 'Turn a video into a mocap clip · desktop app only'}
+                onClick={() => { setOpenMenu(null); onOpenPoseFinder?.() }}
+              />
+              <div className="titlebar-dropdown-sep" />
+              <div className="titlebar-dropdown-label">Rigging</div>
+              <RichItem
+                title="Rig a character…"
+                desc={autoRigAvailable() ? 'Add a skeleton and skin weights to a model' : 'Add a skeleton and skin weights · desktop app + Blender needed'}
+                onClick={() => { setOpenMenu(null); setAutoRiggerOpen(true) }}
+              />
             </div>
           )}
         </div>

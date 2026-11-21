@@ -2,18 +2,13 @@ import { useState } from 'react'
 import { useStore } from '../store.js'
 import Accordion from './Accordion.jsx'
 import {
-  exportPNG,
   capturePNG,
-  captureAnimationPNGs,
-  getAllTimelineDuration,
   previewOutputSize,
-  exportSceneModel,
   enterFullscreen,
 } from '../three/scene.js'
-import { exportAnimationBVH } from '../three/animation.js'
+import { MODEL_FORMATS, saveImagePNG, saveFramesZip, saveBVH, saveSceneModel } from '../three/exportActions.js'
 import { pickVideoFormat, videoBitrate, VIDEO_FPS, MIN_VIDEO_FPS, MAX_VIDEO_FPS, normalizeVideoFps } from '../three/exportSize.js'
 import { webCodecsAvailable } from '../three/videoCapture.js'
-import { createZip } from '../three/zipStore.js'
 import { runExportShot, resolveShotView, canRecordVideo, hideGizmosForShot } from '../three/exportShot.js'
 import { inCrossOriginFrame } from '../three/fsAccess.js'
 
@@ -51,16 +46,6 @@ const QUALITIES = [
   ['standard', 'Standard'],
   ['high', 'High'],
   ['max', 'Maximum'],
-]
-
-// 3D model formats. `rigged` ones keep the skeleton, skin weights, materials and textures;
-// the static ones are geometry only (see exportStatic.js).
-const MODEL_FORMATS = [
-  { value: 'glb', ext: 'glb', rigged: true, label: 'GLB (.glb)', hint: 'Recommended. One file with the skeleton, skin weights, materials and textures. Opens in Blender, Unity, Godot and most 3D tools.' },
-  { value: 'gltf', ext: 'gltf', rigged: true, label: 'glTF (.gltf)', hint: 'The same content as GLB, written as readable JSON with the textures embedded.' },
-  { value: 'obj', ext: 'obj', rigged: false, label: 'OBJ (.obj)', hint: 'Posed shape and UVs only — no skeleton, animation or materials. Opens almost anywhere.' },
-  { value: 'stl', ext: 'stl', rigged: false, label: 'STL (.stl)', hint: 'Posed shape only, no colours or UVs. Made for 3D printing and CAD.' },
-  { value: 'ply', ext: 'ply', rigged: false, label: 'PLY (.ply)', hint: 'Posed shape with UVs and vertex colours, no skeleton or materials.' },
 ]
 
 // A label + control line, so every setting lines up the same way.
@@ -127,14 +112,8 @@ export default function ExportPanel() {
   const notify = (section, text) => setNote({ section, text })
 
   function onPNG() {
-    const restoreGizmos = hideGizmosForShot()
-    const size = exportPNG(exportScale, name)
-    restoreGizmos()
-    if (!size) {
-      notify('image', 'Could not save the image right now.')
-      return
-    }
-    notify('image', `Saved a ${size.width}×${size.height} PNG${size.clamped ? ' (reduced to what your GPU supports)' : ''}.`)
+    const result = saveImagePNG(name)
+    notify('image', result.message)
   }
 
   function clipboardUnavailable(message) {
@@ -181,38 +160,14 @@ export default function ExportPanel() {
   // (Clip Studio Paint, etc.) that take an image sequence but can't paste several images.
   async function onSaveAllImages() {
     if (busy) return
-    const duration = getAllTimelineDuration({ stopAtFirstClipEnd })
-    if (!(duration > 0)) {
-      notify('image', 'Nothing to save — make or select an animation first.')
-      return
-    }
-    const frameCount = Math.ceil(duration * videoFps) + 1
-    const digits = Math.max(5, String(frameCount).length)
-    const prefix = name.replace(/[^A-Za-z0-9._-]+/g, '_') || 'frame'
-    const zip = createZip()
-    const progressInterval = Math.max(1, Math.floor(frameCount / 100))
     setCopying(true)
-    notify('image', `Preparing ${frameCount} animation frames at ${videoFps} fps…`)
-    let restoreGizmos = () => {}
+    notify('image', 'Preparing animation frames…')
     try {
-      restoreGizmos = hideGizmosForShot()
-      const result = await captureAnimationPNGs(videoFps, exportScale, async (blob, frame, total) => {
-        await zip.add(`${prefix}_${String(frame + 1).padStart(digits, '0')}.png`, blob)
-        if ((frame + 1) % progressInterval === 0 || frame + 1 === total) {
-          notify('image', `Saving animation frames… ${frame + 1} of ${total}`)
-        }
+      const result = await saveFramesZip(name, (frame, total) => {
+        notify('image', frame ? `Saving animation frames… ${frame} of ${total}` : `Preparing ${total} animation frames at ${videoFps} fps…`)
       })
-      const url = URL.createObjectURL(zip.finish())
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `${prefix}_frames.zip`
-      a.click()
-      setTimeout(() => URL.revokeObjectURL(url), 60000)
-      notify('image', `Saved ${result.count} images at ${videoFps} fps as ${prefix}_frames.zip, numbered in order.`)
-    } catch (error) {
-      notify('image', `Could not save animation frames: ${error?.message || String(error)}`)
+      notify('image', result.message)
     } finally {
-      restoreGizmos()
       setCopying(false)
     }
   }
@@ -248,34 +203,16 @@ export default function ExportPanel() {
   }
 
   function onExportBVH() {
-    const s = st()
-    const text = exportAnimationBVH(
-      s.animData,
-      s.animFps,
-      s.animDuration,
-      s.activeClipName,
-      s.playbackSource,
-    )
-    if (!text) {
-      notify('mocap', 'Nothing to export — make an in-app animation first.')
-      return
-    }
-    const blob = new Blob([text], { type: 'text/plain' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${name}.bvh`
-    a.click()
-    URL.revokeObjectURL(url)
-    notify('mocap', 'Animation exported as .bvh.')
+    notify('mocap', saveBVH(name).message)
   }
 
   async function onExportModel() {
     if (exportingModel) return
     setExportingModel(true)
     notify('model', `Exporting scene as .${formatInfo.ext}…`)
-    const result = await exportSceneModel(modelFormat, name, formatInfo.rigged ? exportPoseMode : staticPose, {
-      bakeLook: formatInfo.rigged && exportBakeLook,
+    const result = await saveSceneModel(modelFormat, name, {
+      poseMode: formatInfo.rigged ? exportPoseMode : staticPose,
+      bakeLook: exportBakeLook,
       combineMeshes: exportCombine,
     })
     setExportingModel(false)

@@ -60,6 +60,11 @@ contextBridge.exposeInMainWorld('animare', {
   },
   closeAck: () => ipcRenderer.send('animare:close-ack'),
   closeNow: () => ipcRenderer.send('animare:close-now'),
+  // Tell main the person chose Cancel on the "Save changes?" box, so a pending Quit is forgotten.
+  closeCancelled: () => ipcRenderer.send('animare:close-cancelled'),
+  // File > Quit: does what the window's X does — main asks the page first (onCloseRequested), so
+  // unsaved work gets the same "Save changes?" box — then the app exits.
+  quit: () => ipcRenderer.send('animare:quit'),
 
   // .blend import: runs the user's own Blender, headless, to convert the file to glTF.
   blender: {

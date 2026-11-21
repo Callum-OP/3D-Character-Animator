@@ -214,6 +214,7 @@ const pendingWrites = new Set()
 const lastWriteByPath = new Map()
 let closeApproved = false
 let closeAckTimer = null
+let quitRequested = false // File > Quit: on macOS closing the window alone leaves the app running
 const CLOSE_ACK_MS = 5000
 
 function registerCloseIpc() {
@@ -226,6 +227,16 @@ function registerCloseIpc() {
     closeAckTimer = null
     closeApproved = true
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close()
+  })
+  // The person picked Cancel on the "Save changes?" box: a Quit that started it is dropped.
+  ipcMain.on('animare:close-cancelled', () => {
+    quitRequested = false
+  })
+  // File > Quit goes through exactly the same path as the window's X button.
+  ipcMain.on('animare:quit', () => {
+    quitRequested = true
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close()
+    else app.quit()
   })
 }
 
@@ -388,5 +399,5 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
+  if (process.platform !== 'darwin' || quitRequested) app.quit()
 })

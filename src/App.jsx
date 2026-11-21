@@ -209,7 +209,7 @@ function AppInner() {
           </aside>
         </div>
       )}
-      <PoseLibrary />
+      <PoseLibrary onOpenPoseFinder={() => setPoseFinderOpen(true)} />
       <HelpOverlay />
       <AutoRiggerDialog />
       </div>

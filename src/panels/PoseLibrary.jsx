@@ -528,7 +528,7 @@ function Card({ entry, rendered, onApply, onDelete, onRename, onPreview }) {
   )
 }
 
-export default function PoseLibrary() {
+export default function PoseLibrary({ onOpenPoseFinder }) {
   const tab = useStore((s) => s.poseLibraryTab)
   const open = useStore((s) => s.openPoseLibrary)
   const close = useStore((s) => s.closePoseLibrary)
@@ -717,6 +717,15 @@ export default function PoseLibrary() {
           <button className="btn" disabled={!hasCharacter} onClick={() => onSave(() => saveCurrentHandPose('L', nameOrUndefined()))}>Save left hand</button>
           <button className="btn" disabled={!hasCharacter} onClick={() => onSave(() => saveCurrentHandPose('R', nameOrUndefined()))}>Save right hand</button>
         </>)}
+        {tab === 'animation' && onOpenPoseFinder && (
+          <button
+            className="btn secondary"
+            title={window.animare?.pose ? 'Turn a video into a mocap clip with Pose Finder' : 'Pose Finder runs on your own computer, so it needs the desktop app'}
+            onClick={() => { close(); onOpenPoseFinder() }}
+          >
+            Make from video…
+          </button>
+        )}
         {tab === 'animation' && <button className="btn" disabled={!activeClipName} title={activeClipName ? '' : 'Pick a clip in Animate first'} onClick={() => onSave(() => saveClipToLibrary(activeClipName, nameOrUndefined()))}>Save current clip</button>}
         <button className={'pl-dots' + (manage ? ' active' : '')} title="More: import / export library" aria-label="More options" aria-pressed={manage} onClick={() => setManage((m) => !m)}>⋯</button>
       </div>

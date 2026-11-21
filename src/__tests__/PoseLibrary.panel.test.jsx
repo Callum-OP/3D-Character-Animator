@@ -30,6 +30,22 @@ beforeEach(async () => {
 })
 
 describe('Pose Library panel', () => {
+  it('Animation tab can send you to Pose Finder, and closes the library', async () => {
+    const onOpenPoseFinder = vi.fn()
+    useStore.setState({ poseLibraryTab: 'animation' })
+    render(<PoseLibrary onOpenPoseFinder={onOpenPoseFinder} />)
+    fireEvent.click(await screen.findByText('Make from video…'))
+    expect(onOpenPoseFinder).toHaveBeenCalledTimes(1)
+    expect(useStore.getState().poseLibraryTab).toBeNull()
+  })
+
+  it('only offers Make from video… on the Animation tab', async () => {
+    useStore.setState({ poseLibraryTab: 'body' })
+    render(<PoseLibrary onOpenPoseFinder={() => {}} />)
+    await screen.findByText('Save current pose')
+    expect(screen.queryByText('Make from video…')).toBeNull()
+  })
+
   it('is hidden until opened from the menu', () => {
     const { container } = render(<PoseLibrary />)
     expect(container.firstChild).toBeNull()

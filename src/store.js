@@ -1456,6 +1456,8 @@ export const useStore = create((set) => ({
   importedClipNames: [], // names of retargeted BVH mocap clips
   loop: true,
   speed: 1,
+  manageClipsRequested: false, // set by the title bar's Animation > Manage clips…; the Animate panel opens its clip tools and clears it
+  setManageClipsRequested: (manageClipsRequested) => set({ manageClipsRequested }),
   // When true, editing a root (character world-placement) keyframe shifts
   // every LATER keyframe by the same delta — so nudging where a walk clip
   // is at frame 20 carries every step after it along, instead of leaving
