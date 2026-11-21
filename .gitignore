@@ -5,6 +5,8 @@ dist-ssr
 3d-character-animator-itch.zip
 .DS_Store
 references
+__pycache__/
+*.py[cod]
 
 # Electron packaging output
 release

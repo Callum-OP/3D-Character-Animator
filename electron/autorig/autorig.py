@@ -884,6 +884,7 @@ def finger_redistribute(co, W, names, layouts, height, edges=None):
         # Keep the palm blend for the webbing and the segment blends for bending at the joints.
         finger_dist = np.stack([D[:, 4 * f + 1:4 * f + 4].min(axis=1) for f in range(len(FINGERS))], axis=1)
         closest = finger_dist.argmin(axis=1)
+        single_finger = np.zeros(len(P), dtype=bool)
         if edges is not None and len(edges):
             # Only trust narrow, predominantly single-finger components past the webbing.
             a, ex, up, length = lay['frame']
@@ -923,6 +924,7 @@ def finger_redistribute(co, W, names, layouts, height, edges=None):
                 p10, p90 = np.percentile(lateral[group], [10, 90])
                 if votes[winner] >= 0.7 * len(group) and p90 - p10 <= 1.5 * spacing:
                     closest[group] = winner
+                    single_finger[group] = True
             # The thumb ends before the other fingers' distal zone. Follow a
             # narrow connected piece along its own axis instead of the hand axis.
             J = [np.array(j[:]) for j in lay['joints']['Thumb']]
@@ -932,7 +934,7 @@ def finger_redistribute(co, W, names, layouts, height, edges=None):
             across = np.cross(direction, np.array(up[:]))
             across /= max(float(np.linalg.norm(across)), 1e-12)
             width = (P - J[1]) @ across
-            thumb_zone = (t > 0.0) & (t < 1.25) & (distance < 0.14 * length) & (u < 0.70)
+            thumb_zone = (t > 0.0) & (t < 1.25) & (distance < 0.15 * length) & (u < 0.70)
             mask[:] = False
             mask[sel[thumb_zone]] = True
             ee = edges[mask[edges[:, 0]] & mask[edges[:, 1]]]
@@ -950,9 +952,12 @@ def finger_redistribute(co, W, names, layouts, height, edges=None):
                 p10, p90 = np.percentile(width[group], [10, 90])
                 if p90 - p10 <= 0.15 * length:
                     closest[group] = 0
+                    single_finger[group] = True
         Wseg = ((D.min(axis=1, keepdims=True) + eps) / (D + eps)) ** 6
         for f in range(len(FINGERS)):
             Wseg[closest != f, 4 * f + 1:4 * f + 4] = 0.0
+        # A confidently isolated distal component belongs to its finger, not the shared palm.
+        Wseg[single_finger, 0::4] = 0.0
         bones = sorted(set(b for b, _, _ in segs))
         Wb = np.zeros((len(P), len(names)))
         for j, (b, _, _) in enumerate(segs):

@@ -211,7 +211,7 @@ for side, key, sign in (('Left', 'l', 1), ('Right', 'r', -1)):
                 for angle in np.linspace(0, 2 * np.pi, 16, endpoint=False):
                     pts.append(np.array((wrist + (a * u + ex * ((center + 0.025 * np.cos(angle)) * sign)
                                                        + up * (0.02 * np.sin(angle))) * length)[:]))
-        fit, _ = rig.finger_layout(wrist, tip, side, np.array(pts))
+        fit, _, _ = rig.finger_layout(wrist, tip, side, np.array(pts))
         for finger in ('Index', 'Middle', 'Ring', 'Pinky'):
             expected = rig.FINGER_TEMPLATE[finger][1][1] * scale + shift
             actual = (fit[finger][1] - wrist).dot(ex) * sign / length

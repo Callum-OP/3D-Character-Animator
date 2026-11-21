@@ -161,11 +161,15 @@ export async function openRecentProject(recent) {
   }
   const handle = recent.handle
   if (isNativeHandle(handle)) {
+    const native = nativeBridge()
+    if (!native?.readFile || !native?.baseName) {
+      throw new Error('The desktop file bridge is unavailable for this recent project. Restart the desktop app or use Open Project to select the .3dcp file again.')
+    }
     // Native path — no permission dance, no stale-handle risk (see the
     // module note above). Read straight off disk.
-    const text = await nativeBridge().readFile(handle)
+    const text = await native.readFile(handle)
     const record = await readProjectFile({ text: () => Promise.resolve(text) })
-    const name = await nativeBridge().baseName(handle)
+    const name = await native.baseName(handle)
     await upsertRecent({ name, handle })
     return { record, handle, name }
   }

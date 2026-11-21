@@ -81,4 +81,9 @@ describe('projectStore recents list (IndexedDB)', () => {
 
     await expect(openRecentProject(recent)).rejects.toThrow(/Open Project/)
   })
+
+  it('explains when a native recent path has no desktop file bridge', async () => {
+    await expect(openRecentProject({ name: 'Scene.3dcp', handle: 'C:\\Projects\\Scene.3dcp' }))
+      .rejects.toThrow(/desktop file bridge is unavailable/i)
+  })
 })

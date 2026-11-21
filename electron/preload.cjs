@@ -83,6 +83,7 @@ contextBridge.exposeInMainWorld('animare', {
       ipcRenderer.on('animare:autorig-progress', handler)
       return () => ipcRenderer.removeListener('animare:autorig-progress', handler)
     },
+  },
   // Pose Finder (video -> mocap): runs Meta's SAM 3D Body locally through onnxruntime-node (see poseEngine.cjs).
   pose: {
     // → { ortOk, ortError, modelReady, modelBytes, expectedBytes, modelPath, licenseUrl, loaded, provider, platform, arch }
