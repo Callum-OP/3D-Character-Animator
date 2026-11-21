@@ -344,7 +344,7 @@ def blender_bbox_as_gltf(co):
     return {'min': [mn[0], mn[2], -mx[1]], 'max': [mx[0], mx[2], -mn[1]]}
 
 
-def map_landmarks(raw, three_box, mesh_box, detail=''):
+def map_landmarks(raw, three_box, mesh_box, detail='', strict=True):
     """The preview (three.js) and Blender can disagree about units, origin and scale (FBX centimetres,
     parent transforms...). Landmarks are re-expressed relative to the model's own bounding box: ONE uniform
     scale from the heights, feet on the floor, and centred in X/Z. Uniform means a slightly different box
@@ -360,6 +360,10 @@ def map_landmarks(raw, three_box, mesh_box, detail=''):
         fail('The model has no height', 'frame')
     s = eb[1] / et[1]
     for i, name in ((0, 'width'), (2, 'depth')):
+        if not strict:
+            # the app sends plain baked geometry made from the preview's own mesh, so there is nothing to
+            # disagree about: scale, origin and units are reconciled by the uniform mapping below
+            break
         # thin axes are noisy: only compare axes that are a meaningful fraction of the height
         if et[i] > 0.15 * et[1] and not (0.7 <= (eb[i] / et[i]) / s <= 1.43):
             fail('The model looks different in Blender than in the preview (%s differs: preview %.3g, Blender %.3g, '
@@ -1581,7 +1585,7 @@ def main():
     # markers were placed in the preview's frame: re-express them in the frame Blender actually sees
     biggest = sorted(((o.name, len(o.data.vertices), np.ptp(world_vertices(o), axis=0)) for o in comps), key=lambda r: -float(r[2].max()))[:3]
     detail = ' [Blender sees: ' + '; '.join('%s (%d verts, %.2gx%.2gx%.2g m)' % (n, v, e[0], e[1], e[2]) for n, v, e in biggest) + ']'
-    mapped = map_landmarks(job['landmarks'], job.get('bbox'), blender_bbox_as_gltf(all_co), detail)
+    mapped = map_landmarks(job['landmarks'], job.get('bbox'), blender_bbox_as_gltf(all_co), detail, strict=not job.get('baked'))
     L = fit_landmarks(mapped)
     check_landmarks_fit(L, all_co, height)
     cx = L['pelvis'].x

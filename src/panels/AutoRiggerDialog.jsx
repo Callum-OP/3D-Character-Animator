@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import { useStore } from '../store.js'
 import { loadModel, disposeObject } from '../three/loadModel.js'
 import { importModelAuto, exportRigSource } from '../three/scene.js'
+import { bakeRigSource } from '../three/rigSource.js'
 import { getRigSources } from '../three/objects.js'
 import { detectLandmarks } from '../three/autoRigDetect.js'
 import { LANDMARKS, guessLandmarks, toPayload, validateLandmarks, moveLandmark, enforceMirror, createHistory } from '../three/autoRigMath.js'
@@ -303,9 +304,16 @@ function Dialog({ onClose }) {
     setBusy('loading')
     try {
       const parsed = await loadModel(f, { autoDecimate: false })
-      parsed.root.updateMatrixWorld(true)
-      const b = new THREE.Box3().setFromObject(parsed.root)
-      installPreview(parsed.root, { min: b.min.toArray(), max: b.max.toArray() }, countVertices(parsed.root), f.name, async () => new Uint8Array(await f.arrayBuffer()), parsed.info?.bones?.length)
+      const hadBones = parsed.info?.bones?.length
+      // Blender gets a plain baked copy of exactly what the preview shows, never the raw file: skinned / scaled
+      // files are read differently by Blender and the preview, which is what made sizes disagree.
+      let src
+      try {
+        src = await bakeRigSource(parsed.root, { name: f.name })
+      } finally {
+        disposeObject(parsed.root)
+      }
+      installPreview(src.group, src.box, countVertices(src.group), src.name, async () => src.data, hadBones)
     } catch (err) {
       setError(err?.message || String(err))
     } finally {
@@ -445,6 +453,7 @@ function Dialog({ onClose }) {
         input: { name: src.name, data },
         landmarks: toPayload(landmarks),
         bbox: three.current.box,
+        baked: true,
         options: { mirror: symmetry },
       })
       if (!res?.ok) throw new Error(res?.error || 'Rigging failed.')

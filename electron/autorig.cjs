@@ -56,7 +56,7 @@ function explainLaunchFailure(r, platform = process.platform) {
 }
 
 // input: { name, data } (data: Buffer/Uint8Array/ArrayBuffer). → { glb: Buffer, report: object, log }
-async function runAutoRig({ blenderPath, input, landmarks, bbox = null, options = {}, timeoutMs = TIMEOUT_MS, tmpRoot = os.tmpdir(), workRoot = null, onProgress = null, runner = run }) {
+async function runAutoRig({ blenderPath, input, landmarks, bbox = null, baked = false, options = {}, timeoutMs = TIMEOUT_MS, tmpRoot = os.tmpdir(), workRoot = null, onProgress = null, runner = run }) {
   if (!blenderPath || !fs.existsSync(blenderPath)) throw new Error('Blender was not found. Choose its executable in Settings.')
   const ext = String(input?.name || '').split('.').pop().toLowerCase()
   if (!INPUT_EXTS.includes(ext)) throw new Error(`Auto Rigger can't read .${ext} files. Use ${INPUT_EXTS.join(', ')}.`)
@@ -81,7 +81,7 @@ async function runAutoRig({ blenderPath, input, landmarks, bbox = null, options 
     const scriptPath = path.join(base, `autorig-${crypto.createHash('sha1').update(source).digest('hex').slice(0, 10)}.py`)
     if (!fs.existsSync(scriptPath)) await fsp.writeFile(scriptPath, source)
     await fsp.writeFile(inPath, data)
-    await fsp.writeFile(jobPath, JSON.stringify({ input: inPath, output: outPath, report: reportPath, landmarks, bbox, options }))
+    await fsp.writeFile(jobPath, JSON.stringify({ input: inPath, output: outPath, report: reportPath, landmarks, bbox, baked: !!baked, options }))
 
     const args = ['--background', '--factory-startup', '--disable-autoexec', '-noaudio', '--python-exit-code', '3', '--python', scriptPath, '--', jobPath]
     const onData = onProgress ? makeProgressParser(onProgress) : undefined
@@ -152,7 +152,7 @@ function registerAutoRigIpc({ ipcMain, app, deps = {} }) {
           /* window closed */
         }
       }
-      const { glb, report } = await rig({ blenderPath: st.path, input: payload.input, landmarks: payload.landmarks, bbox: payload.bbox, options: payload.options, workRoot: workRoot(), onProgress })
+      const { glb, report } = await rig({ blenderPath: st.path, input: payload.input, landmarks: payload.landmarks, bbox: payload.bbox, baked: payload.baked, options: payload.options, workRoot: workRoot(), onProgress })
       return { ok: true, glb, report, blenderVersion: st.version }
     } catch (err) {
       return { ok: false, code: err?.code || 'failed', error: err?.message || String(err) }

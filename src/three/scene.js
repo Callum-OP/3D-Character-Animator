@@ -148,7 +148,7 @@ import {
 import { initPartRig, getPartRigData, restorePartRigs, getPartRigEntries, invalidatePartRigGeometry, updatePartRig, setPartRigBodyFollow } from './partRig.js'
 import { initMeshSymmetry, getSymmetryData, restoreSymmetry, mirrorMeshes } from './meshSymmetry.js'
 import { combineMeshes as combineExportMeshes, describeCombine } from './combineMeshes.js'
-import { STATIC_FORMATS, bakeStaticMeshes, bakeMeshesWithMaterials, writeStaticModel } from './exportStatic.js'
+import { STATIC_FORMATS, bakeStaticMeshes, writeStaticModel } from './exportStatic.js'
 import { installFlattenerShader } from './flattenerShader.js'
 import { installRigDeltaShader } from './rigDeltaShader.js'
 import { advanceWind, setWindConfig } from './wind.js'
@@ -281,6 +281,7 @@ import { clearUndoHistory, pushUndoBatch, runWithoutHistoryCapture } from './und
 import { markProjectClean, markProjectCleanAfterLoad } from './projectDirty.js'
 import { resolveTextureLook, normalizeMaterialLook, TEXTURE_LOOK_DEFAULT } from './textureLookOptions.js'
 import { withExportSafeMaterials } from './materialUserData.js'
+import { bakeRigSource } from './rigSource.js'
 import { buildPartsGroup, safeFileStem } from './extractParts.js'
 import { bakeRegionsForExport, fromRanges, setRegionsRenderHook } from './regions.js'
 import { analyseSurface, outwardDirection, adjustDirection, faceOfObject, averageSurfaceColor, lightColourFrom } from './lightFromPart.js'
@@ -5525,21 +5526,8 @@ export async function exportRigSource(id) {
     ownSpace(dup)
     dup.updateMatrixWorld(true)
     useExportMaterials(root, dup, model, null)
-    const { group: baked, meshes } = bakeMeshesWithMaterials(dup)
-    if (!meshes) throw new Error('That object has no visible meshes to rig.')
-    const exporter = new GLTFExporter()
-    const result = await withExportSafeMaterials(baked, () => new Promise((resolve, reject) => {
-      exporter.parse(baked, resolve, reject, { binary: true, onlyVisible: true })
-    }))
-    // the preview: the same geometry, flat grey and translucent, so the joints show through
-    const preview = new THREE.Group()
-    const greyMaterial = new THREE.MeshStandardMaterial({ color: 0xb8b8c4, transparent: true, opacity: 0.8, side: THREE.DoubleSide })
-    baked.traverse((o) => {
-      if (o.isMesh) preview.add(new THREE.Mesh(o.geometry.clone(), greyMaterial))
-    })
-    preview.updateMatrixWorld(true)
-    const box = new THREE.Box3().setFromObject(preview)
-    return { name: 'scene-object.glb', data: new Uint8Array(result), group: preview, box: { min: box.min.toArray(), max: box.max.toArray() } }
+    const src = await bakeRigSource(dup, { name: 'scene-object' })
+    return { name: 'scene-object.glb', data: src.data, group: src.group, box: src.box }
   } finally {
     for (const c of blended) setPartRigBodyFollow(c, true)
     resumeSoftCloth()
