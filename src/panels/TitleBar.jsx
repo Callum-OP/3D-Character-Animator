@@ -61,7 +61,7 @@ import {
 // opening from here and saving from the sidebar (or vice versa) stay in
 // sync — there's only one place that actually owns the file I/O. Likewise
 // video export shares exportShot.js with the Export panel.
-export default function TitleBar({ onOpenSettings }) {
+export default function TitleBar({ onOpenSettings, onOpenPoseFinder }) {
   const [openMenu, setOpenMenu] = useState(null) // 'file' | 'edit' | 'animation' | 'help' | null
   const [fileView, setFileView] = useState('root') // 'root' | 'import' | 'export'
   const [recents, setRecents] = useState([])
@@ -78,6 +78,10 @@ export default function TitleBar({ onOpenSettings }) {
   const setLastProjectSave = useStore((s) => s.setLastProjectSave)
   const toggleHelp = useStore((s) => s.toggleHelp)
   const setAutoRiggerOpen = useStore((s) => s.setAutoRiggerOpen)
+  const openPoseLibrary = useStore((s) => s.openPoseLibrary)
+  const closePoseLibrary = useStore((s) => s.closePoseLibrary)
+  const poseLibraryTab = useStore((s) => s.poseLibraryTab)
+  const lastPoseLibraryTab = useStore((s) => s.lastPoseLibraryTab)
   const hasCharacter = useStore((s) => !!s.modelInfo)
   const sceneObjects = useStore((s) => s.sceneObjects)
   const hasObjectAnimation = useStore(
@@ -260,10 +264,13 @@ export default function TitleBar({ onOpenSettings }) {
     if (playbackSource === 'edit') {
       s.setDuration(selectEdit(s.animData, s.animDuration, { loop, speed }))
     } else if (playback === 'stopped' && activeClipName) {
-      s.setDuration(selectClip(activeClipName, { loop, speed }, s.animData))
+      s.setDuration(selectClip(activeClipName, { loop, speed, inPlace: s.removeClipMovement }, s.animData))
     }
-    play()
-    s.setPlayback('playing')
+    if (play()) s.setPlayback('playing')
+    else {
+      s.setPlayback('paused')
+      setMsg('This clip has one pose frame, so there is nothing to play.')
+    }
   }
 
   function onPause() {
@@ -648,6 +655,27 @@ export default function TitleBar({ onOpenSettings }) {
               <button role="menuitem" onClick={onStopAll} disabled={!hasCharacter && !hasObjectAnimation}>Stop All</button>
             </div>
           )}
+        </div>
+
+        {onOpenPoseFinder && typeof window !== 'undefined' && window.animare?.pose && (
+          <div className="titlebar-menu-item">
+            <button
+              className="titlebar-menu-btn"
+              title="Turn a video into a mocap clip"
+              onClick={() => { setOpenMenu(null); onOpenPoseFinder() }}
+            >
+              Pose Finder
+            </button>
+          </div>
+        )}
+
+        <div className="titlebar-menu-item">
+          <button
+            className={'titlebar-menu-btn' + (poseLibraryTab ? ' active' : '')}
+            onClick={() => { setOpenMenu(null); if (poseLibraryTab) closePoseLibrary(); else openPoseLibrary(lastPoseLibraryTab) }}
+          >
+            Pose Library
+          </button>
         </div>
 
         <div className="titlebar-menu-item">

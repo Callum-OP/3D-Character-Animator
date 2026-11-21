@@ -2,7 +2,9 @@ import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { confirmDialog } from '../dialogs.js'
 import { useStore } from '../store.js'
 import EditableValue from './EditableValue.jsx'
+import LockInPlaceSection from './LockInPlaceSection.jsx'
 import ShapeKeyPicker from './ShapeKeyPicker.jsx'
+import { useRowMenu, RowMenuButton, RowName } from './rowMenu.jsx'
 import { applyKeyClick, isTimeSelected, pruneSelection, timesToDelete } from './keySelection.js'
 import {
   selectClip,
@@ -25,6 +27,8 @@ import {
   exportClipJSON,
   importClipJSON,
   renameClip,
+  removeClip,
+  getCharacterClipDuration,
   describeClipBoneMismatch,
   updateRootMotionTrack,
   getClipEditKeys,
@@ -45,6 +49,7 @@ import {
   hasFileSystemAccess as hasClipFileSystemAccess,
 } from '../three/clipLibrary.js'
 import { getBoneQuaternion, getPosedBones, applyPose, setPosingEnabled } from '../three/posing.js'
+import { saveClipToLibrary } from '../three/poseLibraryActions.js'
 import {
   getCurrentModel,
   refreshSoftCloth,
@@ -905,6 +910,7 @@ export default function AnimationPanel() {
   const playback = useStore((s) => s.playback)
   const source = useStore((s) => s.playbackSource)
   const activeClipName = useStore((s) => s.activeClipName)
+  const removeClipMovement = useStore((s) => s.removeClipMovement)
   const loop = useStore((s) => s.loop)
   const speed = useStore((s) => s.speed)
   const duration = useStore((s) => s.duration)
@@ -941,6 +947,9 @@ export default function AnimationPanel() {
   const globalDuration = characterOrder.length > 0 || hasObjectAnimation ? getAllTimelineDuration() : 0
 
   const st = useStore.getState // for imperative setters inside handlers
+  function selectActiveClip(name, opts, data = st().animData, inPlace = removeClipMovement) {
+    return selectClip(name, { ...opts, inPlace }, data)
+  }
   const model = getCurrentModel()
   const meshPhysicsZones = (model?.meshes || [])
     .flatMap((mesh) => meshOverrides[mesh.uuid]?.softZones || [])
@@ -992,8 +1001,9 @@ export default function AnimationPanel() {
   const [blankFrames, setBlankFrames] = useState(4) // how many frames to insert
   const [ragdollMsg, setRagdollMsg] = useState(null) // feedback after a ragdoll bake
   const [boneResetMsg, setBoneResetMsg] = useState(null) // feedback after Reset bone physics
-  const [renameOpen, setRenameOpen] = useState(false)
-  const [renameText, setRenameText] = useState('')
+  const [renamingClip, setRenamingClip] = useState(null) // clip name being renamed in the "Clips on this character" list
+  const [trimTarget, setTrimTarget] = useState(null) // which clip the Trim panel is cutting
+  const clipMenu = useRowMenu()
   // "Keep original movement" — when baking a clip (e.g. mocap) to editable
   // keyframes, also carry over the root/hip's world travel so a walk clip
   // doesn't end up walking on the spot once it's editable.
@@ -1025,6 +1035,18 @@ export default function AnimationPanel() {
     refreshRecentClips()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    setCombineSel([])
+  }, [activeCharacterId])
+
+  useEffect(() => {
+    const available = [...(modelInfo?.clipNames || NO_CLIP_NAMES), ...importedClipNames]
+    setCombineSel((sel) => {
+      const remaining = sel.filter((name) => available.includes(name))
+      return remaining.length === sel.length ? sel : remaining
+    })
+  }, [modelInfo, importedClipNames])
 
   // Space = play/pause, ←/→ = step the shared character playhead. Re-registered every render so the
   // handler always closes over fresh state; ignored while typing in a field.
@@ -1075,6 +1097,14 @@ export default function AnimationPanel() {
   // which unmount via their own Accordion's `mode === …` condition in
   // App.jsx), so it's the one place in this file that previously called
   // hooks after a conditional return. See Titlebar.blackscreen.test.js.
+  // A clip put on the character from the Pose Library asks for its remembered keyframes to be loaded here.
+  const adoptRequest = useStore((s) => s.adoptClipRequest)
+  useEffect(() => {
+    if (!adoptRequest) return
+    st().requestAdoptClipKeys(null)
+    if (st().activeClipName === adoptRequest) adoptClipKeys(adoptRequest)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adoptRequest])
   useEffect(() => {
     if (!pickingSlotKey) return
     if (!selectedBoneName || selectedBoneName === pickBaselineRef.current) return
@@ -1288,7 +1318,7 @@ export default function AnimationPanel() {
     st().setPlaybackSource(next)
     if (next === 'clip' && activeClipName) {
       adoptClipKeys(activeClipName)
-      const d = selectClip(activeClipName, { loop, speed }, st().animData)
+      const d = selectActiveClip(activeClipName, { loop, speed }, st().animData)
       st().setDuration(d)
       st().setPlayback('paused')
       setClipBoneWarning(describeClipBoneMismatch(activeClipName))
@@ -1322,7 +1352,7 @@ export default function AnimationPanel() {
     stop()
     st().setPlaybackSource('clip')
     adoptClipKeys(name)
-    const d = selectClip(name, { loop, speed }, st().animData)
+    const d = selectActiveClip(name, { loop, speed }, st().animData)
     st().setDuration(d)
     st().setCurrentTime(0)
     st().setPlayback('paused')
@@ -1338,8 +1368,27 @@ export default function AnimationPanel() {
       stop()
       st().setPlayback('stopped')
       st().setCurrentTime(0)
-      const d = selectClip(activeClipName, { loop, speed }, st().animData)
+      const d = selectActiveClip(activeClipName, { loop, speed }, st().animData)
       st().setDuration(d)
+      st().setPlayback('paused')
+    }
+  }
+
+  function onRemoveClipMovementToggle(on) {
+    const wasPlaying = st().playback === 'playing'
+    const time = st().currentTime
+    st().setRemoveClipMovement(on)
+    if (source !== 'clip' || !activeClipName) return
+    stop()
+    st().setPlayback('stopped')
+    const d = selectActiveClip(activeClipName, { loop, speed }, st().animData, on)
+    st().setDuration(d)
+    scrubTimeline(time)
+    st().setCurrentTime(time)
+    if (wasPlaying) {
+      if (play()) st().setPlayback('playing')
+      else st().setPlayback('paused')
+    } else {
       st().setPlayback('paused')
     }
   }
@@ -1351,11 +1400,14 @@ export default function AnimationPanel() {
     } else if (!activeClipName) {
       return
     } else if (playback === 'stopped') {
-      const d = selectClip(activeClipName, { loop, speed }, animData)
+      const d = selectActiveClip(activeClipName, { loop, speed }, animData)
       st().setDuration(d)
     }
-    play()
-    st().setPlayback('playing')
+    if (play()) st().setPlayback('playing')
+    else {
+      st().setPlayback('paused')
+      setKfMsg('This clip has one pose frame, so there is nothing to play.')
+    }
   }
 
   function onPauseToggle() {
@@ -1441,7 +1493,7 @@ export default function AnimationPanel() {
         const d = selectEdit(animData, animDuration, { loop, speed })
         st().setDuration(d)
       } else if (activeClipName) {
-        selectClip(activeClipName, { loop, speed }, animData)
+        selectActiveClip(activeClipName, { loop, speed }, animData)
       }
       st().setPlayback('paused')
     } else if (playback === 'playing') {
@@ -1458,7 +1510,7 @@ export default function AnimationPanel() {
     if (source === 'edit') {
       selectEdit(store.animData, store.animDuration, { loop, speed })
     } else if (activeClipName) {
-      selectClip(activeClipName, { loop, speed }, store.animData)
+      selectActiveClip(activeClipName, { loop, speed }, store.animData)
     } else {
       return
     }
@@ -1518,7 +1570,7 @@ export default function AnimationPanel() {
       // be rebuilt from the edited keys — re-selecting the old one would keep
       // the deleted pose.
       rebakeAdoptedClip()
-      selectClip(activeClipName, { loop, speed }, st().animData)
+      selectActiveClip(activeClipName, { loop, speed }, st().animData)
     }
     store.setPlayback('paused')
     updateRootMotionTrack(st().animData.root)
@@ -1643,7 +1695,7 @@ export default function AnimationPanel() {
       st().addImportedClipName(name)
       st().setPlaybackSource('clip')
       st().setActiveClipName(name)
-      const d = selectClip(name, { loop, speed }, animData)
+      const d = selectActiveClip(name, { loop, speed }, animData)
       st().setDuration(d)
       st().setCurrentTime(0)
       st().setPlayback('paused')
@@ -1702,7 +1754,7 @@ export default function AnimationPanel() {
     st().addImportedClipName(name)
     st().setPlaybackSource('clip')
     st().setActiveClipName(name)
-    const d = selectClip(name, { loop, speed }, animData)
+    const d = selectActiveClip(name, { loop, speed }, animData)
     st().setDuration(d)
     st().setCurrentTime(0)
     play()
@@ -1821,23 +1873,80 @@ export default function AnimationPanel() {
     )
   }
 
-  function onOpenRename() {
-    setRenameText(activeClipName || '')
-    setRenameOpen(true)
+  function onSaveEditToLibrary() {
+    const name = clipFromTracks(animData.tracks, animDuration, activeClipName ? `${activeClipName} (edited)` : 'My clip', animData.root, animData.meshes, animData.morphs)
+    if (!name) return
+    stop()
+    armClip(name)
+    saveClipToLibrary(name)
+      .then((e) => setKfMsg(`Saved as the clip “${name}” and added “${e.name}” to the Pose Library.`))
+      .catch((e) => setKfMsg(e.message))
   }
 
-  function onConfirmRename() {
-    if (!activeClipName) return
-    const finalName = renameClip(activeClipName, renameText)
+  function onCommitClipRename(oldName, text) {
+    setRenamingClip(null)
+    if (!(text || '').trim()) return // an empty name just cancels
+    const finalName = renameClip(oldName, text)
     if (!finalName) {
       setBvhMsg("Clips built into the model file itself can't be renamed.")
-      setRenameOpen(false)
       return
     }
-    st().renameImportedClipName(activeClipName, finalName)
-    st().setActiveClipName(finalName)
-    setRenameOpen(false)
-    setBvhMsg(finalName === activeClipName ? null : `Renamed to “${finalName}”.`)
+    if (finalName === oldName) return
+    st().renameImportedClipName(oldName, finalName)
+    if (st().activeClipName === oldName) st().setActiveClipName(finalName)
+    setCombineSel((sel) => sel.map((n) => (n === oldName ? finalName : n)))
+    setTrimTarget((t) => (t === oldName ? finalName : t))
+    setBvhMsg(`Renamed to “${finalName}”.`)
+  }
+
+  // Delete an imported/generated clip from this character. Clips built into the
+  // model file come back on every load, so they're not offered for deletion.
+  function onDeleteClip(name) {
+    if (!importedClipNames.includes(name)) return
+    if (!confirmDialog(`Delete the clip “${name}” from this character? This can't be undone.`)) return
+    const wasActive = st().activeClipName === name
+    const remaining = clipNames.filter((n) => n !== name)
+    const next = remaining[Math.max(0, clipNames.indexOf(name) - 1)] || null
+    if (wasActive) stop() // nothing may still be playing the clip that's about to go
+    removeClip(name)
+    st().removeImportedClipName(name)
+    setCombineSel((sel) => sel.filter((n) => n !== name))
+    if (trimTarget === name) setTrimOpen(false)
+    if (renamingClip === name) setRenamingClip(null)
+    if (wasActive) {
+      // Land on a neighbouring clip so the Manage clips list stays open, or on the
+      // character's own editable animation when this was the last clip.
+      if (next) onClipChange(next)
+      else onUseDefaultClip()
+    }
+    setBvhMsg(`Deleted “${name}”.`)
+  }
+
+  // Make sure `name` is the clip on screen before a tool that works on the active clip runs.
+  function ensureClipActive(name) {
+    if (st().activeClipName !== name || st().playbackSource !== 'clip') onClipChange(name)
+  }
+
+  // The ⋯ / right-click menu for one row of "Clips on this character".
+  function openClipMenu(e, name, fromButton) {
+    const imported = importedClipNames.includes(name)
+    const items = [
+      ...(imported ? [{ id: 'rename', label: 'Rename' }] : []),
+      { id: 'save', label: 'Save clip as…' },
+      { separator: true },
+      { id: 'trim', label: 'Trim…' },
+      { id: 'mirror', label: 'Mirror left ↔ right' },
+      ...(imported ? [{ separator: true }, { id: 'delete', label: 'Delete clip', danger: true }] : []),
+    ]
+    const run = (id) => {
+      if (id === 'rename') setRenamingClip(name)
+      else if (id === 'delete') onDeleteClip(name)
+      else if (id === 'save') onSaveClipAs(name)
+      else if (id === 'trim') onOpenTrim(name)
+      else if (id === 'mirror') onMirrorClip(name)
+    }
+    if (fromButton) clipMenu.openFromButton(e, items, run)
+    else clipMenu.openAt(e, items, run)
   }
 
   // --- clip files (Open Clip / Save Clip As / Recent Clips) -----------------
@@ -1856,7 +1965,7 @@ export default function AnimationPanel() {
     st().setPlaybackSource('clip')
     st().setActiveClipName(name)
     adoptClipKeys(name)
-    const d = selectClip(name, { loop, speed }, st().animData)
+    const d = selectActiveClip(name, { loop, speed }, st().animData)
     st().setDuration(d)
     st().setCurrentTime(0)
     st().setPlayback('paused')
@@ -1871,12 +1980,12 @@ export default function AnimationPanel() {
     }
   }
 
-  async function onSaveClipAs() {
-    if (!activeClipName) return
-    const json = exportClipJSON(activeClipName)
+  async function onSaveClipAs(clipName = activeClipName) {
+    if (!clipName) return
+    const json = exportClipJSON(clipName)
     if (!json) return
     try {
-      const { name } = await saveClipAs(json, activeClipName)
+      const { name } = await saveClipAs(json, clipName)
       setBvhMsg(`Saved “${name}”.`)
       refreshRecentClips()
     } catch (err) {
@@ -1945,19 +2054,22 @@ export default function AnimationPanel() {
 
   // --- trim ------------------------------------------------------------------
 
-  function onOpenTrim() {
-    setTrimRange([0, duration || 0])
+  function onOpenTrim(clipName = activeClipName) {
+    if (!clipName) return
+    ensureClipActive(clipName) // brings its length into the store so the range starts at the full clip
+    setTrimTarget(clipName)
+    setTrimRange([0, st().duration || 0])
     setTrimOpen(true)
   }
 
   function onConfirmTrim() {
-    if (!activeClipName) return
+    if (!trimTarget) return
     const [start, end] = trimRange
     if (end <= start) {
       setBvhMsg('The trim end has to be after the start.')
       return
     }
-    const newName = trimClip(activeClipName, animFps, start, end)
+    const newName = trimClip(trimTarget, animFps, start, end)
     if (!newName) return
     setTrimOpen(false)
     armClip(newName)
@@ -1968,9 +2080,9 @@ export default function AnimationPanel() {
 
     // --- mirror ------------------------------------------------------------
 
-  function onMirrorClip() {
-    if (!activeClipName) return
-    const newName = mirrorClip(activeClipName, animFps)
+  function onMirrorClip(clipName = activeClipName) {
+    if (!clipName) return
+    const newName = mirrorClip(clipName, animFps)
     if (!newName) {
       setBvhMsg("Couldn't mirror that clip.")
       return
@@ -2067,6 +2179,21 @@ export default function AnimationPanel() {
         />
       </div>
 
+      {source === 'clip' && activeClipName && (
+        <label
+          className="slider-row"
+          style={{ marginTop: 8 }}
+          title="Keeps the clip's poses and turning, but removes its built-in horizontal travel so the character stays in place. The original clip is unchanged."
+        >
+          <input
+            type="checkbox"
+            checked={!!removeClipMovement}
+            onChange={(e) => onRemoveClipMovementToggle(e.target.checked)}
+          />
+          <span className="slider-label">Remove built-in movement (in place)</span>
+        </label>
+      )}
+
       {source === 'edit' && hasBones && (
         <div className="kf-numbers" style={{ marginTop: 8 }}>
           <label>
@@ -2127,67 +2254,115 @@ export default function AnimationPanel() {
                 />
                 <span className="slider-label">Carry keyed positions to other clips</span>
               </label>
-              {activeClipName && importedClipNames.includes(activeClipName) && !renameOpen && (
-                <button className="btn secondary" style={{ marginTop: 6 }} onClick={onOpenRename} title="Rename this clip">
-                  ✏️ Rename
+              <div className="field-label" style={{ marginTop: 10 }}>
+                Clips on this character ({clipNames.length})
+              </div>
+              <div className="kf-help">
+                Tick two or more clips in the order you want them to play to combine them.
+              </div>
+              <div className="kf-list" style={{ maxHeight: 220 }}>
+                {clipNames.map((name, i) => {
+                  const imported = importedClipNames.includes(name)
+                  const length = getCharacterClipDuration(activeCharacterId, name)
+                  const pos = combineSel.indexOf(name)
+                  return (
+                    <div
+                      key={name + i}
+                      className={'kf-list-row clip-row' + (name === activeClipName ? ' active' : '')}
+                      title={imported ? 'Click to select. Double-click to rename.' : 'Click to select. Built into the model file.'}
+                      onClick={() => {
+                        if (renamingClip === name) return
+                        if (name !== activeClipName) onClipChange(name)
+                      }}
+                      onContextMenu={(e) => openClipMenu(e, name, false)}
+                    >
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${name || `clip ${i + 1}`} for combining`}
+                        checked={pos !== -1}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={() => toggleCombineSel(name)}
+                      />
+                      <RowName
+                        className="clip-name"
+                        editing={renamingClip === name}
+                        value={name}
+                        onCommit={(text) => onCommitClipRename(name, text)}
+                        onCancel={() => setRenamingClip(null)}
+                        onDoubleClick={() => imported && setRenamingClip(name)}
+                      >
+                        {name || `(clip ${i + 1})`}
+                      </RowName>
+                      {pos !== -1 && <span className="kf-tag" title="Combine order">{pos + 1}</span>}
+                      {!imported && <span className="kf-tag" title="Comes from the model file, so it can't be renamed or deleted">built in</span>}
+                      {length > 0 && <span className="clip-len">{length.toFixed(1)}s</span>}
+                      <RowMenuButton label="Clip options" onOpen={(e) => openClipMenu(e, name, true)} />
+                      {imported && (
+                        <button
+                          type="button"
+                          className="obj-del"
+                          aria-label={`Delete ${name}`}
+                          title="Delete clip"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            onDeleteClip(name)
+                          }}
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+              <p className="obj-row-hint">Right-click a clip (or press ⋯) to rename, save, trim, mirror or delete it.</p>
+              {clipMenu.element}
+
+              <label
+                style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, fontSize: 12 }}
+                title="Shift each clip's hip height so its lowest foot sits at the same ground level as the first clip's. Stops the character dipping or popping up at the joins."
+              >
+                <input
+                  type="checkbox"
+                  checked={combineMatchGround}
+                  onChange={(e) => setCombineMatchGround(e.target.checked)}
+                />
+                Keep feet on the same ground level
+              </label>
+              <label
+                style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, fontSize: 12 }}
+                title="Remove all forward/sideways hip travel baked into the clips so the character stays on the spot (up/down bob is kept)."
+              >
+                <input
+                  type="checkbox"
+                  checked={combineInPlace}
+                  onChange={(e) => setCombineInPlace(e.target.checked)}
+                />
+                Keep on the spot (no movement)
+              </label>
+              <div className="kf-actions" style={{ marginTop: 6 }}>
+                <button
+                  className="btn secondary clip-combine"
+                  onClick={onConfirmCombine}
+                  disabled={combineSel.length < 2}
+                >
+                  Combine {combineSel.length > 1 ? `(${combineSel.length})` : ''}
                 </button>
-              )}
-
-              {renameOpen && (
-                <div style={{ marginTop: 6 }}>
-                  <input
-                    className="select"
-                    style={{ width: '100%', fontSize: 13, padding: '8px 10px' }}
-                    value={renameText}
-                    autoFocus
-                    onFocus={(e) => e.target.select()}
-                    onChange={(e) => setRenameText(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') onConfirmRename()
-                      if (e.key === 'Escape') setRenameOpen(false)
-                    }}
-                  />
-                  <div className="kf-actions" style={{ marginTop: 6 }}>
-                    <button className="btn" onClick={onConfirmRename}>Save</button>
-                    <button className="btn secondary" onClick={() => setRenameOpen(false)}>Cancel</button>
-                  </div>
-                </div>
-              )}
-
-              {activeClipName && (
-                <div className="kf-actions" style={{ marginTop: 6 }}>
-                  <button
-                    className="btn secondary"
-                    onClick={onSaveClipAs}
-                    title="Save this clip to a file on disk — pick where, same as Save Project As"
-                  >
-                    💾 Save Clip As…
+                {combineSel.length > 0 && (
+                  <button className="btn secondary" onClick={() => setCombineSel([])}>
+                    Clear selection
                   </button>
-                  <button
-                    className="btn secondary"
-                    onClick={() => (trimOpen ? setTrimOpen(false) : onOpenTrim())}
-                    title="Cut this clip down to a shorter range, saved as a new clip"
-                  >
-                    ✂ Trim
-                  </button>
-                  <button
-                    className="btn secondary"
-                    onClick={onMirrorClip}
-                    title="Flip the whole clip left ↔ right, frame by frame, saved as a new clip"
-                  >
-                    ⇄ Mirror clip
-                  </button>
-                </div>
-              )}
+                )}
+              </div>
 
-              {trimOpen && activeClipName && (
+              {trimOpen && trimTarget && (
                 <div className="map-editor">
                   <div className="field-label" style={{ marginTop: 4 }}>
-                    Trim “{activeClipName}”
+                    Trim “{trimTarget}”
                   </div>
                   <div className="map-hint">
                     Pick the range to keep — the rest is dropped. Saved as a new clip
-                    named “{activeClipName} (trimmed)”; the original is untouched.
+                    named “{trimTarget} (trimmed)”; the original is untouched.
                   </div>
                   <label className="slider-row">
                     <span className="slider-label">Start</span>
@@ -2242,71 +2417,6 @@ export default function AnimationPanel() {
                 </div>
               )}
 
-              {clipNames.length > 1 && (
-                <>
-                  <div className="field-label" style={{ marginTop: 10 }}>
-                    Combine clips
-                  </div>
-                  <div className="kf-help">
-                    Tick two or more, in the order you want them to play — they'll
-                    be stitched into one new clip, back to back.
-                  </div>
-                  <div className="kf-list">
-                    {clipNames.map((name, i) => {
-                      const pos = combineSel.indexOf(name)
-                      return (
-                        <label key={i} className="kf-list-row" style={{ cursor: 'pointer' }}>
-                          <input
-                            type="checkbox"
-                            checked={pos !== -1}
-                            onChange={() => toggleCombineSel(name)}
-                            style={{ marginRight: 8 }}
-                          />
-                          <span className="kf-what">{name || `(clip ${i + 1})`}</span>
-                          {pos !== -1 && <span className="kf-tag">{pos + 1}</span>}
-                        </label>
-                      )
-                    })}
-                  </div>
-                  <label
-                    style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, fontSize: 12 }}
-                    title="Shift each clip's hip height so its lowest foot sits at the same ground level as the first clip's. Stops the character dipping or popping up at the joins."
-                  >
-                    <input
-                      type="checkbox"
-                      checked={combineMatchGround}
-                      onChange={(e) => setCombineMatchGround(e.target.checked)}
-                    />
-                    Keep feet on the same ground level
-                  </label>
-                  <label
-                    style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, fontSize: 12 }}
-                    title="Remove all forward/sideways hip travel baked into the clips so the character stays on the spot (up/down bob is kept)."
-                  >
-                    <input
-                      type="checkbox"
-                      checked={combineInPlace}
-                      onChange={(e) => setCombineInPlace(e.target.checked)}
-                    />
-                    Keep on the spot (no movement)
-                  </label>
-                  <div className="kf-actions" style={{ marginTop: 6 }}>
-                    <button
-                      className="btn secondary"
-                      onClick={onConfirmCombine}
-                      disabled={combineSel.length < 2}
-                    >
-                      Combine {combineSel.length > 1 ? `(${combineSel.length})` : ''}
-                    </button>
-                    {combineSel.length > 0 && (
-                      <button className="btn secondary danger" onClick={() => setCombineSel([])}>
-                        Clear selection
-                      </button>
-                    )}
-                  </div>
-                </>
-              )}
-
               {recentClips.length > 0 && (
                 <>
                   <div className="field-label" style={{ marginTop: 10 }}>
@@ -2350,6 +2460,7 @@ export default function AnimationPanel() {
         <details className="anim-disclosure" style={{ marginTop: 8 }}>
           <summary>More character tools</summary>
           <div className="anim-disclosure-content">
+            <LockInPlaceSection />
             <section className="wind-controls" aria-label="Character tools">
               <div className="wind-heading">
                 <div>
@@ -2602,7 +2713,7 @@ export default function AnimationPanel() {
 
       {/* Transport */}
       <div className="transport">
-        <button className="btn" onClick={onPauseToggle} disabled={source === 'clip' && !activeClipName}>
+        <button className="btn" onClick={onPauseToggle} disabled={source === 'clip' && (!activeClipName || !(displayDuration > 0))} title={source === 'clip' && !(displayDuration > 0) ? 'This clip contains a single static pose.' : ''}>
           {playing ? '❚❚ Pause' : '▶ Play'}
         </button>
         <button className="btn secondary" onClick={onStop} disabled={playback === 'stopped'}>
@@ -2702,6 +2813,14 @@ export default function AnimationPanel() {
             title="Save the animation you created or edited as a new reusable clip."
           >
             Save as clip…
+          </button>
+          <button
+            className="btn secondary"
+            style={{ marginTop: 8, marginLeft: 6 }}
+            onClick={onSaveEditToLibrary}
+            title="Turn this animation into a clip and keep it in the Pose Library (titlebar)"
+          >
+            📚 Save to library
           </button>
 
           <details className="anim-disclosure">

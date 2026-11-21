@@ -1,5 +1,7 @@
 import * as THREE from 'three'
+import { makeClipNamesUnique, uniqueClipName } from './clipNames.js'
 import { parseBVH, retargetParsed, buildSlotMapping, buildNameMatch, mergeNames } from './bvh.js'
+import { captureLibraryRig, libraryPoseClip, libraryRigsMatch, retargetLibraryClip } from './libraryRetarget.js'
 import {
   sampleMeshTracks,
   getMeshPlaybackSnapshot,
@@ -60,6 +62,8 @@ function newEntry(model) {
     restPos: null,
     action: null,
     clip: null,
+    sourceClip: null,
+    inPlace: false,
     editClip: null,
     editRoot: null,
     editMeshes: null,
@@ -81,6 +85,7 @@ function newEntry(model) {
 const perChar = new Map() // id -> entry (same shape the old singleton `a` had)
 let activeId = null // which character AnimationPanel.jsx is currently editing
 let globalRefs = null // shared across all characters — renderer/store callbacks don't change per-character
+const inPlaceClipCache = new WeakMap()
 // Normal Play in the Animate panel only follows camera cuts/keys when the
 // user opts in (see store.followCameraCuts) — otherwise a work-in-progress
 // clip wouldn't keep yanking the view around while posing. Recording/
@@ -214,6 +219,7 @@ export function updateAnimation(delta) {
   for (const [id, entry] of perChar) {
     if (!entry.mixer) continue
     activeId = id // let the helpers below (which read through the `a` proxy) see this entry
+    if (entry.action && !(entry.clip?.duration > 0)) entry.action.paused = true
     entry.mixer.update(delta)
     if (entry.action) {
       const t = entry.action.time
@@ -248,9 +254,27 @@ export function updateAnimation(delta) {
 export function selectClip(name, opts = {}, animData = null) {
   const clip = findClip(name)
   if (!clip) return 0
+  const playbackClip = opts.inPlace ? getInPlaceClip(clip) : clip
   setupOverlayTracks(withClipOverlay(overlayForClip(animData, name), clip))
-  activate(clip, opts)
-  return clip.duration
+  activate(playbackClip, opts, clip)
+  return playbackClip.duration
+}
+
+function getInPlaceClip(clip) {
+  const cached = inPlaceClipCache.get(clip)
+  if (cached) return cached
+  const res = sampleClipRange(clip, 30, 0, clip.duration, false, { captureHip: true })
+  if (!res) return clip
+  if (res.hip) {
+    restitchHip(res, { anchor: null, endYaw: 0 }, { inPlace: true, matchGround: false }, true)
+  }
+  const inPlace = res.hip
+    ? buildEditClip(res.tracks, res.duration, {})
+    : clip.clone()
+  if (!res.hip) inPlace.tracks = inPlace.tracks.filter((track) => track.name !== '.position')
+  inPlace.name = clip.name
+  inPlaceClipCache.set(clip, inPlace)
+  return inPlace
 }
 
 // --- Mocap (BVH) -------------------------------------------------------------
@@ -276,15 +300,62 @@ export async function beginBVHImport(file) {
 
 // Step 2: retarget the pending BVH using the (possibly hand-edited) slot mapping
 // and add the resulting clip to the playable list. Returns { name, matched, total }.
-export async function applyBVHRetarget(slots) {
+export async function applyBVHRetarget(slots, options) {
   if (!a.pendingBVH) throw new Error('No BVH is being imported.')
   const { names, hip } = mergeNames(a.pendingBVH.autoNames, slots)
   restoreRest() // the retarget measures the rig's rest pose — make sure it's in it
-  const { clip, matched, total } = await retargetParsed(a.pendingBVH, a.model, names, hip)
-  a.importedClips.push(clip)
+  const { clip, matched, total } = await retargetParsed(a.pendingBVH, a.model, names, hip, undefined, options)
+  const name = addGeneratedClip(clip)
   a.pendingBVH = null
   a.refs.requestRender() // the retarget touched the rig; redraw the reset pose
-  return { name: clip.name, matched, total }
+  return { name, matched, total }
+}
+
+// Work out ONE pose from the first frame of a BVH, as it would look on the active character, without adding a clip
+// or changing the pose on screen. Uses the same automatic bone mapping as File > Import Animation. Resolves with
+// { boneName: [x, y, z, w] } for the bones the BVH actually drives (everything else is left out, so hair, cloth and
+// other bones the mocap doesn't know about are never reset).
+export async function poseFromBVHText(text, name = 'pose') {
+  if (!a.model) throw new Error('Load a model first.')
+  const parsed = await parseBVH({ name: `${name}.bvh`, text: async () => text })
+  const targetBoneObjs = a.model.bones || []
+  const targetBones = targetBoneObjs.map((b) => b.name)
+  parsed.autoNames = buildNameMatch(targetBones, parsed.bones)
+  const slots = buildSlotMapping(targetBones, parsed.bones, targetBoneObjs, parsed.skeleton.bones)
+  const { names, hip } = mergeNames(parsed.autoNames, slots)
+
+  // The retarget measures the rig at rest; put every bone back exactly as it was afterwards.
+  const keepQuat = new Map(targetBoneObjs.map((b) => [b, b.quaternion.clone()]))
+  const keepPos = new Map(targetBoneObjs.map((b) => [b, b.position.clone()]))
+  const out = {}
+  try {
+    restoreRest()
+    const { clip } = await retargetParsed(parsed, a.model, names, hip)
+    const driven = new Set()
+    for (const tr of clip.tracks) {
+      const m = /^(.+)\.quaternion$/.exec(tr.name)
+      if (m) driven.add(m[1])
+    }
+    const mixer = new THREE.AnimationMixer(a.model.root)
+    const action = mixer.clipAction(clip)
+    action.setLoop(THREE.LoopOnce, 1)
+    action.clampWhenFinished = true
+    action.play()
+    mixer.setTime(0)
+    for (const b of targetBoneObjs) {
+      if (!driven.has(b.name)) continue
+      const q = b.quaternion
+      out[b.name] = [q.x, q.y, q.z, q.w]
+    }
+    mixer.stopAllAction()
+    mixer.uncacheClip(clip)
+  } finally {
+    for (const [b, q] of keepQuat) b.quaternion.copy(q)
+    for (const [b, p] of keepPos) b.position.copy(p)
+    a.model.root.updateMatrixWorld(true)
+    a.refs.requestRender()
+  }
+  return out
 }
 
 export function cancelBVHImport() {
@@ -296,9 +367,7 @@ export function cancelBVHImport() {
 // don't collide. Returns the final name (null if no model is loaded).
 export function addGeneratedClip(clip) {
   if (!a.model) return null
-  const base = clip.name || 'Clip'
-  let name = base
-  for (let n = 2; findClip(name); n++) name = `${base} ${n}`
+  const name = uniqueClipName(clip.name, new Set([...a.bakedClips, ...a.importedClips].map((c) => c.name)))
   clip.name = name
   a.importedClips.push(clip)
   return name
@@ -312,10 +381,28 @@ export function renameClip(name, newName) {
   if (!clip) return null
   const base = (newName || '').trim() || 'Clip'
   if (base === name) return name
-  let final = base
-  for (let n = 2; findClip(final); n++) final = `${base} ${n}`
+  const final = uniqueClipName(base, new Set([...a.bakedClips, ...a.importedClips].map((c) => c.name)))
   clip.name = final
+  // Which clip the editor's keys belong to is tracked by name, so follow the rename.
+  if (a.adoptedClip === name) a.adoptedClip = final
   return final
+}
+
+// Delete an imported/generated clip from the active character (combined,
+// trimmed, imported, ragdoll, …). Clips baked into the model file itself can't
+// be deleted — they come straight back from the file on load — so this returns
+// false for them (and for unknown names). If the clip is the one currently
+// loaded in the mixer it is stopped first so nothing keeps playing a clip that
+// is no longer in the list.
+export function removeClip(name) {
+  const i = a.importedClips.findIndex((c) => c.name === name)
+  if (i === -1) return false
+  const clip = a.importedClips[i]
+  if (a.sourceClip === clip) stop()
+  if (a.adoptedClip === name) a.adoptedClip = null
+  a.importedClips.splice(i, 1)
+  inPlaceClipCache.delete(clip)
+  return true
 }
 
 // Wrap a clip's standard three.js JSON together with its (optional) baked
@@ -353,10 +440,141 @@ function unwrapClipJSON(json) {
 
 // Serialize a clip (baked or imported) to a plain JSON object, for downloading
 // or stashing in the persistent clip library. Returns null if not found.
-export function exportClipJSON(name) {
+//
+// Locked / pinned limbs (ikpins.js) only exist at runtime, on top of the animation. Exports have to bake them in, or
+// a saved clip or BVH would come out with the feet sliding again. ikpins registers itself here (via scene.js) so this
+// module needs no import of it: apply(model) solves every world-fixed pin on the model's CURRENT pose; bones(model)
+// names the bones those pins move; any(model) says whether there is anything to bake.
+let pinBaker = null
+export function setPinBaker(baker) {
+  pinBaker = baker
+}
+
+// A copy of `clip` whose rotation tracks for the pinned limbs are re-sampled with the pins applied, so the locks
+// travel with the saved clip. Everything else in the clip (other bones, root motion, mesh/shape-key data) is
+// untouched. Returns null when there is nothing to bake.
+function bakePinsIntoClip(clip, fps) {
+  if (!pinBaker || !a.model || !pinBaker.any(a.model)) return null
+  const names = pinBaker.bones(a.model)
+  const bones = a.model.bones.filter((b) => names.has(b.name))
+  if (!bones.length || !(clip.duration > 0)) return null
+  const frames = Math.max(2, Math.round(clip.duration * fps) + 1)
+  const mixer = new THREE.AnimationMixer(a.model.root)
+  const act = mixer.clipAction(clip)
+  act.loop = THREE.LoopOnce
+  act.clampWhenFinished = true
+  act.play()
+  const savedPos = a.model.root.position.clone()
+  const savedQuat = a.model.root.quaternion.clone()
+  const times = []
+  const values = new Map(bones.map((b) => [b, []]))
+  for (let f = 0; f < frames; f++) {
+    const t = (f / (frames - 1)) * clip.duration
+    mixer.setTime(t)
+    a.model.root.updateWorldMatrix(true, true)
+    pinBaker.apply(a.model)
+    times.push(t)
+    for (const b of bones) {
+      const arr = values.get(b)
+      const n = arr.length
+      let { x, y, z, w } = b.quaternion
+      if (n >= 4 && x * arr[n - 4] + y * arr[n - 3] + z * arr[n - 2] + w * arr[n - 1] < 0) { x = -x; y = -y; z = -z; w = -w }
+      arr.push(x, y, z, w)
+    }
+  }
+  mixer.stopAllAction()
+  mixer.uncacheClip(clip)
+  restoreRest()
+  a.model.root.position.copy(savedPos)
+  a.model.root.quaternion.copy(savedQuat)
+  a.model.root.updateWorldMatrix(true, true)
+  a.refs.requestRender()
+
+  const baked = clip.clone()
+  baked.tracks = baked.tracks.filter((tr) => !(tr.name.endsWith('.quaternion') && names.has(trackNodeName(tr.name))))
+  for (const b of bones) baked.tracks.push(new THREE.QuaternionKeyframeTrack(`${b.name}.quaternion`, times, values.get(b)))
+  baked.name = clip.name
+  baked.charMeshTracks = clip.charMeshTracks
+  baked.charMorphTracks = clip.charMorphTracks
+  baked.editKeys = clip.editKeys
+  baked.rootFromKeys = clip.rootFromKeys
+  return baked
+}
+
+// opts.fps: sample rate used when locks have to be baked in (default 30).
+export function exportClipJSON(name, { fps = 30 } = {}) {
   const clip = findClip(name)
   if (!clip) return null
-  return wrapClipJSON(clip)
+  return wrapClipJSON(bakePinsIntoClip(clip, fps) || clip)
+}
+
+// Inspect the load-time rest rig without disturbing the current pose or playback.
+function withLibraryRest(fn) {
+  if (!a.model) throw new Error('Load a model first.')
+  const model = a.model
+  const saved = (model.bones || []).map((bone) => ({
+    bone, position: bone.position.clone(), quaternion: bone.quaternion.clone(),
+  }))
+  try {
+    restoreRest()
+    model.root.updateWorldMatrix(true, true)
+    return fn(model)
+  } finally {
+    for (const item of saved) {
+      item.bone.position.copy(item.position)
+      item.bone.quaternion.copy(item.quaternion)
+    }
+    model.root.updateWorldMatrix(true, true)
+    a.refs?.requestRender()
+  }
+}
+
+export function getLibraryRig() {
+  return withLibraryRest(captureLibraryRig)
+}
+
+function libraryTrackTarget(track) {
+  const binding = THREE.PropertyBinding.parseTrackName(track.name)
+  return binding.objectName === 'bones' ? binding.objectIndex : binding.nodeName
+}
+
+export function prepareLibraryClip(json, rig) {
+  return withLibraryRest((model) => {
+    const targetRig = captureLibraryRig(model)
+    const original = unwrapClipJSON(json)
+    if (rig && !libraryRigsMatch(rig, targetRig)) {
+      return { clip: retargetLibraryClip(json, rig, model), retargeted: true }
+    }
+    if (rig) {
+      const ids = new Map(rig.nodes.map((node, i) => [node.uuid, targetRig.nodes[i].uuid]))
+      for (const track of original.tracks) {
+        const id = libraryTrackTarget(track)
+        if (ids.has(id)) track.name = track.name.replace(id, ids.get(id))
+      }
+    } else {
+      const missing = original.tracks.map(libraryTrackTarget).filter((name) =>
+        name && !model.root.getObjectByName(name) && !model.root.getObjectByProperty('uuid', name))
+      if (missing.length) {
+        throw new Error('This older library clip has no source rig and cannot be retargeted. Save it again from its original character.')
+      }
+    }
+    return { clip: original, retargeted: false }
+  })
+}
+
+export function retargetLibraryPose(bones, rig) {
+  return withLibraryRest((model) => {
+    if (libraryRigsMatch(rig, captureLibraryRig(model))) return { ...bones }
+    const clip = retargetLibraryClip(libraryPoseClip(bones), rig, model)
+    const result = {}
+    for (const track of clip.tracks) {
+      const match = /^(.+)\.quaternion$/.exec(track.name)
+      if (!match) continue
+      const bone = model.bones.find((item) => item.name === match[1] || item.uuid === match[1])
+      if (bone) result[bone.name] = Array.from(track.values.slice(0, 4))
+    }
+    return result
+  })
 }
 
 // Every IMPORTED/GENERATED clip (BVH imports, ragdoll bakes, combined/trimmed
@@ -373,14 +591,19 @@ export function getImportedClipsData(id) {
 // setAnimationModel has created its entry, i.e. after the model has loaded).
 export function restoreImportedClips(id, clipsJSON) {
   const entry = perChar.get(id)
-  if (!entry || !clipsJSON || !clipsJSON.length) return
+  if (!entry || !clipsJSON || !clipsJSON.length) return []
+  const restored = []
   for (const json of clipsJSON) {
     try {
-      entry.importedClips.push(unwrapClipJSON(json))
-    } catch {
-      /* a clip that fails to parse is skipped rather than aborting the load */
+      const clip = unwrapClipJSON(json)
+      restored.push({ originalName: clip.name, clip })
+    } catch (error) {
+      console.warn('Could not restore an imported animation clip:', error)
     }
   }
+  makeClipNamesUnique(restored.map((item) => item.clip), [...entry.bakedClips, ...entry.importedClips])
+  entry.importedClips.push(...restored.map((item) => item.clip))
+  return restored.map(({ originalName, clip }) => ({ originalName, name: clip.name }))
 }
 
 // Parse a previously-exported clip and register it as playable, same as any
@@ -951,6 +1174,7 @@ export function rebakeClipFromKeys(name, keys) {
   if (a.adoptedClip !== name) return false
   const duration = Math.max(0.1, Number(keys.duration) || clip.editKeys.duration || 0.1)
   const root = keys.root || []
+  inPlaceClipCache.delete(clip)
   const fresh = buildEditClip(keys.tracks || {}, duration, {}, root)
   clip.tracks = fresh.tracks
   clip.duration = duration
@@ -960,8 +1184,8 @@ export function rebakeClipFromKeys(name, keys) {
   // The live placement overlay mirrors the position keys too (see
   // updateRootMotionTrack); keep it in step so nothing keeps following a
   // deleted key no matter which caller remembers to refresh it.
-  if (a.clip === clip) a.editRoot = root.length ? [...root].sort((x, y) => x.time - y.time) : null
-  const live = a.clip === clip && a.action
+  if (a.sourceClip === clip) a.editRoot = root.length ? [...root].sort((x, y) => x.time - y.time) : null
+  const live = a.sourceClip === clip && a.action
   const saved = live
     ? {
         time: a.action.time,
@@ -971,9 +1195,11 @@ export function rebakeClipFromKeys(name, keys) {
         loop: a.action.loop,
       }
     : null
-  a.mixer.uncacheClip(clip) // drop the old bindings (and the old action with them)
+  if (live && a.clip && a.clip !== clip) a.mixer.uncacheClip(a.clip)
+  a.mixer.uncacheClip(clip)
   if (saved) {
-    const action = a.mixer.clipAction(clip)
+    const playbackClip = a.inPlace ? getInPlaceClip(clip) : clip
+    const action = a.mixer.clipAction(playbackClip)
     action.reset()
     action.setLoop(saved.loop, Infinity)
     action.clampWhenFinished = saved.clampWhenFinished
@@ -982,6 +1208,8 @@ export function rebakeClipFromKeys(name, keys) {
     action.time = Math.min(saved.time, duration)
     action.paused = saved.paused
     a.action = action
+    a.clip = playbackClip
+    a.sourceClip = clip
     a.mixer.update(0)
     a.refs.requestRender()
   }
@@ -1224,13 +1452,16 @@ function makeRootTracks(root) {
 // and playback kept following the deleted keys. Keep the baked copy in step
 // with the keys instead (and keep the playhead/loop/speed untouched).
 function rebakeClipRoot(keys) {
-  const clip = a.clip
+  const clip = a.sourceClip || a.clip
   if (!clip || !clip.rootFromKeys || !a.mixer || !a.action) return
+  inPlaceClipCache.delete(clip)
   const { time, paused, timeScale, clampWhenFinished, loop } = a.action
   clip.tracks = clip.tracks.filter((t) => t.name !== '.position' && t.name !== '.quaternion')
   if (keys && keys.length) clip.tracks.push(...makeRootTracks(keys))
-  a.mixer.uncacheClip(clip) // drop the old bindings (and the old action with them)
-  const action = a.mixer.clipAction(clip)
+  const playbackClip = a.inPlace ? getInPlaceClip(clip) : clip
+  if (a.clip !== clip) a.mixer.uncacheClip(a.clip)
+  a.mixer.uncacheClip(clip)
+  const action = a.mixer.clipAction(playbackClip)
   action.reset()
   action.setLoop(loop, Infinity)
   action.clampWhenFinished = clampWhenFinished
@@ -1239,6 +1470,8 @@ function rebakeClipRoot(keys) {
   action.time = time
   action.paused = paused
   a.action = action
+  a.clip = playbackClip
+  a.sourceClip = clip
   a.mixer.update(0)
 }
 
@@ -1388,10 +1621,14 @@ function applyMorphPlaybackSnapshot(snap) {
 // --- Transport ---------------------------------------------------------------
 
 export function play() {
-  if (!a.action) return
+  if (!a.action || !(a.clip?.duration > 0)) {
+    if (a.action) a.action.paused = true
+    return false
+  }
   a.refs.suspendPosing()
   a.action.paused = false
   a.refs.setContinuousRender(true)
+  return true
 }
 
 // True if the active character has an armed (playing or paused) action — lets
@@ -1449,6 +1686,8 @@ export function stop() {
   if (a.mixer) a.mixer.stopAllAction()
   a.action = null
   a.clip = null
+  a.sourceClip = null
+  a.inPlace = false
   if (!anyPlaying()) a.refs.setContinuousRender(false)
   restoreRest()
   restoreRootRest()
@@ -1478,8 +1717,9 @@ export function stop() {
 
 export function setLoop(loop) {
   if (!a.action) return
-  a.action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity)
-  a.action.clampWhenFinished = !loop
+  const repeat = loop && !!(a.clip?.duration > 0)
+  a.action.setLoop(repeat ? THREE.LoopRepeat : THREE.LoopOnce, Infinity)
+  a.action.clampWhenFinished = !repeat
 }
 
 export function setSpeed(speed) {
@@ -1527,7 +1767,7 @@ const _pp = new THREE.Vector3()
 const _pq = new THREE.Quaternion()
 
 function fmtNum(n) {
-  return (Math.abs(n) < 1e-6 ? 0 : n).toFixed(4)
+  return (Math.abs(n) < 1e-9 ? 0 : n).toFixed(8)
 }
 
 // A bone's world-space rotation with any scale/reflection in its ancestor
@@ -1605,6 +1845,30 @@ export function exportAnimationBVH(animData, fps, duration, clipName, playbackSo
   const totalDuration = namedClip ? namedClip.duration : duration
   if (!totalDuration || totalDuration <= 0) return null
 
+  const savedBones = bones.map((bone) => ({
+    bone, position: bone.position.clone(), quaternion: bone.quaternion.clone(), scale: bone.scale.clone(),
+  }))
+  const savedPos = a.model.root.position.clone()
+  const savedQuat = a.model.root.quaternion.clone()
+  restoreRest()
+  a.model.root.updateWorldMatrix(true, true)
+
+  const restOffsets = new Map()
+  const restRotations = new Map()
+  for (const b of bones) {
+    if (isRoot(b)) {
+      restOffsets.set(b, new THREE.Vector3())
+      restRotations.set(b, getWorldQuat(b).clone())
+      continue
+    }
+    b.getWorldPosition(_bp)
+    b.parent.getWorldPosition(_pp)
+    _pq.copy(getWorldQuat(b.parent)).invert()
+    restOffsets.set(b, _bp.clone().sub(_pp).applyQuaternion(_pq))
+    restRotations.set(b, getWorldQuat(b).clone().premultiply(_pq))
+  }
+  const restRootPosition = rootBone.getWorldPosition(new THREE.Vector3())
+
   // --- sample the animation frame by frame, on a throwaway mixer so this
   // never disturbs whatever the live a.mixer/a.action are doing ---
   const clip = namedClip || buildEditClip(animData.tracks, duration)
@@ -1615,9 +1879,6 @@ export function exportAnimationBVH(animData, fps, duration, clipName, playbackSo
   bvhAction.play()
 
   const rootKeys = (animData.root || []).slice().sort((x, y) => x.time - y.time)
-  const savedPos = a.model.root.position.clone()
-  const savedQuat = a.model.root.quaternion.clone()
-
   const numFrames = Math.max(2, Math.round(totalDuration * fps) + 1)
   const frameTime = totalDuration / (numFrames - 1)
   const frames = []
@@ -1627,6 +1888,10 @@ export function exportAnimationBVH(animData, fps, duration, clipName, playbackSo
     mixer.setTime(t)
     if (rootKeys.length) applyRootAt(rootKeys, t, a.model.root)
     a.model.root.updateWorldMatrix(true, true)
+    if (pinBaker) {
+      pinBaker.apply(a.model) // locked / pinned limbs are part of what is exported
+      a.model.root.updateWorldMatrix(true, true)
+    }
     const rot = new Map()
     for (const b of bones) {
       // Rotation is taken relative to the bone's WORLD orientation (not its
@@ -1677,32 +1942,14 @@ export function exportAnimationBVH(animData, fps, duration, clipName, playbackSo
   // --- put everything back exactly how it was before export ---
   mixer.stopAllAction()
   mixer.uncacheClip(clip)
-  restoreRest()
+  for (const { bone, position, quaternion, scale } of savedBones) {
+    bone.position.copy(position)
+    bone.quaternion.copy(quaternion)
+    bone.scale.copy(scale)
+  }
   a.model.root.position.copy(savedPos)
   a.model.root.quaternion.copy(savedQuat)
   a.model.root.updateWorldMatrix(true, true)
-
-  // Rest OFFSETS, one per non-root bone: the bone's rest position relative to
-  // its parent, expressed in the parent's UN-SCALED rotated frame (world-space
-  // delta, un-rotated by the parent's world orientation) rather than read
-  // straight off bone.position. Plain bone.position is defined in the
-  // parent's own (possibly scaled/mirrored) local space, so if a rig mirrors
-  // one side via a negative scale anywhere above a bone — a common cheap way
-  // to build a symmetric left/right pair — that bone's offset comes out
-  // mirrored to the wrong side once BVH (which has no scale channels at all)
-  // drops the scale. Computing it from world positions sidesteps that.
-  const restOffsets = new Map()
-  for (const b of bones) {
-    if (isRoot(b)) {
-      restOffsets.set(b, new THREE.Vector3())
-      continue
-    }
-    b.getWorldPosition(_bp)
-    b.parent.getWorldPosition(_pp)
-    getWorldQuat(b.parent)
-    _pq.copy(_wq2).invert()
-    restOffsets.set(b, _bp.clone().sub(_pp).applyQuaternion(_pq))
-  }
 
   // --- write HIERARCHY (rest offsets), collecting the channel order ---
   const order = []
@@ -1728,7 +1975,7 @@ export function exportAnimationBVH(animData, fps, duration, clipName, playbackSo
   write(rootBone, 0)
 
   // --- write MOTION (channel values per frame, in the same order) ---
-  out += `MOTION\nFrames: ${numFrames}\nFrame Time: ${frameTime.toFixed(6)}\n`
+  out += `MOTION\nFrames: ${numFrames}\nFrame Time: ${frameTime.toFixed(9)}\n`
   for (const fr of frames) {
     const parts = []
     for (const b of order) {
@@ -1738,6 +1985,17 @@ export function exportAnimationBVH(animData, fps, duration, clipName, playbackSo
     }
     out += parts.join(' ') + '\n'
   }
+  // BVH has no rest-rotation fields. Keep the reference pose after the motion
+  // so ordinary BVH readers can still play the unchanged frame data.
+  const rest = {
+    root: restRootPosition.applyQuaternion(yawCancel).toArray(),
+    rotations: order.map((b) => {
+      const q = restRotations.get(b).clone()
+      if (isRoot(b)) q.premultiply(yawCancel)
+      return q.toArray()
+    }),
+  }
+  out += `# AnimareRestPose ${JSON.stringify(rest)}\n`
   return out
 }
 
@@ -1844,10 +2102,12 @@ function restoreRootRest() {
   a.rootRest = null
 }
 
-function activate(clip, opts) {
+function activate(clip, opts, sourceClip = clip) {
   if (!a.mixer) return
   a.mixer.stopAllAction()
   a.clip = clip
+  a.sourceClip = sourceClip
+  a.inPlace = !!opts.inPlace
   // Keep the original placement when rebuilding/reselecting an active
   // timeline; otherwise a scrubbed root key becomes the new "rest" position.
   if (a.model && !a.rootRest) {
@@ -1855,8 +2115,9 @@ function activate(clip, opts) {
   }
   const action = a.mixer.clipAction(clip)
   action.reset()
-  action.setLoop(opts.loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity)
-  action.clampWhenFinished = !opts.loop
+  const repeat = opts.loop && clip.duration > 0
+  action.setLoop(repeat ? THREE.LoopRepeat : THREE.LoopOnce, Infinity)
+  action.clampWhenFinished = !repeat
   action.timeScale = opts.speed ?? 1
   action.paused = true
   action.play() // activate so the mixer evaluates it (stays put while paused)

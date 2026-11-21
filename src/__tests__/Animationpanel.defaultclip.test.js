@@ -19,6 +19,7 @@ function setup(overrides = {}) {
     mode: 'object',
     playbackSource: 'edit',
     activeClipName: null,
+    removeClipMovement: false,
     playback: 'stopped',
     animDuration: 2,
     currentTime: 0,
@@ -81,5 +82,16 @@ describe('Default clip', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Play a clip' }))
     expect(useStore.getState().playbackSource).toBe('edit')
     expect(useStore.getState().activeClipName).toBeNull()
+  })
+
+  it('offers the in-place toggle for the selected clip and stores its setting', () => {
+    setup()
+    fireEvent.change(screen.getByLabelText('Character motion clip'), { target: { value: 'Walk' } })
+    const toggle = screen.getByLabelText('Remove built-in movement (in place)')
+    expect(toggle.checked).toBe(false)
+    fireEvent.click(toggle)
+    expect(useStore.getState().removeClipMovement).toBe(true)
+    fireEvent.click(toggle)
+    expect(useStore.getState().removeClipMovement).toBe(false)
   })
 })

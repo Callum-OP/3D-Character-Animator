@@ -1,0 +1,83 @@
+# Pose Finder (video → mocap)
+
+Desktop-only. Runs Meta's **SAM 3D Body** locally via `onnxruntime-node` (ONNX conversion by gok11, ViT-H body decoder,
+SAM License). No Python, no CUDA: CPU everywhere, DirectML (GPU) on Windows including ARM64.
+
+Flow: titlebar **Pose Finder** → accept licence + download model once (~1.4 GB into `userData/pose-engine`) → pick a video or image →
+draw a box round the person → **Find poses** → **Add to active character** (goes through the normal BVH import/retarget) or
+**Download BVH**.
+
+The model and video/image processing run locally. An image is analysed once and produces a single static pose frame. The source rest pose is stored as BVH metadata instead of a visible motion frame. Analysing frames can use substantial RAM and, with DirectML, GPU memory.
+On opening Pose Finder, the app checks its own model file in `userData/pose-engine` and shows **Model ready** if its
+size matches the expected download; it does not search for other installations or recheck the checksum at startup.
+The download itself is SHA-256 verified. **Uninstall model** removes the downloaded model from this device; it
+does not delete videos or generated animations. Stop analysis first. A future analysis requires a new download.
+
+To edit a result, add it to a character, then use **Animate → Edit keyframes** to convert the clip to editable
+keyframes. **Animate → More character tools → Lock in place** can hold feet, hands or selected bones for the whole
+animation; it is not a per-frame lock. Pose Finder itself does not yet have a frame-by-frame skeleton editor.
+
+Choose a motion preset before finding poses:
+- **Standing** uses the existing upright cleanup and ground correction.
+- **Lying down** preserves horizontal poses and uses the lowest tracked body point as the height reference.
+- **Flips** samples more frames, preserves airborne motion and steadies detected foot contacts before and after a jump.
+- **Adaptable** builds on Flips for clips mixing standing, falling, rolling and lying down. It analyses at 30 fps,
+  releases foot contacts when the hips tilt or the torso and hips are close to foot level, and uses shorter root-motion
+  filters to retain quick falls and bounces. It also checks projected hip and foot heights when the 3D estimate
+  places the hips too high during a horizontal pose. Bending over with the hips above the feet can still retain foot contacts.
+
+At their default settings, Adaptable and Flips analyse the same number of frames. Standing and Lying down analyse
+10 frames per second versus 30 for Adaptable, so inference for a clip is approximately three times as much work
+(model loading and other fixed overhead are unchanged). Processing time also depends on the computer and video.
+
+The ground toggle grounds the lowest foot and enables planted-foot cleanup. With the toggle off, the natural
+ground setting preserves airborne height while keeping the output skeleton's heels and toes above the estimated
+ground plane. During detected contacts, the solver
+levels and holds each foot in place on the output skeleton, releasing it for steps; this reduces sliding even when
+the tracked leg rotations are noisy. When adding a result to a character, retargeting preserves the character's
+own foot and toe rest angles rather than forcing them to match the output skeleton. Downloaded BVH files use their
+own skeleton and other BVH imports retain their usual retargeting. Switch the toggle off for airborne or non-standing movement (this also turns
+off the optional fixed-foot pin). Advanced settings can override cleanup.
+Advanced settings expose sampling, smoothing and cleanup controls. The optional fixed-foot pin is for motion on
+the spot, not walking: it is baked into the BVH, but feet can move if the hips travel beyond leg reach. Choosing
+a preset resets these settings. Results are generated from the settings at the time **Find poses** is pressed;
+run it again after changing settings. Both download and character import use that generated BVH. The source rest
+pose is stored in metadata for the app's retargeter. All presets use a lower shoulder and upper-arm
+reference pose by default, while preserving the tracked motion relative to that pose. Adjust or disable
+**Lower shoulders and arms** in advanced settings if it changes the intended result.
+The generated BVH's frame 0 is the first analysed pose, not a separate A-pose calibration frame.
+
+**Analyse frames at** controls model inference for videos, while **Clip frame rate** controls the generated BVH's frame rate.
+Both offer a 12 fps option. Lower analysis rates require less inference work
+but can miss fast motion. Lower clip rates produce fewer output frames.
+
+The model estimates 3D motion from one video, so occluded limbs, floor height, camera movement, and fast rotations
+are approximate. The body-height reference uses tracked points rather than detecting a real floor or bed, and
+the estimated plane and template feet cannot guarantee that a retargeted character's body or feet touch a real
+surface. Raised surfaces such as walls are not detected. Draw the box tightly around the intended person, especially
+when multiple people are visible; a person occupying very few source pixels may not be tracked accurately.
+If the initial detection cannot be followed, start the range where the person is clearer and redraw the box there.
+Frames whose detections cannot be followed hold the last tracked pose and produce a warning; a prolonged loss stops
+the run instead of generating a misleading clip. A plausible detection can still be the wrong person or pose.
+Video seeks are serialized between preview and analysis so a pending preview does not supply the wrong frame.
+Interpolation cannot recover a full rotation between samples. Use a clear view and a higher analysis rate for
+fast flips or steps; review the result and adjust the advanced settings if necessary. Contact detection is
+approximate, and feet may move when a target is beyond the leg's reach or the model cannot see them clearly.
+The Flips preset uses projected foot motion to detect contacts and releases both feet when they and the hips rise.
+Standing, Flips and Adaptable retain accumulated horizontal tracking corrections when a foot lifts, rather than
+snapping back to the uncorrected path. Camera motion, occlusion, or movement towards the camera can still be
+mistaken for contact or release.
+Adaptable uses the same contact detection, with an additional torso check; its shorter filtering can also retain more
+tracking noise. Neither preset detects actual floor contact.
+Turn off Foot lock in advanced settings if it alters the motion.
+
+Files: `electron/poseEngine.cjs` (download, session, inference, IPC) · `src/three/poseFinder/*` (crop maths, MHR rest
+data, motion solver, BVH writer, pipeline) · `src/panels/PoseFinderPanel.jsx`.
+`mhrRest.js` is generated: `node scripts/gen-mhr-rest.mjs <MHR assets>/lod6.fbx` (Meta's MHR, Apache-2.0).
+
+## First real run checklist (the model could not be run where this was written)
+1. Status shows "Model ready" after the download (SHA-256 is verified).
+2. Run a 3–5 s clip, CPU first, then DirectML. Note seconds per frame.
+3. On the result, `info.convention` should report score > 0.95. If the app shows the "conventions look inconsistent"
+   warning, the ONNX output frames differ from what `detectConvention` expects — send the first frame's raw output.
+4. Check: limbs bend the right way (not mirrored), the character faces forward, feet do not slide when planted.

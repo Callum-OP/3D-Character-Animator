@@ -83,6 +83,7 @@ const CHARACTER_FIELDS = [
   'playback',
   'playbackSource',
   'activeClipName',
+  'removeClipMovement',
   'importedClipNames',
   'duration',
   'currentTime',
@@ -139,6 +140,7 @@ function defaultCharacterFields(modelInfo) {
     playback: 'stopped',
     playbackSource: 'edit', // every character starts on its own editable default clip — keying works straight away
     activeClipName: null,
+    removeClipMovement: false,
     importedClipNames: [],
     duration: 0,
     currentTime: 0,
@@ -437,6 +439,9 @@ export const useStore = create((set) => ({
   performanceEffects: false, // disable expensive outline and shadow passes
   showHelp: false, // help & shortcuts overlay
   autoRiggerOpen: false, // Auto Rigger dialog (desktop only)
+  poseLibraryTab: null, // 'body' | 'hand' | 'animation' while the Pose Library panel is open, else null
+  lastPoseLibraryTab: 'body', // the tab the Pose Library opens on next time
+  adoptClipRequest: null, // clip name the Animate panel should load the remembered keyframes of (set by the Pose Library)
 
   setShowGrid: (showGrid) => set({ showGrid }),
   setShowGround: (showGround) => set({ showGround }),
@@ -476,6 +481,9 @@ export const useStore = create((set) => ({
   setShowHelp: (showHelp) => set({ showHelp }),
   setAutoRiggerOpen: (autoRiggerOpen) => set({ autoRiggerOpen }),
   toggleHelp: () => set((s) => ({ showHelp: !s.showHelp })),
+  openPoseLibrary: (poseLibraryTab = 'body') => set({ poseLibraryTab, lastPoseLibraryTab: poseLibraryTab }),
+  closePoseLibrary: () => set({ poseLibraryTab: null }),
+  requestAdoptClipKeys: (adoptClipRequest) => set({ adoptClipRequest }),
 
   // Import-time decimation only affects static meshes; skinned meshes are
   // preserved because Three's SimplifyModifier does not retain skin weights.
@@ -1441,6 +1449,8 @@ export const useStore = create((set) => ({
   // part and shape-key edits stay layered on top of whichever clip is chosen.
   carryKeysAcrossClips: false,
   setCarryKeysAcrossClips: (carryKeysAcrossClips) => set({ carryKeysAcrossClips }),
+  removeClipMovement: false,
+  setRemoveClipMovement: (removeClipMovement) => set({ removeClipMovement }),
   playbackSource: 'edit', // 'clip' (baked) | 'edit' (in-app keyframes)
   activeClipName: null, // selected clip (baked or imported)
   importedClipNames: [], // names of retargeted BVH mocap clips
@@ -1467,6 +1477,8 @@ export const useStore = create((set) => ({
     set((s) => ({
       importedClipNames: s.importedClipNames.map((n) => (n === oldName ? newName : n)),
     })),
+  removeImportedClipName: (name) =>
+    set((s) => ({ importedClipNames: s.importedClipNames.filter((n) => n !== name) })),
   setLoop: (loop) => set({ loop }),
   setSpeed: (speed) => set({ speed }),
   setRippleRootEdit: (rippleRootEdit) => set({ rippleRootEdit }),

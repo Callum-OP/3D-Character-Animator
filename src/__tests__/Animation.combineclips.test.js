@@ -130,6 +130,29 @@ describe('combineClips', () => {
     }
   })
 
+  it('plays clips in place without changing their original hip or root tracks', () => {
+    const model = setup('play-inplace')
+    const walk = model.clips.find((clip) => clip.name === 'Walk')
+    const rootWalk = model.clips.find((clip) => clip.name === 'RootWalk')
+    const originalWalkPositions = Array.from(walk.tracks[0].values)
+    const originalRootPositions = Array.from(rootWalk.tracks[0].values)
+
+    selectClip('Walk', { loop: false, speed: 1, inPlace: true }, {})
+    scrub(0.5)
+    expect(model.bones[0].position.x).toBeCloseTo(0, 3)
+    expect(model.bones[0].position.y).toBeCloseTo(1, 3)
+    expect(model.bones[0].position.z).toBeCloseTo(0, 3)
+
+    selectClip('RootWalk', { loop: false, speed: 1, inPlace: true }, {})
+    scrub(1)
+    expect(model.root.position.x).toBeCloseTo(0, 3)
+    expect(model.bones[0].position.x).toBeCloseTo(0, 3)
+    expect(model.bones[0].position.y).toBeCloseTo(1, 3)
+    expect(model.bones[0].position.z).toBeCloseTo(0, 3)
+    expect(Array.from(walk.tracks[0].values)).toEqual(originalWalkPositions)
+    expect(Array.from(rootWalk.tracks[0].values)).toEqual(originalRootPositions)
+  })
+
   it('folds a clip\'s root-object travel into the combined clip once (no double movement)', () => {
     const model = setup('combine-root')
     const name = combineClips(['RootWalk', 'Walk'], 24)
