@@ -155,4 +155,15 @@ describe('classifyBone', () => {
       thumb_01_r: 'source:RightHandThumb1',
     })
   })
+
+  it('matches generated rig bones to legacy names for retargeting', () => {
+    expect(buildNameMatch(
+      ['Hips', 'LeftArm', 'LeftHandIndex2'],
+      ['mixamorig:Hips', 'mixamorig:LeftArm', 'mixamorig:LeftHandIndex2'],
+    )).toEqual({
+      Hips: 'mixamorig:Hips',
+      LeftArm: 'mixamorig:LeftArm',
+      LeftHandIndex2: 'mixamorig:LeftHandIndex2',
+    })
+  })
 })

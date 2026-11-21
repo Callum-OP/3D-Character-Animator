@@ -13,6 +13,7 @@ import ProjectPanel from './panels/ProjectPanel.jsx'
 import ExportPanel from './panels/ExportPanel.jsx'
 import ViewPanel from './panels/ViewPanel.jsx'
 import HelpOverlay from './panels/HelpOverlay.jsx'
+import AutoRiggerDialog from './panels/AutoRiggerDialog.jsx'
 import PoseFinderPanel from './panels/PoseFinderPanel.jsx'
 import CloseGuard from './panels/CloseGuard.jsx'
 import PoseLibrary from './panels/PoseLibrary.jsx'
@@ -210,6 +211,7 @@ function AppInner() {
       )}
       <PoseLibrary />
       <HelpOverlay />
+      <AutoRiggerDialog />
       </div>
     </div>
   )

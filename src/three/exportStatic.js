@@ -126,3 +126,25 @@ export async function writeStaticModel(format, group) {
   const { PLYExporter } = await import('three/examples/jsm/exporters/PLYExporter.js')
   return new Blob([new PLYExporter().parse(group, undefined, { binary: true, littleEndian: true })], { type: info.mime })
 }
+
+// Like bakeStaticMeshes, but each mesh keeps its OWN material (textures, colours), its multi-material
+// groups and its name: what the Auto Rigger sends to Blender. Skinning is baked into plain world-space
+// geometry, so no skeleton / bind data travels and Blender cannot misread it.
+export function bakeMeshesWithMaterials(root) {
+  root.updateMatrixWorld(true)
+  const group = new THREE.Group()
+  group.name = 'Scene'
+  let count = 0
+  root.traverse((node) => {
+    if (!node.isMesh || !visibleInHierarchy(node)) return
+    const geometry = bakeGeometry(node)
+    if (!geometry) return
+    for (const g of node.geometry.groups || []) geometry.addGroup(g.start, g.count, g.materialIndex)
+    const mesh = new THREE.Mesh(geometry, node.material)
+    mesh.name = node.name || 'mesh'
+    group.add(mesh)
+    count++
+  })
+  group.updateMatrixWorld(true)
+  return { group, meshes: count }
+}

@@ -754,6 +754,7 @@ export function retargetParsed(parsed, model, names, hip, clipName, { preserveFo
     // Anchoring a hip's rest alignment on a thigh instead of the spine bakes
     // a constant sideways tilt into the hips (and everything above them) on
     // every single frame — exactly the "one hip permanently cocked up" look.
+    // Hands prefer the middle finger, whose direction is more stable than the short, angled thumb.
     const collectBranches = (node) => {
       const out = []
       const visit = (n) => {
@@ -766,7 +767,13 @@ export function retargetParsed(parsed, model, names, hip, clipName, { preserveFo
       for (const c of node.children) visit(c)
       return out
     }
-    const branchRank = (n) => {
+    const branchRank = (parent, n) => {
+      if (/^hand\./.test(classifyBone(parent.name) || '')) {
+        const name = n.name.toLowerCase()
+        if (/middle/.test(name)) return 0
+        if (/index|ring|pinky|pinkie|little/.test(name)) return 1
+        if (/thumb/.test(name)) return 2
+      }
       const slot = classifyBone(n.name) || ''
       if (/^(spine|chest|neck|head)/.test(slot)) return 0
       if (/^(shoulder|upperArm)\./.test(slot)) return 1
@@ -797,6 +804,18 @@ export function retargetParsed(parsed, model, names, hip, clipName, { preserveFo
       if (tDir.lengthSq() < 1e-10 || sDir.lengthSq() < 1e-10) continue
       align.set(b, new THREE.Quaternion().setFromUnitVectors(tDir.normalize(), sDir.normalize()))
     }
+    // A bone with no mapped child to aim at (the last finger bone, the toes, the head) used to be left UNaligned
+    // while its parent was turned onto the source's direction, so on an A-pose clip the tip stayed in the rig's own
+    // rest direction and snapped up/back against the rest of the chain. A BVH makes this common: its last joint is
+    // an unnamed "End Site", so even a finger's last deforming bone has no mapped child. Such a bone follows the
+    // same alignment as its nearest aligned mapped ancestor instead (it continues that bone's direction).
+    for (const b of mapped) {
+      if (align.has(b)) continue
+      for (let p = b.parent; p; p = p.parent) {
+        if (mappedSet.has(p) && align.has(p)) {
+          align.set(b, align.get(p).clone())
+          break
+        }
     // Fingers move with their hand: every finger bone (tips and thumbs included) takes the HAND's alignment instead
     // of its own. Aligning each segment on its own swings it towards the source's finger shape by a different
     // amount than its parent, which bent fingertips (leaf bones had no alignment at all) and hooked the thumb away

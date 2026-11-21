@@ -3861,6 +3861,39 @@ body {
   color: inherit;
 }
 
+/* ---- Auto Rigger dialog ---- */
+.autorig-modal { width: min(1040px, 96vw); max-height: 94vh; overflow: auto; }
+.autorig-grid { display: grid; grid-template-columns: minmax(0, 1fr) 250px; gap: 12px; }
+.autorig-stage { position: relative; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.autorig-viewbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.autorig-seg { display: flex; gap: 4px; }
+.autorig-seg .btn.active { outline: 2px solid var(--accent, #ff9f1c); }
+.autorig-canvas { width: 100%; height: min(60vh, 560px); background: rgba(127, 127, 127, 0.12); border-radius: 6px; touch-action: none; cursor: crosshair; display: block; }
+.autorig-empty { position: absolute; inset: 44px 0 0 0; display: flex; align-items: center; justify-content: center; opacity: 0.7; pointer-events: none; }
+.autorig-side { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.autorig-list { max-height: min(48vh, 440px); overflow: auto; border: 1px solid rgba(127, 127, 127, 0.3); border-radius: 6px; padding: 4px; }
+.autorig-group { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.6; padding: 6px 6px 2px; }
+.autorig-item { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; background: none; border: 0; color: inherit; padding: 3px 6px; border-radius: 4px; cursor: pointer; font: inherit; }
+.autorig-item:hover { background: rgba(127, 127, 127, 0.15); }
+.autorig-item.active { background: rgba(255, 159, 28, 0.25); }
+.autorig-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.autorig-check { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.autorig-note { font-size: 13px; opacity: 0.85; }
+.autorig-problems, .autorig-error, .autorig-done { white-space: pre-wrap; font: inherit; font-size: 13px; margin: 8px 0 0; padding: 8px 10px; border-radius: 6px; }
+.autorig-problems { background: rgba(255, 159, 28, 0.16); }
+.autorig-error { background: rgba(255, 80, 70, 0.18); }
+.autorig-done { background: rgba(80, 200, 120, 0.18); }
+.autorig-actions { margin-top: 10px; display: flex; justify-content: flex-end; }
+@media (max-width: 760px) { .autorig-grid { grid-template-columns: 1fr; } }
+.autorig-source { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 8px 0; }
+.autorig-or { opacity: 0.6; font-size: 13px; }
+.autorig-file { font-size: 12px; opacity: 0.75; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
+.autorig-hint { position: absolute; left: 8px; bottom: 8px; font-size: 11px; opacity: 0.65; pointer-events: none; text-shadow: 0 0 4px rgba(0,0,0,0.6); }
+.autorig-estimate { margin-right: auto; font-size: 12px; opacity: 0.75; align-self: center; }
+.autorig-progress { margin-top: 10px; }
+.autorig-bar { height: 8px; border-radius: 4px; background: rgba(127, 127, 127, 0.25); overflow: hidden; }
+.autorig-bar-fill { height: 100%; background: var(--accent, #ff9f1c); transition: width 0.3s ease; }
+.autorig-progress-text { font-size: 12px; margin-top: 4px; opacity: 0.85; }
 /* --- Pose Library --- */
 .pl-panel { position: fixed; left: 16px; top: 51px; bottom: 16px; width: min(430px, 46vw); z-index: 60; display: flex; flex-direction: column; gap: 8px; padding: 12px; background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 12px; box-shadow: 0 8px 28px rgba(0,0,0,.45); }
 .pl-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

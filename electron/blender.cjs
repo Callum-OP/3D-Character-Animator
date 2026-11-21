@@ -339,7 +339,7 @@ function findBlender({ configuredPath, ...opts } = {}) {
 // ---------------------------------------------------------------------------
 
 // Run a process to completion, keeping (a bounded amount of) its output.
-function run(command, args, { timeoutMs, cwd } = {}) {
+function run(command, args, { timeoutMs, cwd, onData } = {}) {
   return new Promise((resolve) => {
     let log = ''
     let timedOut = false
@@ -352,8 +352,16 @@ function run(command, args, { timeoutMs, cwd } = {}) {
       return
     }
     const collect = (chunk) => {
-      log += chunk.toString()
+      const text = chunk.toString()
+      log += text
       if (log.length > LOG_LIMIT) log = log.slice(-LOG_LIMIT)
+      if (onData) {
+        try {
+          onData(text)
+        } catch {
+          /* a listener must never break the run */
+        }
+      }
     }
     child.stdout.on('data', collect)
     child.stderr.on('data', collect)
@@ -558,4 +566,7 @@ module.exports = {
   safeRelativePath,
   convertBlend,
   registerBlenderIpc,
+  run,
+  relevantLines,
+  errorTail,
 }

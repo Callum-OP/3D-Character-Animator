@@ -262,6 +262,7 @@ import {
   getObjectAnimationKeyForRoot,
   getObjectRoots,
   getAllRootsForExport,
+  getRigSources,
   stepObjectAnimation,
   getObjectAnimationDuration,
   stopObjectAnimation,
@@ -281,6 +282,7 @@ import { clearUndoHistory, pushUndoBatch, runWithoutHistoryCapture } from './und
 import { markProjectClean, markProjectCleanAfterLoad } from './projectDirty.js'
 import { resolveTextureLook, normalizeMaterialLook, TEXTURE_LOOK_DEFAULT } from './textureLookOptions.js'
 import { withExportSafeMaterials } from './materialUserData.js'
+import { bakeRigSource } from './rigSource.js'
 import { buildPartsGroup, safeFileStem } from './extractParts.js'
 import { bakeRegionsForExport, fromRanges, setRegionsRenderHook } from './regions.js'
 import { analyseSurface, outwardDirection, adjustDirection, faceOfObject, averageSurfaceColor, lightColourFrom } from './lightFromPart.js'
@@ -5511,4 +5513,41 @@ export function setCameraToTarget(kind, id) {
       : getObjectRootById(id)
   if (!target) return
   commitFramingChange(() => frameCameraToObject(target))
+}
+
+// Auto Rigger source: one scene character / object, as a real textured .glb in its REST pose, plus a
+// ready-to-show preview group (grey, translucent, same frame). Works on an export copy: the live scene is
+// never touched.
+//  * Textures and materials travel with it (a plain geometry file would come back white).
+//  * It is written in the object's OWN space: the scene SCALE is kept (so the size matches what you see),
+//    but not its position or rotation, so the rigged copy does not inherit "where the original stands".
+export async function exportRigSource(id) {
+  const root = getObjectRootById(id)
+  if (!root) throw new Error('That object is no longer in the scene.')
+  suspendSoftCloth()
+  const blended = [...state.characters.values()].filter((c) => c.__partRigBodyFollow)
+  for (const c of blended) setPartRigBodyFollow(c, false)
+  try {
+    const [{ GLTFExporter }, { cloneForExport }] = await Promise.all([import('three/examples/jsm/exporters/GLTFExporter.js'), import('./exportPose.js')])
+    root.updateWorldMatrix(true, false)
+    const model = [...state.characters.values()].find((c) => c.root === root)
+    const worldScale = new THREE.Vector3()
+    root.matrixWorld.decompose(new THREE.Vector3(), new THREE.Quaternion(), worldScale)
+    const ownSpace = (dup) => {
+      dup.position.set(0, 0, 0)
+      dup.quaternion.identity()
+      dup.scale.copy(worldScale)
+    }
+    // the file: the object in its rest pose, baked to plain geometry that KEEPS its real materials
+    // (a skinned file would be misread by Blender; a plain geometry format would lose the textures)
+    const dup = cloneForExport(root, { pose: 'rest', restQuats: model?.__poseRestQuats || null })
+    ownSpace(dup)
+    dup.updateMatrixWorld(true)
+    useExportMaterials(root, dup, model, null)
+    const src = await bakeRigSource(dup, { name: 'scene-object' })
+    return { name: 'scene-object.glb', data: src.data, group: src.group, box: src.box }
+  } finally {
+    for (const c of blended) setPartRigBodyFollow(c, true)
+    resumeSoftCloth()
+  }
 }

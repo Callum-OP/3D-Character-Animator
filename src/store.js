@@ -438,6 +438,7 @@ export const useStore = create((set) => ({
   performanceResolution: 0.5, // viewport scale used by lower resolution mode
   performanceEffects: false, // disable expensive outline and shadow passes
   showHelp: false, // help & shortcuts overlay
+  autoRiggerOpen: false, // Auto Rigger dialog (desktop only)
   poseLibraryTab: null, // 'body' | 'hand' | 'animation' while the Pose Library panel is open, else null
   lastPoseLibraryTab: 'body', // the tab the Pose Library opens on next time
   adoptClipRequest: null, // clip name the Animate panel should load the remembered keyframes of (set by the Pose Library)
@@ -478,6 +479,7 @@ export const useStore = create((set) => ({
   setPerformanceResolution: (performanceResolution) => set({ performanceResolution }),
   setPerformanceEffects: (performanceEffects) => set({ performanceEffects }),
   setShowHelp: (showHelp) => set({ showHelp }),
+  setAutoRiggerOpen: (autoRiggerOpen) => set({ autoRiggerOpen }),
   toggleHelp: () => set((s) => ({ showHelp: !s.showHelp })),
   openPoseLibrary: (poseLibraryTab = 'body') => set({ poseLibraryTab, lastPoseLibraryTab: poseLibraryTab }),
   closePoseLibrary: () => set({ poseLibraryTab: null }),

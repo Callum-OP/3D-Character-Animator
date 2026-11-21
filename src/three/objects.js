@@ -1629,9 +1629,12 @@ export function stepObjectAnimation(delta, loopOverride) {
 
 // Resolve a prop or character id to its live scene root for viewport commands.
 export function getObjectRootById(id) {
-  const prop = o.objects.find((entry) => entry.id === id)
+  const prop = o.objects.find((entry) => String(entry.id) === String(id))
   if (prop) return prop.root
-  return o.characterRoots.get(id)?.root || null
+  for (const [characterId, entry] of o.characterRoots.entries()) {
+    if (String(characterId) === String(id)) return entry.root
+  }
+  return null
 }
 
 // Every prop root plus every loaded character root, for a combined scene
@@ -1646,6 +1649,13 @@ export function getAllRootsForExport() {
     .filter(([, e]) => e.root.visible)
     .map(([, e]) => ({ root: e.root, name: e.name || 'Character' }))
   return props.concat(chars)
+}
+
+// Everything the Auto Rigger can take as its source: loaded characters and prop models (not flat images).
+export function getRigSources() {
+  const chars = [...o.characterRoots.entries()].map(([id, e]) => ({ id, name: e.name || 'Character', kind: 'character' }))
+  const props = o.objects.filter((e) => e.kind === 'model').map((e) => ({ id: e.id, name: e.name || 'Object', kind: 'object' }))
+  return chars.concat(props)
 }
 
 // Lightweight per-part listing for every loaded prop (Mesh mode's Parts panel
