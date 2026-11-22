@@ -72,6 +72,8 @@ function newEntry(model) {
     editCuts: null,
     editMorphs: null,
     rootRest: null,
+    stopRest: null, // placement before Stop showed a clip's first position key (see stop / activate)
+    stopShown: null, // what Stop left the root at, to tell whether the person has moved it since
     meshRest: null,
     morphRest: null,
     camerasRest: null,
@@ -1683,6 +1685,7 @@ export function pause() {
 // Stop playback, return the rig to its rest pose + pre-play placement, and hand
 // control back to posing.
 export function stop() {
+  const wasActive = !!a.clip // read before it is cleared below
   if (a.mixer) a.mixer.stopAllAction()
   a.action = null
   a.clip = null
@@ -1690,8 +1693,23 @@ export function stop() {
   a.inPlace = false
   if (!anyPlaying()) a.refs.setContinuousRender(false)
   restoreRest()
+  // Stop shows where the animation starts, so a clip whose first position key is at 0 leaves the
+  // character on it. That is only a view of the start, not where the character was placed: remember
+  // the placement so the next clip starts from it (see activate). Only when something was actually
+  // running — pressing Stop again must not snap a character the person has since moved.
+  const placement = a.rootRest ? { pos: [...a.rootRest.pos], quat: [...a.rootRest.quat] } : null
   restoreRootRest()
-  if (a.editRoot?.length && a.editRoot[0].time <= 1e-6) sampleRoot(0)
+  if (wasActive) {
+    a.stopRest = null
+    a.stopShown = null
+    if (a.editRoot?.length && a.editRoot[0].time <= 1e-6) {
+      sampleRoot(0)
+      if (placement && a.model) {
+        a.stopRest = placement
+        a.stopShown = { pos: a.model.root.position.toArray(), quat: a.model.root.quaternion.toArray() }
+      }
+    }
+  }
   applyMeshPlaybackSnapshot(a.meshRest)
   a.meshRest = null
   applyMorphPlaybackSnapshot(a.morphRest)
@@ -2094,6 +2112,11 @@ function applyRootKey(root, k) {
   root.quaternion.fromArray(k.quat)
 }
 
+function sameRootPlacement(x, y) {
+  const close = (p, q) => p.length === q.length && p.every((v, i) => Math.abs(v - q[i]) < 1e-9)
+  return close(x.pos, y.pos) && close(x.quat, y.quat)
+}
+
 function restoreRootRest() {
   if (a.rootRest && a.model) {
     a.model.root.position.fromArray(a.rootRest.pos)
@@ -2111,7 +2134,17 @@ function activate(clip, opts, sourceClip = clip) {
   // Keep the original placement when rebuilding/reselecting an active
   // timeline; otherwise a scrubbed root key becomes the new "rest" position.
   if (a.model && !a.rootRest) {
-    a.rootRest = { pos: a.model.root.position.toArray(), quat: a.model.root.quaternion.toArray() }
+    const current = { pos: a.model.root.position.toArray(), quat: a.model.root.quaternion.toArray() }
+    // Right after Stop the root sits on the previous clip's first position key. Unless the person has
+    // moved the character since, that is not its home — the placement from before is.
+    const stillWhereStopLeftIt = a.stopShown && sameRootPlacement(current, a.stopShown)
+    a.rootRest = stillWhereStopLeftIt && a.stopRest ? a.stopRest : current
+    if (a.rootRest !== current) {
+      a.model.root.position.fromArray(a.rootRest.pos)
+      a.model.root.quaternion.fromArray(a.rootRest.quat)
+    }
+    a.stopRest = null
+    a.stopShown = null
   }
   const action = a.mixer.clipAction(clip)
   action.reset()
