@@ -1996,6 +1996,17 @@ export function restoreSoftRest() {
   }
 }
 
+// Same as restoreSoftRest, but only for the given meshes (one character's), so stopping one
+// character doesn't snap another character that is still playing.
+export function restoreSoftRestForMeshes(meshes) {
+  for (const mesh of meshes || []) {
+    const entry = sc.entries.get(mesh)
+    if (!entry) continue
+    if (entry.live) restoreRest(entry)
+    for (const zr of entry.zones.values()) zr.ready = false
+  }
+}
+
 export function clearSoftClothForMeshes(meshes) {
   const removed = new Set(meshes || [])
   for (const mesh of removed) disposeEntry(mesh)

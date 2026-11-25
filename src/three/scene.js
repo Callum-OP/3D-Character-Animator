@@ -117,6 +117,7 @@ import {
   clearAllCloth,
   clearClothForMeshes,
   stepClothLive,
+  resetCloth,
   isClothEnabled,
   refreshClothForStyleChange,
   followIdleClothPose,
@@ -141,6 +142,7 @@ import {
   settleSoftCloth,
   restoreSoftRest,
   resetSoftCloth,
+  restoreSoftRestForMeshes,
   clearSoftClothForMeshes,
   suspendSoftCloth,
   resumeSoftCloth,
@@ -1735,11 +1737,28 @@ export function stopAllCharacters() {
     if (!state.characters.has(id)) continue
     setActiveAnimationCharacter(id)
     stop()
-    resetDanglePose(id)
+    resetCharacterPhysics(id)
   }
   setActiveAnimationCharacter(uiActiveId)
   globalClock = false
   useStore.setState({ playback: 'stopped', currentTime: 0, globalTime: 0 })
+}
+
+// Put one character's physics back on its stopped pose: dangle bones, soft cloth / swing zones and the
+// full cloth simulation. stop() only returns the rig and meshes to rest, so anything simulated on top
+// would otherwise stay wherever the last frame left it.
+export function resetCharacterPhysics(id) {
+  resetDanglePose(id)
+  const meshes = state.characters.get(id)?.meshes || []
+  restoreSoftRestForMeshes(meshes)
+  for (const mesh of meshes) resetCloth(mesh.uuid)
+  requestRender()
+}
+
+// Stop button for the focused character: same as Stop all, but for just this one.
+export function stopActiveCharacter() {
+  stop()
+  if (state.activeCharacterId) resetCharacterPhysics(state.activeCharacterId)
 }
 
 
@@ -4126,10 +4145,14 @@ async function restoreCharacterRecord(c, { addNew, legacyAnimData = null, skippe
   const activeImportedClip = !(model.originalClipNames || model.info.clipNames).includes(c.activeClipName)
     ? restoredClips.find((clip) => clip.originalName === c.activeClipName)
     : null
+  const restoredClipName = activeImportedClip?.name ?? c.activeClipName ?? null
   useStore.setState({
     importedClipNames: restoredClips.map((clip) => clip.name),
-    activeClipName: activeImportedClip?.name ?? c.activeClipName ?? null,
+    activeClipName: restoredClipName,
     playbackSource: c.playbackSource || 'edit',
+    // The transport (Play button, scrubber) reads the clip's length from the store, so a reloaded project must
+    // restore it too; left at 0 the Play button stays disabled until something else (Play all) arms the clip.
+    ...(c.playbackSource === 'clip' && restoredClipName ? { duration: getCharacterClipDuration(id, restoredClipName) } : {}),
     dangleEnabled: c.dangleEnabled ?? true,
     dangleChains: c.dangleChains || [],
     partRigBodyFollow: !!c.partRigBodyFollow,

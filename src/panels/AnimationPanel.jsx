@@ -12,6 +12,7 @@ import {
   play,
   pause,
   stop,
+  hasActiveAction,
   setLoop as engineSetLoop,
   setSpeed as engineSetSpeed,
   beginBVHImport,
@@ -57,6 +58,7 @@ import {
   scrubTimeline,
   playAllCharacters,
   stopAllCharacters,
+  stopActiveCharacter,
   pauseAllCharacters,
   resumeAllCharacters,
   scrubAllTimeline,
@@ -1358,7 +1360,8 @@ export default function AnimationPanel() {
       st().setDuration(d)
     } else if (!activeClipName) {
       return
-    } else if (playback === 'stopped') {
+    } else if (playback === 'stopped' || !hasActiveAction()) {
+      // Nothing armed yet (e.g. a freshly loaded project, whatever the transport label says): arm the clip first
       const d = selectActiveClip(activeClipName, { loop, speed }, animData)
       st().setDuration(d)
     }
@@ -1379,7 +1382,7 @@ export default function AnimationPanel() {
   }
 
   function onStop() {
-    stop()
+    stopActiveCharacter() // rig + hair/cloth/mesh physics back to rest, like Stop all
     st().setPlayback('stopped')
     st().setCurrentTime(0)
     st().setInsertTime(0)

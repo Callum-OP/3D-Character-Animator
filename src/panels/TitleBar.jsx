@@ -16,6 +16,7 @@ import {
   setObjectVisibleById,
   playAllCharacters,
   stopAllCharacters,
+  stopActiveCharacter,
   startGlobalClock,
   getAllTimelineDuration,
 } from '../three/scene.js'
@@ -32,7 +33,7 @@ import {
 import { pickFileWithInput } from '../three/fsAccess.js'
 import { importProjectFromFile } from '../three/importProject.js'
 import { modelFileFromInput, MODEL_ACCEPT } from '../three/modelBundle.js'
-import { play, pause, stop, selectClip, selectEdit, setLoop as engineSetLoop, setSpeed as engineSetSpeed } from '../three/animation.js'
+import { play, pause, stop, hasActiveAction, selectClip, selectEdit, setLoop as engineSetLoop, setSpeed as engineSetSpeed } from '../three/animation.js'
 import { runExportShot, canRecordVideo } from '../three/exportShot.js'
 import {
   getPose,
@@ -283,7 +284,7 @@ export default function TitleBar({ onOpenSettings, onOpenPoseFinder }) {
     const s = useStore.getState()
     if (playbackSource === 'edit') {
       s.setDuration(selectEdit(s.animData, s.animDuration, { loop, speed }))
-    } else if (playback === 'stopped' && activeClipName) {
+    } else if ((playback === 'stopped' || !hasActiveAction()) && activeClipName) {
       s.setDuration(selectClip(activeClipName, { loop, speed, inPlace: s.removeClipMovement }, s.animData))
     }
     if (play()) s.setPlayback('playing')
@@ -301,7 +302,7 @@ export default function TitleBar({ onOpenSettings, onOpenPoseFinder }) {
 
   function onStop() {
     setOpenMenu(null)
-    stop()
+    stopActiveCharacter()
     useStore.getState().setPlayback('stopped')
     useStore.getState().setCurrentTime(0)
   }
