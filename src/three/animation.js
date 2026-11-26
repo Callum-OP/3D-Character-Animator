@@ -300,6 +300,56 @@ export async function beginBVHImport(file) {
   }
 }
 
+// A retargeted mocap clip keeps the hip at the character's standing height on frame 0, whatever the pose is. A
+// clip that opens crouched, or with a leg lifted, or just on different proportions, then starts with the feet
+// floating above (or sunk below) the ground the character stands on. Shift the hip height track so the lowest foot
+// on frame 0 sits where the character's lowest foot sits at rest: feet, not hips, so a crouch or a jump keeps its
+// real height. Returns the shift applied in world units (0 when nothing needed doing).
+function matchClipStartToGround(clip) {
+  if (!a.model || !clip?.tracks?.length) return 0
+  const bones = a.model.bones || []
+  const feet = bones.filter((b) => /foot|ankle|toe|heel/i.test(b.name))
+  if (!feet.length) return 0 // no foot bones to measure: leave the clip as it is rather than guess
+  const hipBone = findMovingRootBone(clip, bones)
+  const hipTrack = hipBone && clip.tracks.find((t) => {
+    if (!/\.position$/.test(t.name)) return false
+    const node = THREE.PropertyBinding.parseTrackName(t.name).nodeName
+    return node === hipBone.name || node === hipBone.uuid
+  })
+  if (!hipTrack || !hipBone.parent) return 0
+
+  const lowestFoot = () => {
+    a.model.root.updateWorldMatrix(true, true)
+    let low = Infinity
+    for (const f of feet) low = Math.min(low, f.matrixWorld.elements[13])
+    return low
+  }
+  restoreRest()
+  const restGround = lowestFoot()
+  const parentInv = new THREE.Matrix4().copy(hipBone.parent.matrixWorld).invert()
+
+  const mixer = new THREE.AnimationMixer(a.model.root)
+  const action = mixer.clipAction(clip)
+  action.play()
+  mixer.setTime(0)
+  const startGround = lowestFoot()
+  mixer.stopAllAction()
+  mixer.uncacheClip(clip)
+  restoreRest()
+
+  const dy = restGround - startGround
+  if (!Number.isFinite(dy) || Math.abs(dy) < 1e-5) return 0
+  // The hip track lives in its parent's space (which can be scaled or rotated), so carry the world-space lift over.
+  const local = new THREE.Vector3(0, dy, 0).applyMatrix3(new THREE.Matrix3().setFromMatrix4(parentInv))
+  const v = hipTrack.values
+  for (let i = 0; i + 2 < v.length; i += 3) {
+    v[i] += local.x
+    v[i + 1] += local.y
+    v[i + 2] += local.z
+  }
+  return dy
+}
+
 // Step 2: retarget the pending BVH using the (possibly hand-edited) slot mapping
 // and add the resulting clip to the playable list. Returns { name, matched, total }.
 export async function applyBVHRetarget(slots, options) {
@@ -307,6 +357,7 @@ export async function applyBVHRetarget(slots, options) {
   const { names, hip } = mergeNames(a.pendingBVH.autoNames, slots)
   restoreRest() // the retarget measures the rig's rest pose — make sure it's in it
   const { clip, matched, total } = await retargetParsed(a.pendingBVH, a.model, names, hip, undefined, options)
+  if (options?.matchGround !== false) matchClipStartToGround(clip)
   const name = addGeneratedClip(clip)
   a.pendingBVH = null
   a.refs.requestRender() // the retarget touched the rig; redraw the reset pose
