@@ -137,6 +137,7 @@ function PosePreview({ tab, entry, side, strength, handAdjust, previewVersion })
       camera.top = 1
       camera.bottom = -1
       camera.updateProjectionMatrix()
+      if (root) previewRef.current?.framePreview()
     }
     const observer = new ResizeObserver(resize)
     observer.observe(host)
@@ -242,7 +243,7 @@ function PosePreview({ tab, entry, side, strength, handAdjust, previewVersion })
         camera.lookAt(target)
         camera.updateProjectionMatrix()
       } else {
-        const bounds = posedBoneBounds(root)
+        const bounds = posedBoneBounds(root, 0.3)
         if (bounds.isEmpty()) return
         const center = bounds.getCenter(new THREE.Vector3())
         const size = bounds.getSize(new THREE.Vector3())

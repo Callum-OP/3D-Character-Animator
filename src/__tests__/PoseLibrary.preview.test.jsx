@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import * as THREE from 'three'
 
 const preview = vi.hoisted(() => ({ root: null, render: null }))
@@ -52,6 +52,53 @@ afterEach(() => {
 })
 
 describe('Pose Library animation preview', () => {
+  it('keeps the head above the highest bone in view, including after resizing', async () => {
+    const root = new THREE.Group()
+    const hips = new THREE.Bone()
+    const head = new THREE.Bone()
+    head.position.y = 1.65
+    hips.add(head)
+    root.add(hips)
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.5, 2, 0.5), new THREE.MeshBasicMaterial())
+    mesh.position.y = 1
+    root.add(mesh)
+    preview.root = root
+    preview.render = vi.fn()
+
+    let width = 300
+    let resize
+    let frame
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(() => ({ width, height: 200 }))
+    vi.stubGlobal('requestAnimationFrame', vi.fn((callback) => { frame = callback; return 1 }))
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback) { resize = callback }
+      observe() {}
+      disconnect() {}
+    })
+
+    useStore.setState({ poseLibraryTab: 'body', modelInfo: { name: 'x' }, qualityPreset: 'standard' })
+    render(<PoseLibrary />)
+    await waitFor(() => expect(screen.queryByText('Loading example model…')).toBeNull())
+
+    const assertHeadVisible = () => {
+      const camera = preview.render.mock.calls.at(-1)?.[1]
+      expect(camera).toBeDefined()
+      camera.updateMatrixWorld()
+      const top = new THREE.Vector3(0, 2, 0).project(camera)
+      expect(top.y).toBeLessThan(0.95)
+      expect(top.y).toBeGreaterThan(-1)
+    }
+
+    act(() => frame())
+    assertHeadVisible()
+    width = 200
+    act(() => { resize(); frame() })
+    assertHeadVisible()
+    const camera = preview.render.mock.calls.at(-1)[1]
+    expect((camera.right - camera.left) / (camera.top - camera.bottom)).toBeCloseTo(1)
+  })
+
   it('plays a hovered clip, holds its representative pose, and replays on hover', async () => {
     const root = new THREE.Group()
     const bone = new THREE.Bone()
