@@ -8,6 +8,7 @@ import {
 } from '../three/poseLibraryStore.js'
 import { listPresets } from '../three/poseLibraryPresets.js'
 import { normalizeSegments, parsedBVHResolver, representativeClipTime } from '../three/poseThumb.js'
+import { frameRenderedPoseThumb } from '../three/renderedPoseThumb.js'
 import { makeHandBVH } from './helpers/syntheticHand.js'
 
 afterEach(async () => {
@@ -78,6 +79,34 @@ describe('library storage', () => {
 })
 
 describe('presets and thumbnails', () => {
+  it.each(['body', 'animation'])('fits the posed character mesh in %s card images', (kind) => {
+    const root = new THREE.Group()
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute([-0.25, 0, 0, 0.25, 0, 0, 0, 2, 0], 3))
+    geometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 4))
+    geometry.setAttribute('skinWeight', new THREE.Float32BufferAttribute([1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0], 4))
+    const mesh = new THREE.SkinnedMesh(geometry, new THREE.MeshBasicMaterial())
+    const hips = new THREE.Bone()
+    const head = new THREE.Bone()
+    head.position.y = 1.4
+    hips.add(head)
+    mesh.add(hips)
+    root.add(mesh)
+    mesh.bind(new THREE.Skeleton([hips, head]))
+    const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 100)
+
+    for (const angle of [0, -Math.PI / 2]) {
+      hips.rotation.z = angle
+      frameRenderedPoseThumb({ root, camera }, { kind })
+      camera.updateMatrixWorld()
+      for (let i = 0; i < 3; i++) {
+        const point = mesh.getVertexPosition(i, new THREE.Vector3()).applyMatrix4(mesh.matrixWorld).project(camera)
+        expect(Math.abs(point.x)).toBeLessThan(0.9)
+        expect(Math.abs(point.y)).toBeLessThan(0.9)
+      }
+    }
+  })
+
   it('lists presets (none ship by default) without crashing', () => {
     expect(Array.isArray(listPresets('body'))).toBe(true)
   })

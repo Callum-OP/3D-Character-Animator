@@ -151,7 +151,7 @@ async function applyEntry(runtime, entry) {
   root.updateWorldMatrix(true, true)
 }
 
-function frame(runtime, entry) {
+export function frameRenderedPoseThumb(runtime, entry) {
   const { root, camera } = runtime
   root.updateWorldMatrix(true, true)
   if (entry.kind === 'hand') {
@@ -194,10 +194,11 @@ function frame(runtime, entry) {
     camera.up.copy(palmUp)
     camera.lookAt(center)
   } else {
-    const box = posedBoneBounds(root, entry.kind === 'animation' ? 0.16 : 0.12)
+    const box = new THREE.Box3().setFromObject(root, true)
+    if (box.isEmpty()) box.copy(posedBoneBounds(root, entry.kind === 'animation' ? 0.16 : 0.12))
     const center = box.getCenter(new THREE.Vector3())
     const size = box.getSize(new THREE.Vector3())
-    const half = Math.max(size.y, size.x) * 0.56
+    const half = Math.max(size.y, size.x, 0.001) * 0.575
     camera.left = -half
     camera.right = half
     camera.top = half
@@ -213,7 +214,7 @@ async function capture(entry) {
   const runtime = await loadRuntime()
   reset(runtime)
   await applyEntry(runtime, entry)
-  frame(runtime, entry)
+  frameRenderedPoseThumb(runtime, entry)
   runtime.renderer.render(runtime.scene, runtime.camera)
   return new Promise((resolve, reject) => {
     runtime.renderer.domElement.toBlob((blob) => blob ? resolve(blob) : reject(new Error('Could not capture thumbnail')), 'image/webp', 0.82)
