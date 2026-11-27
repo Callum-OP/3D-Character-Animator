@@ -668,7 +668,7 @@ export function initScene(container) {
         position: root.position.toArray(),
         quaternion: root.quaternion.toArray(),
         scale: root.scale.toArray(),
-      })
+      }, st.rippleRootEdit)
       return
     }
     if (

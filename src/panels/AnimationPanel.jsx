@@ -413,7 +413,7 @@ function ObjectMovementEditor({ onScrub, onCharacterKeyframe, onCharacterTrackCh
       position: root.position.toArray(),
       quaternion: root.quaternion.toArray(),
       scale: root.scale.toArray(),
-    })
+    }, rippleRootEdit)
     setMessage(`Saved ${selected.name} at ${keyTime.toFixed(2)}s. Add another key at a different time to create a smooth transition.`)
   }
 
@@ -607,7 +607,7 @@ function ObjectMovementEditor({ onScrub, onCharacterKeyframe, onCharacterTrackCh
             className="btn secondary"
             onClick={() => st().setRippleRootEdit(!rippleRootEdit)}
             aria-pressed={rippleRootEdit}
-            title="When you change a position key, carry that change forward to later position keys."
+            title="Carry the change you make to every later key: the position you move the character to, and each bone you pose differently here. Later frames keep their own animation and gain the same adjustment."
           >
             {rippleRootEdit ? '✓ ' : ''}Carry edits forward
           </button>
@@ -729,6 +729,14 @@ function ObjectMovementEditor({ onScrub, onCharacterKeyframe, onCharacterTrackCh
         <button className="btn secondary" onClick={() => scrubObjectAnimation(duration)} disabled={playing}>End</button>
         <button className="btn secondary" onClick={onKeyframe} disabled={!selected || playing}>
           Key selected object{keys.length ? ` (${keys.length})` : ''}
+        </button>
+        <button
+          className="btn secondary"
+          onClick={() => st().setRippleRootEdit(!rippleRootEdit)}
+          aria-pressed={rippleRootEdit}
+          title="When you key a new size, give every later key of this object the same change in size."
+        >
+          {rippleRootEdit ? '✓ ' : ''}Carry edits forward
         </button>
       </div>
 
@@ -926,6 +934,7 @@ export default function AnimationPanel() {
 
   const importedClipNames = useStore((s) => s.importedClipNames)
   const carryKeysAcrossClips = useStore((s) => s.carryKeysAcrossClips)
+  const rippleRootEdit = useStore((s) => s.rippleRootEdit)
   const characterOrder = useStore((s) => s.characterOrder)
   const stopAtFirstClipEnd = useStore((s) => s.stopAtFirstClipEnd)
   const setStopAtFirstClipEnd = useStore((s) => s.setStopAtFirstClipEnd)
@@ -1456,18 +1465,19 @@ export default function AnimationPanel() {
         // The clip remembers its keys: add to them and rebuild the clip (a key
         // past the end lengthens it) instead of converting it to a bake.
         st().addRootKeyframe(time, pos, quat, st().rippleRootEdit)
-        st().addKeyframesAtTime(captureCurrentPose(), time)
+        st().addKeyframesAtTime(captureCurrentPose(), time, st().rippleRootEdit)
         st().addShapeKeysAtTime(shapes, time)
         rebakeAdoptedClip(time)
         updateRootMotionTrack(st().animData.root)
         refreshCharacterAtTime(time)
         return shapeCount
       }
-      onBake({ keyPosition: { time, pos, quat, shapes }, time })
+      // The pose is read now, before the bake re-arms the clip and puts the character back on the clip's own pose.
+      onBake({ keyPosition: { time, pos, quat, shapes, pose: captureCurrentPose() }, time })
       return shapeCount
     }
     st().addRootKeyframe(time, pos, quat, st().rippleRootEdit)
-    st().addKeyframesAtTime(captureCurrentPose(), time)
+    st().addKeyframesAtTime(captureCurrentPose(), time, st().rippleRootEdit)
     st().addShapeKeysAtTime(shapes, time)
     updateRootMotionTrack(st().animData.root)
     refreshCharacterAtTime(time)
@@ -1518,7 +1528,7 @@ export default function AnimationPanel() {
     const quat = getBoneQuaternion(selectedBoneName)
     if (!quat) return
     const t = snap(insertTime)
-    st().addKeyframe(selectedBoneName, t, quat)
+    st().addKeyframe(selectedBoneName, t, quat, st().rippleRootEdit)
     setKfMsg(
       `Saved “${selectedBoneName}” at ${t.toFixed(2)}s. Now move the time slider, change the pose, add another keyframe — then Play.`,
     )
@@ -1531,8 +1541,8 @@ export default function AnimationPanel() {
       return
     }
     const t = snap(insertTime)
-    st().addKeyframesAtTime(posed, t)
-    setKfMsg(`Saved ${posed.length} posed joint(s) at ${t.toFixed(2)}s.`)
+    st().addKeyframesAtTime(posed, t, st().rippleRootEdit)
+    setKfMsg(`Saved ${posed.length} posed joint(s) at ${t.toFixed(2)}s${st().rippleRootEdit ? ', carrying the changes onto later keys' : ''}.`)
   }
 
   // Insert N blank/hold frames at the insert time: every keyframe at or after
@@ -1684,7 +1694,7 @@ export default function AnimationPanel() {
 
     if (keyPosition) {
       st().addRootKeyframe(keyPosition.time, keyPosition.pos, keyPosition.quat, st().rippleRootEdit)
-      st().addKeyframesAtTime(captureCurrentPose(), keyPosition.time)
+      st().addKeyframesAtTime(keyPosition.pose || captureCurrentPose(), keyPosition.time, st().rippleRootEdit)
       st().addShapeKeysAtTime(keyPosition.shapes, keyPosition.time)
       const keyedData = st().animData
       updateRootMotionTrack(keyedData.root)
@@ -2609,6 +2619,14 @@ export default function AnimationPanel() {
               title="Save every joint you've posed, at this time"
             >
               Key whole pose
+            </button>
+            <button
+              className="btn secondary"
+              onClick={() => st().setRippleRootEdit(!rippleRootEdit)}
+              aria-pressed={rippleRootEdit}
+              title="Carry the change you make to every later key: each bone you pose differently here moves by the same amount in all later frames, on top of whatever they already do."
+            >
+              {rippleRootEdit ? '✓ ' : ''}Carry edits forward
             </button>
           </div>
 

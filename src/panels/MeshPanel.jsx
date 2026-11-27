@@ -242,7 +242,7 @@ export default function MeshPanel() {
     if (index < 0) return
     const key = getMeshKeyValue(uuid)
     if (!key) return
-    st().addMeshKeyframe(index, snap(insertTime), key)
+    st().addMeshKeyframe(index, snap(insertTime), key, st().rippleRootEdit)
   }
 
   // The menu for a part row. If the row is part of a multi-selection it acts on all of

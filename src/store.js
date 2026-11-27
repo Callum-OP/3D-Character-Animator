@@ -5,6 +5,7 @@ import { create } from 'zustand'
 import { setUndoHistoryLimit } from './three/undoHistory.js'
 import { DEFAULT_NIGHT, normalizeNight, DEFAULT_SHADOWS, normalizeShadows, shadowStyleValues, shadowsFromLegacy } from './three/shadowSettings.js'
 import { normalizeVideoFps } from './three/exportSize.js'
+import { keyBone, keyTransform } from './three/carryEdits.js'
 
 // These are app-wide preferences rather than project content. They are kept
 // in their own local-storage record so opening a project cannot overwrite the
@@ -1073,13 +1074,11 @@ export const useStore = create((set) => ({
   setObjectAnimTime: (objectAnimTime) => set({ objectAnimTime }),
   setObjectAnimPlaying: (objectAnimPlaying) => set({ objectAnimPlaying }),
   setObjectAutoKeyMovement: (objectAutoKeyMovement) => set({ objectAutoKeyMovement }),
-  addObjectTransformKeyframe: (animationKey, time, transform) =>
+  // `carryAfter` (Carry edits forward): a new size is also applied to every later key of this object.
+  addObjectTransformKeyframe: (animationKey, time, transform, carryAfter = false) =>
     set((s) => {
       const objectAnimData = { ...s.objectAnimData }
-      const keys = (objectAnimData[animationKey] || []).filter((key) => key.time !== time)
-      keys.push({ time, ...transform })
-      keys.sort((a, b) => a.time - b.time)
-      objectAnimData[animationKey] = keys
+      objectAnimData[animationKey] = keyTransform(objectAnimData[animationKey], time, transform, carryAfter)
       return { objectAnimData }
     }),
   deleteObjectTransformKeyframe: (animationKey, time) =>
@@ -1535,13 +1534,11 @@ export const useStore = create((set) => ({
     })),
 
   // Insert/replace a part keyframe (full local position + rotation + scale).
-  addMeshKeyframe: (index, time, key) =>
+  // `carryAfter` (Carry edits forward): a new size is also applied to every later key of this part.
+  addMeshKeyframe: (index, time, key, carryAfter = false) =>
     set((s) => {
       const meshes = { ...(s.animData.meshes || {}) }
-      const keys = (meshes[index] || []).filter((k) => k.time !== time)
-      keys.push({ time, ...key })
-      keys.sort((a, b) => a.time - b.time)
-      meshes[index] = keys
+      meshes[index] = keyTransform(meshes[index], time, key, carryAfter)
       return { animData: { ...s.animData, meshes } }
     }),
 
@@ -1735,27 +1732,21 @@ export const useStore = create((set) => ({
       return { animData: { tracks, root, meshes, cameras, cuts, morphs, lights } }
     }),
 
-  // Insert/replace a keyframe for one bone at a time.
-  addKeyframe: (name, time, quat) =>
+  // Insert/replace a keyframe for one bone at a time. `carryAfter` (Carry edits forward) also gives every later key
+  // of this bone the same change the bone just got compared with what the animation had at this time.
+  addKeyframe: (name, time, quat, carryAfter = false) =>
     set((s) => {
-      const keys = (s.animData.tracks[name] || []).filter((k) => k.time !== time)
-      keys.push({ time, quat })
-      keys.sort((a, b) => a.time - b.time)
+      const keys = keyBone(s.animData.tracks[name], time, quat, null, carryAfter)
       return { animData: { ...s.animData, tracks: { ...s.animData.tracks, [name]: keys } } }
     }),
 
-  // Key several bones at the same time (for "key all posed bones").
-  addKeyframesAtTime: (list, time) =>
+  // Key several bones at the same time (for "key all posed bones"). With `carryAfter`, each bone that actually moved
+  // carries its own change forward; bones that did not move are left exactly as they were.
+  addKeyframesAtTime: (list, time, carryAfter = false) =>
     set((s) => {
       const tracks = { ...s.animData.tracks }
       for (const { name, quat, pos } of list) {
-        const keys = (tracks[name] || []).filter((k) => k.time !== time)
-        const existingPos = (tracks[name] || []).find((k) => k.time === time)?.pos
-        const key = { time, quat }
-        if (pos || existingPos) key.pos = pos || existingPos
-        keys.push(key)
-        keys.sort((a, b) => a.time - b.time)
-        tracks[name] = keys
+        tracks[name] = keyBone(tracks[name], time, quat, pos, carryAfter)
       }
       return { animData: { ...s.animData, tracks } }
     }),

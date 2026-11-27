@@ -628,6 +628,7 @@ export function partMenu(uuids, ctx, state = useStore.getState()) {
     { id: 'reset', label: multi ? `Reset ${uuids.length} parts` : 'Reset part', hint: 'Put the part back where it started' },
     ...(!multi ? [{ id: 'frame', label: 'Frame in viewport', shortcut: 'F' }] : []),
     ...(canKey ? [{ id: 'key', label: 'Key part', hint: "Save this part's position, rotation and size at the Animate panel's insert time" }] : []),
+    ...(canKey ? [{ id: 'carry', label: 'Carry resize forward', checked: !!state.rippleRootEdit, hint: 'When on, keying a new size also resizes every later key of this part by the same amount' }] : []),
     { separator: true },
     { header: 'Make into a new object' },
     { id: 'extract', label: multi ? `Extract ${uuids.length} parts` : 'Extract to object', disabled: !!ctx.extracting, hint: 'Move the part(s) out into an object of their own (the originals are hidden)' },
@@ -647,6 +648,7 @@ export function partMenu(uuids, ctx, state = useStore.getState()) {
     if (id === 'reset') return multi ? resetMeshes(uuids) : resetMesh(first)
     if (id === 'frame') return setCameraToMesh(first)
     if (id === 'key') return ctx.keyPart?.(first)
+    if (id === 'carry') return st.setRippleRootEdit(!st.rippleRootEdit)
     if (id === 'extract') return ctx.extract?.(uuids, true)
     if (id === 'copyOut') return ctx.extract?.(uuids, false)
   }
