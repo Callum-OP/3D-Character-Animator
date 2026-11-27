@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
-import { analyseHands, analyticHandPose, handPoseToBoneQuats, handPosesFromBVH, migrateHandPose, rigsForSide } from './handPose.js'
+import { analyseHands, analyticHandPose, handPoseToBoneQuats, handPosesFromBVH, migrateHandPose, restQuatLookup, rigsForSide } from './handPose.js'
 import { applyClipFrame, parsedBVHResolver, posedBoneBounds, representativeClipTime } from './poseThumb.js'
 import { loadPresetPoseText, loadPresetText } from './poseLibraryPresets.js'
 import { retargetLibraryPreview, retargetPreviewBVH } from './posePreviewRetarget.js'
@@ -119,7 +119,7 @@ async function applyEntry(runtime, entry) {
   } else if (entry.kind === 'hand') {
     const bones = []
     root.traverse((object) => { if (object.isBone) bones.push(object) })
-    const rigs = rigsForSide(analyseHands(bones, () => new THREE.Quaternion()), 'R')
+    const rigs = rigsForSide(analyseHands(bones, restQuatLookup(runtime.rest)), 'R')
     let poses
     if (entry.source === 'basic') {
       poses = Object.fromEntries(rigs.map((rig) => [rig.side, analyticHandPose(rig, entry)]))
@@ -157,7 +157,7 @@ export function frameRenderedPoseThumb(runtime, entry) {
   if (entry.kind === 'hand') {
     const bones = []
     root.traverse((object) => { if (object.isBone) bones.push(object) })
-    const rigs = analyseHands(bones, () => new THREE.Quaternion())
+    const rigs = analyseHands(bones, restQuatLookup(runtime.rest))
     const rig = rigs.find((item) => item.side === 'R') || rigs[0]
     const hand = rig?.hand
     const box = new THREE.Box3()

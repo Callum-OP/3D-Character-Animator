@@ -8,15 +8,17 @@ import {
   getRenderedThumb, putRenderedThumb,
 } from '../three/poseLibraryStore.js'
 import {
-  applyBodyEntry, applyHandEntry, applyAnimationEntry,
+  applyBodyEntry, applyHandEntry, applyAnimationEntry, beginManualRetarget, canRetargetManually,
   saveCurrentBodyPose, saveCurrentHandPose, saveClipToLibrary, backfillAnimationThumb, BASIC_HANDS,
 } from '../three/poseLibraryActions.js'
-import { analyseHands, analyticHandPose, handPoseToBoneQuats, handPosesFromBVH, rigsForSide, migrateHandPose } from '../three/handPose.js'
+import { analyseHands, analyticHandPose, handPoseToBoneQuats, handPosesFromBVH, rigsForSide, migrateHandPose, restQuatLookup } from '../three/handPose.js'
 import {
   applyClipFrame, basicHandThumb, parsedBVHResolver, posedBoneBounds, representativeClipTime,
 } from '../three/poseThumb.js'
 import { animationClipFromJSON, retargetLibraryPreview, retargetPreviewBVH } from '../three/posePreviewRetarget.js'
 import HandPoseSection from './HandPoseSection.jsx'
+import RetargetEditor from './RetargetEditor.jsx'
+import { useRowMenu } from './rowMenu.jsx'
 import { confirmDialog } from '../dialogs.js'
 
 const TABS = [['body', 'Body'], ['hand', 'Hand'], ['animation', 'Animation']]
@@ -208,7 +210,7 @@ function PosePreview({ tab, entry, side, strength, handAdjust, previewVersion })
         const aspect = rect.width && rect.height ? rect.width / rect.height : 1
         const rigBones = []
         root.traverse((object) => { if (object.isBone) rigBones.push(object) })
-        const rigs = analyseHands(rigBones, () => new THREE.Quaternion())
+        const rigs = analyseHands(rigBones, restQuatLookup(rest))
         const rig = rigs.find((item) => item.side === activeSide) || rigs.find((item) => item.side === 'R') || rigs[0]
 
         let palmNormal = new THREE.Vector3(0, 0, 1)
@@ -319,9 +321,9 @@ function PosePreview({ tab, entry, side, strength, handAdjust, previewVersion })
         if (tab === 'hand' && handAdjustRef.current) {
           const bones = []
           preview.root.traverse((object) => { if (object.isBone) bones.push(object) })
-          const identity = () => new THREE.Quaternion()
+          const restOf = restQuatLookup(preview.rest)
           const adjust = handAdjustRef.current
-          const rigs = rigsForSide(analyseHands(bones, identity), adjust.side)
+          const rigs = rigsForSide(analyseHands(bones, restOf), adjust.side)
           for (const rig of rigs) {
             for (const [boneName, value] of Object.entries(handPoseToBoneQuats(
               rig,
@@ -363,10 +365,10 @@ function PosePreview({ tab, entry, side, strength, handAdjust, previewVersion })
         } else if (tab === 'hand') {
           const bones = []
           preview.root.traverse((object) => { if (object.isBone) bones.push(object) })
-          const identity = () => new THREE.Quaternion()
+          const restOf = restQuatLookup(preview.rest)
           let poses = null
           if (entry.source === 'basic') {
-            const rigs = rigsForSide(analyseHands(bones, identity), side)
+            const rigs = rigsForSide(analyseHands(bones, restOf), side)
             for (const rig of rigs) {
               for (const [boneName, value] of Object.entries(handPoseToBoneQuats(rig, analyticHandPose(rig, entry), strength / 100))) {
                 const bone = preview.root.getObjectByName(boneName)
@@ -384,7 +386,7 @@ function PosePreview({ tab, entry, side, strength, handAdjust, previewVersion })
           }
           if (poses) {
             preview.root.updateWorldMatrix(true, true)
-            const rigs = rigsForSide(analyseHands(bones, identity), side)
+            const rigs = rigsForSide(analyseHands(bones, restOf), side)
             for (const rig of rigs) {
               const pose = poses[rig.side] || poses.R || poses.L
               if (!pose) continue
@@ -438,7 +440,7 @@ function PosePreview({ tab, entry, side, strength, handAdjust, previewVersion })
   )
 }
 
-function Card({ entry, rendered, onApply, onDelete, onRename, onPreview }) {
+function Card({ entry, rendered, onApply, onDelete, onRename, onPreview, onMenu }) {
   const [thumb, setThumb] = useState(entry.thumb || null)
   const [image, setImage] = useState(null)
   const ref = useRef(null)
@@ -499,7 +501,7 @@ function Card({ entry, rendered, onApply, onDelete, onRename, onPreview }) {
   }, [entry, rendered])
   const duration = thumb?.duration ?? entry.data?.clip?.clip?.duration
   return (
-    <div className="pl-card" ref={ref} onMouseEnter={() => onPreview?.(entry)} onFocus={() => onPreview?.(entry)}>
+    <div className="pl-card" ref={ref} onMouseEnter={() => onPreview?.(entry)} onFocus={() => onPreview?.(entry)} onContextMenu={(e) => onMenu?.(e, entry)}>
       <button className="pl-card-main" onClick={() => onApply(entry)} title={`Apply “${entry.name}”`}>
         <Thumb thumb={thumb} image={image} animation={entry.kind === 'animation'} hand={entry.kind === 'hand'} />
         {editing ? (
@@ -551,6 +553,11 @@ export default function PoseLibrary({ onOpenPoseFinder }) {
   const [handAdjust, setHandAdjust] = useState(null)
   const [renderedCards, setRenderedCards] = useState(() => useStore.getState().qualityPreset !== 'verylow')
   const [previewVersion, setPreviewVersion] = useState(0)
+  // A manual retarget in progress: { entry, mapping, busy } while the bone-mapping editor is showing.
+  const [retarget, setRetarget] = useState(null)
+  const retargetOpenRef = useRef(false)
+  retargetOpenRef.current = !!retarget
+  const rowMenu = useRowMenu()
 
   const refresh = useCallback(async () => {
     const all = await listEntries()
@@ -559,10 +566,16 @@ export default function PoseLibrary({ onOpenPoseFinder }) {
   }, [])
   useEffect(() => { if (tab) refresh() }, [tab, refresh])
   useEffect(() => { setCategory('all'); setQuery('') }, [tab])
+  useEffect(() => { setRetarget(null) }, [tab])
   useEffect(() => { setRenderedCards(qualityPreset !== 'verylow') }, [qualityPreset])
   useEffect(() => {
     if (!tab) return undefined
-    const onKey = (e) => { if (e.key === 'Escape') close() }
+    // Esc backs out of the retarget editor first, and only then closes the library.
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return
+      if (retargetOpenRef.current) setRetarget(null)
+      else close()
+    }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [tab, close])
@@ -608,6 +621,40 @@ export default function PoseLibrary({ onOpenPoseFinder }) {
     }
     const r = await applyAnimationEntry(entry)
     return `Added the clip “${r.name}”${r.retargeted ? ' (retargeted rotations and hip motion; other source-specific tracks and editing data were not transferred)' : ''} — press Play in Animate.`
+  })
+  const onStartRetarget = (entry) => run(async () => {
+    const mapping = await beginManualRetarget(entry)
+    setRetarget({ entry, mapping, busy: false })
+    return null
+  })
+  const onApplyRetarget = async (slots) => {
+    const { entry } = retarget
+    setRetarget((r) => r && { ...r, busy: true })
+    try {
+      if (entry.kind === 'body') {
+        const r = await applyBodyEntry(entry, { keepHands, slots })
+        setMsg(`Applied “${r.label}” with your bone mapping (${r.applied} bones${r.skipped ? `, ${r.skipped} not on this rig` : ''}).`)
+      } else {
+        const r = await applyAnimationEntry(entry, { slots })
+        setMsg(`Added the clip “${r.name}” with your bone mapping — press Play in Animate.`)
+      }
+      setRetarget(null)
+    } catch (e) {
+      setMsg(e.message || String(e))
+      setRetarget((r) => r && { ...r, busy: false })
+    }
+  }
+  const menuItems = (entry) => [
+    { id: 'apply', label: 'Apply' },
+    ...(canRetargetManually(entry)
+      ? [{ id: 'retarget', label: 'Retarget manually…', disabled: !hasCharacter }]
+      : []),
+    ...(entry.source === 'mine' ? [{ separator: true }, { id: 'delete', label: 'Delete', danger: true }] : []),
+  ]
+  const onCardMenu = (e, entry) => rowMenu.openAt(e, menuItems(entry), (id) => {
+    if (id === 'apply') onApply(entry)
+    else if (id === 'retarget') onStartRetarget(entry)
+    else if (id === 'delete') onDelete(entry)
   })
   const onSave = (fn) => run(async () => { const e = await fn(); await refresh(); setSource('all'); setSaveName(''); return `Saved “${e.name}” to the library.` })
   const onDelete = (e) => { if (confirmDialog(`Delete “${e.name}” from your library?`)) deleteEntry(e.id).then(refresh) }
@@ -682,12 +729,25 @@ export default function PoseLibrary({ onOpenPoseFinder }) {
         previewVersion={previewVersion}
       />
 
-      <div className="pl-grid">
+      {retarget && (
+        <RetargetEditor
+          mapping={retarget.mapping}
+          onChange={(update) => setRetarget((r) => r && { ...r, mapping: update(r.mapping) })}
+          onApply={onApplyRetarget}
+          onCancel={() => setRetarget(null)}
+          busy={retarget.busy}
+          applyLabel="Apply"
+          busyLabel="Applying…"
+          sourceLabel="source"
+        />
+      )}
+      <div className="pl-grid" style={retarget ? { display: 'none' } : undefined}>
         {shown.map((entry) => (
           <Card
             key={entry.id || entry.name}
             entry={entry}
             rendered={renderedCards}
+            onMenu={onCardMenu}
             onApply={onApply}
             onDelete={onDelete}
             onRename={onRename}
@@ -742,6 +802,7 @@ export default function PoseLibrary({ onOpenPoseFinder }) {
       <input ref={fileRef} type="file" accept=".json,application/json" style={{ display: 'none' }} onChange={onImport} />
       {!isPersistent() && <div className="pl-msg">Browser storage isn’t available, so saved poses will be lost when you close the app. Use Export library to keep them.</div>}
       {msg && <div className="pl-msg">{msg}</div>}
+      {rowMenu.element}
     </aside>
   )
 }

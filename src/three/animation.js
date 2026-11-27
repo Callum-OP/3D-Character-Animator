@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { makeClipNamesUnique, uniqueClipName } from './clipNames.js'
 import { parseBVH, retargetParsed, buildSlotMapping, buildNameMatch, mergeNames } from './bvh.js'
-import { captureLibraryRig, libraryPoseClip, libraryRigsMatch, retargetLibraryClip } from './libraryRetarget.js'
+import { captureLibraryRig, libraryMapping, libraryPoseClip, libraryRigsMatch, retargetLibraryClip } from './libraryRetarget.js'
 import {
   sampleMeshTracks,
   getMeshPlaybackSnapshot,
@@ -368,13 +368,13 @@ export async function applyBVHRetarget(slots, options) {
 // or changing the pose on screen. Uses the same automatic bone mapping as File > Import Animation. Resolves with
 // { boneName: [x, y, z, w] } for the bones the BVH actually drives (everything else is left out, so hair, cloth and
 // other bones the mocap doesn't know about are never reset).
-export async function poseFromBVHText(text, name = 'pose') {
+export async function poseFromBVHText(text, name = 'pose', options = {}) {
   if (!a.model) throw new Error('Load a model first.')
   const parsed = await parseBVH({ name: `${name}.bvh`, text: async () => text })
   const targetBoneObjs = a.model.bones || []
   const targetBones = targetBoneObjs.map((b) => b.name)
   parsed.autoNames = buildNameMatch(targetBones, parsed.bones)
-  const slots = buildSlotMapping(targetBones, parsed.bones, targetBoneObjs, parsed.skeleton.bones)
+  const slots = options.slots || buildSlotMapping(targetBones, parsed.bones, targetBoneObjs, parsed.skeleton.bones)
   const { names, hip } = mergeNames(parsed.autoNames, slots)
 
   // The retarget measures the rig at rest; put every bone back exactly as it was afterwards.
@@ -586,13 +586,40 @@ export function getLibraryRig() {
   return withLibraryRest(captureLibraryRig)
 }
 
+// The starting point for the retarget editor on a saved library entry: its source bones, this character's bones and
+// the automatic matching, as { name, sourceBones, targetBones, slots }.
+export function beginLibraryMapping(rig, name) {
+  if (!rig) throw new Error('This older library entry has no source rig, so there is nothing to map. Save it again from its original character.')
+  return withLibraryRest((model) => libraryMapping(rig, model, name))
+}
+
+// The same for a preset BVH file's text. Nothing is kept: the text is parsed again when the mapping is applied.
+export async function beginBVHTextMapping(text, name = 'pose') {
+  if (!a.model) throw new Error('Load a model first.')
+  const parsed = await parseBVH({ name: `${name}.bvh`, text: async () => text })
+  const targetBoneObjs = a.model.bones || []
+  const targetBones = targetBoneObjs.map((b) => b.name)
+  return {
+    name: parsed.name || name,
+    sourceBones: parsed.bones,
+    targetBones,
+    slots: buildSlotMapping(targetBones, parsed.bones, targetBoneObjs, parsed.skeleton.bones),
+  }
+}
+
 function libraryTrackTarget(track) {
   const binding = THREE.PropertyBinding.parseTrackName(track.name)
   return binding.objectName === 'bones' ? binding.objectIndex : binding.nodeName
 }
 
-export function prepareLibraryClip(json, rig) {
+// `options.slots` is a hand-edited bone mapping from the retarget editor: it always retargets, even onto a rig that
+// matches the one the clip was saved from.
+export function prepareLibraryClip(json, rig, options = {}) {
   return withLibraryRest((model) => {
+    if (options.slots) {
+      if (!rig) throw new Error('This older library clip has no source rig, so there is nothing to map. Save it again from its original character.')
+      return { clip: retargetLibraryClip(json, rig, model, options.slots), retargeted: true }
+    }
     const targetRig = captureLibraryRig(model)
     const original = unwrapClipJSON(json)
     if (rig && !libraryRigsMatch(rig, targetRig)) {
@@ -615,10 +642,10 @@ export function prepareLibraryClip(json, rig) {
   })
 }
 
-export function retargetLibraryPose(bones, rig) {
+export function retargetLibraryPose(bones, rig, options = {}) {
   return withLibraryRest((model) => {
-    if (libraryRigsMatch(rig, captureLibraryRig(model))) return { ...bones }
-    const clip = retargetLibraryClip(libraryPoseClip(bones), rig, model)
+    if (!options.slots && libraryRigsMatch(rig, captureLibraryRig(model))) return { ...bones }
+    const clip = retargetLibraryClip(libraryPoseClip(bones), rig, model, options.slots || null)
     const result = {}
     for (const track of clip.tracks) {
       const match = /^(.+)\.quaternion$/.exec(track.name)

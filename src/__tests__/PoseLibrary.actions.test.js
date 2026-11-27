@@ -28,6 +28,7 @@ vi.mock('../three/scene.js', () => ({ importBVHAuto: vi.fn() }))
 vi.mock('../three/animation.js', () => ({
   poseFromBVHText: vi.fn(), stop: vi.fn(), exportClipJSON: vi.fn(), addGeneratedClip: vi.fn(), selectClip: vi.fn(),
   getLibraryRig: vi.fn(() => ({ nodes: [] })), prepareLibraryClip: vi.fn(), retargetLibraryPose: vi.fn(),
+  beginLibraryMapping: vi.fn(), beginBVHTextMapping: vi.fn(),
 }))
 
 const actions = await import('../three/poseLibraryActions.js')
@@ -173,5 +174,80 @@ describe('animations', () => {
     const r = await actions.applyAnimationEntry({ source: 'preset', id: 'preset:animation/run.bvh', name: 'Run', url: '/x.bvh' })
     expect(scene.importBVHAuto.mock.calls[0][0].name).toBe('Run (2).bvh')
     expect(r.name).toBe('Run (2)')
+  })
+})
+
+describe('retargeting by hand', () => {
+  const slots = [{ key: 'hips', label: 'Hips', target: 'mixamorig:Hips', source: 'Hips', guessed: false }]
+  const mapping = { name: 'x', sourceBones: ['Hips'], targetBones: ['mixamorig:Hips'], slots }
+
+  it('only body poses and animations can be mapped; hands are placed finger by finger', () => {
+    expect(actions.canRetargetManually({ kind: 'body' })).toBe(true)
+    expect(actions.canRetargetManually({ kind: 'animation' })).toBe(true)
+    expect(actions.canRetargetManually({ kind: 'hand' })).toBe(false)
+  })
+
+  it('opens the editor from the saved rig for your own entries', async () => {
+    const anim = await import('../three/animation.js')
+    anim.beginLibraryMapping.mockReturnValue(mapping)
+    useStore.setState({ modelInfo: { name: 'x' } })
+    const rig = { nodes: [] }
+    expect(await actions.beginManualRetarget({ kind: 'body', source: 'mine', name: 'Wave', data: { rig, bones: {} } })).toBe(mapping)
+    expect(anim.beginLibraryMapping).toHaveBeenCalledWith(rig, 'Wave')
+  })
+
+  it('opens the editor from the BVH text for presets', async () => {
+    const anim = await import('../three/animation.js')
+    anim.beginBVHTextMapping.mockResolvedValue(mapping)
+    useStore.setState({ modelInfo: { name: 'x' } })
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: true, text: async () => 'HIERARCHY' })
+    const entry = { kind: 'animation', source: 'preset', id: 'preset:animation/run.bvh', name: 'Run', url: '/x.bvh' }
+    expect(await actions.beginManualRetarget(entry)).toBe(mapping)
+    expect(anim.beginBVHTextMapping).toHaveBeenCalledWith('HIERARCHY', 'Run')
+  })
+
+  it('refuses hands and an empty scene with a clear message', async () => {
+    useStore.setState({ modelInfo: { name: 'x' } })
+    await expect(actions.beginManualRetarget({ kind: 'hand', source: 'mine', name: 'Fist' })).rejects.toThrow(/finger by finger/)
+    useStore.setState({ modelInfo: null })
+    await expect(actions.beginManualRetarget({ kind: 'body', source: 'mine', name: 'Wave', data: {} })).rejects.toThrow(/Load a character/)
+  })
+
+  it('a saved pose is applied through the edited mapping', async () => {
+    const anim = await import('../three/animation.js')
+    const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.5, 0, 0)).toArray()
+    anim.retargetLibraryPose.mockReturnValue({ 'mixamorig:Spine': q })
+    const rig = { nodes: [] }
+    await actions.applyBodyEntry({ source: 'mine', name: 'Lean', data: { bones: { Spine: q }, rig } }, { slots })
+    expect(anim.retargetLibraryPose).toHaveBeenLastCalledWith({ Spine: q }, rig, { slots })
+    expect(angle('mixamorig:Spine')).toBeGreaterThan(0.4)
+  })
+
+  it('a preset pose is read through the edited mapping', async () => {
+    const anim = await import('../three/animation.js')
+    const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.5, 0, 0)).toArray()
+    anim.poseFromBVHText.mockResolvedValue({ 'mixamorig:Spine': q })
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: true, text: async () => 'HIERARCHY' })
+    await actions.applyBodyEntry({ source: 'preset', id: 'preset:body/lean.bvh', name: 'Lean', url: '/x.bvh' }, { slots })
+    expect(anim.poseFromBVHText).toHaveBeenLastCalledWith('HIERARCHY', 'Lean', { slots })
+  })
+
+  it('a saved clip is retargeted through the edited mapping', async () => {
+    const anim = await import('../three/animation.js')
+    anim.prepareLibraryClip.mockReturnValue({ clip: {}, retargeted: true })
+    anim.addGeneratedClip.mockReturnValue('Walk')
+    anim.selectClip.mockReturnValue(2)
+    const rig = { nodes: [] }
+    await actions.applyAnimationEntry({ source: 'mine', name: 'Walk', data: { clip: {}, rig } }, { slots })
+    expect(anim.prepareLibraryClip).toHaveBeenLastCalledWith({}, rig, { slots })
+  })
+
+  it('a preset clip is imported through the edited mapping', async () => {
+    const scene = await import('../three/scene.js')
+    scene.importBVHAuto.mockResolvedValue({ name: 'Run' })
+    useStore.setState({ importedClipNames: [] })
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: true, text: async () => 'HIERARCHY' })
+    await actions.applyAnimationEntry({ source: 'preset', id: 'preset:animation/run.bvh', name: 'Run', url: '/x.bvh' }, { slots })
+    expect(scene.importBVHAuto).toHaveBeenLastCalledWith(expect.anything(), { slots })
   })
 })

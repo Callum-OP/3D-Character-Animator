@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { confirmDialog } from '../dialogs.js'
 import { useStore } from '../store.js'
 import EditableValue from './EditableValue.jsx'
+import RetargetEditor from './RetargetEditor.jsx'
 import LockInPlaceSection from './LockInPlaceSection.jsx'
 import ShapeKeyPicker from './ShapeKeyPicker.jsx'
 import { useRowMenu, RowMenuButton, RowName } from './rowMenu.jsx'
@@ -49,7 +50,7 @@ import {
   saveClipAs,
   hasFileSystemAccess as hasClipFileSystemAccess,
 } from '../three/clipLibrary.js'
-import { getBoneQuaternion, getPosedBones, applyPose, setPosingEnabled } from '../three/posing.js'
+import { getBoneQuaternion, getPosedBones, applyPose } from '../three/posing.js'
 import { saveClipToLibrary } from '../three/poseLibraryActions.js'
 import {
   getCurrentModel,
@@ -1013,13 +1014,6 @@ export default function AnimationPanel() {
   // When a BVH is parsed, this holds the mapping editor state until the user
   // confirms (Retarget) or cancels: { name, sourceBones, targetBones, slots }.
   const [mapping, setMapping] = useState(null)
-  // Which mapping slot (by key) is waiting for a click on a bone dot in the
-  // viewport — set by the "Pick" button next to a slot's rig-bone dropdown.
-  // Lets generic/renamed rigs be mapped by clicking the bone you can SEE
-  // (the neck, a wrist...) instead of hunting for its name in the dropdown.
-  const [pickingSlotKey, setPickingSlotKey] = useState(null)
-  const mode = useStore((s) => s.mode)
-  const pickBaselineRef = useRef(null) // selectedBoneName at the moment picking was armed, so we don't grab a stale/already-selected bone
   const selectedSceneObject =
     sceneObjects.find((object) => object.id === selectedObjectId) ||
     (!selectedObjectId && selectedCameraId == null && selectedLightId == null && modelInfo
@@ -1090,11 +1084,7 @@ export default function AnimationPanel() {
     return () => window.removeEventListener('keydown', onKey)
   })
 
-  // While a slot is armed, a change in the picked bone (from clicking a dot
-  // in the viewport) assigns it as that slot's rig-bone target, then hands
-  // bone-picking back to whatever the app's normal mode dictates.
-  //
-  // These three effects must run on every render, even when nothing is
+  // These effects must run on every render, even when nothing is
   // loaded — see the comment on the early returns just below for why moving
   // them here (above both `if (!modelInfo) return null` and `if (!hasClips
   // && !hasBones) return null`) is not just tidiness but a correctness fix:
@@ -1115,36 +1105,6 @@ export default function AnimationPanel() {
     if (st().activeClipName === adoptRequest) adoptClipKeys(adoptRequest)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [adoptRequest])
-  useEffect(() => {
-    if (!pickingSlotKey) return
-    if (!selectedBoneName || selectedBoneName === pickBaselineRef.current) return
-    setSlot(pickingSlotKey, 'target', selectedBoneName)
-    setPickingSlotKey(null)
-    setPosingEnabled(mode === 'bone')
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedBoneName])
-
-  // Esc cancels an armed pick without assigning anything.
-  useEffect(() => {
-    if (!pickingSlotKey) return
-    function onKey(e) {
-      if (e.key === 'Escape') onCancelPickTarget()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pickingSlotKey])
-
-  // Leaving the mapping editor (Retarget/Cancel) while a pick is still armed
-  // shouldn't leave bone-picking force-enabled behind.
-  useEffect(() => {
-    if (!mapping && pickingSlotKey) {
-      setPickingSlotKey(null)
-      setPosingEnabled(mode === 'bone')
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mapping])
-
   useEffect(() => {
     if (!modelInfo || !hasCharacterSelected || source !== 'edit' || Math.abs(insertTime - currentTime) <= 1e-6) return
     if (playback === 'playing') {
@@ -1615,45 +1575,10 @@ export default function AnimationPanel() {
     }
   }
 
-  // Update one slot's target/source bone in the mapping editor.
-  function setSlot(key, field, value) {
-    setMapping((m) => ({
-      ...m,
-      slots: m.slots.map((s) => (s.key === key ? { ...s, [field]: value } : s)),
-    }))
-  }
-
-  // Arm "click a bone on the character" for one slot's rig-bone target — or,
-  // if a bone is already selected (e.g. the user cycled to the right one by
-  // clicking it a few times first), use that immediately instead of making
-  // them click it again. Turns on bone picking in the viewport (even if the
-  // app isn't currently in Bone/Pose mode) so the dots are visible and
-  // clickable; the effect below catches the resulting selection.
-  function onStartPickTarget(key) {
-    if (selectedBoneName) {
-      setSlot(key, 'target', selectedBoneName)
-      return
-    }
-    pickBaselineRef.current = selectedBoneName
-    setPickingSlotKey(key)
-    setPosingEnabled(true)
-  }
-
-  function onCancelPickTarget() {
-    setPickingSlotKey(null)
-    setPosingEnabled(mode === 'bone')
-  }
-
-  // While a slot is armed, a change in the picked bone (from clicking a dot
-  // in the viewport) assigns it as that slot's rig-bone target, then hands
-  // bone-picking back to whatever the app's normal mode dictates. (Moved
-  // above the early returns near the top of the component — see the comment
-  // there for why.)
-
-  async function onRetarget() {
+  async function onRetarget(slots) {
     setBvhBusy(true)
     try {
-      const { name, matched, total } = await applyBVHRetarget(mapping.slots)
+      const { name, matched, total } = await applyBVHRetarget(slots || mapping.slots)
       st().addImportedClipName(name)
       st().setPlaybackSource('clip')
       st().setActiveClipName(name)
@@ -2583,94 +2508,13 @@ export default function AnimationPanel() {
 
       {/* Mocap bone-mapping editor */}
       {mapping && (
-        <div className="map-editor">
-          <div className="field-label" style={{ marginTop: 8 }}>
-            Map “{mapping.name}” bones → this rig
-          </div>
-          <div className="map-hint">
-            Auto-guessed by body part. Fix any wrong rows (leave a row blank to
-            skip it), then Retarget. If the rig has generic bone names, use{' '}
-            <strong>Pick</strong> and click the bone on the character instead
-            of hunting through the dropdown.
-            {mapping.slots.some((s) => s.guessed) && (
-              <>
-                {' '}Rows marked <strong>~guess</strong> have no usable bone
-                names (in the mocap file, the character rig, or both), so
-                they were guessed from the skeleton's shape instead — check
-                these carefully.
-              </>
-            )}
-          </div>
-
-          {pickingSlotKey && (
-            <div className="map-hint map-hint-active">
-              Click a bone dot on the character to assign it to “
-              {mapping.slots.find((s) => s.key === pickingSlotKey)?.label}”.{' '}
-              <button className="btn secondary" onClick={onCancelPickTarget}>
-                Cancel
-              </button>
-            </div>
-          )}
-
-          <div className="map-list">
-            {mapping.slots.map((s) => (
-              <div key={s.key} className={s.guessed ? 'map-row map-row-guessed' : 'map-row'}>
-                <span className="map-slot">
-                  {s.label}
-                  {s.guessed && (
-                    <span className="map-guessed-badge" title="Guessed from bone position, not name">
-                      {' '}~guess
-                    </span>
-                  )}
-                </span>
-                <span className="map-target-cell">
-                  <select
-                    className="select select-sm"
-                    title="Character bone"
-                    value={s.target}
-                    onChange={(e) => setSlot(s.key, 'target', e.target.value)}
-                  >
-                    <option value="">— rig —</option>
-                    {mapping.targetBones.map((b, i) => (
-                      <option key={`${b}-${i}`} value={b}>
-                        {b}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    className={'map-pick-btn' + (pickingSlotKey === s.key ? ' active' : '')}
-                    onClick={() => (pickingSlotKey === s.key ? onCancelPickTarget() : onStartPickTarget(s.key))}
-                    title="If a bone is already selected, assigns it. Otherwise, click here then click the bone on the character."
-                  >
-                    ⌖
-                  </button>
-                </span>
-                <select
-                  className="select select-sm"
-                  title="Mocap (BVH) bone"
-                  value={s.source}
-                  onChange={(e) => setSlot(s.key, 'source', e.target.value)}
-                >
-                  <option value="">— mocap —</option>
-                  {mapping.sourceBones.map((b, i) => (
-                    <option key={`${b}-${i}`} value={b}>
-                      {b}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            ))}
-          </div>
-
-          <div className="kf-actions" style={{ marginTop: 8 }}>
-            <button className="btn" onClick={onRetarget} disabled={bvhBusy}>
-              {bvhBusy ? 'Retargeting…' : 'Retarget'}
-            </button>
-            <button className="btn secondary" onClick={onCancelMapping} disabled={bvhBusy}>
-              Cancel
-            </button>
-          </div>
-        </div>
+        <RetargetEditor
+          mapping={mapping}
+          onChange={setMapping}
+          onApply={onRetarget}
+          onCancel={onCancelMapping}
+          busy={bvhBusy}
+        />
       )}
 
       {/* Transport */}

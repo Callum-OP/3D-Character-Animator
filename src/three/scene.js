@@ -2267,8 +2267,10 @@ export async function addObjectFile(file, { animationKey, recordHistory = true }
 // "quick BVH import" entry point should call, so that bookkeeping can't be
 // forgotten again — see Titlebar.bvhimport.test.js.
 export async function importBVHAuto(file, options) {
+  const { slots: editedSlots, ...retargetOptions } = options || {}
   const guess = await beginBVHImport(file)
-  const { name, matched, total } = await applyBVHRetarget(guess.slots, options)
+  // `slots` is a hand-edited mapping from a retarget editor; without it the automatic guess is used.
+  const { name, matched, total } = await applyBVHRetarget(editedSlots || guess.slots, retargetOptions)
   const s = useStore.getState()
   s.addImportedClipName(name)
   s.setPlaybackSource('clip')

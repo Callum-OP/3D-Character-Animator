@@ -213,6 +213,15 @@ function measureFrame(rig, restQuatOf) {
   return true
 }
 
+// A `restQuatOf` for analyseHands from a list of { object, quaternion } rest entries (the bones' rest rotations as
+// the model was loaded). A rig's hand bones are rarely unrotated at rest, so a hand analysed with the wrong rest
+// puts every finger, the thumb most of all, on the wrong axes: curls go the wrong way and a thumbs-up lies against
+// the palm. Anything that previews a hand pose must use the same rest the character in the scene does.
+export function restQuatLookup(rest) {
+  const byBone = new Map((rest || []).map((item) => [item.object, item.quaternion]))
+  return (bone) => (byBone.get(bone) || IDENTITY).clone()
+}
+
 // Find every hand on `bones` and measure its palm frame against the rig's rest pose. Hands whose geometry
 // gives no palm frame (fewer than two non-thumb fingers) are dropped.
 export function analyseHands(bones, restQuatOf) {

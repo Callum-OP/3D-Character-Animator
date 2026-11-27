@@ -12,7 +12,7 @@ import {
 import { POSE_FORMAT } from './poses.js'
 import {
   poseFromBVHText, stop as stopAnimation, exportClipJSON, addGeneratedClip, selectClip,
-  getLibraryRig, prepareLibraryClip, retargetLibraryPose,
+  getLibraryRig, prepareLibraryClip, retargetLibraryPose, beginLibraryMapping, beginBVHTextMapping,
 } from './animation.js'
 import { importBVHAuto } from './scene.js'
 import {
@@ -87,14 +87,35 @@ function fingerBoneNames() {
   return names
 }
 
-// Put a body pose on the character. `keepHands` leaves the fingers as they are.
+// Whether an entry can be retargeted by hand: body poses and animations, preset or saved. Hand poses are placed finger
+// by finger on whichever hands the character has, so there is no bone mapping to edit.
+export function canRetargetManually(entry) {
+  return entry?.kind === 'body' || entry?.kind === 'animation'
+}
+
+// The starting point for the retarget editor for a library entry: { name, sourceBones, targetBones, slots }, with the
+// automatic matching already filled in. Hand the edited `slots` to applyBodyEntry / applyAnimationEntry.
+export async function beginManualRetarget(entry) {
+  if (!canRetargetManually(entry)) throw new Error('Hand poses are placed finger by finger, so there is no bone mapping to edit.')
+  if (!useStore.getState().modelInfo) throw new Error('Load a character first.')
+  if (entry.source === 'preset') {
+    const text = entry.kind === 'body' ? await loadPresetPoseText(entry) : await loadPresetText(entry)
+    return beginBVHTextMapping(text, entry.name)
+  }
+  return beginLibraryMapping(entry.data?.rig, entry.name)
+}
+
+// Put a body pose on the character. `keepHands` leaves the fingers as they are. `slots` is a bone mapping edited by
+// hand in the retarget editor; without it the bones are matched automatically.
 // Resolves with { applied, skipped, label }.
-export async function applyBodyEntry(entry, { keepHands = true } = {}) {
+export async function applyBodyEntry(entry, { keepHands = true, slots = null } = {}) {
   let bones
   if (entry.source === 'preset') {
     const text = await loadPresetPoseText(entry)
-    bones = await poseFromBVHText(text, entry.name)
+    bones = await poseFromBVHText(text, entry.name, { slots })
     if (!Object.keys(bones).length) throw new Error(`"${entry.name}" didn't match any of this character's bones.`)
+  } else if (slots) {
+    bones = retargetLibraryPose(entry.data.bones, entry.data.rig, { slots })
   } else {
     bones = entry.data.rig
       ? retargetLibraryPose(entry.data.bones, entry.data.rig)
@@ -139,17 +160,17 @@ async function presetHandPoses(entry) {
 }
 
 // Put an animation on the character as a new clip, paused on its first frame. Resolves with { name }.
-export async function applyAnimationEntry(entry) {
+export async function applyAnimationEntry(entry, { slots = null } = {}) {
   const s = useStore.getState()
   if (entry.source === 'preset') {
     const text = await loadPresetText(entry)
     let base = entry.name
     let n = 2
     while (s.importedClipNames.includes(base)) base = `${entry.name} (${n++})`
-    const { name } = await importBVHAuto(new File([text], `${base}.bvh`))
+    const { name } = await importBVHAuto(new File([text], `${base}.bvh`), slots ? { slots } : undefined)
     return { name, label: entry.name }
   }
-  const { clip, retargeted } = prepareLibraryClip(entry.data.clip, entry.data.rig)
+  const { clip, retargeted } = prepareLibraryClip(entry.data.clip, entry.data.rig, { slots })
   const name = addGeneratedClip(clip)
   if (!name) throw new Error('Load a model first.')
   s.addImportedClipName(name)

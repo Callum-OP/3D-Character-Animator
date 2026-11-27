@@ -61,9 +61,30 @@ export function libraryRigsMatch(source, target) {
   })
 }
 
+// The automatic source -> character bone matching for a saved rig, in the shape the retarget editor edits
+// ({ sourceBones, targetBones, slots }). `slots` is what the editor changes and hands back.
+function matchSavedRig(source, model) {
+  const sourceNames = source.bones.map((bone) => bone.name)
+  const targetBones = model.bones || []
+  const targetNames = targetBones.map((bone) => bone.name)
+  return {
+    sourceNames,
+    targetNames,
+    autoNames: buildNameMatch(targetNames, sourceNames),
+    slots: buildSlotMapping(targetNames, sourceNames, targetBones, source.bones),
+  }
+}
+
+export function libraryMapping(rig, model, name = 'Saved pose') {
+  const source = restoreSource(rig)
+  const { sourceNames, targetNames, slots } = matchSavedRig(source, model)
+  return { name, sourceBones: sourceNames, targetBones: targetNames, slots }
+}
+
 // Reuse the BVH retargeter with the actual saved rest pose rather than BVH's
 // first-frame calibration. Resample independent track times onto a common grid.
-export function retargetLibraryClip(json, rig, model) {
+// `slotsOverride` is a hand-edited mapping from the retarget editor; without it the bones are matched automatically.
+export function retargetLibraryClip(json, rig, model, slotsOverride = null) {
   const source = restoreSource(rig)
   const clip = THREE.AnimationClip.parse(json?.clip || json)
   const byId = new Map()
@@ -80,11 +101,8 @@ export function retargetLibraryClip(json, rig, model) {
     const name = byId.get(id)
     if (name) sourceTracks.push({ track, name, property: binding.propertyName })
   }
-  const sourceNames = source.bones.map((bone) => bone.name)
-  const targetBones = model.bones || []
-  const targetNames = targetBones.map((bone) => bone.name)
-  const slots = buildSlotMapping(targetNames, sourceNames, targetBones, source.bones)
-  const { names, hip } = mergeNames(buildNameMatch(targetNames, sourceNames), slots)
+  const matched = matchSavedRig(source, model)
+  const { names, hip } = mergeNames(matched.autoNames, slotsOverride || matched.slots)
   const driven = new Set(sourceTracks.filter((item) => item.property === 'quaternion' || item.name === hip).map((item) => item.name))
   if (!Object.values(names).some((name) => driven.has(name))) {
     throw new Error('No animated source bones could be matched to this character.')

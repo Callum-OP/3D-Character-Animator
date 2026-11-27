@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import {
-  clearAnimationModel, getLibraryRig, initAnimation, prepareLibraryClip,
+  beginLibraryMapping, clearAnimationModel, getLibraryRig, initAnimation, prepareLibraryClip,
   retargetLibraryPose, setAnimationModel,
 } from '../three/animation.js'
 
@@ -129,5 +129,69 @@ describe('saved library retargeting', () => {
     const spine = result.clip.tracks.find((track) => track.name === 'Spine.quaternion')
     expect(result.retargeted).toBe(true)
     expect(new THREE.Quaternion().fromArray(spine.values).angleTo(new THREE.Quaternion())).toBeCloseTo(0.6, 4)
+  })
+
+  describe('manual bone mapping', () => {
+    it('starts the editor from the automatic match of the saved rig onto this character', () => {
+      const { rig } = fixture()
+      const mapping = beginLibraryMapping(rig, 'Wave')
+      expect(mapping.name).toBe('Wave')
+      expect(mapping.sourceBones).toEqual(sourceNames)
+      expect(mapping.targetBones).toEqual(targetNames)
+      expect(mapping.slots.find((slot) => slot.key === 'hips')).toMatchObject({ target: targetNames[0], source: sourceNames[0] })
+      expect(mapping.slots.find((slot) => slot.key === 'spine')).toMatchObject({ target: targetNames[1], source: sourceNames[1] })
+    })
+
+    it('says so when an older entry has no source rig to map from', () => {
+      fixture()
+      expect(() => beginLibraryMapping(null, 'Old')).toThrow(/no source rig/i)
+    })
+
+    it('uses the edited mapping for a pose: a row left blank is skipped', () => {
+      const { source, rig } = fixture()
+      const posed = source.bones[1].quaternion.clone().multiply(turn(0.7))
+      const bones = Object.fromEntries(source.bones.map((bone) => [bone.name, values(bone === source.bones[1] ? posed : bone.quaternion)]))
+      const auto = beginLibraryMapping(rig, 'Pose').slots
+      expect(retargetLibraryPose(bones, rig, { slots: auto })[targetNames[1]]).toBeTruthy()
+
+      const skipped = auto.map((slot) => (slot.key === 'spine' ? { ...slot, source: '' } : slot))
+      expect(retargetLibraryPose(bones, rig, { slots: skipped })[targetNames[1]]).toBeUndefined()
+    })
+
+    it('maps a character whose bones have generic names once the rows are filled in by hand', () => {
+      const source = model(sourceNames, Math.PI / 2)
+      setAnimationModel(source, 'source')
+      const rig = getLibraryRig()
+      const generic = ['Bone_01', 'Bone_02', 'Bone_03']
+      const target = model(generic)
+      setAnimationModel(target, 'target')
+      const posed = source.bones[1].quaternion.clone().multiply(turn(0.7))
+      const bones = Object.fromEntries(source.bones.map((bone) => [bone.name, values(bone === source.bones[1] ? posed : bone.quaternion)]))
+      const slots = beginLibraryMapping(rig, 'Pose').slots.map((slot) => {
+        if (slot.key === 'hips') return { ...slot, target: generic[0], source: 'Hips' }
+        if (slot.key === 'spine') return { ...slot, target: generic[1], source: 'Spine' }
+        if (slot.key === 'head') return { ...slot, target: generic[2], source: 'Head' }
+        return { ...slot, target: '', source: '' }
+      })
+      const result = retargetLibraryPose(bones, rig, { slots })
+      expect(new THREE.Quaternion().fromArray(result.Bone_02).angleTo(new THREE.Quaternion())).toBeCloseTo(0.7, 3)
+      // Left out of the mapping, a row's bone is never touched.
+      const without = slots.map((slot) => (slot.key === 'head' ? { ...slot, source: '' } : slot))
+      expect(retargetLibraryPose(bones, rig, { slots: without }).Bone_03).toBeUndefined()
+    })
+
+    it('retargets a clip by the edited mapping even when the character has the same rig it was saved from', () => {
+      const source = model(sourceNames)
+      setAnimationModel(source, 'source')
+      const rig = getLibraryRig()
+      const same = new THREE.AnimationClip('Same', 1, [
+        new THREE.QuaternionKeyframeTrack('Spine.quaternion', [0, 1], [...values(turn(0)), ...values(turn(0.5))]),
+      ])
+      expect(prepareLibraryClip({ clip: same.toJSON() }, rig).retargeted).toBe(false)
+      const slots = beginLibraryMapping(rig, 'Same').slots
+      const result = prepareLibraryClip({ clip: same.toJSON() }, rig, { slots })
+      expect(result.retargeted).toBe(true)
+      expect(result.clip.tracks.some((track) => track.name === 'Spine.quaternion')).toBe(true)
+    })
   })
 })

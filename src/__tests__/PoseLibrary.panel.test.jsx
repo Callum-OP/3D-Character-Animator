@@ -5,7 +5,9 @@ import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/re
 vi.mock('../three/poseLibraryActions.js', () => ({
   applyBodyEntry: vi.fn().mockResolvedValue({ applied: 3, skipped: 0, label: 'Wave' }),
   applyHandEntry: vi.fn().mockResolvedValue({ applied: 15, label: 'Fist' }),
-  applyAnimationEntry: vi.fn(),
+  applyAnimationEntry: vi.fn().mockResolvedValue({ name: 'Walk (2)' }),
+  beginManualRetarget: vi.fn(),
+  canRetargetManually: (entry) => entry?.kind === 'body' || entry?.kind === 'animation',
   saveCurrentBodyPose: vi.fn().mockResolvedValue({ name: 'Mine1' }),
   saveCurrentHandPose: vi.fn(),
   saveClipToLibrary: vi.fn(),
@@ -119,5 +121,77 @@ describe('Pose Library panel', () => {
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(useStore.getState().poseLibraryTab).toBeNull()
     await waitFor(() => expect(container.firstChild).toBeNull())
+  })
+
+  describe('right-click menu', () => {
+    const mapping = () => ({
+      name: 'Wave',
+      sourceBones: ['Hips', 'Spine'],
+      targetBones: ['mixamorig:Hips', 'mixamorig:Spine'],
+      slots: [{ key: 'hips', label: 'Hips', target: 'mixamorig:Hips', source: 'Hips', guessed: false }],
+    })
+
+    it('offers Apply and Retarget manually on a body pose, plus Delete on your own', async () => {
+      await store.putEntry({ kind: 'body', name: 'Wave', data: { bones: {} } })
+      useStore.setState({ poseLibraryTab: 'body' })
+      render(<PoseLibrary />)
+      fireEvent.contextMenu(await screen.findByTitle('Apply “Wave”'))
+      expect(await screen.findByText('Apply')).toBeTruthy()
+      expect(screen.getByText('Retarget manually…')).toBeTruthy()
+      expect(screen.getByText('Delete')).toBeTruthy()
+    })
+
+    it('has no Retarget option on hand poses', async () => {
+      useStore.setState({ poseLibraryTab: 'hand' })
+      render(<PoseLibrary />)
+      fireEvent.contextMenu(await screen.findByTitle('Apply “Fist”'))
+      expect(await screen.findByText('Apply')).toBeTruthy()
+      expect(screen.queryByText('Retarget manually…')).toBeNull()
+    })
+
+    it('opens the bone-mapping editor and applies the pose with the edited mapping', async () => {
+      await store.putEntry({ kind: 'body', name: 'Wave', data: { bones: {} } })
+      actions.beginManualRetarget.mockResolvedValue(mapping())
+      useStore.setState({ poseLibraryTab: 'body' })
+      render(<PoseLibrary />)
+      fireEvent.contextMenu(await screen.findByTitle('Apply “Wave”'))
+      fireEvent.click(await screen.findByText('Retarget manually…'))
+      expect(await screen.findByText(/bones → this rig/)).toBeTruthy()
+      expect(actions.applyBodyEntry).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ slots: expect.anything() }))
+
+      fireEvent.change(screen.getByTitle('Source bone'), { target: { value: 'Spine' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+      await waitFor(() => expect(actions.applyBodyEntry).toHaveBeenCalled())
+      const [entry, opts] = actions.applyBodyEntry.mock.calls.at(-1)
+      expect(entry.name).toBe('Wave')
+      expect(opts.keepHands).toBe(true)
+      expect(opts.slots[0]).toMatchObject({ key: 'hips', target: 'mixamorig:Hips', source: 'Spine' })
+      await waitFor(() => expect(screen.queryByText(/bones → this rig/)).toBeNull())
+      expect(await screen.findByText(/with your bone mapping/)).toBeTruthy()
+    })
+
+    it('Escape backs out of the editor without closing the library', async () => {
+      await store.putEntry({ kind: 'animation', name: 'Walk', data: { clip: {}, rig: {} } })
+      actions.beginManualRetarget.mockResolvedValue(mapping())
+      useStore.setState({ poseLibraryTab: 'animation' })
+      render(<PoseLibrary />)
+      fireEvent.contextMenu(await screen.findByTitle('Apply “Walk”'))
+      fireEvent.click(await screen.findByText('Retarget manually…'))
+      await screen.findByText(/bones → this rig/)
+      fireEvent.keyDown(window, { key: 'Escape' })
+      await waitFor(() => expect(screen.queryByText(/bones → this rig/)).toBeNull())
+      expect(useStore.getState().poseLibraryTab).toBe('animation')
+    })
+
+    it('shows why mapping could not start instead of opening an empty editor', async () => {
+      await store.putEntry({ kind: 'body', name: 'Old', data: { bones: {} } })
+      actions.beginManualRetarget.mockRejectedValue(new Error('This older library entry has no source rig.'))
+      useStore.setState({ poseLibraryTab: 'body' })
+      render(<PoseLibrary />)
+      fireEvent.contextMenu(await screen.findByTitle('Apply “Old”'))
+      fireEvent.click(await screen.findByText('Retarget manually…'))
+      expect(await screen.findByText(/no source rig/)).toBeTruthy()
+      expect(screen.queryByText(/bones → this rig/)).toBeNull()
+    })
   })
 })
